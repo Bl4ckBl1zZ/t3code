@@ -1,0 +1,6 @@
+{
+  "name": "@t3tools/chrome-extension",
+  "version": "0.0.24",
+  "private": true,
+  "type": "module"
+}

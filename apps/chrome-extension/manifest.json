@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "T3 Code Browser Transfer",
+  "description": "Transfers desktop T3 Code sessions into Chrome with the matching dev server tab.",
+  "version": "0.0.1",
+  "permissions": ["storage", "tabs", "tabGroups", "windows"],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost/*",
+    "https://localhost/*",
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "https://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*"
+      ],
+      "js": ["transfer-content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_title": "T3 Code Browser Transfer"
+  }
+}

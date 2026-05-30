@@ -98,6 +98,7 @@ const electronMenuLayer = Layer.succeed(ElectronMenu.ElectronMenu, {
 
 const electronShellLayer = Layer.succeed(ElectronShell.ElectronShell, {
   openExternal: () => Effect.succeed(true),
+  openInChrome: () => Effect.succeed(true),
   copyText: () => Effect.void,
 } satisfies ElectronShell.ElectronShellShape);
 

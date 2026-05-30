@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { shouldShowOpenInPicker } from "./ChatHeader";
+import { shouldShowBrowserAnnotationButton, shouldShowOpenInPicker } from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -42,6 +42,43 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldShowBrowserAnnotationButton", () => {
+  const primaryEnvironmentId = EnvironmentId.make("environment-primary");
+
+  it("shows in browser primary-project chats", () => {
+    expect(
+      shouldShowBrowserAnnotationButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        hasDesktopBridge: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides in desktop chats", () => {
+    expect(
+      shouldShowBrowserAnnotationButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        hasDesktopBridge: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides for remote environments", () => {
+    expect(
+      shouldShowBrowserAnnotationButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
+        primaryEnvironmentId,
+        hasDesktopBridge: false,
       }),
     ).toBe(false);
   });

@@ -16,7 +16,10 @@ import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScr
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { TransferToBrowserButton } from "./TransferToBrowserButton";
+import { BrowserAnnotationButton } from "./BrowserAnnotationButton";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
+import { shouldShowTransferToBrowser } from "../../browserTransfer";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -56,6 +59,20 @@ export function shouldShowOpenInPicker(input: {
   );
 }
 
+export function shouldShowBrowserAnnotationButton(input: {
+  readonly activeProjectName: string | undefined;
+  readonly activeThreadEnvironmentId: EnvironmentId;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly hasDesktopBridge: boolean;
+}): boolean {
+  return (
+    !input.hasDesktopBridge &&
+    Boolean(input.activeProjectName) &&
+    input.primaryEnvironmentId !== null &&
+    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+  );
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
@@ -86,6 +103,18 @@ export const ChatHeader = memo(function ChatHeader({
     activeProjectName,
     activeThreadEnvironmentId,
     primaryEnvironmentId,
+  });
+  const showTransferToBrowser = shouldShowTransferToBrowser({
+    activeProjectName,
+    activeThreadEnvironmentId,
+    primaryEnvironmentId,
+    hasDesktopBridge: typeof window !== "undefined" && Boolean(window.desktopBridge),
+  });
+  const showBrowserAnnotationButton = shouldShowBrowserAnnotationButton({
+    activeProjectName,
+    activeThreadEnvironmentId,
+    primaryEnvironmentId,
+    hasDesktopBridge: typeof window !== "undefined" && Boolean(window.desktopBridge),
   });
 
   return (
@@ -131,6 +160,10 @@ export const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
+        {showTransferToBrowser && (
+          <TransferToBrowserButton activeProjectScripts={activeProjectScripts} />
+        )}
+        {showBrowserAnnotationButton && <BrowserAnnotationButton />}
         {activeProjectName && (
           <GitActionsControl
             gitCwd={gitCwd}

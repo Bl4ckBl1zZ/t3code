@@ -133,3 +133,13 @@ export const openExternal = makeIpcMethod({
     return yield* shell.openExternal(url);
   }),
 });
+
+export const openInChrome = makeIpcMethod({
+  channel: IpcChannels.OPEN_IN_CHROME_CHANNEL,
+  payload: Schema.String,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.openInChrome")(function* (url) {
+    const shell = yield* ElectronShell.ElectronShell;
+    return yield* shell.openInChrome(url);
+  }),
+});
