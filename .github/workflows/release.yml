@@ -35,7 +35,7 @@ jobs:
   check_changes:
     name: Check for changes since last nightly
     if: github.event_name == 'schedule'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
@@ -71,7 +71,7 @@ jobs:
     if: |
       !failure() && !cancelled() &&
       (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       release_channel: ${{ steps.release_meta.outputs.release_channel }}
@@ -193,15 +193,30 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
-            runner: blacksmith-12vcpu-macos-26
+            runner: macos-14
             platform: mac
             target: dmg
             arch: arm64
+          - label: macOS x64
+            runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - label: Linux x64
+            runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
           - label: Windows x64
-            runner: blacksmith-32vcpu-windows-2025
+            runner: windows-2022
             platform: win
             target: nsis
             arch: x64
+          - label: Windows arm64
+            runner: windows-11-arm
+            platform: win
+            target: nsis
+            arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -377,6 +392,7 @@ jobs:
           for pattern in \
             "release/*.dmg" \
             "release/*.zip" \
+            "release/*.AppImage" \
             "release/*.exe" \
             "release/*.blockmap" \
             "release/*.yml"; do
@@ -385,17 +401,23 @@ jobs:
             done
           done
 
-          # Enable if Windows arm64 builds are enabled.
+          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
+            shopt -s nullglob
+            for manifest in release-publish/*-mac.yml; do
+              mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"
+            done
+          fi
+
           # Windows updater metadata is channel-specific (for example
           # "latest.yml" or "nightly.yml"). Suffix each per-arch copy so the
           # release job can merge matching arm64/x64 manifests back into one
           # canonical manifest per channel.
-          # if [[ "${{ matrix.platform }}" == "win" ]]; then
-          #   shopt -s nullglob
-          #   for manifest in release-publish/*.yml; do
-          #     mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
-          #   done
-          # fi
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            shopt -s nullglob
+            for manifest in release-publish/*.yml; do
+              mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
+            done
+          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -408,7 +430,7 @@ jobs:
     name: Publish CLI to npm
     needs: [preflight, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404 # blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -449,7 +471,7 @@ jobs:
     name: Publish GitHub Release
     needs: [preflight, build, publish_cli]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - id: app_token
@@ -485,34 +507,45 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      # - name: Merge Windows updater manifests
-      #   run: |
-      #     shopt -s nullglob
-      #     found_windows_manifest=false
-      #     for x64_manifest in release-assets/*-win-x64.yml; do
-      #       if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
-      #         continue
-      #       fi
+      - name: Merge macOS updater manifests
+        run: |
+          shopt -s nullglob
+          for x64_manifest in release-assets/*-mac-x64.yml; do
+            arm64_manifest="${x64_manifest%-x64.yml}.yml"
+            if [[ -f "$arm64_manifest" ]]; then
+              node scripts/merge-update-manifests.ts --platform mac "$arm64_manifest" "$x64_manifest"
+              rm -f "$x64_manifest"
+            fi
+          done
 
-      #       arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
-      #       output_manifest="${x64_manifest/-win-x64.yml/.yml}"
-      #       if [[ ! -f "$arm64_manifest" ]]; then
-      #         echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
-      #         exit 1
-      #       fi
+      - name: Merge Windows updater manifests
+        run: |
+          shopt -s nullglob
+          found_windows_manifest=false
+          for x64_manifest in release-assets/*-win-x64.yml; do
+            if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
+              continue
+            fi
 
-      #       found_windows_manifest=true
-      #       node scripts/merge-update-manifests.ts --platform win \
-      #         "$arm64_manifest" \
-      #         "$x64_manifest" \
-      #         "$output_manifest"
-      #       rm -f "$arm64_manifest" "$x64_manifest"
-      #     done
+            arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
+            output_manifest="${x64_manifest/-win-x64.yml/.yml}"
+            if [[ ! -f "$arm64_manifest" ]]; then
+              echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
+              exit 1
+            fi
 
-      #     if [[ "$found_windows_manifest" != true ]]; then
-      #       echo "No Windows updater manifests found to merge." >&2
-      #       exit 1
-      #     fi
+            found_windows_manifest=true
+            node scripts/merge-update-manifests.ts --platform win \
+              "$arm64_manifest" \
+              "$x64_manifest" \
+              "$output_manifest"
+            rm -f "$arm64_manifest" "$x64_manifest"
+          done
+
+          if [[ "$found_windows_manifest" != true ]]; then
+            echo "No Windows updater manifests found to merge." >&2
+            exit 1
+          fi
 
       - name: Publish release
         if: needs.preflight.outputs.previous_tag != ''
@@ -528,6 +561,7 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
+            release-assets/*.AppImage
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
@@ -547,6 +581,7 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
+            release-assets/*.AppImage
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
@@ -557,7 +592,7 @@ jobs:
     name: Deploy hosted web app
     needs: [preflight, release]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -649,7 +684,7 @@ jobs:
     name: Finalize release
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
     needs: [preflight, release]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - id: app_token
@@ -732,7 +767,7 @@ jobs:
       needs.deploy_web.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
     needs: [preflight, release, deploy_web, finalize]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
