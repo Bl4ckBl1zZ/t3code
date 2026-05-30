@@ -197,26 +197,11 @@ jobs:
             platform: mac
             target: dmg
             arch: arm64
-          - label: macOS x64
-            runner: blacksmith-12vcpu-macos-26
-            platform: mac
-            target: dmg
-            arch: x64
-          - label: Linux x64
-            runner: blacksmith-32vcpu-ubuntu-2404
-            platform: linux
-            target: AppImage
-            arch: x64
           - label: Windows x64
             runner: blacksmith-32vcpu-windows-2025
             platform: win
             target: nsis
             arch: x64
-          # - label: Windows arm64
-          #   runner: windows-11-arm
-          #   platform: win
-          #   target: nsis
-          #   arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -392,7 +377,6 @@ jobs:
           for pattern in \
             "release/*.dmg" \
             "release/*.zip" \
-            "release/*.AppImage" \
             "release/*.exe" \
             "release/*.blockmap" \
             "release/*.yml"; do
@@ -400,13 +384,6 @@ jobs:
               cp "$file" release-publish/
             done
           done
-
-          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
-            shopt -s nullglob
-            for manifest in release-publish/*-mac.yml; do
-              mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"
-            done
-          fi
 
           # Enable if Windows arm64 builds are enabled.
           # Windows updater metadata is channel-specific (for example
@@ -508,17 +485,6 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      - name: Merge macOS updater manifests
-        run: |
-          shopt -s nullglob
-          for x64_manifest in release-assets/*-mac-x64.yml; do
-            arm64_manifest="${x64_manifest%-x64.yml}.yml"
-            if [[ -f "$arm64_manifest" ]]; then
-              node scripts/merge-update-manifests.ts --platform mac "$arm64_manifest" "$x64_manifest"
-              rm -f "$x64_manifest"
-            fi
-          done
-
       # - name: Merge Windows updater manifests
       #   run: |
       #     shopt -s nullglob
@@ -562,7 +528,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
@@ -582,7 +547,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
