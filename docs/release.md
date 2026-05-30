@@ -11,10 +11,8 @@ This document covers the unified release workflow for stable and nightly desktop
   - scheduled nightly every three hours
   - manual `workflow_dispatch` for either channel
 - Runs quality gates first: lint, typecheck, test.
-- Builds four artifacts in parallel for both channels:
+- Builds the enabled desktop artifact matrix in parallel for both channels:
   - macOS `arm64` DMG
-  - macOS `x64` DMG
-  - Linux `x64` AppImage
   - Windows `x64` NSIS installer
 - Publishes one GitHub Release with all produced files.
   - Stable tags with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
@@ -22,9 +20,6 @@ This document covers the unified release workflow for stable and nightly desktop
   - Nightly runs are always GitHub prereleases and never marked latest.
   - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
 - Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing from the same workflow file:
-  - stable releases publish npm dist-tag `latest`
-  - nightly releases publish npm dist-tag `nightly`
 - Deploys the hosted web app to Vercel only after a release is published:
   - stable releases are aliased to the `latest` hosted app channel
   - nightly releases are aliased to the `nightly` hosted app channel
@@ -96,7 +91,6 @@ One-time Vercel dashboard setup:
   - `make_latest` is always `false`
 - Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
 - Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Publishes the CLI package (`apps/server`, npm package `t3`) to the `nightly` npm dist-tag using the same nightly version.
 - Does not commit version bumps back to `main`.
 
 ## Desktop auto-update notes
@@ -120,26 +114,6 @@ One-time Vercel dashboard setup:
 - macOS metadata note:
   - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
   - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
-
-## 0) npm OIDC trusted publishing setup (CLI)
-
-The workflow publishes the CLI with `npm publish` from `apps/server` after bumping
-the package version to the release tag version.
-
-Checklist:
-
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
-2. In npm package settings, configure Trusted Publisher:
-   - Provider: GitHub Actions
-   - Repository: this repo
-   - Workflow file: `.github/workflows/release.yml`
-   - Environment (if used): match your npm trusted publishing config
-3. Ensure npm account and org policies allow trusted publishing for the package.
-4. Create release tag `vX.Y.Z` and push; workflow will:
-   - set `apps/server/package.json` version to `X.Y.Z`
-   - build web + server
-   - run `npm publish --access public --tag latest`
-5. Nightly runs from the same workflow file publish with `npm publish --access public --tag nightly`.
 
 ## 1) Dry-run release without signing
 
