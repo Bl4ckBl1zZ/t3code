@@ -50,6 +50,7 @@ const rpcClientMock = {
     clear: vi.fn(),
     restart: vi.fn(),
     close: vi.fn(),
+    detectWebServers: vi.fn(async () => ({ servers: [] })),
     onMetadata: vi.fn((listener: (event: TerminalMetadataStreamEvent) => void) =>
       registerListener(terminalMetadataListeners, listener),
     ),

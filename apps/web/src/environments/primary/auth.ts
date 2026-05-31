@@ -228,12 +228,13 @@ function isTransientBootstrapError(error: unknown): boolean {
 }
 
 async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
-  const bootstrapCredential = getDesktopBootstrapCredential();
   const currentSession = await fetchSessionState();
   if (currentSession.authenticated) {
+    stripPairingTokenFromUrl();
     return { status: "authenticated" };
   }
 
+  const bootstrapCredential = getDesktopBootstrapCredential() ?? takePairingTokenFromUrl();
   if (!bootstrapCredential) {
     return {
       status: "requires-auth",

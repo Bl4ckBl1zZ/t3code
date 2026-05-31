@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "T3 Code Browser Transfer",
-  "description": "Transfers desktop T3 Code sessions into Chrome with the matching dev server tab.",
+  "description": "Links T3 Code browser chats with matching dev server tabs for annotations.",
   "version": "0.0.1",
-  "permissions": ["storage", "tabs", "tabGroups", "windows"],
+  "permissions": ["storage", "tabs", "windows", "sidePanel", "scripting"],
   "host_permissions": [
     "<all_urls>",
     "http://localhost/*",
@@ -17,16 +17,24 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": ["transfer-content.js"],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["sidepanel.html", "sidepanel.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src http: https:;"
+  },
   "action": {
     "default_title": "T3 Code Browser Transfer"
   }

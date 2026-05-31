@@ -2,6 +2,7 @@ import {
   DEFAULT_TERMINAL_ID,
   type TerminalAttachInput,
   type TerminalAttachStreamEvent,
+  type TerminalDetectedWebServer,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
@@ -12,6 +13,7 @@ import {
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Equal from "effect/Equal";
@@ -25,6 +27,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 
 import { ServerConfig } from "../../config.ts";
 import {
@@ -33,6 +36,13 @@ import {
   terminalSessionsTotal,
 } from "../../observability/Metrics.ts";
 import * as ProcessRunner from "../../processRunner.ts";
+import {
+  collectProcessTreePids,
+  listeningPortsToWebServerCandidates,
+  parseLsofListeningPorts,
+  parsePsPidPpidOutput,
+  type DetectedWebServerCandidate,
+} from "../devServerDetection.ts";
 import {
   TerminalCwdError,
   TerminalHistoryError,
@@ -56,6 +66,8 @@ const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
+const WEB_SERVER_DETECTION_HTTP_TIMEOUT_MS = 700;
+const WEB_SERVER_DETECTION_MAX_PIDS = 256;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const MAX_TERMINAL_LABEL_LENGTH = 128;
@@ -682,6 +694,83 @@ function defaultSubprocessInspectorForPlatform(platform: NodeJS.Platform) {
   });
 }
 
+const readPosixProcessTreePids = Effect.fn("terminal.readPosixProcessTreePids")(function* (
+  rootPid: number,
+) {
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const psResult = yield* Effect.exit(
+    processRunner.run({
+      command: "ps",
+      args: ["-eo", "pid=,ppid="],
+      timeout: "1 second",
+      maxOutputBytes: 512 * 1024,
+      outputMode: "truncate",
+      timeoutBehavior: "timedOutResult",
+    }),
+  );
+
+  if (psResult._tag === "Failure" || psResult.value.code !== 0) {
+    return new Set<number>([rootPid]);
+  }
+
+  const rows = parsePsPidPpidOutput(psResult.value.stdout);
+  const pids = collectProcessTreePids(rows, rootPid);
+  return pids.size > 0 ? pids : new Set<number>([rootPid]);
+});
+
+const readListeningWebServerCandidates = Effect.fn("terminal.readListeningWebServerCandidates")(
+  function* (rootPid: number, platform: NodeJS.Platform) {
+    if (platform === "win32") {
+      return [];
+    }
+
+    const processRunner = yield* ProcessRunner.ProcessRunner;
+    const pids = yield* readPosixProcessTreePids(rootPid);
+    const pidList = [...pids]
+      .filter((pid) => Number.isInteger(pid) && pid > 0)
+      .toSorted((left, right) => left - right)
+      .slice(0, WEB_SERVER_DETECTION_MAX_PIDS);
+
+    if (pidList.length === 0) {
+      return [];
+    }
+
+    const lsofResult = yield* Effect.exit(
+      processRunner.run({
+        command: "lsof",
+        args: ["-nP", "-a", "-p", pidList.join(","), "-iTCP", "-sTCP:LISTEN"],
+        timeout: "1 second",
+        maxOutputBytes: 512 * 1024,
+        outputMode: "truncate",
+        timeoutBehavior: "timedOutResult",
+      }),
+    );
+
+    if (lsofResult._tag === "Failure" || lsofResult.value.code !== 0) {
+      return [];
+    }
+
+    return listeningPortsToWebServerCandidates(
+      parseLsofListeningPorts(lsofResult.value.stdout, pids),
+    );
+  },
+);
+
+function verifyHttpServerCandidate(
+  candidate: DetectedWebServerCandidate,
+): Effect.Effect<TerminalDetectedWebServer, never, HttpClient.HttpClient> {
+  return HttpClient.get(candidate.url).pipe(
+    Effect.timeoutOption(Duration.millis(WEB_SERVER_DETECTION_HTTP_TIMEOUT_MS)),
+    Effect.map((result): boolean => Option.isSome(result)),
+    Effect.catch(() => Effect.succeed(false)),
+    Effect.map((verified) => ({
+      ...candidate,
+      verified,
+      source: "listening-port" as const,
+    })),
+  );
+}
+
 function capHistory(history: string, maxLines: number): string {
   if (history.length === 0) return history;
   const hasTrailingNewline = history.endsWith("\n");
@@ -957,6 +1046,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
     const baseEnv = options.env ?? process.env;
     const shellResolver = options.shellResolver ?? (() => defaultShellResolver(platform, baseEnv));
     const processRunner = yield* ProcessRunner.ProcessRunner;
+    const httpClient = yield* HttpClient.HttpClient;
     const subprocessInspector =
       options.subprocessInspector ??
       ((terminalPid) =>
@@ -2240,6 +2330,31 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       yield* Effect.sync(() => process.write(input.data));
     });
 
+    const detectWebServers: TerminalManagerShape["detectWebServers"] = Effect.fn(
+      "terminal.detectWebServers",
+    )(function* (input) {
+      const session = yield* requireSession(input.threadId, input.terminalId);
+      if (!session.process || session.status !== "running" || session.pid === null) {
+        return { servers: [] };
+      }
+
+      const candidates = yield* readListeningWebServerCandidates(session.pid, platform).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+      );
+      const servers = yield* Effect.forEach(candidates, verifyHttpServerCandidate, {
+        concurrency: 4,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
+
+      return {
+        servers: servers.toSorted(
+          (left, right) =>
+            Number(right.verified) - Number(left.verified) ||
+            left.port - right.port ||
+            left.pid - right.pid,
+        ),
+      };
+    });
+
     const resize: TerminalManagerShape["resize"] = Effect.fn("terminal.resize")(function* (input) {
       const terminalId = input.terminalId;
       const session = yield* requireSession(input.threadId, terminalId);
@@ -2388,6 +2503,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       clear,
       restart,
       close,
+      detectWebServers,
       subscribe,
       subscribeMetadata,
     } satisfies TerminalManagerShape;
@@ -2396,4 +2512,5 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
 
 export const TerminalManagerLive = Layer.effect(TerminalManager, makeTerminalManager()).pipe(
   Layer.provide(ProcessRunner.layer),
+  Layer.provide(FetchHttpClient.layer),
 );

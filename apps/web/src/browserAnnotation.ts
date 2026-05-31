@@ -12,6 +12,7 @@ export interface BrowserAnnotationReadyMessage {
   readonly type: typeof BROWSER_ANNOTATION_READY_MESSAGE;
   readonly linked: boolean;
   readonly active: boolean;
+  readonly browserContext?: BrowserAnnotationBrowserContext;
 }
 
 export interface BrowserAnnotationStatusMessage {
@@ -19,7 +20,27 @@ export interface BrowserAnnotationStatusMessage {
   readonly type: typeof BROWSER_ANNOTATION_STATUS_MESSAGE;
   readonly linked: boolean;
   readonly active: boolean;
+  readonly browserContext?: BrowserAnnotationBrowserContext;
   readonly error?: string;
+}
+
+export interface BrowserAnnotationGroupedTab {
+  readonly id: number;
+  readonly url?: string;
+  readonly title?: string;
+  readonly active: boolean;
+  readonly groupId: number | null;
+  readonly windowId: number | null;
+  readonly index: number | null;
+  readonly kind: "t3code" | "dev-server" | "other";
+}
+
+export interface BrowserAnnotationBrowserContext {
+  readonly currentTabId: number | null;
+  readonly currentGroupId: number | null;
+  readonly groupedTabs: ReadonlyArray<BrowserAnnotationGroupedTab>;
+  readonly annotationTarget?: BrowserAnnotationGroupedTab;
+  readonly ambiguous: boolean;
 }
 
 export interface BrowserAnnotationCaptureMessage {

@@ -94,6 +94,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       clear: vi.fn(),
       restart: vi.fn(),
       close: vi.fn(),
+      detectWebServers: vi.fn(async () => ({ servers: [] })),
       onEvent: vi.fn(() => () => undefined),
       onMetadata: vi.fn(() => () => undefined),
     },

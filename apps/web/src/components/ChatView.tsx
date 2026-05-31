@@ -20,6 +20,7 @@ import {
   ProviderDriverKind,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   RuntimeMode,
+  type TerminalDetectedWebServer,
   TerminalOpenInput,
 } from "@t3tools/contracts";
 import {
@@ -453,6 +454,23 @@ function terminalIdListsEqual(left: readonly string[], right: readonly string[])
     }
   }
   return true;
+}
+
+function projectScriptRunKey(projectId: ProjectId, scriptId: string): string {
+  return `${projectId}:${scriptId}`;
+}
+
+const PROJECT_SCRIPT_WEB_SERVER_DETECTION_ATTEMPTS = 40;
+const PROJECT_SCRIPT_WEB_SERVER_DETECTION_INTERVAL_MS = 750;
+
+interface ProjectScriptDetectedWebServerState {
+  readonly terminalId: string;
+  readonly server: TerminalDetectedWebServer;
+  readonly detectedAt: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -894,12 +912,18 @@ export default function ChatView(props: ChatViewProps) {
     {},
     LastInvokedScriptByProjectSchema,
   );
+  const [projectScriptTerminalIdsByRunKey, setProjectScriptTerminalIdsByRunKey] = useState<
+    Record<string, string[]>
+  >({});
+  const [projectScriptDetectedWebServerByRunKey, setProjectScriptDetectedWebServerByRunKey] =
+    useState<Record<string, ProjectScriptDetectedWebServerState>>({});
   const legendListRef = useRef<LegendListRef | null>(null);
   const isAtEndRef = useRef(true);
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
+  const projectScriptWebServerDetectionGenerationRef = useRef<Record<string, number>>({});
 
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
@@ -1070,6 +1094,54 @@ export default function ChatView(props: ChatViewProps) {
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
   );
+  const runningProjectScriptIds = useMemo(() => {
+    const runningScriptIds = new Set<string>();
+    if (!activeProject) {
+      return runningScriptIds;
+    }
+
+    const runningTerminalIdSet = new Set(runningTerminalIds);
+    for (const script of activeProject.scripts) {
+      const terminalIds =
+        projectScriptTerminalIdsByRunKey[projectScriptRunKey(activeProject.id, script.id)] ?? [];
+      if (terminalIds.some((terminalId) => runningTerminalIdSet.has(terminalId))) {
+        runningScriptIds.add(script.id);
+      }
+    }
+    return runningScriptIds;
+  }, [activeProject, projectScriptTerminalIdsByRunKey, runningTerminalIds]);
+  const detectedProjectScriptDevServerUrl = useMemo(() => {
+    if (!activeProject) {
+      return null;
+    }
+
+    const runningTerminalIdSet = new Set(runningTerminalIds);
+    const preferredScriptId = lastInvokedScriptByProjectId[activeProject.id] ?? null;
+    const orderedScripts = activeProject.scripts.toSorted((left, right) => {
+      if (left.id === preferredScriptId) return -1;
+      if (right.id === preferredScriptId) return 1;
+      return 0;
+    });
+
+    for (const script of orderedScripts) {
+      const detected =
+        projectScriptDetectedWebServerByRunKey[projectScriptRunKey(activeProject.id, script.id)];
+      if (!detected || !detected.server.verified) {
+        continue;
+      }
+      if (!runningTerminalIdSet.has(detected.terminalId)) {
+        continue;
+      }
+      return detected.server.url;
+    }
+
+    return null;
+  }, [
+    activeProject,
+    lastInvokedScriptByProjectId,
+    projectScriptDetectedWebServerByRunKey,
+    runningTerminalIds,
+  ]);
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -2124,6 +2196,62 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadId, activeThreadRef, activeKnownTerminalIds, environmentId, storeCloseTerminal],
   );
+  const queueProjectScriptWebServerDetection = useCallback(
+    (input: {
+      readonly runKey: string;
+      readonly threadId: ThreadId;
+      readonly terminalId: string;
+    }) => {
+      const generation =
+        (projectScriptWebServerDetectionGenerationRef.current[input.runKey] ?? 0) + 1;
+      projectScriptWebServerDetectionGenerationRef.current = {
+        ...projectScriptWebServerDetectionGenerationRef.current,
+        [input.runKey]: generation,
+      };
+
+      void (async () => {
+        for (
+          let attempt = 0;
+          attempt < PROJECT_SCRIPT_WEB_SERVER_DETECTION_ATTEMPTS;
+          attempt += 1
+        ) {
+          if (projectScriptWebServerDetectionGenerationRef.current[input.runKey] !== generation) {
+            return;
+          }
+
+          const api = readEnvironmentApi(environmentId);
+          const detectWebServers = api?.terminal.detectWebServers;
+          if (!detectWebServers) {
+            return;
+          }
+
+          try {
+            const result = await detectWebServers({
+              threadId: input.threadId,
+              terminalId: input.terminalId,
+            });
+            const server = result.servers.find((candidate) => candidate.verified);
+            if (server) {
+              setProjectScriptDetectedWebServerByRunKey((current) => ({
+                ...current,
+                [input.runKey]: {
+                  terminalId: input.terminalId,
+                  server,
+                  detectedAt: Date.now(),
+                },
+              }));
+              return;
+            }
+          } catch {
+            return;
+          }
+
+          await sleep(PROJECT_SCRIPT_WEB_SERVER_DETECTION_INTERVAL_MS);
+        }
+      })();
+    },
+    [environmentId],
+  );
   const runProjectScript = useCallback(
     async (
       script: ProjectScript,
@@ -2172,6 +2300,17 @@ export default function ChatView(props: ChatViewProps) {
       const targetTerminalId = shouldCreateNewTerminal
         ? nextTerminalId(activeKnownTerminalIds)
         : baseTerminalId;
+      const runKey = projectScriptRunKey(activeProject.id, script.id);
+      setProjectScriptTerminalIdsByRunKey((current) => {
+        const existingTerminalIds = current[runKey] ?? [];
+        if (existingTerminalIds.includes(targetTerminalId)) {
+          return current;
+        }
+        return {
+          ...current,
+          [runKey]: [...existingTerminalIds, targetTerminalId],
+        };
+      });
       const openTerminalInput: TerminalOpenInput = shouldCreateNewTerminal
         ? {
             threadId: activeThreadId,
@@ -2203,6 +2342,11 @@ export default function ChatView(props: ChatViewProps) {
           terminalId: targetTerminalId,
           data: `${script.command}\r`,
         });
+        queueProjectScriptWebServerDetection({
+          runKey,
+          threadId: activeThreadId,
+          terminalId: targetTerminalId,
+        });
       } catch (error) {
         setThreadError(
           activeThreadId,
@@ -2225,6 +2369,7 @@ export default function ChatView(props: ChatViewProps) {
       activeKnownTerminalIds,
       runningTerminalIds,
       terminalUiState.activeTerminalId,
+      queueProjectScriptWebServerDetection,
     ],
   );
 
@@ -3376,7 +3521,12 @@ export default function ChatView(props: ChatViewProps) {
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (event.source !== window || event.origin !== window.location.origin) {
+      const fromWindow = event.source === window && event.origin === window.location.origin;
+      const fromExtensionParent =
+        window.parent !== window &&
+        event.source === window.parent &&
+        event.origin.startsWith("chrome-extension://");
+      if (!fromWindow && !fromExtensionParent) {
         return;
       }
       if (!isBrowserAnnotationCaptureMessage(event.data)) {
@@ -4000,9 +4150,11 @@ export default function ChatView(props: ChatViewProps) {
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
           activeProjectScripts={activeProject?.scripts}
+          detectedDevServerUrl={detectedProjectScriptDevServerUrl}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
+          runningProjectScriptIds={runningProjectScriptIds}
           keybindings={keybindings}
           availableEditors={availableEditors}
           terminalAvailable={activeProject !== undefined}

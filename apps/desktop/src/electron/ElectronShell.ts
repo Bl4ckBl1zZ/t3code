@@ -48,7 +48,6 @@ interface ChromeLaunch {
 }
 
 const CHROME_LAUNCH_OPTIONS = {
-  detached: true,
   stdin: "ignore",
   stdout: "ignore",
   stderr: "ignore",
@@ -101,8 +100,8 @@ const launchChromeUrl = Effect.fn("desktop.electron.shell.launchChromeUrl")(func
   const command = ChildProcess.make(launch.command, launch.args, launch.options);
 
   return yield* spawner.spawn(command).pipe(
-    Effect.flatMap((handle) => handle.unref),
-    Effect.as(true),
+    Effect.flatMap((handle) => handle.exitCode),
+    Effect.map((exitCode) => Number(exitCode) === 0),
     Effect.scoped,
     Effect.catch(() => Effect.succeed(false)),
   );

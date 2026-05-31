@@ -11,6 +11,8 @@ import {
   TerminalAttachStreamEvent,
   TerminalClearInput,
   TerminalCloseInput,
+  TerminalDetectWebServersInput,
+  TerminalDetectWebServersResult,
   TerminalEvent,
   TerminalCwdError,
   TerminalError,
@@ -122,6 +124,13 @@ export interface TerminalManagerShape {
    * When `terminalId` is omitted, closes all sessions for the thread.
    */
   readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
+
+  /**
+   * Detect local HTTP servers started under a terminal's process tree.
+   */
+  readonly detectWebServers: (
+    input: TerminalDetectWebServersInput,
+  ) => Effect.Effect<TerminalDetectWebServersResult, TerminalError>;
 
   /**
    * Subscribe to terminal runtime events with a direct callback.

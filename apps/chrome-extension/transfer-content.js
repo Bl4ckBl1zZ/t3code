@@ -1,6 +1,8 @@
 /* global chrome */
 
 const TRANSFER_MESSAGE_TYPE = "t3code.transferToBrowser";
+const TRANSFER_START_MESSAGE_TYPE = "t3code.browserTransfer.start";
+const TRANSFER_RESULT_MESSAGE_TYPE = "t3code.browserTransfer.result";
 const PAGE_SOURCE = "t3code.web";
 const EXTENSION_SOURCE = "t3code.chrome-extension";
 const ANNOTATION_PROBE_MESSAGE_TYPE = "t3code.browserAnnotation.probe";
@@ -12,14 +14,25 @@ const DEV_ANNOTATION_ACTIVATE_MESSAGE_TYPE = "t3code.devPreview.activateAnnotati
 const DEV_ANNOTATION_CAPTURE_SCREENSHOT_MESSAGE_TYPE =
   "t3code.devPreview.captureAnnotationScreenshot";
 const DEV_ANNOTATION_SUBMIT_MESSAGE_TYPE = "t3code.devPreview.submitAnnotation";
+const DEV_ATTACH_SIDE_PANEL_MESSAGE_TYPE = "t3code.devPreview.attachSidePanel";
 const TRANSFER_FLAG_PARAM = "t3BrowserTransfer";
 const TRANSFER_ID_PARAM = "t3BrowserTransferId";
 const DEV_SERVER_URL_PARAM = "t3DevServerUrl";
+const GROUP_TITLE_PARAM = "t3GroupTitle";
+const SIDE_PANEL_SESSION_PARAM = "t3SidePanelSessionId";
 const DEFAULT_DEV_SERVER_URL = "http://localhost:3000/";
 const OVERLAY_CLASS = "t3code-annotation-overlay";
+const INLINE_SIDE_PANEL_HOST_ID = "t3code-inline-side-panel";
+const INLINE_SIDE_PANEL_STYLE_ID = "t3code-inline-side-panel-page-crop";
+const INLINE_SIDE_PANEL_ACTIVE_ATTR = "data-t3code-inline-side-panel";
+const INLINE_SIDE_PANEL_WIDTH_VAR = "--t3code-inline-side-panel-width";
+const INLINE_SIDE_PANEL_DEFAULT_WIDTH_PX = 440;
+const INLINE_SIDE_PANEL_MIN_WIDTH_PX = 320;
+const INLINE_SIDE_PANEL_VIEWPORT_MARGIN_PX = 48;
 const CROP_PADDING_PX = 32;
 const MAX_CROP_WIDTH_PX = 1_600;
 const MAX_CROP_HEIGHT_PX = 1_100;
+let inlineSidePanelWidthPx = INLINE_SIDE_PANEL_DEFAULT_WIDTH_PX;
 
 function normalizeHttpUrl(rawUrl) {
   try {
@@ -33,16 +46,28 @@ function normalizeHttpUrl(rawUrl) {
   }
 }
 
+function transferStorageKey(id) {
+  return `t3code:browser-transfer:${id}`;
+}
+
+function readSidePanelSessionId() {
+  const value = new URL(window.location.href).searchParams.get(SIDE_PANEL_SESSION_PARAM)?.trim();
+  return value && value.length > 0 ? value : null;
+}
+
 function hasHandledTransfer(id) {
   try {
-    const key = `t3code:browser-transfer:${id}`;
-    if (window.sessionStorage.getItem(key) === "1") {
-      return true;
-    }
-    window.sessionStorage.setItem(key, "1");
-    return false;
+    return window.sessionStorage.getItem(transferStorageKey(id)) === "1";
   } catch {
     return false;
+  }
+}
+
+function markTransferHandled(id) {
+  try {
+    window.sessionStorage.setItem(transferStorageKey(id), "1");
+  } catch {
+    // Duplicate suppression is best-effort.
   }
 }
 
@@ -58,10 +83,12 @@ function readTransferRequest() {
   if (hasHandledTransfer(id)) {
     return null;
   }
+  markTransferHandled(id);
 
   return {
     devServerUrl:
       normalizeHttpUrl(url.searchParams.get(DEV_SERVER_URL_PARAM) ?? "") ?? DEFAULT_DEV_SERVER_URL,
+    groupTitle: url.searchParams.get(GROUP_TITLE_PARAM)?.trim() || undefined,
     id,
   };
 }
@@ -71,8 +98,24 @@ function isPageBridgeMessage(data) {
     typeof data === "object" &&
     data !== null &&
     data.source === PAGE_SOURCE &&
-    (data.type === ANNOTATION_PROBE_MESSAGE_TYPE || data.type === ANNOTATION_ACTIVATE_MESSAGE_TYPE)
+    (data.type === TRANSFER_START_MESSAGE_TYPE ||
+      data.type === ANNOTATION_PROBE_MESSAGE_TYPE ||
+      data.type === ANNOTATION_ACTIVATE_MESSAGE_TYPE)
   );
+}
+
+function isTrustedT3CodePage() {
+  try {
+    const url = new URL(window.location.href);
+    return (
+      url.searchParams.get(TRANSFER_FLAG_PARAM) === "1" ||
+      url.searchParams.has(SIDE_PANEL_SESSION_PARAM) ||
+      url.pathname.startsWith("/_chat") ||
+      /\bT3 Code\b/i.test(document.title)
+    );
+  } catch {
+    return /\bT3 Code\b/i.test(document.title);
+  }
 }
 
 function postToPage(message) {
@@ -85,6 +128,253 @@ function postToPage(message) {
   );
 }
 
+function inlineSidePanelHost() {
+  return document.getElementById(INLINE_SIDE_PANEL_HOST_ID);
+}
+
+function setInlineSidePanelHidden(hidden) {
+  const host = inlineSidePanelHost();
+  if (!host) return;
+  host.style.visibility = hidden ? "hidden" : "visible";
+}
+
+function inlineSidePanelPageCropStyle() {
+  const existing = document.getElementById(INLINE_SIDE_PANEL_STYLE_ID);
+  if (existing instanceof HTMLStyleElement) {
+    return existing;
+  }
+
+  const style = document.createElement("style");
+  style.id = INLINE_SIDE_PANEL_STYLE_ID;
+  style.textContent = `
+    html[${INLINE_SIDE_PANEL_ACTIVE_ATTR}="true"] {
+      overflow-x: hidden !important;
+    }
+	    html[${INLINE_SIDE_PANEL_ACTIVE_ATTR}="true"] > body {
+	      box-sizing: border-box !important;
+	      max-width: calc(100vw - var(${INLINE_SIDE_PANEL_WIDTH_VAR})) !important;
+	      overflow-x: hidden !important;
+	      width: calc(100vw - var(${INLINE_SIDE_PANEL_WIDTH_VAR})) !important;
+	    }
+  `;
+  document.documentElement.append(style);
+  return style;
+}
+
+function applyInlineSidePanelPageCrop(width) {
+  inlineSidePanelPageCropStyle();
+  document.documentElement.setAttribute(INLINE_SIDE_PANEL_ACTIVE_ATTR, "true");
+  document.documentElement.style.setProperty(INLINE_SIDE_PANEL_WIDTH_VAR, `${width}px`);
+}
+
+function clearInlineSidePanelPageCrop() {
+  document.documentElement.removeAttribute(INLINE_SIDE_PANEL_ACTIVE_ATTR);
+  document.documentElement.style.removeProperty(INLINE_SIDE_PANEL_WIDTH_VAR);
+  document.getElementById(INLINE_SIDE_PANEL_STYLE_ID)?.remove();
+}
+
+function inlineSidePanelReservedWidth() {
+  return inlineSidePanelHost() ? inlineSidePanelWidthPx : 0;
+}
+
+function effectiveViewportRight() {
+  return Math.max(1, window.innerWidth - inlineSidePanelReservedWidth());
+}
+
+function maxInlineSidePanelWidthPx() {
+  return Math.max(220, window.innerWidth - INLINE_SIDE_PANEL_VIEWPORT_MARGIN_PX);
+}
+
+function normalizedInlineSidePanelWidth(value) {
+  const maxWidth = maxInlineSidePanelWidthPx();
+  const minWidth = Math.min(INLINE_SIDE_PANEL_MIN_WIDTH_PX, maxWidth);
+  return clamp(Math.round(value), minWidth, maxWidth);
+}
+
+function setInlineSidePanelWidth(host, width) {
+  inlineSidePanelWidthPx = normalizedInlineSidePanelWidth(width);
+  host.style.width = `${inlineSidePanelWidthPx}px`;
+  applyInlineSidePanelPageCrop(inlineSidePanelWidthPx);
+}
+
+function attachInlineSidePanel(message) {
+  if (window.top !== window) {
+    return;
+  }
+
+  const sidePanelSessionId =
+    typeof message.sidePanelSessionId === "string" && message.sidePanelSessionId.trim()
+      ? message.sidePanelSessionId.trim()
+      : null;
+  if (!sidePanelSessionId) {
+    throw new Error("Missing T3 Code side panel session.");
+  }
+
+  const panelUrl = chrome.runtime.getURL(
+    `sidepanel.html?sessionId=${encodeURIComponent(sidePanelSessionId)}&mode=inline`,
+  );
+  const existingHost = inlineSidePanelHost();
+  if (existingHost?.shadowRoot) {
+    const existingFrame = existingHost.shadowRoot.querySelector("iframe");
+    if (existingFrame instanceof HTMLIFrameElement && existingFrame.src !== panelUrl) {
+      existingFrame.src = panelUrl;
+    }
+    existingHost.style.visibility = "visible";
+    setInlineSidePanelWidth(existingHost, inlineSidePanelWidthPx);
+    return;
+  }
+  existingHost?.remove();
+
+  const host = document.createElement("div");
+  host.id = INLINE_SIDE_PANEL_HOST_ID;
+  host.style.position = "fixed";
+  host.style.top = "0";
+  host.style.right = "0";
+  host.style.bottom = "0";
+  host.style.zIndex = "2147483000";
+  host.style.pointerEvents = "auto";
+  setInlineSidePanelWidth(host, inlineSidePanelWidthPx);
+
+  const shadowRoot = host.attachShadow({ mode: "open" });
+  shadowRoot.innerHTML = `
+    <style>
+      :host { all: initial; }
+      .panel {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        background: #0a0a0a;
+        border-left: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: -18px 0 48px rgba(0, 0, 0, 0.34);
+        display: grid;
+        grid-template-rows: 30px minmax(0, 1fr);
+        position: relative;
+        color: #f4f4f5;
+        font: 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .resize-handle {
+        bottom: 0;
+        cursor: ew-resize;
+        left: -5px;
+        position: absolute;
+        top: 0;
+        touch-action: none;
+        width: 10px;
+        z-index: 2;
+      }
+      .resize-handle::after {
+        background: rgba(255, 255, 255, 0.16);
+        bottom: 0;
+        content: "";
+        left: 4px;
+        opacity: 0;
+        position: absolute;
+        top: 0;
+        transition: opacity 120ms ease;
+        width: 2px;
+      }
+      .resize-handle:hover::after,
+      .resize-handle[data-active="true"]::after {
+        opacity: 1;
+      }
+      .bar {
+        align-items: center;
+        background: #111113;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        box-sizing: border-box;
+        display: flex;
+        justify-content: flex-end;
+        min-width: 0;
+        padding: 0 6px;
+      }
+      button {
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 6px;
+        color: #a1a1aa;
+        cursor: pointer;
+        display: inline-flex;
+        font: inherit;
+        height: 22px;
+        justify-content: center;
+        padding: 0;
+        width: 22px;
+      }
+      button:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #f4f4f5;
+      }
+      iframe {
+        border: 0;
+        display: block;
+        height: 100%;
+        min-width: 0;
+        width: 100%;
+      }
+    </style>
+    <div class="panel">
+      <div class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize T3 Code side panel"></div>
+      <div class="bar"><button type="button" aria-label="Close T3 Code side panel">x</button></div>
+      <iframe title="T3 Code"></iframe>
+    </div>
+  `;
+  const frame = shadowRoot.querySelector("iframe");
+  const closeButton = shadowRoot.querySelector("button");
+  const resizeHandle = shadowRoot.querySelector(".resize-handle");
+  if (frame instanceof HTMLIFrameElement) {
+    frame.src = panelUrl;
+  }
+  closeButton?.addEventListener("click", () => {
+    host.remove();
+    clearInlineSidePanelPageCrop();
+  });
+  if (resizeHandle instanceof HTMLElement) {
+    let resizeState = null;
+    const stopResize = () => {
+      if (!resizeState) return;
+      resizeHandle.dataset.active = "false";
+      document.removeEventListener("pointermove", onResizeMove, true);
+      document.removeEventListener("pointerup", stopResize, true);
+      document.removeEventListener("pointercancel", stopResize, true);
+      document.body.style.cursor = resizeState.bodyCursor;
+      document.body.style.userSelect = resizeState.bodyUserSelect;
+      if (frame instanceof HTMLIFrameElement) {
+        frame.style.pointerEvents = resizeState.framePointerEvents;
+      }
+      resizeState = null;
+    };
+    const onResizeMove = (event) => {
+      if (!resizeState) return;
+      event.preventDefault();
+      const deltaX = resizeState.startClientX - event.clientX;
+      setInlineSidePanelWidth(host, resizeState.startWidth + deltaX);
+    };
+    resizeHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      resizeState = {
+        startClientX: event.clientX,
+        startWidth: host.getBoundingClientRect().width,
+        bodyCursor: document.body.style.cursor,
+        bodyUserSelect: document.body.style.userSelect,
+        framePointerEvents: frame instanceof HTMLIFrameElement ? frame.style.pointerEvents : "",
+      };
+      resizeHandle.dataset.active = "true";
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+      if (frame instanceof HTMLIFrameElement) {
+        frame.style.pointerEvents = "none";
+      }
+      document.addEventListener("pointermove", onResizeMove, true);
+      document.addEventListener("pointerup", stopResize, true);
+      document.addEventListener("pointercancel", stopResize, true);
+    });
+    window.addEventListener("resize", () => setInlineSidePanelWidth(host, inlineSidePanelWidthPx));
+  }
+  document.documentElement.append(host);
+}
+
 async function sendRuntimeMessage(message) {
   const response = await chrome.runtime.sendMessage(message);
   if (!response?.ok) {
@@ -95,11 +385,16 @@ async function sendRuntimeMessage(message) {
 
 async function postAnnotationStatus(type) {
   try {
-    const status = await sendRuntimeMessage({ type: ANNOTATION_STATUS_MESSAGE_TYPE });
+    const sidePanelSessionId = readSidePanelSessionId();
+    const status = await sendRuntimeMessage({
+      type: ANNOTATION_STATUS_MESSAGE_TYPE,
+      ...(sidePanelSessionId ? { sidePanelSessionId } : {}),
+    });
     postToPage({
       type,
       linked: Boolean(status?.linked),
       active: Boolean(status?.active),
+      ...(status?.browserContext ? { browserContext: status.browserContext } : {}),
     });
   } catch {
     postToPage({ type, linked: false, active: false });
@@ -108,11 +403,16 @@ async function postAnnotationStatus(type) {
 
 async function activateAnnotationModeFromPage() {
   try {
-    const status = await sendRuntimeMessage({ type: ANNOTATION_ACTIVATE_MESSAGE_TYPE });
+    const sidePanelSessionId = readSidePanelSessionId();
+    const status = await sendRuntimeMessage({
+      type: ANNOTATION_ACTIVATE_MESSAGE_TYPE,
+      ...(sidePanelSessionId ? { sidePanelSessionId } : {}),
+    });
     postToPage({
       type: ANNOTATION_STATUS_MESSAGE_TYPE,
       linked: Boolean(status?.linked),
       active: Boolean(status?.active),
+      ...(status?.browserContext ? { browserContext: status.browserContext } : {}),
     });
   } catch (error) {
     postToPage({
@@ -124,6 +424,51 @@ async function activateAnnotationModeFromPage() {
   }
 }
 
+async function startTransferFromPage(message) {
+  const id =
+    typeof message.id === "string" && message.id.trim()
+      ? message.id.trim()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const devServerUrl = normalizeHttpUrl(message.devServerUrl ?? "") ?? DEFAULT_DEV_SERVER_URL;
+  const groupTitle =
+    typeof message.groupTitle === "string" && message.groupTitle.trim()
+      ? message.groupTitle.trim()
+      : undefined;
+  if (hasHandledTransfer(id)) {
+    postToPage({
+      type: TRANSFER_RESULT_MESSAGE_TYPE,
+      id,
+      ok: true,
+      duplicate: true,
+    });
+    return;
+  }
+
+  try {
+    const result = await sendRuntimeMessage({
+      type: TRANSFER_MESSAGE_TYPE,
+      devServerUrl,
+      groupTitle,
+      id,
+    });
+    markTransferHandled(id);
+    postToPage({
+      type: TRANSFER_RESULT_MESSAGE_TYPE,
+      id,
+      ok: true,
+      devTabId: result?.devTabId,
+      groupId: result?.groupId,
+    });
+  } catch (error) {
+    postToPage({
+      type: TRANSFER_RESULT_MESSAGE_TYPE,
+      id,
+      ok: false,
+      error: error instanceof Error ? error.message : "Transfer failed.",
+    });
+  }
+}
+
 window.addEventListener("message", (event) => {
   if (event.source !== window || event.origin !== window.location.origin) {
     return;
@@ -131,9 +476,17 @@ window.addEventListener("message", (event) => {
   if (!isPageBridgeMessage(event.data)) {
     return;
   }
+  if (!isTrustedT3CodePage()) {
+    return;
+  }
 
   if (event.data.type === ANNOTATION_PROBE_MESSAGE_TYPE) {
     void postAnnotationStatus(ANNOTATION_READY_MESSAGE_TYPE);
+    return;
+  }
+
+  if (event.data.type === TRANSFER_START_MESSAGE_TYPE) {
+    void startTransferFromPage(event.data);
     return;
   }
 
@@ -204,9 +557,10 @@ function resolveElementAtPoint(x, y, state) {
 
 function visibleRectForElement(element) {
   const rect = element.getBoundingClientRect();
-  const left = clamp(rect.left, 0, window.innerWidth);
+  const viewportRight = effectiveViewportRight();
+  const left = clamp(rect.left, 0, viewportRight);
   const top = clamp(rect.top, 0, window.innerHeight);
-  const right = clamp(rect.right, 0, window.innerWidth);
+  const right = clamp(rect.right, 0, viewportRight);
   const bottom = clamp(rect.bottom, 0, window.innerHeight);
   return {
     x: left,
@@ -218,14 +572,15 @@ function visibleRectForElement(element) {
 
 function cropRectForElement(element, pointerX, pointerY) {
   const rect = visibleRectForElement(element);
-  let left = clamp(rect.x - CROP_PADDING_PX, 0, window.innerWidth);
+  const viewportRight = effectiveViewportRight();
+  let left = clamp(rect.x - CROP_PADDING_PX, 0, viewportRight);
   let top = clamp(rect.y - CROP_PADDING_PX, 0, window.innerHeight);
-  let right = clamp(rect.x + rect.width + CROP_PADDING_PX, 0, window.innerWidth);
+  let right = clamp(rect.x + rect.width + CROP_PADDING_PX, 0, viewportRight);
   let bottom = clamp(rect.y + rect.height + CROP_PADDING_PX, 0, window.innerHeight);
 
   if (right - left > MAX_CROP_WIDTH_PX) {
     const center = clamp(pointerX, left + MAX_CROP_WIDTH_PX / 2, right - MAX_CROP_WIDTH_PX / 2);
-    left = clamp(center - MAX_CROP_WIDTH_PX / 2, 0, window.innerWidth - MAX_CROP_WIDTH_PX);
+    left = clamp(center - MAX_CROP_WIDTH_PX / 2, 0, viewportRight - MAX_CROP_WIDTH_PX);
     right = left + MAX_CROP_WIDTH_PX;
   }
   if (bottom - top > MAX_CROP_HEIGHT_PX) {
@@ -300,13 +655,16 @@ function removeAnnotationMode(state) {
   window.removeEventListener("pointermove", state.onPointerMove, true);
   window.removeEventListener("click", state.onClick, true);
   window.removeEventListener("keydown", state.onKeyDown, true);
+  state.highlight?.remove();
+  state.notice?.remove();
   state.host?.remove();
   activeAnnotationState = null;
 }
 
 function placeAnnotationForm(host, cropRect) {
   const width = 320;
-  const left = clamp(cropRect.x, 12, Math.max(12, window.innerWidth - width - 12));
+  const viewportRight = effectiveViewportRight();
+  const left = clamp(cropRect.x, 12, Math.max(12, viewportRight - width - 12));
   const below = cropRect.y + cropRect.height + 10;
   const top =
     below + 118 <= window.innerHeight
@@ -389,7 +747,14 @@ function showAnnotationForm(state, element, cropRect, screenshotDataUrl) {
     if (event.key === "Escape") {
       event.preventDefault();
       removeAnnotationMode(state);
-      void chrome.runtime.sendMessage({ type: ANNOTATION_STATUS_MESSAGE_TYPE }).catch(() => {});
+      void chrome.runtime
+        .sendMessage({
+          type: ANNOTATION_STATUS_MESSAGE_TYPE,
+          ...(typeof state.sidePanelSessionId === "string"
+            ? { sidePanelSessionId: state.sidePanelSessionId }
+            : {}),
+        })
+        .catch(() => {});
       return;
     }
     if (event.key !== "Enter" || event.shiftKey) {
@@ -405,6 +770,10 @@ function showAnnotationForm(state, element, cropRect, screenshotDataUrl) {
     textarea.disabled = true;
     void sendRuntimeMessage({
       type: DEV_ANNOTATION_SUBMIT_MESSAGE_TYPE,
+      ...(typeof state.sourceTabId === "number" ? { sourceTabId: state.sourceTabId } : {}),
+      ...(typeof state.sidePanelSessionId === "string"
+        ? { sidePanelSessionId: state.sidePanelSessionId }
+        : {}),
       text,
       screenshotDataUrl,
       pageUrl: window.location.href,
@@ -426,7 +795,7 @@ function showAnnotationForm(state, element, cropRect, screenshotDataUrl) {
 
 let activeAnnotationState = null;
 
-function startAnnotationMode() {
+function startAnnotationMode(message) {
   if (activeAnnotationState) {
     removeAnnotationMode(activeAnnotationState);
   }
@@ -477,6 +846,11 @@ function startAnnotationMode() {
     shadowRoot,
     highlight,
     notice,
+    sourceTabId: typeof message.sourceTabId === "number" ? message.sourceTabId : null,
+    sidePanelSessionId:
+      typeof message.sidePanelSessionId === "string" && message.sidePanelSessionId.trim()
+        ? message.sidePanelSessionId.trim()
+        : null,
     currentElement: null,
     inputOpen: false,
     capturing: false,
@@ -517,13 +891,22 @@ function startAnnotationMode() {
     showNotice(state, "Capturing screenshot...");
     const cropRect = cropRectForElement(element, event.clientX, event.clientY);
 
-    void sendRuntimeMessage({ type: DEV_ANNOTATION_CAPTURE_SCREENSHOT_MESSAGE_TYPE })
+    setInlineSidePanelHidden(true);
+    void sendRuntimeMessage({
+      type: DEV_ANNOTATION_CAPTURE_SCREENSHOT_MESSAGE_TYPE,
+      ...(typeof state.sourceTabId === "number" ? { sourceTabId: state.sourceTabId } : {}),
+      ...(typeof state.sidePanelSessionId === "string"
+        ? { sidePanelSessionId: state.sidePanelSessionId }
+        : {}),
+    })
       .then((result) => cropScreenshot(result.screenshotDataUrl, cropRect))
       .then((croppedDataUrl) => {
+        setInlineSidePanelHidden(false);
         state.capturing = false;
         showAnnotationForm(state, element, cropRect, croppedDataUrl);
       })
       .catch((error) => {
+        setInlineSidePanelHidden(false);
         state.capturing = false;
         showNotice(state, error instanceof Error ? error.message : "Could not capture screenshot.");
       });
@@ -549,13 +932,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     typeof message !== "object" ||
     message === null ||
     (message.type !== DEV_ANNOTATION_ACTIVATE_MESSAGE_TYPE &&
+      message.type !== DEV_ATTACH_SIDE_PANEL_MESSAGE_TYPE &&
       message.type !== ANNOTATION_CAPTURED_MESSAGE_TYPE)
   ) {
     return false;
   }
 
+  if (message.type === DEV_ATTACH_SIDE_PANEL_MESSAGE_TYPE) {
+    try {
+      attachInlineSidePanel(message);
+      sendResponse({ ok: true });
+    } catch (error) {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not attach T3 Code side panel.",
+      });
+    }
+    return false;
+  }
+
   if (message.type === DEV_ANNOTATION_ACTIVATE_MESSAGE_TYPE) {
-    startAnnotationMode();
+    startAnnotationMode(message);
     sendResponse({ ok: true });
     return false;
   }

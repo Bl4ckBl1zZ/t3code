@@ -90,6 +90,26 @@ export const TerminalCloseInput = Schema.Struct({
 });
 export type TerminalCloseInput = typeof TerminalCloseInput.Type;
 
+export const TerminalDetectWebServersInput = TerminalSessionInput;
+export type TerminalDetectWebServersInput = Schema.Codec.Encoded<
+  typeof TerminalDetectWebServersInput
+>;
+
+export const TerminalDetectedWebServer = Schema.Struct({
+  url: Schema.String.check(Schema.isNonEmpty()),
+  host: Schema.String.check(Schema.isNonEmpty()),
+  port: Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(65_535)),
+  pid: Schema.Int.check(Schema.isGreaterThan(0)),
+  verified: Schema.Boolean,
+  source: Schema.Literal("listening-port"),
+});
+export type TerminalDetectedWebServer = typeof TerminalDetectedWebServer.Type;
+
+export const TerminalDetectWebServersResult = Schema.Struct({
+  servers: Schema.Array(TerminalDetectedWebServer),
+});
+export type TerminalDetectWebServersResult = typeof TerminalDetectWebServersResult.Type;
+
 export const TerminalSessionStatus = Schema.Literals(["starting", "running", "exited", "error"]);
 export type TerminalSessionStatus = typeof TerminalSessionStatus.Type;
 

@@ -30,7 +30,9 @@ interface ChatHeaderProps {
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
+  detectedDevServerUrl: string | null;
   preferredScriptId: string | null;
+  runningProjectScriptIds: ReadonlySet<string>;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   terminalAvailable: boolean;
@@ -82,7 +84,9 @@ export const ChatHeader = memo(function ChatHeader({
   isGitRepo,
   openInCwd,
   activeProjectScripts,
+  detectedDevServerUrl,
   preferredScriptId,
+  runningProjectScriptIds,
   keybindings,
   availableEditors,
   terminalAvailable,
@@ -147,6 +151,7 @@ export const ChatHeader = memo(function ChatHeader({
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
+            runningScriptIds={runningProjectScriptIds}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
@@ -161,7 +166,11 @@ export const ChatHeader = memo(function ChatHeader({
           />
         )}
         {showTransferToBrowser && (
-          <TransferToBrowserButton activeProjectScripts={activeProjectScripts} />
+          <TransferToBrowserButton
+            activeProjectName={activeProjectName}
+            activeProjectScripts={activeProjectScripts}
+            detectedDevServerUrl={detectedDevServerUrl}
+          />
         )}
         {showBrowserAnnotationButton && <BrowserAnnotationButton />}
         {activeProjectName && (

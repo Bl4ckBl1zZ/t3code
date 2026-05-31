@@ -23,6 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import { TestClock } from "effect/testing";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { expect } from "vitest";
 
 import * as ProcessRunner from "../../processRunner.ts";
@@ -225,7 +226,11 @@ const createManager = (
 ): Effect.Effect<
   ManagerFixture,
   PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path | Scope.Scope | ProcessRunner.ProcessRunner
+  | FileSystem.FileSystem
+  | Path.Path
+  | Scope.Scope
+  | ProcessRunner.ProcessRunner
+  | HttpClient.HttpClient
 > =>
   Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) =>
     Effect.gen(function* () {
@@ -270,7 +275,11 @@ const createManager = (
   );
 
 it.layer(
-  Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.mergeAll(
+    NodeServices.layer,
+    ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+    FetchHttpClient.layer,
+  ),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
   const itEffectSkipOnWindows = process.platform === "win32" ? it.effect.skip : it.effect;

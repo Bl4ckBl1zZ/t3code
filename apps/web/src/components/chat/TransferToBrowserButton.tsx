@@ -7,21 +7,31 @@ import {
   inferBrowserTransferDevServerUrl,
   resolveBrowserRoutePath,
 } from "../../browserTransfer";
+import { selectPairingEndpoint } from "../../advertisedEndpointSelection";
 import { createServerPairingCredential } from "../../environments/primary";
+import { useUiStateStore } from "../../uiStateStore";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const TransferToBrowserButton = memo(function TransferToBrowserButton({
+  activeProjectName,
   activeProjectScripts,
+  detectedDevServerUrl,
 }: {
+  readonly activeProjectName: string | undefined;
   readonly activeProjectScripts: readonly ProjectScript[] | undefined;
+  readonly detectedDevServerUrl: string | null;
 }) {
   const [isTransferring, setIsTransferring] = useState(false);
-  const devServerUrl = useMemo(
+  const defaultAdvertisedEndpointKey = useUiStateStore(
+    (state) => state.defaultAdvertisedEndpointKey,
+  );
+  const inferredDevServerUrl = useMemo(
     () => inferBrowserTransferDevServerUrl(activeProjectScripts),
     [activeProjectScripts],
   );
+  const devServerUrl = detectedDevServerUrl ?? inferredDevServerUrl;
 
   const transferToBrowser = () => {
     if (isTransferring) return;
@@ -37,29 +47,40 @@ export const TransferToBrowserButton = memo(function TransferToBrowserButton({
     setIsTransferring(true);
     void (async () => {
       const bootstrap = bridge.getLocalEnvironmentBootstrap();
-      const t3CodeBaseUrl = bootstrap?.httpBaseUrl;
+      let t3CodeBaseUrl = bootstrap?.httpBaseUrl;
+      const advertisedEndpoints = await bridge.getAdvertisedEndpoints().catch(() => []);
+      const advertisedEndpoint = selectPairingEndpoint(
+        advertisedEndpoints,
+        defaultAdvertisedEndpointKey,
+      );
+      t3CodeBaseUrl = advertisedEndpoint?.httpBaseUrl ?? t3CodeBaseUrl;
       if (!t3CodeBaseUrl) {
         throw new Error("Local T3 Code URL is unavailable.");
       }
 
+      const extensionInstallPath = bridge?.getBrowserExtensionInstallPath
+        ? await bridge.getBrowserExtensionInstallPath()
+        : null;
       const pairingCredential = await createServerPairingCredential("Chrome browser transfer");
       const transferUrl = buildBrowserTransferUrl({
         t3CodeBaseUrl,
         routePath: resolveBrowserRoutePath(window.location),
         pairingCredential: pairingCredential.credential,
         devServerUrl,
+        ...(activeProjectName ? { groupTitle: activeProjectName } : {}),
+        extensionInstallPath,
       });
 
       const opened = bridge.openInChrome
         ? await bridge.openInChrome(transferUrl)
         : await bridge.openExternal(transferUrl);
       if (!opened) {
-        throw new Error("Chrome could not be opened.");
+        throw new Error("The browser could not be opened.");
       }
 
       toastManager.add({
         type: "success",
-        title: "Transfer sent to Chrome",
+        title: "Transfer sent to browser",
       });
     })()
       .catch((error) => {
@@ -95,7 +116,9 @@ export const TransferToBrowserButton = memo(function TransferToBrowserButton({
           Transfer to Browser
         </span>
       </TooltipTrigger>
-      <TooltipPopup side="bottom">Open T3 Code and {devServerUrl} together in Chrome.</TooltipPopup>
+      <TooltipPopup side="bottom">
+        Open {devServerUrl} with T3 Code in Chrome side panel.
+      </TooltipPopup>
     </Tooltip>
   );
 });

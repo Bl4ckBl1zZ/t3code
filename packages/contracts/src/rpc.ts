@@ -67,6 +67,8 @@ import {
   TerminalAttachStreamEvent,
   TerminalClearInput,
   TerminalCloseInput,
+  TerminalDetectWebServersInput,
+  TerminalDetectWebServersResult,
   TerminalError,
   TerminalEvent,
   TerminalMetadataStreamEvent,
@@ -147,6 +149,7 @@ export const WS_METHODS = {
   terminalClear: "terminal.clear",
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
+  terminalDetectWebServers: "terminal.detectWebServers",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -422,6 +425,12 @@ export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
   error: TerminalError,
 });
 
+export const WsTerminalDetectWebServersRpc = Rpc.make(WS_METHODS.terminalDetectWebServers, {
+  payload: TerminalDetectWebServersInput,
+  success: TerminalDetectWebServersResult,
+  error: TerminalError,
+});
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -549,6 +558,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalClearRpc,
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
+  WsTerminalDetectWebServersRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeTerminalMetadataRpc,
   WsSubscribeServerConfigRpc,

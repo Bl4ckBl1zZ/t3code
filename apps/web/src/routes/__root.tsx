@@ -12,6 +12,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
+import { BrowserTransferSetupPrompt } from "../components/BrowserTransferSetupPrompt";
 import { CommandPalette } from "../components/CommandPalette";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
@@ -61,13 +62,17 @@ import {
   resolveInitialServerAuthGateState,
   updatePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
+import { rememberBrowserTransferSetupRequestFromUrl } from "../browserTransfer";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
 }>()({
   beforeLoad: async ({ location }) => {
-    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
+    const currentUrl = new URL(window.location.href);
+    rememberBrowserTransferSetupRequestFromUrl(currentUrl);
+
+    if (location.pathname === "/pair" && hasHostedPairingRequest(currentUrl)) {
       return {
         authGateState: {
           status: "hosted-pairing",
@@ -75,7 +80,7 @@ export const Route = createRootRouteWithContext<{
       };
     }
 
-    if (isHostedStaticApp(new URL(window.location.href))) {
+    if (isHostedStaticApp(currentUrl)) {
       await waitForSavedEnvironmentRegistryHydration();
       return {
         authGateState: {
@@ -114,7 +119,14 @@ function RootRouteView() {
   }, [pathname]);
 
   if (pathname === "/pair") {
-    return <Outlet />;
+    return (
+      <ToastProvider>
+        <AnchoredToastProvider>
+          <Outlet />
+          <BrowserTransferSetupPrompt />
+        </AnchoredToastProvider>
+      </ToastProvider>
+    );
   }
 
   if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
@@ -141,6 +153,7 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <SlowRpcAckToastCoordinator /> : null}
+        <BrowserTransferSetupPrompt />
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>{appShell}</WebSocketConnectionSurface>
         ) : (
