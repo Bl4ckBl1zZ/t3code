@@ -3056,8 +3056,14 @@ export default function ChatView(props: ChatViewProps) {
       }
       return;
     }
-    if (!activeProject) return;
     const threadIdForSend = activeThread.id;
+    if (!activeProject) {
+      setThreadError(
+        threadIdForSend,
+        "Workspace is still loading. Wait for the workspace to finish adding, then try again.",
+      );
+      return;
+    }
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath

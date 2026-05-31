@@ -1121,9 +1121,20 @@ function OpenCommandPaletteDialog() {
             ),
           });
         } else {
-          await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
-            envMode: settings.defaultThreadEnvMode,
-          }).catch(() => undefined);
+          try {
+            await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
+              envMode: settings.defaultThreadEnvMode,
+            });
+          } catch (error) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to open thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+            return;
+          }
         }
         setOpen(false);
         return;
@@ -1146,7 +1157,7 @@ function OpenCommandPaletteDialog() {
         });
         await handleNewThread(scopeProjectRef(browseEnvironmentId, projectId), {
           envMode: settings.defaultThreadEnvMode,
-        }).catch(() => undefined);
+        });
         setOpen(false);
       } catch (error) {
         toastManager.add(
