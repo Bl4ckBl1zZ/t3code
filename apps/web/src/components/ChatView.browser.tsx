@@ -62,6 +62,7 @@ import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
+import { TERMINAL_INTERRUPT_SEQUENCE } from "./ChatView.logic";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
@@ -2367,6 +2368,117 @@ describe("ChatView timeline estimator parity (full app)", () => {
           });
         },
         { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("stops running project scripts instead of starting another terminal", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadKey: {
+        [THREAD_KEY]: {
+          threadId: THREAD_ID,
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+          logicalProjectKey: PROJECT_DRAFT_KEY,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      logicalProjectDraftThreadKeyByLogicalProjectKey: {
+        [PROJECT_DRAFT_KEY]: THREAD_KEY,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withProjectScripts(createDraftOnlySnapshot(), [
+        {
+          id: "lint",
+          name: "Lint",
+          command: "bun run lint",
+          icon: "lint",
+          runOnWorktreeCreate: false,
+        },
+      ]),
+    });
+
+    try {
+      const runButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.title === "Run Lint",
+          ) as HTMLButtonElement | null,
+        "Unable to find Run Lint button.",
+      );
+      runButton.click();
+
+      let terminalId = "";
+      await vi.waitFor(
+        () => {
+          const openRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.terminalOpen,
+          );
+          expect(openRequest).toMatchObject({
+            _tag: WS_METHODS.terminalOpen,
+            threadId: THREAD_ID,
+          });
+          terminalId = String(openRequest?.terminalId ?? "");
+          expect(terminalId).not.toBe("");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      rpcHarness.emitStreamValue(WS_METHODS.subscribeTerminalMetadata, {
+        type: "upsert",
+        terminal: {
+          threadId: THREAD_ID,
+          terminalId,
+          cwd: "/repo/project",
+          worktreePath: null,
+          status: "running",
+          pid: 123,
+          exitCode: null,
+          exitSignal: null,
+          hasRunningSubprocess: true,
+          label: "bun",
+          updatedAt: isoAt(1_200),
+        },
+      });
+
+      const stopButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.title === "Stop Lint",
+          ) as HTMLButtonElement | null,
+        "Unable to find Stop Lint button.",
+      );
+      stopButton.click();
+
+      await vi.waitFor(
+        () => {
+          const interruptRequest = wsRequests.find(
+            (request) =>
+              request._tag === WS_METHODS.terminalWrite &&
+              request.terminalId === terminalId &&
+              request.data === TERMINAL_INTERRUPT_SEQUENCE,
+          );
+          expect(interruptRequest).toMatchObject({
+            _tag: WS_METHODS.terminalWrite,
+            threadId: THREAD_ID,
+            terminalId,
+            data: TERMINAL_INTERRUPT_SEQUENCE,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(wsRequests.filter((request) => request._tag === WS_METHODS.terminalOpen)).toHaveLength(
+        1,
       );
     } finally {
       await mounted.cleanup();

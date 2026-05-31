@@ -65,6 +65,7 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatTimestamp } from "../../timestampFormat";
+import { AuthenticatedImage } from "../AuthenticatedImage";
 
 import {
   buildInlineTerminalContextText,
@@ -361,10 +362,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       ctx.onImageExpand(preview);
                     }}
                   >
-                    <img
+                    <AuthenticatedImage
                       src={image.previewUrl}
                       alt={image.name}
                       className="block h-auto max-h-[220px] w-full object-cover"
+                      fallback={
+                        <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+                          {image.name}
+                        </div>
+                      }
                     />
                   </button>
                 ) : (

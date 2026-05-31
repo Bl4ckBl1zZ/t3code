@@ -1,7 +1,11 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { shouldShowBrowserAnnotationButton, shouldShowOpenInPicker } from "./ChatHeader";
+import {
+  shouldShowBrowserAnnotationButton,
+  shouldShowOpenInPicker,
+  shouldShowTransferToBrowserButton,
+} from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -50,14 +54,26 @@ describe("shouldShowOpenInPicker", () => {
 describe("shouldShowBrowserAnnotationButton", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
 
-  it("shows in primary-project chats", () => {
+  it("shows in primary-project browser-agent sidebars", () => {
     expect(
       shouldShowBrowserAnnotationButton({
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+        browserAgentSidebarMode: true,
       }),
     ).toBe(true);
+  });
+
+  it("hides outside browser-agent sidebars", () => {
+    expect(
+      shouldShowBrowserAnnotationButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        browserAgentSidebarMode: false,
+      }),
+    ).toBe(false);
   });
 
   it("hides without an active project", () => {
@@ -66,6 +82,7 @@ describe("shouldShowBrowserAnnotationButton", () => {
         activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+        browserAgentSidebarMode: true,
       }),
     ).toBe(false);
   });
@@ -76,6 +93,55 @@ describe("shouldShowBrowserAnnotationButton", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId,
+        browserAgentSidebarMode: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldShowTransferToBrowserButton", () => {
+  const primaryEnvironmentId = EnvironmentId.make("environment-primary");
+
+  it("shows in primary-project app chats", () => {
+    expect(
+      shouldShowTransferToBrowserButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        browserAgentSidebarMode: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides in browser-agent sidebars", () => {
+    expect(
+      shouldShowTransferToBrowserButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        browserAgentSidebarMode: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides without an active project", () => {
+    expect(
+      shouldShowTransferToBrowserButton({
+        activeProjectName: undefined,
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        browserAgentSidebarMode: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides for remote environments", () => {
+    expect(
+      shouldShowTransferToBrowserButton({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
+        primaryEnvironmentId,
+        browserAgentSidebarMode: false,
       }),
     ).toBe(false);
   });

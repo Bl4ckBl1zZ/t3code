@@ -45,7 +45,12 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
-import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import {
+  PLAN_SIDE_PANEL_SEARCH_VALUE,
+  parseDiffRouteSearch,
+  stripRightPanelSearchParams,
+  stripSidePanelSearchParams,
+} from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
@@ -173,9 +178,11 @@ import {
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
+  runningProjectScriptTerminalIds,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   shouldWriteThreadErrorToCurrentServerThread,
+  TERMINAL_INTERRUPT_SEQUENCE,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -882,7 +889,7 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
+  const [draftPlanSidebarOpen, setDraftPlanSidebarOpen] = useState(false);
   const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
@@ -915,6 +922,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const previousActiveThreadIdRef = useRef<ThreadId | null>(null);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
   const projectScriptWebServerDetectionGenerationRef = useRef<Record<string, number>>({});
 
@@ -992,6 +1000,9 @@ export default function ChatView(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.diff === "1";
+  const planSidebarOpen = isServerThread
+    ? rawSearch.sidePanel === PLAN_SIDE_PANEL_SEARCH_VALUE
+    : draftPlanSidebarOpen;
   const activeThreadId = activeThread?.id ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
@@ -1988,8 +1999,8 @@ export default function ChatView(props: ChatViewProps) {
       },
       replace: true,
       search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
-        return diffOpen ? { ...rest, diff: undefined } : { ...rest, diff: "1" };
+        const rest = stripRightPanelSearchParams(previous);
+        return diffOpen ? rest : { ...rest, diff: "1" };
       },
     });
   }, [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, threadId]);
@@ -2258,6 +2269,44 @@ export default function ChatView(props: ChatViewProps) {
     ) => {
       const api = readEnvironmentApi(environmentId);
       if (!api || !activeThreadId || !activeProject || !activeThread) return;
+      const runKey = projectScriptRunKey(activeProject.id, script.id);
+      const runningScriptTerminalIds = runningProjectScriptTerminalIds({
+        scriptTerminalIds: projectScriptTerminalIdsByRunKey[runKey],
+        runningTerminalIds,
+      });
+      if (runningScriptTerminalIds.length > 0) {
+        const targetTerminalId = runningScriptTerminalIds[0];
+        if (activeThreadRef && targetTerminalId) {
+          storeSetActiveTerminal(activeThreadRef, targetTerminalId);
+          setTerminalFocusRequestId((value) => value + 1);
+        }
+        projectScriptWebServerDetectionGenerationRef.current = {
+          ...projectScriptWebServerDetectionGenerationRef.current,
+          [runKey]: (projectScriptWebServerDetectionGenerationRef.current[runKey] ?? 0) + 1,
+        };
+
+        const stopResults = await Promise.allSettled(
+          runningScriptTerminalIds.map((terminalId) =>
+            api.terminal.write({
+              threadId: activeThreadId,
+              terminalId,
+              data: TERMINAL_INTERRUPT_SEQUENCE,
+            }),
+          ),
+        );
+        const failedStop = stopResults.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (failedStop && stopResults.every((result) => result.status === "rejected")) {
+          setThreadError(
+            activeThreadId,
+            failedStop.reason instanceof Error
+              ? failedStop.reason.message
+              : `Failed to stop script "${script.name}".`,
+          );
+        }
+        return;
+      }
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -2293,7 +2342,6 @@ export default function ChatView(props: ChatViewProps) {
       const targetTerminalId = shouldCreateNewTerminal
         ? nextTerminalId(activeKnownTerminalIds)
         : baseTerminalId;
-      const runKey = projectScriptRunKey(activeProject.id, script.id);
       setProjectScriptTerminalIdsByRunKey((current) => {
         const existingTerminalIds = current[runKey] ?? [];
         if (existingTerminalIds.includes(targetTerminalId)) {
@@ -2360,6 +2408,7 @@ export default function ChatView(props: ChatViewProps) {
       setLastInvokedScriptByProjectId,
       environmentId,
       activeKnownTerminalIds,
+      projectScriptTerminalIdsByRunKey,
       runningTerminalIds,
       terminalUiState.activeTerminalId,
       queueProjectScriptWebServerDetection,
@@ -2541,22 +2590,55 @@ export default function ChatView(props: ChatViewProps) {
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
-  const togglePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen((open) => {
-      if (open) {
-        planSidebarDismissedForTurnRef.current =
-          activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-      } else {
-        planSidebarDismissedForTurnRef.current = null;
+
+  const setPlanSidebarOpenForCurrentThread = useCallback(
+    (open: boolean) => {
+      if (!isServerThread) {
+        setDraftPlanSidebarOpen(open);
+        return;
       }
-      return !open;
-    });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId,
+          threadId,
+        },
+        replace: true,
+        search: (previous) => {
+          if (open) {
+            const rest = stripRightPanelSearchParams(previous);
+            return { ...rest, sidePanel: PLAN_SIDE_PANEL_SEARCH_VALUE };
+          }
+          return stripSidePanelSearchParams(previous);
+        },
+      });
+    },
+    [environmentId, isServerThread, navigate, threadId],
+  );
+
+  const togglePlanSidebar = useCallback(() => {
+    if (planSidebarOpen) {
+      planSidebarDismissedForTurnRef.current =
+        activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+      setPlanSidebarOpenForCurrentThread(false);
+      return;
+    }
+
+    planSidebarDismissedForTurnRef.current = null;
+    setPlanSidebarOpenForCurrentThread(true);
+  }, [
+    activePlan?.turnId,
+    planSidebarOpen,
+    setPlanSidebarOpenForCurrentThread,
+    sidebarProposedPlan?.turnId,
+  ]);
+
   const closePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen(false);
     planSidebarDismissedForTurnRef.current =
       activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+    setPlanSidebarOpenForCurrentThread(false);
+  }, [activePlan?.turnId, setPlanSidebarOpenForCurrentThread, sidebarProposedPlan?.turnId]);
 
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -2639,15 +2721,27 @@ export default function ChatView(props: ChatViewProps) {
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    if (planSidebarOpenOnNextThreadRef.current) {
-      planSidebarOpenOnNextThreadRef.current = false;
-      setPlanSidebarOpen(true);
-    } else {
-      planSidebarOpenOnNextThreadRef.current = false;
-      setPlanSidebarOpen(false);
+
+    const previousActiveThreadId = previousActiveThreadIdRef.current;
+    const nextActiveThreadId = activeThread?.id ?? null;
+    if (nextActiveThreadId !== null) {
+      previousActiveThreadIdRef.current = nextActiveThreadId;
     }
-    planSidebarDismissedForTurnRef.current = null;
-  }, [activeThread?.id]);
+
+    const threadChanged =
+      previousActiveThreadId !== null &&
+      nextActiveThreadId !== null &&
+      previousActiveThreadId !== nextActiveThreadId;
+    if (threadChanged) {
+      if (planSidebarOpenOnNextThreadRef.current) {
+        setPlanSidebarOpenForCurrentThread(true);
+      } else {
+        setPlanSidebarOpenForCurrentThread(false);
+      }
+      planSidebarOpenOnNextThreadRef.current = false;
+      planSidebarDismissedForTurnRef.current = null;
+    }
+  }, [activeThread?.id, setPlanSidebarOpenForCurrentThread]);
 
   // Auto-open the plan sidebar when plan/todo steps arrive for the current turn.
   // Don't auto-open for plans carried over from a previous turn (the user can open manually).
@@ -2659,12 +2753,13 @@ export default function ChatView(props: ChatViewProps) {
     if (latestTurnId && activePlan.turnId !== latestTurnId) return;
     const turnKey = activePlan.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
     if (planSidebarDismissedForTurnRef.current === turnKey) return;
-    setPlanSidebarOpen(true);
+    setPlanSidebarOpenForCurrentThread(true);
   }, [
     activePlan,
     activeLatestTurn?.turnId,
     autoOpenPlanSidebar,
     planSidebarOpen,
+    setPlanSidebarOpenForCurrentThread,
     sidebarProposedPlan?.turnId,
   ]);
 
@@ -3573,7 +3668,7 @@ export default function ChatView(props: ChatViewProps) {
         // step-tracking activities that the sidebar will display.
         if (nextInteractionMode === "default" && autoOpenPlanSidebar) {
           planSidebarDismissedForTurnRef.current = null;
-          setPlanSidebarOpen(true);
+          setPlanSidebarOpenForCurrentThread(true);
         }
         sendInFlightRef.current = false;
       } catch (err) {
@@ -3598,6 +3693,7 @@ export default function ChatView(props: ChatViewProps) {
       persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
+      setPlanSidebarOpenForCurrentThread,
       setComposerDraftInteractionMode,
       setThreadError,
       autoOpenPlanSidebar,
@@ -3843,7 +3939,7 @@ export default function ChatView(props: ChatViewProps) {
           threadId,
         },
         search: (previous) => {
-          const rest = stripDiffSearchParams(previous);
+          const rest = stripRightPanelSearchParams(previous);
           return filePath
             ? { ...rest, diff: "1", diffTurnId: turnId, diffFilePath: filePath }
             : { ...rest, diff: "1", diffTurnId: turnId };

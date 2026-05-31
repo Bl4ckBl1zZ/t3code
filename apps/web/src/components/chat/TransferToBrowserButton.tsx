@@ -2,7 +2,10 @@ import type { EnvironmentId, ProjectScript, ThreadId } from "@t3tools/contracts"
 import { MonitorUpIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
-import { inferBrowserAgentDevServerUrl } from "../../browserAgents";
+import {
+  inferBrowserAgentDevServerUrl,
+  resolveBrowserAgentTransferDevServerUrl,
+} from "../../browserAgents";
 import { autoPairBrowserAgent, isNoBrowserAgentConnectedError } from "../../browserAgentPairing";
 import { getPrimaryEnvironmentConnection } from "../../environments/runtime";
 import { Button } from "../ui/button";
@@ -39,10 +42,11 @@ export const TransferToBrowserButton = memo(function TransferToBrowserButton({
     void (async () => {
       const connection = getPrimaryEnvironmentConnection();
       const openPreview = async () => {
+        const transferDevServerUrl = await resolveBrowserAgentTransferDevServerUrl(devServerUrl);
         return await connection.client.browserAgents.openOrFocusPreview({
           environmentId: activeThreadEnvironmentId,
           threadId: activeThreadId,
-          devServerUrl,
+          devServerUrl: transferDevServerUrl,
           repoName: activeProjectName,
         });
       };

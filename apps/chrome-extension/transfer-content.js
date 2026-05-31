@@ -1,22 +1,10 @@
-const ROOT_ID = "t3code-browser-agent-root";
 const HIGHLIGHT_ID = "t3code-browser-agent-highlight";
+const ANNOTATION_STATUS_ID = "t3code-browser-agent-annotation-status";
+const ANNOTATION_INPUT_ID = "t3code-browser-agent-annotation-input";
+const OPEN_SIDE_PANEL_PROMPT_ID = "t3code-browser-agent-open-side-panel-prompt";
 const CANCEL_ANNOTATION_MESSAGE_TYPE = "t3code.browserAgent.cancelAnnotation";
-const BODY_MARGIN_RIGHT_ATTR = "data-t3code-browser-agent-body-margin-right";
-const BODY_TRANSITION_ATTR = "data-t3code-browser-agent-body-transition";
-const DEFAULT_WIDTH = 420;
-const MIN_WIDTH = 300;
-const MAX_WIDTH = 760;
 
-let workspaceLink = null;
-let sidebarRoot = null;
-let shadowRoot = null;
-let sidebarWidth = DEFAULT_WIDTH;
 let annotationState = null;
-let resizeState = null;
-
-function clampSidebarWidth(width) {
-  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, width));
-}
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve, reject) => {
@@ -35,236 +23,125 @@ function sendRuntimeMessage(message) {
   });
 }
 
-function removeExistingRoot() {
-  document.getElementById(ROOT_ID)?.remove();
+function removeOpenSidePanelPrompt() {
+  document.getElementById(OPEN_SIDE_PANEL_PROMPT_ID)?.remove();
 }
 
-function pageBody() {
-  return document.body;
+function showOpenSidePanelPrompt(reason) {
+  removeOpenSidePanelPrompt();
+
+  const prompt = document.createElement("aside");
+  prompt.id = OPEN_SIDE_PANEL_PROMPT_ID;
+  prompt.style.position = "fixed";
+  prompt.style.right = "16px";
+  prompt.style.top = "16px";
+  prompt.style.zIndex = "2147483647";
+  prompt.style.boxSizing = "border-box";
+  prompt.style.width = "min(360px, calc(100vw - 32px))";
+  prompt.style.border = "1px solid rgba(255,255,255,0.14)";
+  prompt.style.borderRadius = "8px";
+  prompt.style.background = "rgba(17,17,18,0.97)";
+  prompt.style.boxShadow = "0 18px 44px rgba(0,0,0,0.32)";
+  prompt.style.color = "#f5f5f5";
+  prompt.style.font = "13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+  prompt.style.padding = "12px";
+  prompt.style.pointerEvents = "auto";
+
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.alignItems = "center";
+  row.style.gap = "8px";
+
+  const text = document.createElement("div");
+  text.textContent = reason
+    ? "Chrome needs one click to open the T3 Code side panel."
+    : "Open the T3 Code side panel.";
+  text.style.flex = "1";
+  text.style.color = "#d4d4d8";
+
+  const openButton = document.createElement("button");
+  openButton.type = "button";
+  openButton.textContent = "Open";
+  openButton.style.border = "0";
+  openButton.style.borderRadius = "7px";
+  openButton.style.background = "#2563eb";
+  openButton.style.color = "#fff";
+  openButton.style.cursor = "pointer";
+  openButton.style.font = "700 13px system-ui, sans-serif";
+  openButton.style.minHeight = "32px";
+  openButton.style.padding = "0 12px";
+
+  const dismissButton = document.createElement("button");
+  dismissButton.type = "button";
+  dismissButton.textContent = "x";
+  dismissButton.title = "Dismiss";
+  dismissButton.style.border = "0";
+  dismissButton.style.borderRadius = "7px";
+  dismissButton.style.background = "rgba(255,255,255,0.08)";
+  dismissButton.style.color = "#d4d4d8";
+  dismissButton.style.cursor = "pointer";
+  dismissButton.style.font = "700 13px system-ui, sans-serif";
+  dismissButton.style.width = "32px";
+  dismissButton.style.height = "32px";
+
+  openButton.addEventListener("click", () => {
+    openButton.disabled = true;
+    openButton.textContent = "Opening";
+    text.textContent = "Opening T3 Code side panel...";
+    void sendRuntimeMessage({ type: "t3code.browserAgent.openSidePanelFromPage" })
+      .then(removeOpenSidePanelPrompt)
+      .catch((error) => {
+        openButton.disabled = false;
+        openButton.textContent = "Open";
+        text.textContent = error instanceof Error ? error.message : "Could not open side panel.";
+      });
+  });
+  dismissButton.addEventListener("click", removeOpenSidePanelPrompt);
+
+  row.append(text, openButton, dismissButton);
+  prompt.append(row);
+  document.documentElement.appendChild(prompt);
 }
 
-function preserveBodyLayout() {
-  const body = pageBody();
-  if (!body) {
-    return null;
-  }
-  if (!body.hasAttribute(BODY_MARGIN_RIGHT_ATTR)) {
-    body.setAttribute(BODY_MARGIN_RIGHT_ATTR, body.style.marginRight);
-  }
-  if (!body.hasAttribute(BODY_TRANSITION_ATTR)) {
-    body.setAttribute(BODY_TRANSITION_ATTR, body.style.transition);
-  }
-  return body;
+function clearAnnotationStatus() {
+  document.getElementById(ANNOTATION_STATUS_ID)?.remove();
 }
 
-function applyPageInset() {
-  const body = preserveBodyLayout();
-  if (!body) {
+function setAnnotationStatus(statusText) {
+  if (!statusText) {
+    clearAnnotationStatus();
     return;
   }
-  body.style.marginRight = `${sidebarWidth}px`;
+  let status = document.getElementById(ANNOTATION_STATUS_ID);
+  if (!status) {
+    status = document.createElement("div");
+    status.id = ANNOTATION_STATUS_ID;
+    status.style.position = "fixed";
+    status.style.right = "16px";
+    status.style.bottom = "16px";
+    status.style.zIndex = "2147483647";
+    status.style.maxWidth = "360px";
+    status.style.boxSizing = "border-box";
+    status.style.border = "1px solid rgba(255,255,255,0.14)";
+    status.style.borderRadius = "8px";
+    status.style.background = "rgba(17,17,18,0.96)";
+    status.style.boxShadow = "0 18px 44px rgba(0,0,0,0.32)";
+    status.style.color = "#f5f5f5";
+    status.style.font = "13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    status.style.padding = "10px 12px";
+    status.style.pointerEvents = "none";
+    document.documentElement.appendChild(status);
+  }
+  status.textContent = statusText;
 }
 
-function ensureSidebar(link) {
-  workspaceLink = link;
-  if (typeof link.sidebarWidthPx === "number" && Number.isFinite(link.sidebarWidthPx)) {
-    sidebarWidth = clampSidebarWidth(link.sidebarWidthPx);
-  }
-  if (sidebarRoot?.isConnected && shadowRoot) {
-    applyPageInset();
-    renderSidebar();
-    return;
-  }
-
-  removeExistingRoot();
-  applyPageInset();
-  sidebarRoot = document.createElement("div");
-  sidebarRoot.id = ROOT_ID;
-  sidebarRoot.style.position = "fixed";
-  sidebarRoot.style.top = "0";
-  sidebarRoot.style.right = "0";
-  sidebarRoot.style.bottom = "0";
-  sidebarRoot.style.width = `${sidebarWidth}px`;
-  sidebarRoot.style.zIndex = "2147483646";
-  sidebarRoot.style.pointerEvents = "auto";
-  document.documentElement.appendChild(sidebarRoot);
-  shadowRoot = sidebarRoot.attachShadow({ mode: "open" });
-  renderSidebar();
-}
-
-function setSidebarStatus(statusText) {
-  const status = shadowRoot?.querySelector(".status");
-  if (status) {
-    status.textContent = statusText;
-  }
-}
-
-function renderSidebar(statusText = "Connected") {
-  if (!shadowRoot || !workspaceLink) {
-    return;
-  }
-  shadowRoot.innerHTML = `
-    <style>
-      :host {
-        all: initial;
-        color-scheme: dark;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      .panel {
-        box-sizing: border-box;
-        width: 100%;
-        height: 100%;
-        background: rgba(15, 15, 16, 0.97);
-        color: #f5f5f5;
-        border-left: 1px solid rgba(255,255,255,0.12);
-        box-shadow: -24px 0 60px rgba(0,0,0,0.24);
-        display: flex;
-        flex-direction: column;
-      }
-      .resize {
-        position: absolute;
-        top: 0;
-        left: -4px;
-        width: 8px;
-        height: 100%;
-        cursor: col-resize;
-      }
-      .body {
-        position: relative;
-        display: flex;
-        flex: 1;
-        flex-direction: column;
-        min-height: 0;
-      }
-      iframe {
-        display: block;
-        width: 100%;
-        height: 100%;
-        flex: 1;
-        border: 0;
-        background: #0f0f10;
-      }
-      .status {
-        position: absolute;
-        left: 12px;
-        right: 12px;
-        bottom: 12px;
-        box-sizing: border-box;
-        border: 1px solid rgba(255,255,255,0.12);
-        border-radius: 8px;
-        background: rgba(15, 15, 16, 0.9);
-        color: #cbd5e1;
-        font-size: 13px;
-        line-height: 1.45;
-        padding: 8px 10px;
-        pointer-events: none;
-      }
-      .status:empty {
-        display: none;
-      }
-      .fallback {
-        display: none;
-        flex: 1;
-        place-items: center;
-        padding: 24px;
-        color: #cbd5e1;
-        font-size: 13px;
-        line-height: 1.45;
-      }
-      .fallback.visible {
-        display: grid;
-      }
-    </style>
-    <div class="panel">
-      <div class="resize" title="Resize"></div>
-      <div class="body">
-        <iframe class="chat" title="T3 Code chat"></iframe>
-        <div class="fallback"></div>
-        <div class="status"></div>
-      </div>
-    </div>
-  `;
-
-  setSidebarStatus(statusText);
-  const frame = shadowRoot.querySelector(".chat");
-  const fallback = shadowRoot.querySelector(".fallback");
-  if (typeof workspaceLink.t3Url === "string" && workspaceLink.t3Url.length > 0) {
-    frame.src = workspaceLink.t3Url;
-    frame.addEventListener("load", () => setSidebarStatus(""));
-  } else {
-    frame.remove();
-    fallback.classList.add("visible");
-    fallback.textContent =
-      "This workspace link does not include a chat URL. Reopen the preview from T3 Code.";
-  }
-  shadowRoot.querySelector(".resize").addEventListener("pointerdown", startResize);
-}
-
-function setIframePointerEvents(value) {
-  const frame = shadowRoot?.querySelector(".chat");
-  if (frame) {
-    frame.style.pointerEvents = value;
-  }
-}
-
-function cleanupResize() {
-  if (!resizeState) {
-    return;
-  }
-  resizeState.controller.abort();
-  try {
-    resizeState.handle.releasePointerCapture?.(resizeState.pointerId);
-  } catch {
-    // The browser may have already released capture after pointerup/cancel.
-  }
-  resizeState = null;
-  setIframePointerEvents("");
-  document.documentElement.style.cursor = "";
-  document.documentElement.style.userSelect = "";
-}
-
-function startResize(event) {
-  event.preventDefault();
-  cleanupResize();
-  const startX = event.clientX;
-  const startWidth = sidebarWidth;
-  const handle = event.currentTarget;
-  if (!handle) {
-    return;
-  }
-  const controller = new AbortController();
-  resizeState = {
-    controller,
-    handle,
-    pointerId: event.pointerId,
-  };
-  handle.setPointerCapture?.(event.pointerId);
-  setIframePointerEvents("none");
-  document.documentElement.style.cursor = "col-resize";
-  document.documentElement.style.userSelect = "none";
-
-  const onMove = (moveEvent) => {
-    const delta = startX - moveEvent.clientX;
-    sidebarWidth = clampSidebarWidth(startWidth + delta);
-    if (sidebarRoot) {
-      sidebarRoot.style.width = `${sidebarWidth}px`;
+function showTransientAnnotationStatus(statusText) {
+  setAnnotationStatus(statusText);
+  setTimeout(() => {
+    if (document.getElementById(ANNOTATION_STATUS_ID)?.textContent === statusText) {
+      clearAnnotationStatus();
     }
-    applyPageInset();
-  };
-  const onDone = () => {
-    cleanupResize();
-  };
-
-  const options = { signal: controller.signal, capture: true };
-  handle.addEventListener("pointermove", onMove, options);
-  handle.addEventListener("pointerup", onDone, options);
-  handle.addEventListener("pointercancel", onDone, options);
-  handle.addEventListener("lostpointercapture", onDone, options);
-  window.addEventListener("pointermove", onMove, options);
-  window.addEventListener("pointerup", onDone, options);
-  window.addEventListener("pointercancel", onDone, options);
-  window.addEventListener("mouseup", onDone, options);
-  window.addEventListener("blur", onDone, options);
+  }, 2_000);
 }
 
 function ensureHighlight() {
@@ -340,8 +217,11 @@ function cropScreenshot(dataUrl, rect) {
   });
 }
 
-function cleanupAnnotation() {
+function cleanupAnnotation(options = {}) {
   document.getElementById(HIGHLIGHT_ID)?.remove();
+  if (!options.preserveStatus) {
+    clearAnnotationStatus();
+  }
   if (!annotationState) {
     return;
   }
@@ -355,11 +235,11 @@ function cleanupAnnotation() {
 
 function cancelAnnotation() {
   cleanupAnnotation();
-  setSidebarStatus("");
 }
 
 function showAnnotationInput(capture) {
   const input = document.createElement("input");
+  input.id = ANNOTATION_INPUT_ID;
   input.type = "text";
   input.placeholder = "Annotation";
   input.style.position = "fixed";
@@ -413,11 +293,12 @@ function showAnnotationInput(capture) {
       },
     })
       .then(() => {
-        cleanupAnnotation();
-        setSidebarStatus("Annotation sent");
+        cleanupAnnotation({ preserveStatus: true });
+        showTransientAnnotationStatus("Annotation sent");
       })
       .catch((error) => {
-        setSidebarStatus(error.message);
+        cleanupAnnotation({ preserveStatus: true });
+        setAnnotationStatus(error.message);
       });
   });
 
@@ -426,15 +307,25 @@ function showAnnotationInput(capture) {
   }
 }
 
+function isBrowserAgentElement(element) {
+  return (
+    element.id === HIGHLIGHT_ID ||
+    element.id === ANNOTATION_STATUS_ID ||
+    element.id === ANNOTATION_INPUT_ID ||
+    element.id === OPEN_SIDE_PANEL_PROMPT_ID ||
+    Boolean(element.closest?.(`#${OPEN_SIDE_PANEL_PROMPT_ID}`))
+  );
+}
+
 function startAnnotationMode(link) {
   cleanupAnnotation();
-  setSidebarStatus("Select an element on the page.");
+  setAnnotationStatus("Select an element on the page.");
 
   const state = {
     input: null,
     onMove: (event) => {
       const target = document.elementFromPoint(event.clientX, event.clientY);
-      if (!target || target === sidebarRoot || sidebarRoot?.contains(target)) {
+      if (!target || isBrowserAgentElement(target)) {
         return;
       }
       updateHighlight(target);
@@ -450,7 +341,7 @@ function startAnnotationMode(link) {
       const target = state.target;
       const rect = target.getBoundingClientRect();
       updateHighlight(target);
-      setSidebarStatus("Screenshot captured. Add a note and press Enter.");
+      setAnnotationStatus("Screenshot captured. Add a note and press Enter.");
       void sendRuntimeMessage({ type: "t3code.browserAgent.captureVisibleTab" })
         .then(async (response) => {
           if (annotationState !== state) {
@@ -471,8 +362,8 @@ function startAnnotationMode(link) {
           if (annotationState !== state) {
             return;
           }
-          cleanupAnnotation();
-          setSidebarStatus(error.message);
+          cleanupAnnotation({ preserveStatus: true });
+          setAnnotationStatus(error.message);
         });
       window.removeEventListener("mousemove", state.onMove, true);
       window.removeEventListener("click", state.onClick, true);
@@ -506,12 +397,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: true });
       return true;
     case "t3code.browserAgent.attachSidebar":
-      ensureSidebar(message.workspaceLink);
+      sendResponse({ ok: true });
+      return true;
+    case "t3code.browserAgent.showOpenSidePanelPrompt":
+      showOpenSidePanelPrompt(message.reason);
+      sendResponse({ ok: true });
+      return true;
+    case "t3code.browserAgent.hideOpenSidePanelPrompt":
+      removeOpenSidePanelPrompt();
       sendResponse({ ok: true });
       return true;
     case "t3code.browserAgent.activateAnnotation":
-      ensureSidebar(message.workspaceLink);
       startAnnotationMode(message.workspaceLink);
+      sendResponse({ ok: true });
+      return true;
+    case "t3code.browserAgent.cancelAnnotation":
+      cancelAnnotation();
       sendResponse({ ok: true });
       return true;
     default:

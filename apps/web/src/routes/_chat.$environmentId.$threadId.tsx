@@ -14,7 +14,7 @@ import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../comp
 import {
   type DiffRouteSearch,
   parseDiffRouteSearch,
-  stripDiffSearchParams,
+  stripRightPanelSearchParams,
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
@@ -196,7 +196,7 @@ function ChatThreadRouteView() {
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
-      search: { diff: undefined },
+      search: (previous) => stripRightPanelSearchParams(previous),
     });
   }, [navigate, threadRef]);
   const openDiff = useCallback(() => {
@@ -208,7 +208,7 @@ function ChatThreadRouteView() {
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
       search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
+        const rest = stripRightPanelSearchParams(previous);
         return { ...rest, diff: "1" };
       },
     });

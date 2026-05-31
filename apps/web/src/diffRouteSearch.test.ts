@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiffRouteSearch } from "./diffRouteSearch";
+import { parseDiffRouteSearch, stripRightPanelSearchParams } from "./diffRouteSearch";
 
 describe("parseDiffRouteSearch", () => {
   it("parses valid diff search values", () => {
@@ -69,6 +69,41 @@ describe("parseDiffRouteSearch", () => {
 
     expect(parsed).toEqual({
       diff: "1",
+    });
+  });
+
+  it("parses the plan side panel when diff is closed", () => {
+    expect(
+      parseDiffRouteSearch({
+        sidePanel: "plan",
+      }),
+    ).toEqual({
+      sidePanel: "plan",
+    });
+  });
+
+  it("gives the diff panel precedence over the plan side panel", () => {
+    expect(
+      parseDiffRouteSearch({
+        diff: "1",
+        sidePanel: "plan",
+      }),
+    ).toEqual({
+      diff: "1",
+    });
+  });
+
+  it("strips all right panel search params together", () => {
+    expect(
+      stripRightPanelSearchParams({
+        diff: "1",
+        diffTurnId: "turn-1",
+        diffFilePath: "src/app.ts",
+        sidePanel: "plan",
+        keep: "value",
+      }),
+    ).toEqual({
+      keep: "value",
     });
   });
 });

@@ -1,6 +1,11 @@
-import type { EnvironmentId, ProjectScript } from "@t3tools/contracts";
+import type { AdvertisedEndpoint, EnvironmentId, ProjectScript } from "@t3tools/contracts";
+
+import { endpointDefaultPreferenceKey } from "./advertisedEndpointSelection";
+import { isLoopbackHostname, readPrimaryEnvironmentTarget } from "./environments/primary/target";
+import { useUiStateStore } from "./uiStateStore";
 
 export const DEFAULT_BROWSER_AGENT_DEV_SERVER_URL = "http://localhost:3000/";
+const WILDCARD_DEV_SERVER_HOSTNAMES = new Set(["0.0.0.0", "::"]);
 
 const PORT_PATTERNS = [
   /(?:^|\s)(?:--port|-p)\s+(\d{2,5})\b/,
@@ -19,6 +24,114 @@ function parsePort(command: string): number | null {
     }
   }
   return null;
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, "$1");
+}
+
+function isLocalDevServerHostname(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  return isLoopbackHostname(normalized) || WILDCARD_DEV_SERVER_HOSTNAMES.has(normalized);
+}
+
+function parseUrl(rawUrl: string): URL | null {
+  try {
+    const baseUrl =
+      typeof window !== "undefined" &&
+      (window.location.protocol === "http:" || window.location.protocol === "https:")
+        ? window.location.origin
+        : undefined;
+    return baseUrl ? new URL(rawUrl, baseUrl) : new URL(rawUrl);
+  } catch {
+    return null;
+  }
+}
+
+function remoteHttpHost(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const url = parseUrl(rawUrl);
+  if (!url || isLocalDevServerHostname(url.hostname)) {
+    return null;
+  }
+  return url.hostname;
+}
+
+function currentBrowserRemoteHttpHost(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return remoteHttpHost(window.location.origin);
+}
+
+function firstTailscaleIpEndpoint(
+  endpoints: ReadonlyArray<AdvertisedEndpoint>,
+): AdvertisedEndpoint | null {
+  return (
+    endpoints.find(
+      (endpoint) => endpoint.status !== "unavailable" && endpoint.id.startsWith("tailscale-ip:"),
+    ) ?? null
+  );
+}
+
+function preferredAdvertisedEndpoint(
+  endpoints: ReadonlyArray<AdvertisedEndpoint>,
+  defaultEndpointKey: string | null | undefined,
+): AdvertisedEndpoint | null {
+  const availableEndpoints = endpoints.filter((endpoint) => endpoint.status !== "unavailable");
+  if (defaultEndpointKey) {
+    const selectedEndpoint = availableEndpoints.find(
+      (endpoint) => endpointDefaultPreferenceKey(endpoint) === defaultEndpointKey,
+    );
+    if (selectedEndpoint) {
+      return selectedEndpoint;
+    }
+  }
+
+  return availableEndpoints.find((endpoint) => endpoint.isDefault) ?? null;
+}
+
+async function resolveReachablePreviewHost(): Promise<string | null> {
+  const getAdvertisedEndpoints =
+    typeof window !== "undefined" ? window.desktopBridge?.getAdvertisedEndpoints : undefined;
+  if (getAdvertisedEndpoints) {
+    const advertisedEndpoints = await getAdvertisedEndpoints().catch(() => []);
+    const selectedEndpoint = preferredAdvertisedEndpoint(
+      advertisedEndpoints,
+      useUiStateStore.getState().defaultAdvertisedEndpointKey,
+    );
+    const selectedHost = remoteHttpHost(selectedEndpoint?.httpBaseUrl);
+    if (selectedHost) {
+      return selectedHost;
+    }
+
+    const currentBrowserHost = currentBrowserRemoteHttpHost();
+    if (currentBrowserHost) {
+      return currentBrowserHost;
+    }
+
+    const tailscaleIpEndpoint = firstTailscaleIpEndpoint(advertisedEndpoints);
+    const tailscaleIpHost = remoteHttpHost(tailscaleIpEndpoint?.httpBaseUrl);
+    if (tailscaleIpHost) {
+      return tailscaleIpHost;
+    }
+  } else {
+    const currentBrowserHost = currentBrowserRemoteHttpHost();
+    if (currentBrowserHost) {
+      return currentBrowserHost;
+    }
+  }
+
+  try {
+    return remoteHttpHost(readPrimaryEnvironmentTarget()?.target.httpBaseUrl);
+  } catch {
+    return null;
+  }
 }
 
 function primaryRunnableScript(
@@ -51,6 +164,23 @@ export function inferBrowserAgentDevServerUrl(
   }
 
   return DEFAULT_BROWSER_AGENT_DEV_SERVER_URL;
+}
+
+export async function resolveBrowserAgentTransferDevServerUrl(
+  devServerUrl: string,
+): Promise<string> {
+  const url = parseUrl(devServerUrl);
+  if (!url || !isLocalDevServerHostname(url.hostname)) {
+    return devServerUrl;
+  }
+
+  const reachableHost = await resolveReachablePreviewHost();
+  if (!reachableHost) {
+    return url.toString();
+  }
+
+  url.hostname = reachableHost;
+  return url.toString();
 }
 
 export function shouldShowBrowserAgentControls(input: {

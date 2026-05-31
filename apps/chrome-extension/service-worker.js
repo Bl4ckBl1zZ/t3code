@@ -1,5 +1,7 @@
 const BACKEND_KEY = "t3code.browserAgent.backend";
 const LINKS_KEY = "t3code.browserAgent.workspaceLinks";
+const ACTIVE_LINK_KEY = "t3code.browserAgent.activeWorkspaceLink";
+const SIDE_PANEL_PATH = "sidepanel.html";
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
@@ -46,9 +48,13 @@ function chatUrlForWorkspaceLink(baseUrl, link, sidebarSessionToken) {
   return url.toString();
 }
 
-async function workspaceLinkForContent(link, tab, options = {}) {
+async function workspaceLinkForContent(link, tab = null, options = {}) {
   const backend = currentBackend ?? (await readBackend());
-  const nextLink = { ...link, tabId: tab.id, windowId: tab.windowId };
+  const nextLink = {
+    ...link,
+    ...(tab?.id !== undefined ? { tabId: tab.id } : {}),
+    ...(tab?.windowId !== undefined ? { windowId: tab.windowId } : {}),
+  };
   if (!backend?.baseUrl) {
     return nextLink;
   }
@@ -79,7 +85,8 @@ async function writeBackend(backend) {
 async function clearBackend() {
   currentBackend = null;
   closeSocket();
-  await chrome.storage.local.remove(BACKEND_KEY);
+  await chrome.storage.local.remove([BACKEND_KEY, LINKS_KEY, ACTIVE_LINK_KEY]);
+  await disableNativeSidePanelForAllTabs();
 }
 
 async function readLinks() {
@@ -116,6 +123,23 @@ function linkForStorage(link) {
   } catch {
     return link;
   }
+}
+
+async function readActiveWorkspaceLink() {
+  const stored = await chrome.storage.local.get(ACTIVE_LINK_KEY);
+  const record = stored[ACTIVE_LINK_KEY];
+  return record && typeof record.linkId === "string" ? record : null;
+}
+
+async function writeActiveWorkspaceLink(link) {
+  await chrome.storage.local.set({
+    [ACTIVE_LINK_KEY]: {
+      linkId: link.id,
+      ...(link.tabId !== undefined ? { tabId: link.tabId } : {}),
+      ...(link.windowId !== undefined ? { windowId: link.windowId } : {}),
+      updatedAt: new Date().toISOString(),
+    },
+  });
 }
 
 async function fetchJson(baseUrl, path, options = {}) {
@@ -307,7 +331,7 @@ function sendHello() {
       canFocusTabs: true,
       canGroupTabs: Boolean(chrome.tabs?.group),
       canAnnotate: true,
-      canRenderInlineSidebar: true,
+      canRenderInlineSidebar: false,
     },
   });
 }
@@ -504,6 +528,331 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
 }
 
+async function sendExistingTabMessage(tabId, message) {
+  try {
+    await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
+  } catch {
+    // The prompt content script may not be present on every tab.
+  }
+}
+
+function numericTabId(tab) {
+  const tabId = Number(tab?.id);
+  return Number.isInteger(tabId) && tabId >= 0 ? tabId : null;
+}
+
+async function resolveNativeSidePanelTab(tab) {
+  const tabId = numericTabId(tab);
+  if (tabId !== null) {
+    try {
+      return await chrome.tabs.get(tabId);
+    } catch {
+      return tab;
+    }
+  }
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return activeTab ?? null;
+}
+
+async function setDefaultNativeSidePanelDisabled() {
+  if (!chrome.sidePanel?.setOptions) {
+    return;
+  }
+  try {
+    await chrome.sidePanel.setOptions({ enabled: false });
+  } catch (error) {
+    console.warn("[T3 Code] failed to disable the default side panel", error);
+  }
+}
+
+async function closeGlobalNativeSidePanels() {
+  if (!chrome.sidePanel?.close) {
+    return;
+  }
+  try {
+    const windows = await chrome.windows.getAll();
+    await Promise.all(
+      windows.map(async (window) => {
+        if (window.id === undefined) {
+          return;
+        }
+        await chrome.sidePanel.close({ windowId: window.id }).catch(() => undefined);
+      }),
+    );
+  } catch (error) {
+    console.warn("[T3 Code] failed to close stale global side panels", error);
+  }
+}
+
+async function enableNativeSidePanelForTab(tab) {
+  const tabId = numericTabId(tab);
+  if (tabId === null) {
+    throw new Error("No active Chrome tab.");
+  }
+  if (!chrome.sidePanel?.setOptions) {
+    throw new Error("Chrome Side Panel tab options are unavailable.");
+  }
+  await chrome.sidePanel.setOptions({
+    tabId,
+    path: SIDE_PANEL_PATH,
+    enabled: true,
+  });
+}
+
+async function disableNativeSidePanelForTab(tab) {
+  const tabId = numericTabId(tab);
+  if (tabId === null || !chrome.sidePanel?.setOptions) {
+    return;
+  }
+  await chrome.sidePanel.setOptions({ tabId, enabled: false });
+}
+
+function selectTabScopedWorkspaceLinkForTab(links, tab) {
+  return newestLink(
+    links.filter(
+      (entry) =>
+        linkMatchesTabIdentity(entry, tab) && tabMatchesDevServer(tab.url, entry.devServerUrl),
+    ),
+  );
+}
+
+async function syncNativeSidePanelOptionsForTab(tab) {
+  if (!chrome.sidePanel?.setOptions || numericTabId(tab) === null) {
+    return;
+  }
+  try {
+    const links = await readLinks();
+    const link = selectTabScopedWorkspaceLinkForTab(links, tab);
+    if (link) {
+      await enableNativeSidePanelForTab(tab);
+    } else {
+      await disableNativeSidePanelForTab(tab);
+    }
+  } catch (error) {
+    console.warn("[T3 Code] failed to sync side panel tab options", error);
+  }
+}
+
+async function syncNativeSidePanelOptionsForTabId(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await syncNativeSidePanelOptionsForTab(tab);
+  } catch {
+    // The tab may have closed before Chrome delivered the event.
+  }
+}
+
+async function syncNativeSidePanelOptionsForAllTabs() {
+  if (!chrome.sidePanel?.setOptions) {
+    return;
+  }
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(tabs.map((tab) => syncNativeSidePanelOptionsForTab(tab)));
+  } catch (error) {
+    console.warn("[T3 Code] failed to sync side panel options for open tabs", error);
+  }
+}
+
+async function disableNativeSidePanelForAllTabs() {
+  if (!chrome.sidePanel?.setOptions) {
+    return;
+  }
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(tabs.map((tab) => disableNativeSidePanelForTab(tab)));
+  } catch (error) {
+    console.warn("[T3 Code] failed to disable side panel options for open tabs", error);
+  }
+}
+
+async function syncNativeSidePanelOptionsForFocusedWindow() {
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (activeTab) {
+      await syncNativeSidePanelOptionsForTab(activeTab);
+    }
+  } catch {
+    // There may be no focused browser window.
+  }
+}
+
+async function configureSidePanelBehavior() {
+  if (!chrome.sidePanel) {
+    return;
+  }
+  await setDefaultNativeSidePanelDisabled();
+  await closeGlobalNativeSidePanels();
+  await syncNativeSidePanelOptionsForAllTabs();
+  if (!chrome.sidePanel.setPanelBehavior) {
+    return;
+  }
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  } catch (error) {
+    console.warn("[T3 Code] failed to configure side panel action behavior", error);
+  }
+}
+
+async function openNativeSidePanel(tab) {
+  if (!chrome.sidePanel?.open) {
+    return { opened: false, reason: "Chrome Side Panel API is unavailable." };
+  }
+  try {
+    const targetTab = await resolveNativeSidePanelTab(tab);
+    const tabId = numericTabId(targetTab);
+    if (tabId === null) {
+      return { opened: false, reason: "No active Chrome tab." };
+    }
+    await enableNativeSidePanelForTab(targetTab);
+    await chrome.sidePanel.open({ tabId });
+    return { opened: true };
+  } catch (error) {
+    return {
+      opened: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function markSidePanelNeedsUserOpen(tab, reason) {
+  if (tab?.id === undefined) {
+    return;
+  }
+  await chrome.action.setBadgeText({ tabId: tab.id, text: "OPEN" });
+  await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#2563eb" });
+  await chrome.action.setTitle({
+    tabId: tab.id,
+    title: reason ? `Open T3 Code side panel: ${reason}` : "Open T3 Code side panel",
+  });
+}
+
+async function clearSidePanelNeedsUserOpen(tab) {
+  if (tab?.id === undefined) {
+    return;
+  }
+  await chrome.action.setBadgeText({ tabId: tab.id, text: "" });
+  await chrome.action.setTitle({ tabId: tab.id, title: "T3 Code Browser Agent" });
+}
+
+async function showSidePanelOpenPrompt(tab, reason) {
+  await markSidePanelNeedsUserOpen(tab, reason);
+  if (tab?.id === undefined) {
+    return;
+  }
+  await sendTabMessage(tab.id, {
+    type: "t3code.browserAgent.showOpenSidePanelPrompt",
+    reason,
+  }).catch((error) => {
+    console.warn("[T3 Code] failed to show side panel open prompt", error);
+  });
+}
+
+async function clearSidePanelOpenPrompt(tab) {
+  await clearSidePanelNeedsUserOpen(tab);
+  if (tab?.id === undefined) {
+    return;
+  }
+  await sendExistingTabMessage(tab.id, { type: "t3code.browserAgent.hideOpenSidePanelPrompt" });
+}
+
+async function setActiveNativeSidePanelLink(tab, link, options = {}) {
+  await upsertLink(linkForStorage(link));
+  await writeActiveWorkspaceLink(link);
+  if (options.open !== true) {
+    await enableNativeSidePanelForTab(tab).catch((error) => {
+      console.warn("[T3 Code] failed to enable side panel for linked tab", error);
+    });
+  }
+  if (options.open === true) {
+    const result = await openNativeSidePanel(tab);
+    if (result.opened) {
+      await clearSidePanelOpenPrompt(tab);
+    } else {
+      await showSidePanelOpenPrompt(tab, result.reason);
+    }
+  }
+}
+
+function linkMatchesActiveWorkspaceRecord(link, record) {
+  if (!record) {
+    return false;
+  }
+  if (link.id === record.linkId) {
+    return true;
+  }
+  if (record.tabId === undefined || record.windowId === undefined) {
+    return false;
+  }
+  return (
+    link.tabId !== undefined &&
+    link.windowId !== undefined &&
+    String(link.tabId) === String(record.tabId) &&
+    String(link.windowId) === String(record.windowId)
+  );
+}
+
+async function resolveSidePanelActiveTab(input) {
+  if (!input?.activeTab || input.activeTab.id === undefined) {
+    return null;
+  }
+  const tabId = Number(input.activeTab.id);
+  if (!Number.isFinite(tabId)) {
+    return input.activeTab;
+  }
+  try {
+    return await chrome.tabs.get(tabId);
+  } catch {
+    return input.activeTab;
+  }
+}
+
+async function getSidePanelState(input = {}) {
+  const backend = currentBackend ?? (await readBackend());
+  const activeTab = await resolveSidePanelActiveTab(input);
+  if (activeTab) {
+    void clearSidePanelOpenPrompt(activeTab).catch(() => undefined);
+  }
+  const links = await readLinks();
+  let selectedLink = activeTab ? selectWorkspaceLinkForTab(links, activeTab) : null;
+
+  if (!selectedLink && !activeTab) {
+    const activeRecord = await readActiveWorkspaceLink();
+    selectedLink =
+      links.find((link) => linkMatchesActiveWorkspaceRecord(link, activeRecord)) ?? null;
+  }
+
+  if (!selectedLink && !activeTab) {
+    selectedLink = newestLink(links);
+  }
+
+  const previewTab =
+    selectedLink && activeTab && tabMatchesDevServer(activeTab.url, selectedLink.devServerUrl)
+      ? activeTab
+      : selectedLink
+        ? await findPreviewTab(selectedLink)
+        : null;
+  const workspaceLink = selectedLink
+    ? await workspaceLinkForContent(selectedLink, previewTab)
+    : null;
+
+  return {
+    ok: true,
+    paired: Boolean(backend),
+    baseUrl: backend?.baseUrl ?? null,
+    connected: socket?.readyState === WebSocket.OPEN,
+    workspaceLink,
+    activeTab: activeTab
+      ? {
+          tabId: activeTab.id,
+          windowId: activeTab.windowId,
+          url: activeTab.url,
+          title: activeTab.title,
+        }
+      : null,
+  };
+}
+
 async function openOrFocusPreview(command) {
   const link = command.workspaceLink;
   let tab = await findPreviewTab(link);
@@ -516,11 +865,7 @@ async function openOrFocusPreview(command) {
   const contentLink = await workspaceLinkForContent(link, tab, {
     sidebarSessionToken: command.sidebarSessionToken,
   });
-  await upsertLink(linkForStorage(contentLink));
-  await sendTabMessage(tab.id, {
-    type: "t3code.browserAgent.attachSidebar",
-    workspaceLink: contentLink,
-  });
+  await setActiveNativeSidePanelLink(tab, contentLink, { open: true });
   await sendTabsSnapshot();
   sendToServer({
     type: "browserAgent.command.result",
@@ -540,7 +885,7 @@ async function activateAnnotation(command) {
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
   const contentLink = await workspaceLinkForContent(link, tab);
-  await upsertLink(linkForStorage(contentLink));
+  await setActiveNativeSidePanelLink(tab, contentLink);
   await sendTabMessage(tab.id, {
     type: "t3code.browserAgent.activateAnnotation",
     workspaceLink: contentLink,
@@ -605,10 +950,7 @@ async function activateForCurrentTab(tab) {
     return { ok: false, reason: "No T3 Code workspace link matches this tab yet." };
   }
   const contentLink = await workspaceLinkForContent(link, tab);
-  await sendTabMessage(tab.id, {
-    type: "t3code.browserAgent.attachSidebar",
-    workspaceLink: contentLink,
-  });
+  await setActiveNativeSidePanelLink(tab, contentLink);
   return { ok: true };
 }
 
@@ -635,6 +977,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
         })(),
       );
+    case "t3code.browserAgent.getSidePanelState":
+      return respond(getSidePanelState(message));
     case "t3code.browserAgent.pair":
       return respond(
         (async () => {
@@ -663,6 +1007,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: true };
         })(),
       );
+    case "t3code.browserAgent.cancelAnnotation":
+      return respond(
+        (async () => {
+          const links = await readLinks();
+          const link =
+            typeof message.workspaceLinkId === "string"
+              ? links.find((entry) => entry.id === message.workspaceLinkId)
+              : null;
+          const activeRecord = await readActiveWorkspaceLink();
+          const selectedLink =
+            link ??
+            links.find((entry) => linkMatchesActiveWorkspaceRecord(entry, activeRecord)) ??
+            newestLink(links);
+          const tab = selectedLink ? await findPreviewTab(selectedLink) : null;
+          if (tab?.id !== undefined) {
+            await sendTabMessage(tab.id, { type: "t3code.browserAgent.cancelAnnotation" });
+          }
+          return { ok: true };
+        })(),
+      );
+    case "t3code.browserAgent.openSidePanelFromPage": {
+      const tab = sender.tab;
+      const openPromise = openNativeSidePanel(tab);
+      return respond(
+        (async () => {
+          const result = await openPromise;
+          if (!result.opened) {
+            throw new Error(result.reason ?? "Chrome did not open the side panel.");
+          }
+          await clearSidePanelOpenPrompt(tab);
+          const backend = currentBackend ?? (await readBackend());
+          if (backend) {
+            await connectBackend();
+            await activateForCurrentTab(tab).catch(() => undefined);
+          }
+          return { ok: true };
+        })(),
+      );
+    }
     case "t3code.browserAgent.activateFromSidebar":
       return respond(
         (async () => {
@@ -682,27 +1065,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.action.onClicked.addListener((tab) => {
+  const openPromise = openNativeSidePanel(tab);
   void (async () => {
-    const backend = currentBackend ?? (await readBackend());
-    if (!backend) {
-      await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
-      return;
+    const result = await openPromise;
+    if (result.opened) {
+      await clearSidePanelOpenPrompt(tab);
+    } else {
+      await showSidePanelOpenPrompt(tab, result.reason);
     }
-    await connectBackend();
-    const result = await activateForCurrentTab(tab);
-    if (!result.ok) {
-      await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
+    const backend = currentBackend ?? (await readBackend());
+    if (backend) {
+      await connectBackend();
+      await activateForCurrentTab(tab).catch(() => undefined);
     }
   })();
 });
 
-chrome.tabs.onCreated.addListener(() => void sendTabsSnapshot());
-chrome.tabs.onUpdated.addListener(() => void sendTabsSnapshot());
+chrome.tabs.onCreated.addListener((tab) => {
+  void syncNativeSidePanelOptionsForTab(tab);
+  void sendTabsSnapshot();
+});
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === "complete") {
+    void syncNativeSidePanelOptionsForTab(tab);
+  }
+  void sendTabsSnapshot();
+});
 chrome.tabs.onRemoved.addListener(() => void sendTabsSnapshot());
-chrome.tabs.onActivated.addListener(() => void sendTabsSnapshot());
-chrome.windows.onFocusChanged.addListener(() => void sendTabsSnapshot());
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  void syncNativeSidePanelOptionsForTabId(tabId);
+  void sendTabsSnapshot();
+});
+chrome.windows.onFocusChanged.addListener(() => {
+  void syncNativeSidePanelOptionsForFocusedWindow();
+  void sendTabsSnapshot();
+});
 
-chrome.runtime.onStartup.addListener(() => void connectBackend());
-chrome.runtime.onInstalled.addListener(() => void connectBackend());
+chrome.runtime.onStartup.addListener(() => {
+  void configureSidePanelBehavior();
+  void connectBackend();
+});
+chrome.runtime.onInstalled.addListener(() => {
+  void configureSidePanelBehavior();
+  void connectBackend();
+});
 
+void configureSidePanelBehavior();
 void connectBackend();

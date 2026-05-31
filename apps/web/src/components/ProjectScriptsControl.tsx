@@ -12,6 +12,7 @@ import {
   PlayIcon,
   PlusIcon,
   SettingsIcon,
+  SquareIcon,
   WrenchIcon,
 } from "lucide-react";
 import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
@@ -232,13 +233,18 @@ export default function ProjectScriptsControl({
                 "border-emerald-500/45 bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/18 dark:text-emerald-300",
             )}
             onClick={() => onRunScript(primaryScript)}
+            aria-label={
+              primaryScriptRunning ? `Stop ${primaryScript.name}` : `Run ${primaryScript.name}`
+            }
             title={
-              primaryScriptRunning
-                ? `${primaryScript.name} is running`
-                : `Run ${primaryScript.name}`
+              primaryScriptRunning ? `Stop ${primaryScript.name}` : `Run ${primaryScript.name}`
             }
           >
-            <ScriptIcon icon={primaryScript.icon} />
+            {primaryScriptRunning ? (
+              <SquareIcon className="size-3.5 fill-current" />
+            ) : (
+              <ScriptIcon icon={primaryScript.icon} />
+            )}
             <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
               {primaryScript.name}
             </span>
@@ -267,7 +273,11 @@ export default function ProjectScriptsControl({
                     )}
                     onClick={() => onRunScript(script)}
                   >
-                    <ScriptIcon icon={script.icon} className="size-4" />
+                    {scriptRunning ? (
+                      <SquareIcon className="size-4 fill-current" />
+                    ) : (
+                      <ScriptIcon icon={script.icon} className="size-4" />
+                    )}
                     <span className="truncate">
                       {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
                     </span>

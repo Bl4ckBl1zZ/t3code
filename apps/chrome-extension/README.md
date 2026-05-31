@@ -15,8 +15,9 @@ Manual pairing is still available from the extension icon for remote browsers or
 reachable T3 Code backend URL plus a pairing token from the app.
 
 After pairing, **Transfer to Browser** sends a backend command to the extension. The extension opens
-or focuses the matching dev-server tab, groups it by repo name, injects the lightweight T3 Code
-sidebar, and reports the tab state back to the app.
+or focuses the matching dev-server tab, groups it by repo name, records that tab as the active
+workspace, and serves the T3 Code chat from Chrome's native side panel. If Chrome does not open the
+side panel automatically, click the extension icon in the preview window.
 
 The cursor button in T3 Code sends an annotation command through the backend. The extension focuses
 the linked preview tab, lets you click an element, captures a cropped screenshot around the

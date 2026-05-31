@@ -2,6 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { FolderIcon } from "lucide-react";
 import { useState } from "react";
 import { resolveEnvironmentHttpUrl } from "../environments/runtime";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 
 const loadedProjectFaviconSrcs = new Set<string>();
 const PROJECT_FAVICON_URL_VERSION = "github-repo-image-v1";
@@ -41,7 +42,7 @@ export function ProjectFavicon(input: {
           className={`size-3.5 shrink-0 text-muted-foreground/50 ${input.className ?? ""}`}
         />
       ) : null}
-      <img
+      <AuthenticatedImage
         src={src}
         alt=""
         className={`size-3.5 shrink-0 rounded-sm object-contain ${status === "loaded" ? "" : "hidden"} ${input.className ?? ""}`}

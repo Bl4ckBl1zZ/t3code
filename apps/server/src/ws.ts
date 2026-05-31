@@ -879,6 +879,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               Effect.flatMap((issued) =>
                 browserAgentRegistry.openOrFocusPreview(input, {
                   sidebarSessionToken: issued.token,
+                  preferredSessionId: currentSessionId,
                 }),
               ),
             ),
@@ -887,7 +888,9 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         [WS_METHODS.browserAgentsActivateAnnotation]: (input) =>
           observeRpcEffect(
             WS_METHODS.browserAgentsActivateAnnotation,
-            browserAgentRegistry.activateAnnotation(input),
+            browserAgentRegistry.activateAnnotation(input, {
+              preferredSessionId: currentSessionId,
+            }),
             { "rpc.aggregate": "browser-agent" },
           ),
         [WS_METHODS.subscribeBrowserAgents]: (_input) =>

@@ -232,6 +232,7 @@ export class BrowserAgentRegistry {
     input: BrowserAgentOpenOrFocusPreviewInput,
     options?: {
       readonly sidebarSessionToken?: string;
+      readonly preferredSessionId?: AuthSessionId;
     },
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
     const registry = this;
@@ -240,6 +241,7 @@ export class BrowserAgentRegistry {
         environmentId: input.environmentId,
         threadId: input.threadId,
         ...(input.preferredAgentId ? { preferredAgentId: input.preferredAgentId } : {}),
+        ...(options?.preferredSessionId ? { preferredSessionId: options.preferredSessionId } : {}),
       });
       const timestamp = nowIso();
       const key = workspaceLinkKey(input);
@@ -279,6 +281,9 @@ export class BrowserAgentRegistry {
 
   activateAnnotation(
     input: BrowserAgentActivateAnnotationInput,
+    options?: {
+      readonly preferredSessionId?: AuthSessionId;
+    },
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
     const registry = this;
     return Effect.gen(function* () {
@@ -292,7 +297,12 @@ export class BrowserAgentRegistry {
       const agent = yield* registry.selectAgent({
         environmentId: input.environmentId,
         threadId: input.threadId,
-        preferredAgentId: input.preferredAgentId ?? link.agentId,
+        ...(input.preferredAgentId ? { preferredAgentId: input.preferredAgentId } : {}),
+        ...(options?.preferredSessionId
+          ? { preferredSessionId: options.preferredSessionId }
+          : input.preferredAgentId
+            ? {}
+            : { preferredAgentId: link.agentId }),
       });
       const commandId = makeCommandId("annotate");
       registry.pendingCommands.set(commandId, {
@@ -313,6 +323,7 @@ export class BrowserAgentRegistry {
     readonly environmentId: string;
     readonly threadId: string;
     readonly preferredAgentId?: BrowserAgentId;
+    readonly preferredSessionId?: AuthSessionId;
   }): Effect.Effect<BrowserAgent, BrowserAgentCommandError, never> {
     const connectedAgents = Array.from(this.agents.values()).filter((agent) => agent.connected);
     if (connectedAgents.length === 0) {
@@ -327,6 +338,14 @@ export class BrowserAgentRegistry {
     if (input.preferredAgentId) {
       const preferred = this.agents.get(input.preferredAgentId);
       if (preferred?.connected) {
+        if (input.preferredSessionId && preferred.sessionId !== input.preferredSessionId) {
+          return Effect.fail(
+            toCommandError({
+              code: "no-agent-connected",
+              message: "No paired browser extension is connected for this client.",
+            }),
+          );
+        }
         return Effect.succeed(preferred);
       }
       return Effect.fail(
@@ -338,6 +357,29 @@ export class BrowserAgentRegistry {
     }
 
     const existing = this.workspaceLinks.get(workspaceLinkKey(input));
+    if (input.preferredSessionId) {
+      if (existing) {
+        const linkedAgent = this.agents.get(existing.agentId);
+        if (linkedAgent?.connected && linkedAgent.sessionId === input.preferredSessionId) {
+          return Effect.succeed(linkedAgent);
+        }
+      }
+
+      const sameSessionMostRecent = connectedAgents
+        .filter((agent) => agent.sessionId === input.preferredSessionId)
+        .toSorted((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+      if (sameSessionMostRecent) {
+        return Effect.succeed(sameSessionMostRecent);
+      }
+
+      return Effect.fail(
+        toCommandError({
+          code: "no-agent-connected",
+          message: "No paired browser extension is connected for this client.",
+        }),
+      );
+    }
+
     if (existing) {
       const linkedAgent = this.agents.get(existing.agentId);
       if (linkedAgent?.connected) {

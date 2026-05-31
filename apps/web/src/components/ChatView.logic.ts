@@ -21,6 +21,7 @@ import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
+export const TERMINAL_INTERRUPT_SEQUENCE = "\x03";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
@@ -101,6 +102,27 @@ export function reconcileMountedTerminalThreadIds(input: {
   }
 
   return nextThreadIds;
+}
+
+export function runningProjectScriptTerminalIds(input: {
+  scriptTerminalIds: ReadonlyArray<string> | undefined;
+  runningTerminalIds: ReadonlyArray<string>;
+}): string[] {
+  if (!input.scriptTerminalIds || input.scriptTerminalIds.length === 0) {
+    return [];
+  }
+
+  const runningTerminalIdSet = new Set(input.runningTerminalIds);
+  const seenTerminalIds = new Set<string>();
+  const terminalIds: string[] = [];
+  for (const terminalId of input.scriptTerminalIds) {
+    if (seenTerminalIds.has(terminalId) || !runningTerminalIdSet.has(terminalId)) {
+      continue;
+    }
+    seenTerminalIds.add(terminalId);
+    terminalIds.push(terminalId);
+  }
+  return terminalIds;
 }
 
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {

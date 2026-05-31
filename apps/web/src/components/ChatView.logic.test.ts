@@ -19,6 +19,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
+  runningProjectScriptTerminalIds,
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
@@ -179,6 +180,26 @@ describe("reconcileMountedTerminalThreadIds", () => {
         activeThreadTerminalOpen: false,
       }),
     ).toEqual(currentThreadIds.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
+  });
+});
+
+describe("runningProjectScriptTerminalIds", () => {
+  it("returns only running terminal ids previously associated with the script", () => {
+    expect(
+      runningProjectScriptTerminalIds({
+        scriptTerminalIds: ["default", "terminal-2", "terminal-2", "terminal-3"],
+        runningTerminalIds: ["terminal-3", "unrelated", "terminal-2"],
+      }),
+    ).toEqual(["terminal-2", "terminal-3"]);
+  });
+
+  it("returns an empty list when the script has no running terminals", () => {
+    expect(
+      runningProjectScriptTerminalIds({
+        scriptTerminalIds: ["default"],
+        runningTerminalIds: ["unrelated"],
+      }),
+    ).toEqual([]);
   });
 });
 
