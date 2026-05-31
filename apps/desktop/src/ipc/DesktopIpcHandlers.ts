@@ -35,7 +35,6 @@ import {
 import {
   confirm,
   getAppBranding,
-  getBrowserExtensionInstallPath,
   getLocalEnvironmentBootstrap,
   openInChrome,
   openExternal,
@@ -51,7 +50,6 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handleSync(getLocalEnvironmentBootstrap);
 
   yield* ipc.handle(getClientSettings);
-  yield* ipc.handle(getBrowserExtensionInstallPath);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getSavedEnvironmentRegistry);
   yield* ipc.handle(setSavedEnvironmentRegistry);

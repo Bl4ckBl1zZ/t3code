@@ -203,6 +203,17 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     );
 
   const encodeClaims = Schema.encodeEffect(Schema.fromJsonString(SessionClaims));
+  const encodeSessionToken = (claims: SessionClaims) =>
+    encodeClaims(claims).pipe(
+      Effect.map(base64UrlEncode),
+      Effect.map(
+        (encodedPayload) => `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`,
+      ),
+      Effect.mapError(
+        (cause) => new SessionCredentialError({ message: "Failed to encode claims", cause }),
+      ),
+    );
+
   const issue: SessionCredentialServiceShape["issue"] = (input) =>
     Effect.gen(function* () {
       const sessionId = AuthSessionId.make(yield* crypto.randomUUIDv4);
@@ -221,13 +232,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         exp: expiresAt.epochMilliseconds,
       };
 
-      const encodedPayload = yield* encodeClaims(claims).pipe(
-        Effect.map(base64UrlEncode),
-        Effect.mapError(
-          (cause) => new SessionCredentialError({ message: "Failed to encode claims", cause }),
-        ),
-      );
-      const signature = signPayload(encodedPayload, signingSecret);
+      const token = yield* encodeSessionToken(claims);
       const client = input?.client ?? createDefaultClientMetadata();
       yield* authSessions.create({
         sessionId,
@@ -261,13 +266,61 @@ export const makeSessionCredentialService = Effect.gen(function* () {
 
       return {
         sessionId,
-        token: `${encodedPayload}.${signature}`,
+        token,
         method: claims.method,
         client,
         expiresAt: expiresAt,
         role: claims.role,
       } satisfies IssuedSession;
     }).pipe(Effect.mapError(toSessionCredentialError("Failed to issue session credential.")));
+
+  const issueBearerTokenForSession: SessionCredentialServiceShape["issueBearerTokenForSession"] = (
+    sessionId,
+    input,
+  ) =>
+    Effect.gen(function* () {
+      const row = yield* authSessions.getById({ sessionId });
+      if (Option.isNone(row)) {
+        return yield* new SessionCredentialError({
+          message: "Unknown session.",
+        });
+      }
+      if (row.value.revokedAt !== null) {
+        return yield* new SessionCredentialError({
+          message: "Session revoked.",
+        });
+      }
+
+      const issuedAt = yield* DateTime.now;
+      if (row.value.expiresAt.epochMilliseconds <= issuedAt.epochMilliseconds) {
+        return yield* new SessionCredentialError({
+          message: "Session expired.",
+        });
+      }
+
+      const requestedExpiresAt = DateTime.add(issuedAt, {
+        milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
+      });
+      const expiresAt =
+        requestedExpiresAt.epochMilliseconds < row.value.expiresAt.epochMilliseconds
+          ? requestedExpiresAt
+          : row.value.expiresAt;
+      const token = yield* encodeSessionToken({
+        v: 1,
+        kind: "session",
+        sid: row.value.sessionId,
+        sub: row.value.subject,
+        role: row.value.role,
+        method: "bearer-session-token",
+        iat: issuedAt.epochMilliseconds,
+        exp: expiresAt.epochMilliseconds,
+      });
+
+      return {
+        token,
+        expiresAt,
+      };
+    }).pipe(Effect.mapError(toSessionCredentialError("Failed to issue bearer token for session.")));
 
   const verify: SessionCredentialServiceShape["verify"] = (token) =>
     Effect.gen(function* () {
@@ -510,6 +563,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
   return {
     cookieName,
     issue,
+    issueBearerTokenForSession,
     verify,
     issueWebSocketToken,
     verifyWebSocketToken,

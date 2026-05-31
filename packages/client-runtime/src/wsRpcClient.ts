@@ -124,6 +124,12 @@ export interface WsRpcClient {
   readonly review: {
     readonly getDiffPreview: RpcUnaryMethod<typeof WS_METHODS.reviewGetDiffPreview>;
   };
+  readonly browserAgents: {
+    readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.browserAgentsList>;
+    readonly openOrFocusPreview: RpcUnaryMethod<typeof WS_METHODS.browserAgentsOpenOrFocusPreview>;
+    readonly activateAnnotation: RpcUnaryMethod<typeof WS_METHODS.browserAgentsActivateAnnotation>;
+    readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeBrowserAgents>;
+  };
   readonly server: {
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
     readonly refreshProviders: (
@@ -280,6 +286,19 @@ export function createWsRpcClient(
     review: {
       getDiffPreview: (input) =>
         transport.request((client) => client[WS_METHODS.reviewGetDiffPreview](input)),
+    },
+    browserAgents: {
+      list: () => transport.request((client) => client[WS_METHODS.browserAgentsList]({})),
+      openOrFocusPreview: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsOpenOrFocusPreview](input)),
+      activateAnnotation: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsActivateAnnotation](input)),
+      subscribe: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeBrowserAgents]({}),
+          listener,
+          subscriptionOptions(options, WS_METHODS.subscribeBrowserAgents),
+        ),
     },
     server: {
       getConfig: () => transport.request((client) => client[WS_METHODS.serverGetConfig]({})),

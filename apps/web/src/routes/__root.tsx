@@ -12,7 +12,6 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
-import { BrowserTransferSetupPrompt } from "../components/BrowserTransferSetupPrompt";
 import { CommandPalette } from "../components/CommandPalette";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
@@ -59,10 +58,10 @@ import { configureClientTracing } from "../observability/clientTracing";
 import {
   ensurePrimaryEnvironmentReady,
   getPrimaryKnownEnvironment,
+  isBrowserAgentSidebarMode,
   resolveInitialServerAuthGateState,
   updatePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
-import { rememberBrowserTransferSetupRequestFromUrl } from "../browserTransfer";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 
 export const Route = createRootRouteWithContext<{
@@ -70,7 +69,6 @@ export const Route = createRootRouteWithContext<{
 }>()({
   beforeLoad: async ({ location }) => {
     const currentUrl = new URL(window.location.href);
-    rememberBrowserTransferSetupRequestFromUrl(currentUrl);
 
     if (location.pathname === "/pair" && hasHostedPairingRequest(currentUrl)) {
       return {
@@ -123,7 +121,6 @@ function RootRouteView() {
       <ToastProvider>
         <AnchoredToastProvider>
           <Outlet />
-          <BrowserTransferSetupPrompt />
         </AnchoredToastProvider>
       </ToastProvider>
     );
@@ -149,11 +146,11 @@ function RootRouteView() {
         <EnvironmentConnectionManagerBootstrap />
         <SshPasswordPromptDialog />
         <HostedStaticEnvironmentBootstrap />
+        <BrowserAgentSidebarEscapeRelay />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <SlowRpcAckToastCoordinator /> : null}
-        <BrowserTransferSetupPrompt />
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>{appShell}</WebSocketConnectionSurface>
         ) : (
@@ -162,6 +159,29 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function BrowserAgentSidebarEscapeRelay() {
+  useEffect(() => {
+    if (!isBrowserAgentSidebarMode() || window.parent === window) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      window.parent.postMessage({ type: "t3code.browserAgent.cancelAnnotation" }, "*");
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+    };
+  }, []);
+
+  return null;
 }
 
 function HostedStaticEnvironmentBootstrap() {

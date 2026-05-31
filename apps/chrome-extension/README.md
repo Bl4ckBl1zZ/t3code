@@ -1,23 +1,24 @@
-# T3 Code Browser Transfer
+# T3 Code Browser Agent
 
-This is an unpacked Chrome extension for the desktop-only **Transfer to Browser** action.
+This is an unpacked Chrome extension that pairs with a T3 Code backend over bearer auth and a
+browser-agent WebSocket.
 
-Load it in Chrome from `chrome://extensions` with Developer Mode enabled, choosing this
+Load it from `chrome://extensions` with Developer Mode enabled, choosing this
 `apps/chrome-extension` directory.
 
-The extension listens for T3 Code transfer URLs on loopback hosts, opens the inferred dev server
-URL in the same Chrome window, and groups the T3 Code and dev server tabs together.
+The normal pairing path is automatic: click **Transfer to Browser** in T3 Code. If no browser agent
+is connected yet, T3 Code creates a bearer alias for the current session, opens the backend's
+`/browser-agent/auto-pair` URL in the default browser, and this extension consumes that session
+token before the transfer command is retried. This works for owner and non-owner remote sessions.
 
-When the linked T3 Code browser tab is focused, the chat header shows a cursor button. Clicking it
-focuses the linked dev server tab and enables annotation mode. Click a page element, type an
-annotation, and press Enter to send the cropped highlighted screenshot plus text into the focused
-T3 Code chat.
+Manual pairing is still available from the extension icon for remote browsers or debugging. Enter a
+reachable T3 Code backend URL plus a pairing token from the app.
 
-The extension requests `<all_urls>` because Chrome requires either that permission or `activeTab`
-for `tabs.captureVisibleTab()`. Content scripts still only run on loopback T3/dev URLs, and the
-service worker only accepts annotation screenshots from a dev tab linked by a transfer.
+After pairing, **Transfer to Browser** sends a backend command to the extension. The extension opens
+or focuses the matching dev-server tab, groups it by repo name, injects the lightweight T3 Code
+sidebar, and reports the tab state back to the app.
 
-Chrome exposes tab grouping through the public extension APIs. Native Chrome Split View currently
-does not expose a public extension method for creating a split view, so the extension prepares the
-paired group and leaves native split activation to Chrome/user support when that API becomes
-available.
+The cursor button in T3 Code sends an annotation command through the backend. The extension focuses
+the linked preview tab, lets you click an element, captures a cropped screenshot around the
+highlighted element, and sends the annotation back to the backend. The backend appends the
+annotation as a new chat message with the screenshot attachment.

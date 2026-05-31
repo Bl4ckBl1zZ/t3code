@@ -19,7 +19,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { TransferToBrowserButton } from "./TransferToBrowserButton";
 import { BrowserAnnotationButton } from "./BrowserAnnotationButton";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
-import { shouldShowTransferToBrowser } from "../../browserTransfer";
+import { shouldShowBrowserAgentControls } from "../../browserAgents";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -65,14 +65,8 @@ export function shouldShowBrowserAnnotationButton(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly hasDesktopBridge: boolean;
 }): boolean {
-  return (
-    !input.hasDesktopBridge &&
-    Boolean(input.activeProjectName) &&
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
-  );
+  return shouldShowBrowserAgentControls(input);
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -108,17 +102,15 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     primaryEnvironmentId,
   });
-  const showTransferToBrowser = shouldShowTransferToBrowser({
+  const showTransferToBrowser = shouldShowBrowserAgentControls({
     activeProjectName,
     activeThreadEnvironmentId,
     primaryEnvironmentId,
-    hasDesktopBridge: typeof window !== "undefined" && Boolean(window.desktopBridge),
   });
   const showBrowserAnnotationButton = shouldShowBrowserAnnotationButton({
     activeProjectName,
     activeThreadEnvironmentId,
     primaryEnvironmentId,
-    hasDesktopBridge: typeof window !== "undefined" && Boolean(window.desktopBridge),
   });
 
   return (
@@ -169,10 +161,17 @@ export const ChatHeader = memo(function ChatHeader({
           <TransferToBrowserButton
             activeProjectName={activeProjectName}
             activeProjectScripts={activeProjectScripts}
+            activeThreadEnvironmentId={activeThreadEnvironmentId}
+            activeThreadId={activeThreadId}
             detectedDevServerUrl={detectedDevServerUrl}
           />
         )}
-        {showBrowserAnnotationButton && <BrowserAnnotationButton />}
+        {showBrowserAnnotationButton && (
+          <BrowserAnnotationButton
+            activeThreadEnvironmentId={activeThreadEnvironmentId}
+            activeThreadId={activeThreadId}
+          />
+        )}
         {activeProjectName && (
           <GitActionsControl
             gitCwd={gitCwd}

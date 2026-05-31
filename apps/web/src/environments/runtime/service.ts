@@ -23,6 +23,7 @@ import { type QueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 import {
   createKnownEnvironment,
+  getKnownEnvironmentHttpBaseUrl,
   getKnownEnvironmentWsBaseUrl,
   scopedThreadKey,
   scopeProjectRef,
@@ -37,7 +38,7 @@ import {
 import { ensureLocalApi } from "~/localApi";
 import { collectActiveTerminalUiThreadKeys } from "~/lib/terminalUiStateCleanup";
 import { deriveOrchestrationBatchEffects } from "~/orchestrationEventEffects";
-import { getPrimaryKnownEnvironment } from "../primary";
+import { getPrimaryKnownEnvironment, readPrimaryBrowserAgentSidebarSessionToken } from "../primary";
 import { remoteHttpRuntime } from "../../lib/runtime";
 
 import {
@@ -1134,10 +1135,23 @@ function createPrimaryEnvironmentClient(
       `Unable to resolve websocket URL for ${knownEnvironment?.label ?? "primary environment"}.`,
     );
   }
+  const sidebarBearerToken = readPrimaryBrowserAgentSidebarSessionToken();
+  const httpBaseUrl = getKnownEnvironmentHttpBaseUrl(knownEnvironment);
+  const socketUrl =
+    sidebarBearerToken && httpBaseUrl
+      ? () =>
+          remoteHttpRuntime.runPromise(
+            resolveRemoteWebSocketConnectionUrl({
+              wsBaseUrl,
+              httpBaseUrl,
+              bearerToken: sidebarBearerToken,
+            }),
+          )
+      : wsBaseUrl;
   const connectionLabel = knownEnvironment?.label ?? null;
 
   return createWsRpcClient(
-    new WsTransport(wsBaseUrl, {
+    new WsTransport(socketUrl, {
       getConnectionLabel: () => connectionLabel,
       getVersionMismatchHint: () =>
         resolveServerConfigVersionMismatch(getServerConfig())?.hint ?? null,

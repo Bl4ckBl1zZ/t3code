@@ -97,8 +97,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   openInChrome: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_IN_CHROME_CHANNEL, url),
-  getBrowserExtensionInstallPath: async () =>
-    ipcRenderer.invoke(IpcChannels.GET_BROWSER_EXTENSION_INSTALL_PATH_CHANNEL),
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

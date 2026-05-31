@@ -1,4 +1,5 @@
 import type {
+  AuthBearerBootstrapResult,
   AuthBootstrapInput,
   AuthBootstrapResult,
   AuthClientMetadata,
@@ -61,6 +62,36 @@ let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
 let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
+const BROWSER_AGENT_SIDEBAR_SESSION_TOKEN_KEY = "t3code.browserAgentSidebar.sessionToken";
+
+export function isBrowserAgentSidebarMode(): boolean {
+  return new URL(window.location.href).searchParams.get("browserAgentSidebar") === "1";
+}
+
+export function readPrimaryBrowserAgentSidebarSessionToken(): string | null {
+  if (!isBrowserAgentSidebarMode()) {
+    return null;
+  }
+  try {
+    const token = window.sessionStorage.getItem(BROWSER_AGENT_SIDEBAR_SESSION_TOKEN_KEY);
+    return token && token.trim().length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePrimaryBrowserAgentSidebarSessionToken(token: string): void {
+  try {
+    window.sessionStorage.setItem(BROWSER_AGENT_SIDEBAR_SESSION_TOKEN_KEY, token);
+  } catch {
+    // If storage is unavailable, the next session check will fall back to cookie auth.
+  }
+}
+
+function authRequestHeaders(): HeadersInit | undefined {
+  const bearerToken = readPrimaryBrowserAgentSidebarSessionToken();
+  return bearerToken ? { authorization: `Bearer ${bearerToken}` } : undefined;
+}
 
 export function peekPairingTokenFromUrl(): string | null {
   return getPairingTokenFromUrl(new URL(window.location.href));
@@ -93,8 +124,10 @@ function getDesktopBootstrapCredential(): string | null {
 
 export async function fetchSessionState(): Promise<AuthSessionState> {
   return retryTransientBootstrap(async () => {
+    const headers = authRequestHeaders();
     const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/session"), {
       credentials: "include",
+      ...(headers ? { headers } : {}),
     });
     if (!response.ok) {
       throw new BootstrapHttpError({
@@ -145,7 +178,53 @@ function toFriendlyBootstrapErrorMessage(status: number, message: string): strin
   return parsedMessage;
 }
 
+async function acceptBrowserAgentSidebarSessionToken(
+  sessionToken: string,
+): Promise<AuthBootstrapResult> {
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/session"), {
+    credentials: "include",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const message = toFriendlyBootstrapErrorMessage(response.status, await response.text());
+    throw new BootstrapHttpError({
+      message: message || `Failed to verify browser sidebar session (${response.status}).`,
+      status: response.status,
+    });
+  }
+
+  const result = (await response.json()) as AuthSessionState;
+  if (
+    !result.authenticated ||
+    result.sessionMethod !== "bearer-session-token" ||
+    !result.role ||
+    !result.expiresAt
+  ) {
+    throw new BootstrapHttpError({
+      message: "Invalid browser sidebar session.",
+      status: 401,
+    });
+  }
+
+  writePrimaryBrowserAgentSidebarSessionToken(sessionToken);
+  return {
+    authenticated: true,
+    role: result.role,
+    sessionMethod: "bearer-session-token",
+    expiresAt: result.expiresAt,
+  };
+}
+
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBootstrapResult> {
+  if (isBrowserAgentSidebarMode()) {
+    return retryTransientBootstrap(async () => {
+      return await acceptBrowserAgentSidebarSessionToken(credential);
+    });
+  }
+
   return retryTransientBootstrap(async () => {
     const payload: AuthBootstrapInput = { credential };
     const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/bootstrap"), {
@@ -288,6 +367,26 @@ export async function createServerPairingCredential(
   }
 
   return (await response.json()) as AuthPairingCredentialResult;
+}
+
+export async function createServerSessionBearerToken(): Promise<AuthBearerBootstrapResult> {
+  const headers = authRequestHeaders();
+  const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/session/bearer-token"), {
+    credentials: "include",
+    ...(headers ? { headers } : {}),
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await readErrorMessage(
+        response,
+        `Failed to create session bearer token (${response.status}).`,
+      ),
+    );
+  }
+
+  return (await response.json()) as AuthBearerBootstrapResult;
 }
 
 export async function listServerPairingLinks(): Promise<ReadonlyArray<ServerPairingLinkRecord>> {

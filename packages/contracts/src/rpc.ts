@@ -5,6 +5,14 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { AuthAccessStreamEvent } from "./auth.ts";
 import {
+  BrowserAgentActivateAnnotationInput,
+  BrowserAgentCommandError,
+  BrowserAgentCommandResult,
+  BrowserAgentListResult,
+  BrowserAgentOpenOrFocusPreviewInput,
+  BrowserAgentStreamEvent,
+} from "./browserAgent.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -170,6 +178,11 @@ export const WS_METHODS = {
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
 
+  // Browser agent methods
+  browserAgentsList: "browserAgents.list",
+  browserAgentsOpenOrFocusPreview: "browserAgents.openOrFocusPreview",
+  browserAgentsActivateAnnotation: "browserAgents.activateAnnotation",
+
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
@@ -177,6 +190,7 @@ export const WS_METHODS = {
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
+  subscribeBrowserAgents: "subscribeBrowserAgents",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -277,6 +291,29 @@ export const WsSourceControlPublishRepositoryRpc = Rpc.make(
     payload: SourceControlPublishRepositoryInput,
     success: SourceControlPublishRepositoryResult,
     error: SourceControlRepositoryError,
+  },
+);
+
+export const WsBrowserAgentsListRpc = Rpc.make(WS_METHODS.browserAgentsList, {
+  payload: Schema.Struct({}),
+  success: BrowserAgentListResult,
+});
+
+export const WsBrowserAgentsOpenOrFocusPreviewRpc = Rpc.make(
+  WS_METHODS.browserAgentsOpenOrFocusPreview,
+  {
+    payload: BrowserAgentOpenOrFocusPreviewInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsActivateAnnotationRpc = Rpc.make(
+  WS_METHODS.browserAgentsActivateAnnotation,
+  {
+    payload: BrowserAgentActivateAnnotationInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
   },
 );
 
@@ -518,6 +555,12 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
+export const WsSubscribeBrowserAgentsRpc = Rpc.make(WS_METHODS.subscribeBrowserAgents, {
+  payload: Schema.Struct({}),
+  success: BrowserAgentStreamEvent,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -534,6 +577,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsBrowserAgentsListRpc,
+  WsBrowserAgentsOpenOrFocusPreviewRpc,
+  WsBrowserAgentsActivateAnnotationRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,
@@ -564,6 +610,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
+  WsSubscribeBrowserAgentsRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

@@ -16,10 +16,13 @@ export {
 
 export {
   createServerPairingCredential,
+  createServerSessionBearerToken,
   fetchSessionState,
+  isBrowserAgentSidebarMode,
   listServerClientSessions,
   listServerPairingLinks,
   peekPairingTokenFromUrl,
+  readPrimaryBrowserAgentSidebarSessionToken,
   resolveInitialServerAuthGateState,
   revokeOtherServerClientSessions,
   revokeServerClientSession,

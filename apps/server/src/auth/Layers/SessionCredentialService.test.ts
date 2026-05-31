@@ -84,6 +84,31 @@ it.layer(NodeServices.layer)("SessionCredentialServiceLive", (it) => {
     }).pipe(Effect.provide(Layer.merge(makeSessionCredentialLayer(), TestClock.layer()))),
   );
 
+  it.effect("issues bearer aliases for existing sessions without creating clients", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      const issued = yield* sessions.issue({
+        subject: "desktop-bootstrap",
+        role: "owner",
+        client: {
+          label: "Desktop app",
+          deviceType: "desktop",
+        },
+      });
+      const alias = yield* sessions.issueBearerTokenForSession(issued.sessionId);
+      const verified = yield* sessions.verify(alias.token);
+      const activeSessions = yield* sessions.listActive();
+
+      expect(verified.sessionId).toBe(issued.sessionId);
+      expect(verified.subject).toBe("desktop-bootstrap");
+      expect(verified.role).toBe("owner");
+      expect(verified.method).toBe("bearer-session-token");
+      expect(alias.expiresAt.toString()).toBe(issued.expiresAt.toString());
+      expect(activeSessions).toHaveLength(1);
+      expect(activeSessions[0]?.sessionId).toBe(issued.sessionId);
+    }).pipe(Effect.provide(makeSessionCredentialLayer())),
+  );
+
   it.effect("rejects websocket tokens once the parent session has expired", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionCredentialService;

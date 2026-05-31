@@ -50,24 +50,22 @@ describe("shouldShowOpenInPicker", () => {
 describe("shouldShowBrowserAnnotationButton", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
 
-  it("shows in browser primary-project chats", () => {
+  it("shows in primary-project chats", () => {
     expect(
       shouldShowBrowserAnnotationButton({
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
-        hasDesktopBridge: false,
       }),
     ).toBe(true);
   });
 
-  it("hides in desktop chats", () => {
+  it("hides without an active project", () => {
     expect(
       shouldShowBrowserAnnotationButton({
-        activeProjectName: "codething-mvp",
+        activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
-        hasDesktopBridge: true,
       }),
     ).toBe(false);
   });
@@ -78,7 +76,6 @@ describe("shouldShowBrowserAnnotationButton", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId,
-        hasDesktopBridge: false,
       }),
     ).toBe(false);
   });

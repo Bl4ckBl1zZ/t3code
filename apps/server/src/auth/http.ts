@@ -141,6 +141,39 @@ export const authWebSocketTokenRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
+export const authSessionBearerTokenRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/auth/session/bearer-token",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* ServerAuth;
+    const sessions = yield* SessionCredentialService;
+    const session = yield* serverAuth.authenticateHttpRequest(request);
+    const issued = yield* sessions.issueBearerTokenForSession(session.sessionId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({
+            message: "Failed to issue session bearer token.",
+            cause,
+          }),
+      ),
+    );
+    return HttpServerResponse.jsonUnsafe(
+      {
+        authenticated: true,
+        role: session.role,
+        sessionMethod: "bearer-session-token",
+        expiresAt: DateTime.toUtc(issued.expiresAt),
+        sessionToken: issued.token,
+      } satisfies AuthBearerBootstrapResult,
+      {
+        status: 200,
+        headers: browserApiCorsHeaders,
+      },
+    );
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+);
+
 export const authPairingCredentialRouteLayer = HttpRouter.add(
   "POST",
   "/api/auth/pairing-token",

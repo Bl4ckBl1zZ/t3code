@@ -13,6 +13,8 @@ import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   type AuthAccessStreamEvent,
   AuthSessionId,
+  BrowserAgentCommandError,
+  type BrowserAgentStreamEvent,
   CommandId,
   EventId,
   type OrchestrationCommand,
@@ -93,6 +95,7 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { browserAgentRegistry } from "./browserAgents/registry.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 
@@ -854,6 +857,59 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               );
             }),
             { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.browserAgentsList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsList,
+            Effect.sync(() => browserAgentRegistry.snapshot()),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsOpenOrFocusPreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsOpenOrFocusPreview,
+            sessions.issueBearerTokenForSession(currentSessionId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new BrowserAgentCommandError({
+                    code: "command-failed",
+                    message: "Failed to prepare browser sidebar session.",
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((issued) =>
+                browserAgentRegistry.openOrFocusPreview(input, {
+                  sidebarSessionToken: issued.token,
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsActivateAnnotation]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsActivateAnnotation,
+            browserAgentRegistry.activateAnnotation(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.subscribeBrowserAgents]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeBrowserAgents,
+            Stream.concat(
+              Stream.make({
+                type: "snapshot" as const,
+                snapshot: browserAgentRegistry.snapshot(),
+              }),
+              Stream.callback<BrowserAgentStreamEvent>((queue) =>
+                Effect.acquireRelease(
+                  Effect.sync(() =>
+                    browserAgentRegistry.subscribe((event) => {
+                      Effect.runFork(Queue.offer(queue, event));
+                    }),
+                  ),
+                  (unsubscribe) => Effect.sync(unsubscribe),
+                ),
+              ),
+            ),
+            { "rpc.aggregate": "browser-agent" },
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {

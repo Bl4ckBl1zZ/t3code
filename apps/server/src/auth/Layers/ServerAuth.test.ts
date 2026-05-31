@@ -96,6 +96,30 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
     }).pipe(Effect.provide(makeServerAuthLayer())),
   );
 
+  it.effect("prefers explicit bearer credentials over stale cookies", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+
+      const pairingCredential = yield* serverAuth.issuePairingCredential();
+      const exchanged = yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
+        pairingCredential.credential,
+        requestMetadata,
+      );
+      const verified = yield* serverAuth.authenticateHttpRequest({
+        cookies: {
+          t3_session: "stale.invalid.cookie",
+        },
+        headers: {
+          authorization: `Bearer ${exchanged.sessionToken}`,
+        },
+      } as unknown as Parameters<ServerAuthShape["authenticateHttpRequest"]>[0]);
+
+      expect(verified.sessionId).toBeTruthy();
+      expect(verified.method).toBe("bearer-session-token");
+      expect(verified.role).toBe("client");
+    }).pipe(Effect.provide(makeServerAuthLayer())),
+  );
+
   it.effect("issues startup pairing URLs that bootstrap owner sessions", () =>
     Effect.gen(function* () {
       const serverAuth = yield* ServerAuth;

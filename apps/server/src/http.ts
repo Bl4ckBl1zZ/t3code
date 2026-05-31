@@ -64,12 +64,58 @@ const PROJECT_FAVICON_GITHUB_GRAPHQL_QUERY = `
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
+const BROWSER_AGENT_AUTO_PAIR_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>T3 Code Browser Agent Pairing</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #111;
+        color: #f7f7f7;
+        font: 14px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      main {
+        max-width: 420px;
+        padding: 24px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 12px;
+        background: rgba(255,255,255,0.04);
+      }
+      h1 { margin: 0 0 8px; font-size: 18px; }
+      p { margin: 0; color: rgba(255,255,255,0.7); line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Pairing T3 Code Browser Agent</h1>
+      <p>If this stays open, reload or install the T3 Code Browser Agent extension, then retry Transfer to Browser.</p>
+    </main>
+  </body>
+</html>`;
 
 export const browserApiCorsLayer = HttpRouter.cors({
   allowedMethods: [...browserApiCorsAllowedMethods],
   allowedHeaders: [...browserApiCorsAllowedHeaders],
   maxAge: 600,
 });
+
+export const browserAgentAutoPairRouteLayer = HttpRouter.add(
+  "GET",
+  "/browser-agent/auto-pair",
+  Effect.succeed(
+    HttpServerResponse.text(BROWSER_AGENT_AUTO_PAIR_HTML, {
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+    }),
+  ),
+);
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname

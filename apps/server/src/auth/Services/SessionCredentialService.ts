@@ -56,6 +56,18 @@ export interface SessionCredentialServiceShape {
     readonly role?: SessionRole;
     readonly client?: AuthClientMetadata;
   }) => Effect.Effect<IssuedSession, SessionCredentialError>;
+  readonly issueBearerTokenForSession: (
+    sessionId: AuthSessionId,
+    input?: {
+      readonly ttl?: Duration.Duration;
+    },
+  ) => Effect.Effect<
+    {
+      readonly token: string;
+      readonly expiresAt: DateTime.DateTime;
+    },
+    SessionCredentialError
+  >;
   readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
   readonly issueWebSocketToken: (
     sessionId: AuthSessionId,

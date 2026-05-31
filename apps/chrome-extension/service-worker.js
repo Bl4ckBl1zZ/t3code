@@ -1,1111 +1,708 @@
-/* global chrome */
+const BACKEND_KEY = "t3code.browserAgent.backend";
+const LINKS_KEY = "t3code.browserAgent.workspaceLinks";
+const RECONNECT_MIN_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
 
-const TRANSFER_MESSAGE_TYPE = "t3code.transferToBrowser";
-const ANNOTATION_STATUS_MESSAGE_TYPE = "t3code.browserAnnotation.status";
-const ANNOTATION_ACTIVATE_MESSAGE_TYPE = "t3code.browserAnnotation.activate";
-const DEV_ANNOTATION_ACTIVATE_MESSAGE_TYPE = "t3code.devPreview.activateAnnotationMode";
-const DEV_ANNOTATION_CAPTURE_SCREENSHOT_MESSAGE_TYPE =
-  "t3code.devPreview.captureAnnotationScreenshot";
-const DEV_ANNOTATION_SUBMIT_MESSAGE_TYPE = "t3code.devPreview.submitAnnotation";
-const DEV_ATTACH_SIDE_PANEL_MESSAGE_TYPE = "t3code.devPreview.attachSidePanel";
-const ANNOTATION_CAPTURED_MESSAGE_TYPE = "t3code.browserAnnotation.capture";
-const SIDE_PANEL_GET_SESSION_MESSAGE_TYPE = "t3code.sidePanel.getSession";
-const SIDE_PANEL_READY_MESSAGE_TYPE = "t3code.sidePanel.ready";
-const TRANSFER_FLAG_PARAM = "t3BrowserTransfer";
-const TRANSFER_ID_PARAM = "t3BrowserTransferId";
-const TRANSFER_DEV_SERVER_URL_PARAM = "t3DevServerUrl";
-const TRANSFER_EXTENSION_PATH_PARAM = "t3ExtensionPath";
-const TRANSFER_GROUP_TITLE_PARAM = "t3GroupTitle";
-const DEFAULT_GROUP_TITLE = "T3 Code";
-const LINK_STORAGE_KEY = "t3code.browserTransfer.links";
-const NO_TAB_GROUP_ID = -1;
-const sidePanelPortsBySessionId = new Map();
+let socket = null;
+let socketBaseUrl = null;
+let socketEventController = null;
+let reconnectTimer = null;
+let reconnectDelayMs = RECONNECT_MIN_MS;
+let currentBackend = null;
+let connecting = null;
 
-function isTransferMessage(message) {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    message.type === TRANSFER_MESSAGE_TYPE &&
-    typeof message.devServerUrl === "string" &&
-    message.devServerUrl.length > 0 &&
-    (message.groupTitle === undefined || typeof message.groupTitle === "string")
-  );
-}
-
-function normalizeHttpUrl(rawUrl) {
+function normalizeBaseUrl(value) {
   try {
-    const url = new URL(rawUrl);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    if (url.pathname === "") {
+      url.pathname = "/";
     }
-    return url.toString();
+    return url.toString().replace(/\/$/, "");
   } catch {
     return null;
   }
 }
 
-function cleanT3SidePanelUrl(rawUrl) {
-  const url = new URL(rawUrl);
-  for (const param of [
-    TRANSFER_FLAG_PARAM,
-    TRANSFER_ID_PARAM,
-    TRANSFER_DEV_SERVER_URL_PARAM,
-    TRANSFER_EXTENSION_PATH_PARAM,
-    TRANSFER_GROUP_TITLE_PARAM,
-  ]) {
-    url.searchParams.delete(param);
+function wsUrlFor(baseUrl, token) {
+  const url = new URL(`${baseUrl}/browser-agent/ws`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("wsToken", token);
+  return url.toString();
+}
+
+function chatUrlForWorkspaceLink(baseUrl, link, sidebarSessionToken) {
+  const url = new URL(
+    `/${encodeURIComponent(link.environmentId)}/${encodeURIComponent(link.threadId)}`,
+    `${baseUrl}/`,
+  );
+  url.searchParams.set("browserAgentSidebar", "1");
+  url.searchParams.set("browserWorkspaceLinkId", link.id);
+  if (typeof sidebarSessionToken === "string" && sidebarSessionToken.length > 0) {
+    url.hash = new URLSearchParams([["token", sidebarSessionToken]]).toString();
   }
   return url.toString();
 }
 
-function normalizeGroupTitle(rawTitle) {
-  const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
-  return title.length > 0 ? title.slice(0, 64) : DEFAULT_GROUP_TITLE;
+async function workspaceLinkForContent(link, tab, options = {}) {
+  const backend = currentBackend ?? (await readBackend());
+  const nextLink = { ...link, tabId: tab.id, windowId: tab.windowId };
+  if (!backend?.baseUrl) {
+    return nextLink;
+  }
+  const sidebarSessionToken =
+    typeof options.sidebarSessionToken === "string" && options.sidebarSessionToken.length > 0
+      ? options.sidebarSessionToken
+      : backend.sessionToken;
+  return {
+    ...nextLink,
+    t3Url: chatUrlForWorkspaceLink(backend.baseUrl, nextLink, sidebarSessionToken),
+  };
 }
 
-function isAnnotationStatusMessage(message) {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    message.type === ANNOTATION_STATUS_MESSAGE_TYPE &&
-    (message.sidePanelSessionId === undefined || typeof message.sidePanelSessionId === "string")
-  );
+async function readBackend() {
+  const stored = await chrome.storage.local.get(BACKEND_KEY);
+  const backend = stored[BACKEND_KEY];
+  if (!backend || typeof backend.baseUrl !== "string" || typeof backend.sessionToken !== "string") {
+    return null;
+  }
+  return backend;
 }
 
-function isAnnotationActivateMessage(message) {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    message.type === ANNOTATION_ACTIVATE_MESSAGE_TYPE &&
-    (message.sidePanelSessionId === undefined || typeof message.sidePanelSessionId === "string")
-  );
+async function writeBackend(backend) {
+  currentBackend = backend;
+  await chrome.storage.local.set({ [BACKEND_KEY]: backend });
 }
 
-function isDevAnnotationCaptureScreenshotMessage(message) {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    message.type === DEV_ANNOTATION_CAPTURE_SCREENSHOT_MESSAGE_TYPE &&
-    (message.sourceTabId === undefined || typeof message.sourceTabId === "number") &&
-    (message.sidePanelSessionId === undefined || typeof message.sidePanelSessionId === "string")
-  );
-}
-
-function isDevAnnotationSubmitMessage(message) {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    message.type === DEV_ANNOTATION_SUBMIT_MESSAGE_TYPE &&
-    typeof message.text === "string" &&
-    message.text.trim().length > 0 &&
-    typeof message.screenshotDataUrl === "string" &&
-    message.screenshotDataUrl.startsWith("data:image/") &&
-    typeof message.pageUrl === "string" &&
-    typeof message.pageTitle === "string" &&
-    (message.sourceTabId === undefined || typeof message.sourceTabId === "number") &&
-    (message.sidePanelSessionId === undefined || typeof message.sidePanelSessionId === "string")
-  );
-}
-
-function isSidePanelGetSessionMessage(message) {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    message.type === SIDE_PANEL_GET_SESSION_MESSAGE_TYPE &&
-    typeof message.sessionId === "string" &&
-    message.sessionId.trim().length > 0
-  );
-}
-
-function senderTabId(sender) {
-  return sender.tab?.id;
+async function clearBackend() {
+  currentBackend = null;
+  closeSocket();
+  await chrome.storage.local.remove(BACKEND_KEY);
 }
 
 async function readLinks() {
-  try {
-    const result = await chrome.storage.session.get(LINK_STORAGE_KEY);
-    const links = result[LINK_STORAGE_KEY];
-    return Array.isArray(links) ? links : [];
-  } catch {
-    return [];
-  }
+  const stored = await chrome.storage.local.get(LINKS_KEY);
+  const links = stored[LINKS_KEY];
+  return Array.isArray(links) ? links : [];
 }
 
-async function writeLinks(links) {
-  try {
-    await chrome.storage.session.set({ [LINK_STORAGE_KEY]: links });
-  } catch {
-    // Session storage is best-effort. The current service worker invocation
-    // still completes the requested operation even if persistence fails.
-  }
-}
-
-async function storeLink(link) {
+async function upsertLink(link) {
   const links = await readLinks();
-  const nextLinks = links.filter(
-    (entry) =>
-      entry.devTabId !== link.devTabId &&
-      (link.t3TabId === undefined || entry.t3TabId !== link.t3TabId) &&
-      (link.sidePanelSessionId === undefined ||
-        entry.sidePanelSessionId !== link.sidePanelSessionId),
+  const next = links.filter((entry) => {
+    if (entry.id === link.id) {
+      return false;
+    }
+    if (link.tabId === undefined || link.windowId === undefined) {
+      return true;
+    }
+    return (
+      String(entry.tabId) !== String(link.tabId) || String(entry.windowId) !== String(link.windowId)
+    );
+  });
+  next.push(link);
+  await chrome.storage.local.set({ [LINKS_KEY]: next });
+}
+
+function linkForStorage(link) {
+  if (typeof link.t3Url !== "string" || link.t3Url.length === 0) {
+    return link;
+  }
+  try {
+    const url = new URL(link.t3Url);
+    url.hash = "";
+    return { ...link, t3Url: url.toString() };
+  } catch {
+    return link;
+  }
+}
+
+async function fetchJson(baseUrl, path, options = {}) {
+  const headers = {
+    "content-type": "application/json",
+    ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+  };
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `Request failed with status ${response.status}`);
+  }
+  return await response.json();
+}
+
+async function pairBackend(input) {
+  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  if (!baseUrl) {
+    throw new Error("Enter a valid T3 Code backend URL.");
+  }
+  const providedSessionToken = String(input.sessionToken ?? "").trim();
+  if (providedSessionToken) {
+    const session = await fetchJson(baseUrl, "/api/auth/session", {
+      token: providedSessionToken,
+    });
+    if (!session?.authenticated) {
+      throw new Error("The backend rejected the browser agent session token.");
+    }
+    const backend = {
+      baseUrl,
+      sessionToken: providedSessionToken,
+      pairedAt: new Date().toISOString(),
+    };
+    await writeBackend(backend);
+    await connectBackend({ force: true });
+    return { ok: true };
+  }
+
+  const credential = String(input.credential ?? "").trim();
+  if (!credential) {
+    throw new Error("Enter a pairing token or browser agent session token.");
+  }
+  const result = await fetchJson(baseUrl, "/api/auth/bootstrap/bearer", {
+    method: "POST",
+    body: { credential },
+  });
+  if (typeof result.sessionToken !== "string") {
+    throw new Error("The backend did not return a bearer session token.");
+  }
+  const backend = {
+    baseUrl,
+    sessionToken: result.sessionToken,
+    pairedAt: new Date().toISOString(),
+  };
+  await writeBackend(backend);
+  await connectBackend({ force: true });
+  return { ok: true };
+}
+
+async function getWsToken(backend) {
+  const result = await fetchJson(backend.baseUrl, "/api/auth/ws-token", {
+    method: "POST",
+    token: backend.sessionToken,
+  });
+  if (typeof result.token !== "string") {
+    throw new Error("The backend did not return a WebSocket token.");
+  }
+  return result.token;
+}
+
+function closeSocket() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (socket) {
+    socketEventController?.abort();
+    socketEventController = null;
+    socket.close();
+    socket = null;
+  }
+  socketBaseUrl = null;
+}
+
+function scheduleReconnect() {
+  if (!currentBackend || reconnectTimer !== null) {
+    return;
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void connectBackend().catch(() => scheduleReconnect());
+  }, reconnectDelayMs);
+  reconnectDelayMs = Math.min(RECONNECT_MAX_MS, reconnectDelayMs * 2);
+}
+
+async function connectBackend(options = {}) {
+  if (connecting) {
+    return connecting;
+  }
+  connecting = (async () => {
+    const backend = currentBackend ?? (await readBackend());
+    currentBackend = backend;
+    if (!backend) {
+      return { connected: false };
+    }
+    if (
+      !options.force &&
+      socket &&
+      socket.readyState === WebSocket.OPEN &&
+      socketBaseUrl === backend.baseUrl
+    ) {
+      return { connected: true };
+    }
+
+    closeSocket();
+    const token = await getWsToken(backend);
+    socketBaseUrl = backend.baseUrl;
+    socket = new WebSocket(wsUrlFor(backend.baseUrl, token));
+    socketEventController = new AbortController();
+    const eventOptions = { signal: socketEventController.signal };
+    socket.addEventListener(
+      "open",
+      () => {
+        reconnectDelayMs = RECONNECT_MIN_MS;
+        sendHello();
+        void sendTabsSnapshot();
+      },
+      eventOptions,
+    );
+    socket.addEventListener(
+      "message",
+      (event) => {
+        void handleServerMessage(event.data).catch((error) => {
+          console.warn("[T3 Code] browser-agent command failed", error);
+        });
+      },
+      eventOptions,
+    );
+    socket.addEventListener(
+      "close",
+      () => {
+        socket = null;
+        socketBaseUrl = null;
+        socketEventController = null;
+        scheduleReconnect();
+      },
+      eventOptions,
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        socket?.close();
+      },
+      eventOptions,
+    );
+    return { connected: true };
+  })();
+  try {
+    return await connecting;
+  } finally {
+    connecting = null;
+  }
+}
+
+function sendToServer(message) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw new Error("T3 Code browser-agent socket is not connected.");
+  }
+  socket.send(JSON.stringify(message));
+}
+
+function sendHello() {
+  sendToServer({
+    type: "browserAgent.hello",
+    device: {
+      extensionVersion: chrome.runtime.getManifest().version,
+      userAgent: navigator.userAgent,
+      browser: "Chrome",
+      platform: navigator.platform,
+    },
+    capabilities: {
+      version: 1,
+      canCaptureVisibleTab: true,
+      canInjectScripts: Boolean(chrome.scripting?.executeScript),
+      canFocusTabs: true,
+      canGroupTabs: Boolean(chrome.tabs?.group),
+      canAnnotate: true,
+      canRenderInlineSidebar: true,
+    },
+  });
+}
+
+async function sendTabsSnapshot() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  const tabs = await chrome.tabs.query({});
+  const groupsById = new Map();
+  const groupIds = Array.from(
+    new Set(
+      tabs
+        .map((tab) => tab.groupId)
+        .filter((groupId) => typeof groupId === "number" && groupId >= 0),
+    ),
   );
-  nextLinks.push(link);
-  await writeLinks(nextLinks);
+  await Promise.all(
+    groupIds.map(async (groupId) => {
+      try {
+        groupsById.set(groupId, await chrome.tabGroups.get(groupId));
+      } catch {
+        groupsById.delete(groupId);
+      }
+    }),
+  );
+  sendToServer({
+    type: "browserAgent.tabs.snapshot",
+    tabs: tabs
+      .filter((tab) => tab.id !== undefined && tab.windowId !== undefined)
+      .map((tab) => {
+        const group = typeof tab.groupId === "number" ? groupsById.get(tab.groupId) : null;
+        const snapshot = {
+          tabId: tab.id,
+          windowId: tab.windowId,
+          url: tab.url,
+          title: tab.title,
+          active: tab.active === true,
+        };
+        if (typeof tab.groupId === "number" && tab.groupId >= 0) {
+          snapshot.groupId = tab.groupId;
+        }
+        if (group?.title) {
+          snapshot.groupTitle = group.title;
+        }
+        return snapshot;
+      }),
+  });
 }
 
-async function removeLinksForTab(tabId) {
-  const links = await readLinks();
-  const nextLinks = links.filter((entry) => entry.t3TabId !== tabId && entry.devTabId !== tabId);
-  if (nextLinks.length !== links.length) {
-    await writeLinks(nextLinks);
-  }
-}
-
-async function findLinkByT3TabId(tabId) {
-  const links = await readLinks();
-  return links.find((entry) => entry.t3TabId === tabId) ?? null;
-}
-
-async function findLinkByDevTabId(tabId) {
-  const links = await readLinks();
-  return links.find((entry) => entry.devTabId === tabId) ?? null;
-}
-
-async function findLinkBySidePanelSessionId(sessionId) {
-  const links = await readLinks();
-  return links.find((entry) => entry.sidePanelSessionId === sessionId) ?? null;
-}
-
-async function getExistingTab(tabId) {
+function normalizeUrlForMatch(value) {
   try {
-    return await chrome.tabs.get(tabId);
+    const url = new URL(value);
+    url.hash = "";
+    return url;
   } catch {
-    await removeLinksForTab(tabId);
     return null;
   }
 }
 
-function wait(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function sidePanelPath(sessionId) {
-  return `sidepanel.html?sessionId=${encodeURIComponent(sessionId)}`;
-}
-
-function createSidePanelSessionId(id) {
-  const suffix = Math.random().toString(36).slice(2);
-  return `${String(id).replace(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now().toString(36)}-${suffix}`;
-}
-
-async function openSidePanelForLink(link) {
-  if (typeof link.devTabId !== "number" || typeof link.windowId !== "number") {
-    throw new Error("Side panel link is missing tab metadata.");
+function tabMatchesDevServer(tabUrl, devServerUrl) {
+  const tab = normalizeUrlForMatch(tabUrl ?? "");
+  const target = normalizeUrlForMatch(devServerUrl);
+  if (!tab || !target) {
+    return false;
   }
-  if (!chrome.sidePanel?.setOptions || !chrome.sidePanel?.open) {
-    throw new Error("Chrome Side Panel API is unavailable.");
+  if (tab.origin !== target.origin) {
+    return false;
   }
-  await chrome.sidePanel.setOptions({
-    tabId: link.devTabId,
-    path: sidePanelPath(link.sidePanelSessionId),
-    enabled: true,
-  });
-  await chrome.sidePanel.open({
-    tabId: link.devTabId,
-    windowId: link.windowId,
-  });
+  const targetPath = target.pathname.replace(/\/+$/, "") || "/";
+  if (targetPath === "/") {
+    return true;
+  }
+  return tab.pathname === target.pathname || tab.pathname.startsWith(`${targetPath}/`);
 }
 
-function isMissingContentScriptError(error) {
-  const message = error instanceof Error ? error.message : String(error);
+function linkTimestamp(link) {
+  const value = Date.parse(link.updatedAt ?? link.createdAt ?? "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function newestLink(links) {
+  return links.reduce((best, link) => {
+    if (!best) {
+      return link;
+    }
+    return linkTimestamp(link) >= linkTimestamp(best) ? link : best;
+  }, null);
+}
+
+function linkMatchesTabIdentity(link, tab) {
   return (
-    message.includes("Receiving end does not exist") ||
-    message.includes("Could not establish connection")
+    tab.id !== undefined &&
+    tab.windowId !== undefined &&
+    link.tabId !== undefined &&
+    link.windowId !== undefined &&
+    String(link.tabId) === String(tab.id) &&
+    String(link.windowId) === String(tab.windowId)
   );
 }
 
-async function ensureDevTabContentScript(tabId) {
-  if (!chrome.scripting?.executeScript) {
-    throw new Error("Chrome scripting API is unavailable.");
+function selectWorkspaceLinkForTab(links, tab) {
+  const matchingUrlLinks = links.filter((entry) =>
+    tabMatchesDevServer(tab.url, entry.devServerUrl),
+  );
+  if (matchingUrlLinks.length === 0) {
+    return null;
+  }
+
+  const exactTabLinks = matchingUrlLinks.filter((entry) => linkMatchesTabIdentity(entry, tab));
+  if (exactTabLinks.length > 0) {
+    return newestLink(exactTabLinks);
+  }
+
+  const sameWindowLinks = matchingUrlLinks.filter(
+    (entry) =>
+      tab.windowId !== undefined &&
+      entry.windowId !== undefined &&
+      String(entry.windowId) === String(tab.windowId),
+  );
+  return newestLink(sameWindowLinks.length > 0 ? sameWindowLinks : matchingUrlLinks);
+}
+
+async function findPreviewTab(link) {
+  if (link.tabId !== undefined) {
+    try {
+      const tab = await chrome.tabs.get(Number(link.tabId));
+      if (tabMatchesDevServer(tab.url, link.devServerUrl)) {
+        return tab;
+      }
+    } catch {
+      // Fall back to URL scan below.
+    }
+  }
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) => tabMatchesDevServer(tab.url, link.devServerUrl)) ?? null;
+}
+
+async function ensureGrouped(tabId, repoName) {
+  if (!chrome.tabs.group || !chrome.tabGroups?.update) {
+    return;
+  }
+  try {
+    const tabs = await chrome.tabs.query({});
+    const groupIds = Array.from(
+      new Set(
+        tabs
+          .map((tab) => tab.groupId)
+          .filter((groupId) => typeof groupId === "number" && groupId >= 0),
+      ),
+    );
+    let groupId = null;
+    for (const candidateGroupId of groupIds) {
+      try {
+        const group = await chrome.tabGroups.get(candidateGroupId);
+        if (group.title === repoName) {
+          groupId = group.id;
+          break;
+        }
+      } catch {
+        // Ignore stale group ids from tabs that changed while we were scanning.
+      }
+    }
+    if (groupId === null) {
+      groupId = await chrome.tabs.group({ tabIds: [tabId] });
+    } else {
+      await chrome.tabs.group({ groupId, tabIds: [tabId] });
+    }
+    await chrome.tabGroups.update(groupId, {
+      title: repoName,
+      color: "green",
+      collapsed: false,
+    });
+  } catch (error) {
+    console.warn("[T3 Code] failed to group preview tab", error);
+  }
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "t3code.browserAgent.ping" }, { frameId: 0 });
+    return;
+  } catch {
+    // Inject below.
   }
   await chrome.scripting.executeScript({
-    target: {
-      tabId,
-      frameIds: [0],
-    },
+    target: { tabId, frameIds: [0] },
     files: ["transfer-content.js"],
   });
 }
 
-async function sendMessageToDevTab(tabId, message) {
-  let lastError = null;
-  let injected = false;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      return await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
-    } catch (error) {
-      lastError = error;
-      if (!isMissingContentScriptError(error)) {
-        throw error;
-      }
-      if (!injected) {
-        injected = true;
-        await ensureDevTabContentScript(tabId);
-      }
-      await wait(100);
-    }
-  }
-  throw lastError ?? new Error("Preview tab content script did not respond.");
+async function sendTabMessage(tabId, message) {
+  await ensureContentScript(tabId);
+  return await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
 }
 
-async function attachInlineSidePanelForLink(link) {
-  if (typeof link.devTabId !== "number") {
-    throw new Error("Side panel link is missing preview tab metadata.");
+async function openOrFocusPreview(command) {
+  const link = command.workspaceLink;
+  let tab = await findPreviewTab(link);
+  if (!tab) {
+    tab = await chrome.tabs.create({ url: link.devServerUrl, active: true });
   }
-  const response = await sendMessageToDevTab(link.devTabId, {
-    type: DEV_ATTACH_SIDE_PANEL_MESSAGE_TYPE,
-    sidePanelSessionId: link.sidePanelSessionId,
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tab.id, { active: true });
+  await ensureGrouped(tab.id, link.repoName);
+  const contentLink = await workspaceLinkForContent(link, tab, {
+    sidebarSessionToken: command.sidebarSessionToken,
   });
-  if (response && response.ok === false) {
-    throw new Error(response.error || "Could not attach the T3 Code side panel.");
-  }
-}
-
-function withCurrentDevTabMetadata(link, devTab) {
-  const devServerUrl = normalizeHttpUrl(devTab.url ?? "") ?? link.devServerUrl ?? devTab.url ?? "";
-  return {
-    ...link,
-    devTabId: devTab.id,
-    windowId: devTab.windowId,
-    groupId: tabGroupId(devTab),
-    devServerUrl,
-  };
-}
-
-async function openChatPanelForLink(link) {
-  try {
-    await openSidePanelForLink(link);
-    if (await waitForSidePanelConnection(link.sidePanelSessionId, 1_200)) {
-      return "native";
-    }
-  } catch {
-    // Chrome only allows programmatic side panel opens from some extension
-    // user gestures. Desktop transfer arrives through an auto-opened tab, so
-    // the native API can reject here even though the desktop button was clicked.
-  }
-  await attachInlineSidePanelForLink(link);
-  return "inline";
-}
-
-async function openInlineChatPanelForLink(link) {
-  await attachInlineSidePanelForLink(link);
-  return "inline";
-}
-
-function sendSidePanelMessage(sessionId, message) {
-  const port = sidePanelPortsBySessionId.get(sessionId);
-  if (!port) {
-    return false;
-  }
-  try {
-    port.postMessage(message);
-    return true;
-  } catch {
-    sidePanelPortsBySessionId.delete(sessionId);
-    return false;
-  }
-}
-
-async function waitForSidePanelConnection(sessionId, timeoutMs) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (sidePanelPortsBySessionId.has(sessionId)) {
-      return true;
-    }
-    await wait(50);
-  }
-  return sidePanelPortsBySessionId.has(sessionId);
-}
-
-function tabGroupId(tab) {
-  return typeof tab.groupId === "number" && tab.groupId !== NO_TAB_GROUP_ID ? tab.groupId : null;
-}
-
-function localHttpUrl(rawUrl) {
-  const url = normalizeHttpUrl(rawUrl ?? "");
-  if (!url) {
-    return null;
-  }
-
-  const parsed = new URL(url);
-  const hostname = parsed.hostname.toLowerCase();
-  if (
-    hostname === "localhost" ||
-    hostname === "::1" ||
-    hostname === "[::1]" ||
-    hostname === "0.0.0.0" ||
-    hostname.endsWith(".localhost") ||
-    hostname.startsWith("127.")
-  ) {
-    return url;
-  }
-
-  return null;
-}
-
-function isLikelyDevServerTab(tab, sourceTabId) {
-  if (tab.id === undefined || tab.id === sourceTabId) {
-    return false;
-  }
-  if (isLikelyT3CodeTab(tab)) {
-    return false;
-  }
-  return localHttpUrl(tab.url) !== null;
-}
-
-function isLikelyT3CodeTab(tab) {
-  if (!tab.url) {
-    return false;
-  }
-
-  try {
-    const url = new URL(tab.url);
-    return (
-      url.searchParams.get("t3BrowserTransfer") === "1" ||
-      url.pathname.startsWith("/_chat") ||
-      /\bT3 Code\b/i.test(tab.title ?? "")
-    );
-  } catch {
-    return /\bT3 Code\b/i.test(tab.title ?? "");
-  }
-}
-
-function summarizeTab(tab, sourceTabId, annotationTargetId = null) {
-  if (tab.id === undefined) {
-    return null;
-  }
-
-  const groupId = tabGroupId(tab);
-  const isSource = tab.id === sourceTabId;
-  const isTarget = annotationTargetId !== null && tab.id === annotationTargetId;
-  return {
-    id: tab.id,
-    ...(typeof tab.url === "string" && tab.url.length > 0 ? { url: tab.url } : {}),
-    ...(typeof tab.title === "string" && tab.title.length > 0 ? { title: tab.title } : {}),
-    active: Boolean(tab.active),
-    groupId,
-    windowId: typeof tab.windowId === "number" ? tab.windowId : null,
-    index: typeof tab.index === "number" ? tab.index : null,
-    kind: isSource
-      ? "t3code"
-      : isTarget || isLikelyDevServerTab(tab, sourceTabId)
-        ? "dev-server"
-        : "other",
-  };
-}
-
-async function groupedTabsForTab(tab) {
-  const groupId = tabGroupId(tab);
-  if (groupId === null || typeof tab.windowId !== "number") {
-    return [tab];
-  }
-
-  try {
-    return await chrome.tabs.query({
-      groupId,
-      windowId: tab.windowId,
-    });
-  } catch {
-    return [tab];
-  }
-}
-
-function chooseAnnotationTarget(candidates, explicitLink) {
-  const explicitTab =
-    explicitLink?.devTabId !== undefined
-      ? candidates.find((tab) => tab.id === explicitLink.devTabId)
-      : null;
-  if (explicitTab) {
-    return { target: explicitTab, ambiguous: false };
-  }
-
-  const explicitDevServerUrl = normalizeHttpUrl(explicitLink?.devServerUrl ?? "");
-  if (explicitDevServerUrl) {
-    const matchingTabs = candidates.filter(
-      (tab) => normalizeHttpUrl(tab.url ?? "") === explicitDevServerUrl,
-    );
-    if (matchingTabs.length === 1) {
-      return { target: matchingTabs[0], ambiguous: false };
-    }
-  }
-
-  if (candidates.length === 1) {
-    return { target: candidates[0], ambiguous: false };
-  }
-
-  if (candidates.length > 1) {
-    return { target: null, ambiguous: true };
-  }
-
-  return { target: null, ambiguous: false };
-}
-
-function emptyBrowserContext(currentTabId = null) {
-  return {
-    currentTabId,
-    currentGroupId: null,
-    groupedTabs: [],
-    ambiguous: false,
-  };
-}
-
-async function buildBrowserContextForT3Tab(sourceTabId) {
-  const sourceTab = await getExistingTab(sourceTabId);
-  if (!sourceTab) {
-    return emptyBrowserContext(sourceTabId);
-  }
-
-  const explicitLink = await findLinkByT3TabId(sourceTabId);
-  const groupedTabs = await groupedTabsForTab(sourceTab);
-  const candidateTabs = groupedTabs.filter((tab) => isLikelyDevServerTab(tab, sourceTabId));
-  const { target, ambiguous } = chooseAnnotationTarget(candidateTabs, explicitLink);
-  const targetId = target?.id ?? null;
-  const summarizedTabs = groupedTabs
-    .map((tab) => summarizeTab(tab, sourceTabId, targetId))
-    .filter(Boolean);
-  const annotationTarget = target ? summarizeTab(target, sourceTabId, targetId) : null;
-
-  return {
-    currentTabId: sourceTabId,
-    currentGroupId: tabGroupId(sourceTab),
-    groupedTabs: summarizedTabs,
-    ...(annotationTarget ? { annotationTarget } : {}),
-    ambiguous,
-  };
-}
-
-async function buildBrowserContextForSidePanelSession(sessionId) {
-  const link = await findLinkBySidePanelSessionId(sessionId);
-  if (!link || typeof link.devTabId !== "number") {
-    return emptyBrowserContext();
-  }
-
-  const devTab = await getExistingTab(link.devTabId);
-  if (!devTab || devTab.id === undefined) {
-    return emptyBrowserContext();
-  }
-
-  const annotationTarget = summarizeTab(devTab, null, devTab.id);
-  return {
-    currentTabId: null,
-    currentGroupId: null,
-    groupedTabs: annotationTarget ? [annotationTarget] : [],
-    ...(annotationTarget ? { annotationTarget } : {}),
-    ambiguous: false,
-  };
-}
-
-async function resolveT3TabForDevAnnotation(message, devTabId) {
-  if (typeof message.sourceTabId === "number") {
-    const sourceTab = await getExistingTab(message.sourceTabId);
-    if (sourceTab) {
-      return sourceTab;
-    }
-  }
-
-  const explicitLink = await findLinkByDevTabId(devTabId);
-  if (explicitLink) {
-    const sourceTab = await getExistingTab(explicitLink.t3TabId);
-    if (sourceTab) {
-      return sourceTab;
-    }
-  }
-
-  const devTab = await getExistingTab(devTabId);
-  if (!devTab) {
-    return null;
-  }
-  const groupedTabs = await groupedTabsForTab(devTab);
-  const candidateTabs = groupedTabs.filter(
-    (tab) => tab.id !== devTabId && tab.id !== undefined && isLikelyT3CodeTab(tab),
-  );
-  return candidateTabs.length === 1 ? candidateTabs[0] : null;
-}
-
-async function resolveSidePanelLinkForDevAnnotation(message, devTabId) {
-  const sidePanelSessionId =
-    typeof message.sidePanelSessionId === "string" && message.sidePanelSessionId.trim()
-      ? message.sidePanelSessionId.trim()
-      : null;
-  if (sidePanelSessionId) {
-    const link = await findLinkBySidePanelSessionId(sidePanelSessionId);
-    return link && link.devTabId === devTabId ? link : null;
-  }
-
-  const link = await findLinkByDevTabId(devTabId);
-  return link?.sidePanelSessionId ? link : null;
-}
-
-function matchingTransferCandidate(candidates, groupTitle) {
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  return candidates.find((candidate) => candidate.groupTitle === groupTitle) ?? candidates[0];
-}
-
-async function findExistingTransferFromLinks(devServerUrl, groupTitle) {
-  const links = await readLinks();
-  const candidates = [];
-
-  for (const link of links) {
-    if (normalizeHttpUrl(link.devServerUrl ?? "") !== devServerUrl) {
-      continue;
-    }
-
-    const devTab = await getExistingTab(link.devTabId);
-    if (!devTab || devTab.id === undefined || devTab.windowId === undefined) {
-      continue;
-    }
-
-    candidates.push({
-      devTab,
-      sidePanelSessionId:
-        typeof link.sidePanelSessionId === "string" ? link.sidePanelSessionId : null,
-      groupTitle: typeof link.groupTitle === "string" ? link.groupTitle : null,
-    });
-  }
-
-  return matchingTransferCandidate(candidates, groupTitle);
-}
-
-async function findExistingTransfer(_sourceTabId, devServerUrl, groupTitle) {
-  return await findExistingTransferFromLinks(devServerUrl, groupTitle);
-}
-
-async function findReusableLinkByDevServerUrl(devServerUrl) {
-  const links = await readLinks();
-  const candidates = links.filter(
-    (link) =>
-      typeof link.t3Url === "string" &&
-      link.t3Url.length > 0 &&
-      normalizeHttpUrl(link.devServerUrl ?? "") === devServerUrl,
-  );
-  return candidates.length === 1 ? candidates[0] : null;
-}
-
-async function resolveActionLinkFromT3Tab(tab) {
-  if (tab.id === undefined || !tab.url) {
-    return null;
-  }
-
-  const explicitLink = await findLinkByT3TabId(tab.id);
-  if (explicitLink?.sidePanelSessionId && typeof explicitLink.devTabId === "number") {
-    const devTab = await getExistingTab(explicitLink.devTabId);
-    return devTab && devTab.id !== undefined && devTab.windowId !== undefined
-      ? withCurrentDevTabMetadata(explicitLink, devTab)
-      : null;
-  }
-
-  const browserContext = await buildBrowserContextForT3Tab(tab.id);
-  const devTabId = browserContext.annotationTarget?.id;
-  if (typeof devTabId !== "number") {
-    return null;
-  }
-
-  const devTab = await getExistingTab(devTabId);
-  if (!devTab || devTab.id === undefined || devTab.windowId === undefined) {
-    return null;
-  }
-
-  const link = {
-    id: `action-${tab.id}-${devTab.id}-${Date.now()}`,
-    sidePanelSessionId: createSidePanelSessionId(`action-${tab.id}-${devTab.id}`),
-    t3TabId: tab.id,
-    t3Url: cleanT3SidePanelUrl(tab.url),
-    devTabId: devTab.id,
-    windowId: devTab.windowId,
-    groupId: browserContext.currentGroupId,
-    groupTitle: DEFAULT_GROUP_TITLE,
-    devServerUrl: normalizeHttpUrl(devTab.url ?? "") ?? devTab.url ?? "",
-    createdAt: new Date().toISOString(),
-  };
-  await storeLink(link);
-  return link;
-}
-
-async function resolveActionLinkFromDevTab(tab) {
-  if (tab.id === undefined || tab.windowId === undefined) {
-    return null;
-  }
-
-  const explicitLink = await findLinkByDevTabId(tab.id);
-  if (explicitLink?.t3Url) {
-    const link = {
-      ...withCurrentDevTabMetadata(explicitLink, tab),
-      sidePanelSessionId:
-        typeof explicitLink.sidePanelSessionId === "string" &&
-        explicitLink.sidePanelSessionId.length > 0
-          ? explicitLink.sidePanelSessionId
-          : createSidePanelSessionId(`action-${tab.id}`),
-    };
-    await storeLink(link);
-    return link;
-  }
-
-  const devServerUrl = normalizeHttpUrl(tab.url ?? "");
-  if (!devServerUrl) {
-    return null;
-  }
-
-  const reusableLink = await findReusableLinkByDevServerUrl(devServerUrl);
-  if (!reusableLink) {
-    return null;
-  }
-
-  const link = {
-    ...withCurrentDevTabMetadata(reusableLink, tab),
-    id: `action-${tab.id}-${Date.now()}`,
-    sidePanelSessionId: createSidePanelSessionId(`action-${tab.id}`),
-    createdAt: new Date().toISOString(),
-  };
-  await storeLink(link);
-  return link;
-}
-
-async function resolveActionLinkForTab(tab) {
-  if (tab.id === undefined) {
-    return null;
-  }
-  if (isLikelyT3CodeTab(tab)) {
-    return await resolveActionLinkFromT3Tab(tab);
-  }
-  return await resolveActionLinkFromDevTab(tab);
-}
-
-async function focusExistingTransfer(existingTransfer, sourceTab, groupTitle, devServerUrl, id) {
-  const sourceTabId = sourceTab.id;
-  const sidePanelSessionId = createSidePanelSessionId(id);
-  const link = {
-    id,
-    sidePanelSessionId,
-    t3Url: cleanT3SidePanelUrl(sourceTab.url),
-    devTabId: existingTransfer.devTab.id,
-    windowId: existingTransfer.devTab.windowId,
-    groupId: null,
-    groupTitle,
-    devServerUrl,
-    createdAt: new Date().toISOString(),
-  };
-  await storeLink(link);
-
-  await chrome.tabs.update(existingTransfer.devTab.id, { active: true });
-  await chrome.windows.update(existingTransfer.devTab.windowId, { focused: true });
-  let panelMode = "native";
-  try {
-    panelMode = await openChatPanelForLink(link);
-  } finally {
-    if (sourceTabId !== existingTransfer.devTab.id) {
-      await chrome.tabs.remove(sourceTabId).catch(() => {});
-    }
-  }
-
-  return {
-    devTabId: existingTransfer.devTab.id,
-    sidePanelSessionId,
-    panelMode,
-    reused: true,
-  };
-}
-
-async function handleTransferToBrowser(message, sender) {
-  const sourceTabId = sender.tab?.id;
-  if (sourceTabId === undefined) {
-    throw new Error("Transfer request did not include a source tab.");
-  }
-
-  const sourceTab = await chrome.tabs.get(sourceTabId);
-  if (sourceTab.windowId === undefined || sourceTab.index === undefined) {
-    throw new Error("Source tab is missing window metadata.");
-  }
-  if (!sourceTab.url) {
-    throw new Error("Source tab is missing the T3 Code URL.");
-  }
-
-  const devServerUrl = normalizeHttpUrl(message.devServerUrl);
-  if (!devServerUrl) {
-    throw new Error("Transfer request included an invalid dev server URL.");
-  }
-
-  const groupTitle = normalizeGroupTitle(message.groupTitle);
-  const id = typeof message.id === "string" ? message.id : `${Date.now()}`;
-  const existingTransfer = await findExistingTransfer(sourceTabId, devServerUrl, groupTitle);
-  if (existingTransfer) {
-    return await focusExistingTransfer(existingTransfer, sourceTab, groupTitle, devServerUrl, id);
-  }
-
-  const devTab = await chrome.tabs.create({
-    windowId: sourceTab.windowId,
-    index: sourceTab.index + 1,
-    url: devServerUrl,
-    active: true,
+  await upsertLink(linkForStorage(contentLink));
+  await sendTabMessage(tab.id, {
+    type: "t3code.browserAgent.attachSidebar",
+    workspaceLink: contentLink,
   });
-  if (devTab.id === undefined) {
-    throw new Error("Chrome did not return a dev server tab id.");
-  }
+  await sendTabsSnapshot();
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: tab.id,
+    windowId: tab.windowId,
+  });
+}
 
-  const sidePanelSessionId = createSidePanelSessionId(id);
-  const link = {
-    id,
-    sidePanelSessionId,
-    t3Url: cleanT3SidePanelUrl(sourceTab.url),
-    devTabId: devTab.id,
-    windowId: sourceTab.windowId,
-    groupId: null,
-    groupTitle,
-    devServerUrl,
-    createdAt: new Date().toISOString(),
-  };
-  await storeLink(link);
-  await chrome.windows.update(sourceTab.windowId, { focused: true });
-  let panelMode = "native";
+async function activateAnnotation(command) {
+  const link = command.workspaceLink;
+  const tab = await findPreviewTab(link);
+  if (!tab?.id) {
+    throw new Error("Could not find the dev-server tab for this workspace.");
+  }
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tab.id, { active: true });
+  const contentLink = await workspaceLinkForContent(link, tab);
+  await upsertLink(linkForStorage(contentLink));
+  await sendTabMessage(tab.id, {
+    type: "t3code.browserAgent.activateAnnotation",
+    workspaceLink: contentLink,
+  });
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: tab.id,
+    windowId: tab.windowId,
+  });
+}
+
+async function handleServerMessage(rawData) {
+  const command = JSON.parse(rawData);
   try {
-    panelMode = await openChatPanelForLink(link);
-  } finally {
-    await chrome.tabs.remove(sourceTabId).catch(() => {});
-  }
-
-  return {
-    devTabId: devTab.id,
-    sidePanelSessionId,
-    panelMode,
-  };
-}
-
-async function handleSidePanelGetSession(message) {
-  const link = await findLinkBySidePanelSessionId(message.sessionId.trim());
-  if (!link || typeof link.t3Url !== "string" || link.t3Url.length === 0) {
-    throw new Error("T3 Code side panel session was not found.");
-  }
-  return {
-    sessionId: link.sidePanelSessionId,
-    t3Url: link.t3Url,
-    devServerUrl: link.devServerUrl,
-    groupTitle: link.groupTitle,
-  };
-}
-
-async function handleAnnotationStatus(message, sender) {
-  if (typeof message.sidePanelSessionId === "string" && message.sidePanelSessionId.trim()) {
-    const browserContext = await buildBrowserContextForSidePanelSession(
-      message.sidePanelSessionId.trim(),
-    );
-    return {
-      linked: Boolean(browserContext.annotationTarget),
-      active: false,
-      browserContext,
-    };
-  }
-
-  const sourceTabId = senderTabId(sender);
-  if (sourceTabId === undefined) {
-    return {
-      linked: false,
-      active: false,
-      browserContext: emptyBrowserContext(),
-    };
-  }
-
-  const browserContext = await buildBrowserContextForT3Tab(sourceTabId);
-  return {
-    linked: Boolean(browserContext.annotationTarget),
-    active: false,
-    browserContext,
-  };
-}
-
-async function handleAnnotationActivate(message, sender) {
-  if (typeof message.sidePanelSessionId === "string" && message.sidePanelSessionId.trim()) {
-    const sidePanelSessionId = message.sidePanelSessionId.trim();
-    const browserContext = await buildBrowserContextForSidePanelSession(sidePanelSessionId);
-    if (!browserContext.annotationTarget) {
-      throw new Error("No linked preview tab found. Use Transfer to Browser again.");
+    switch (command.type) {
+      case "browserAgent.command.openOrFocusPreview":
+        await openOrFocusPreview(command);
+        return;
+      case "browserAgent.command.activateAnnotation":
+        await activateAnnotation(command);
+        return;
+      case "browserAgent.command.requestTabsSnapshot":
+        await sendTabsSnapshot();
+        sendToServer({
+          type: "browserAgent.command.result",
+          commandId: command.commandId,
+          ok: true,
+        });
+        return;
+      default:
+        return;
     }
-
-    const devTab = await getExistingTab(browserContext.annotationTarget.id);
-    if (!devTab || devTab.id === undefined || devTab.windowId === undefined) {
-      throw new Error("The linked preview tab is no longer available.");
-    }
-
-    await chrome.windows.update(devTab.windowId, { focused: true });
-    await chrome.tabs.update(devTab.id, { active: true });
-    await chrome.tabs.sendMessage(devTab.id, {
-      type: DEV_ANNOTATION_ACTIVATE_MESSAGE_TYPE,
-      sidePanelSessionId,
-    });
-
-    return {
-      linked: true,
-      active: true,
-      browserContext: {
-        ...browserContext,
-        annotationTarget: summarizeTab(devTab, null, devTab.id),
-      },
-    };
-  }
-
-  const sourceTabId = senderTabId(sender);
-  if (sourceTabId === undefined) {
-    throw new Error("Annotation request did not include a source tab.");
-  }
-
-  const browserContext = await buildBrowserContextForT3Tab(sourceTabId);
-  if (browserContext.ambiguous && !browserContext.annotationTarget) {
-    throw new Error("Multiple grouped preview tabs found. Keep one dev server tab in this group.");
-  }
-
-  if (!browserContext.annotationTarget) {
-    throw new Error("No grouped preview tab found. Keep T3 Code and the dev server in one group.");
-  }
-
-  const devTab = await getExistingTab(browserContext.annotationTarget.id);
-  if (!devTab || devTab.id === undefined || devTab.windowId === undefined) {
-    throw new Error("The linked preview tab is no longer available.");
-  }
-
-  await chrome.windows.update(devTab.windowId, { focused: true });
-  await chrome.tabs.update(devTab.id, { active: true });
-  await chrome.tabs.sendMessage(devTab.id, {
-    type: DEV_ANNOTATION_ACTIVATE_MESSAGE_TYPE,
-    sourceTabId,
-  });
-
-  await storeLink({
-    id: `group-${sourceTabId}-${devTab.id}`,
-    t3TabId: sourceTabId,
-    devTabId: devTab.id,
-    windowId: devTab.windowId,
-    groupId: browserContext.currentGroupId,
-    groupTitle: DEFAULT_GROUP_TITLE,
-    devServerUrl: normalizeHttpUrl(devTab.url ?? "") ?? devTab.url ?? "",
-    createdAt: new Date().toISOString(),
-  });
-
-  return {
-    linked: true,
-    active: true,
-    browserContext: {
-      ...browserContext,
-      annotationTarget: summarizeTab(devTab, sourceTabId, devTab.id),
-    },
-  };
-}
-
-async function handleDevAnnotationCaptureScreenshot(message, sender) {
-  const devTabId = senderTabId(sender);
-  const windowId = sender.tab?.windowId;
-  if (devTabId === undefined || windowId === undefined) {
-    throw new Error("Screenshot request did not include a preview tab.");
-  }
-
-  if (
-    !(await resolveSidePanelLinkForDevAnnotation(message, devTabId)) &&
-    !(await resolveT3TabForDevAnnotation(message, devTabId))
-  ) {
-    throw new Error("This preview tab is not linked to a T3 Code chat.");
-  }
-
-  await chrome.tabs.update(devTabId, { active: true });
-  await chrome.windows.update(windowId, { focused: true });
-  await wait(80);
-
-  const screenshotDataUrl = await chrome.tabs.captureVisibleTab(windowId, {
-    format: "png",
-  });
-  return { screenshotDataUrl };
-}
-
-async function handleDevAnnotationSubmit(message, sender) {
-  const devTabId = senderTabId(sender);
-  if (devTabId === undefined) {
-    throw new Error("Annotation submission did not include a preview tab.");
-  }
-
-  const sidePanelLink = await resolveSidePanelLinkForDevAnnotation(message, devTabId);
-  if (sidePanelLink?.sidePanelSessionId) {
-    const delivered = sendSidePanelMessage(sidePanelLink.sidePanelSessionId, {
-      type: ANNOTATION_CAPTURED_MESSAGE_TYPE,
-      text: message.text,
-      screenshotDataUrl: message.screenshotDataUrl,
-      pageUrl: message.pageUrl,
-      pageTitle: message.pageTitle,
-      selectorLabel:
-        typeof message.selectorLabel === "string" && message.selectorLabel.trim().length > 0
-          ? message.selectorLabel
-          : undefined,
-    });
-    if (!delivered) {
-      throw new Error("The T3 Code side panel is not connected.");
-    }
-    return { linked: true, active: false };
-  }
-
-  const t3Tab = await resolveT3TabForDevAnnotation(message, devTabId);
-  if (!t3Tab || t3Tab.id === undefined || t3Tab.windowId === undefined) {
-    throw new Error("The linked T3 Code tab is no longer available.");
-  }
-
-  await chrome.tabs.sendMessage(t3Tab.id, {
-    type: ANNOTATION_CAPTURED_MESSAGE_TYPE,
-    text: message.text,
-    screenshotDataUrl: message.screenshotDataUrl,
-    pageUrl: message.pageUrl,
-    pageTitle: message.pageTitle,
-    selectorLabel:
-      typeof message.selectorLabel === "string" && message.selectorLabel.trim().length > 0
-        ? message.selectorLabel
-        : undefined,
-  });
-  await chrome.tabs.update(t3Tab.id, { active: true });
-  await chrome.windows.update(t3Tab.windowId, { focused: true });
-
-  return { linked: true, active: false };
-}
-
-function sendAsyncResponse(sendResponse, promise) {
-  void promise.then(
-    (result) => {
-      sendResponse({ ok: true, result });
-    },
-    (error) => {
-      sendResponse({
+  } catch (error) {
+    if (command.commandId) {
+      sendToServer({
+        type: "browserAgent.command.result",
+        commandId: command.commandId,
         ok: false,
-        error: error instanceof Error ? error.message : "Request failed.",
+        error: error instanceof Error ? error.message : String(error),
       });
-    },
-  );
-  return true;
+    }
+    throw error;
+  }
+}
+
+async function captureVisibleTab(sender) {
+  if (!sender.tab?.windowId) {
+    throw new Error("Cannot capture a screenshot outside a tab.");
+  }
+  return await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: "png" });
+}
+
+async function activateForCurrentTab(tab) {
+  if (!tab?.id || !tab.url) {
+    return { ok: false, reason: "No active tab." };
+  }
+  const links = await readLinks();
+  const link = selectWorkspaceLinkForTab(links, tab);
+  if (!link) {
+    return { ok: false, reason: "No T3 Code workspace link matches this tab yet." };
+  }
+  const contentLink = await workspaceLinkForContent(link, tab);
+  await sendTabMessage(tab.id, {
+    type: "t3code.browserAgent.attachSidebar",
+    workspaceLink: contentLink,
+  });
+  return { ok: true };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (isTransferMessage(message)) {
-    return sendAsyncResponse(sendResponse, handleTransferToBrowser(message, sender));
-  }
+  const respond = (promise) => {
+    promise
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  };
 
-  if (isSidePanelGetSessionMessage(message)) {
-    return sendAsyncResponse(sendResponse, handleSidePanelGetSession(message));
+  switch (message?.type) {
+    case "t3code.browserAgent.getStatus":
+      return respond(
+        (async () => {
+          const backend = currentBackend ?? (await readBackend());
+          return {
+            ok: true,
+            paired: Boolean(backend),
+            baseUrl: backend?.baseUrl ?? null,
+            connected: socket?.readyState === WebSocket.OPEN,
+          };
+        })(),
+      );
+    case "t3code.browserAgent.pair":
+      return respond(
+        (async () => {
+          const result = await pairBackend(message);
+          if (message.closeTabAfterPair === true && sender.tab?.id !== undefined) {
+            setTimeout(() => {
+              void chrome.tabs.remove(sender.tab.id).catch(() => undefined);
+            }, 750);
+          }
+          return result;
+        })(),
+      );
+    case "t3code.browserAgent.forget":
+      return respond(clearBackend().then(() => ({ ok: true })));
+    case "t3code.browserAgent.captureVisibleTab":
+      return respond(captureVisibleTab(sender).then((dataUrl) => ({ ok: true, dataUrl })));
+    case "t3code.browserAgent.annotationSubmitted":
+      return respond(
+        (async () => {
+          await connectBackend();
+          sendToServer({
+            type: "browserAgent.annotation.submitted",
+            workspaceLinkId: message.workspaceLinkId,
+            annotation: message.annotation,
+          });
+          return { ok: true };
+        })(),
+      );
+    case "t3code.browserAgent.activateFromSidebar":
+      return respond(
+        (async () => {
+          await connectBackend();
+          const link = message.workspaceLink;
+          sendToServer({
+            type: "browserAgent.annotation.submitted",
+            workspaceLinkId: link.id,
+            annotation: message.annotation,
+          });
+          return { ok: true };
+        })(),
+      );
+    default:
+      return false;
   }
-
-  if (isAnnotationStatusMessage(message)) {
-    return sendAsyncResponse(sendResponse, handleAnnotationStatus(message, sender));
-  }
-
-  if (isAnnotationActivateMessage(message)) {
-    return sendAsyncResponse(sendResponse, handleAnnotationActivate(message, sender));
-  }
-
-  if (isDevAnnotationCaptureScreenshotMessage(message)) {
-    return sendAsyncResponse(sendResponse, handleDevAnnotationCaptureScreenshot(message, sender));
-  }
-
-  if (isDevAnnotationSubmitMessage(message)) {
-    return sendAsyncResponse(sendResponse, handleDevAnnotationSubmit(message, sender));
-  }
-
-  return false;
 });
-
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "t3code.sidePanel") {
-    return;
-  }
-
-  let sessionId = null;
-  port.onMessage.addListener((message) => {
-    if (
-      typeof message === "object" &&
-      message !== null &&
-      message.type === SIDE_PANEL_READY_MESSAGE_TYPE &&
-      typeof message.sessionId === "string" &&
-      message.sessionId.trim().length > 0
-    ) {
-      sessionId = message.sessionId.trim();
-      sidePanelPortsBySessionId.set(sessionId, port);
-    }
-  });
-  port.onDisconnect.addListener(() => {
-    if (sessionId && sidePanelPortsBySessionId.get(sessionId) === port) {
-      sidePanelPortsBySessionId.delete(sessionId);
-    }
-  });
-});
-
-async function restoreInlineSidePanelForDevTab(tabId, tab) {
-  const link = await findLinkByDevTabId(tabId);
-  if (
-    !link?.sidePanelSessionId ||
-    typeof link.t3Url !== "string" ||
-    link.t3Url.length === 0 ||
-    sidePanelPortsBySessionId.has(link.sidePanelSessionId)
-  ) {
-    return;
-  }
-
-  const devTab =
-    tab && tab.id === tabId && tab.windowId !== undefined ? tab : await getExistingTab(tabId);
-  if (!devTab || devTab.id === undefined || devTab.windowId === undefined) {
-    return;
-  }
-
-  const nextLink = withCurrentDevTabMetadata(link, devTab);
-  await storeLink(nextLink);
-  await attachInlineSidePanelForLink(nextLink);
-}
-
-async function showActionError(tabId, error) {
-  if (tabId === undefined) {
-    return;
-  }
-  const message = error instanceof Error ? error.message : "Could not open T3 Code sidebar.";
-  await chrome.action.setBadgeText({ tabId, text: "!" }).catch(() => {});
-  await chrome.action.setTitle({ tabId, title: message }).catch(() => {});
-  await wait(2_500);
-  await chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
-  await chrome.action.setTitle({ tabId, title: "T3 Code Browser Transfer" }).catch(() => {});
-}
-
-async function handleActionClick(tab) {
-  const link = await resolveActionLinkForTab(tab);
-  if (!link || typeof link.devTabId !== "number" || typeof link.windowId !== "number") {
-    throw new Error("No linked T3 Code chat found for this tab. Use Transfer to Browser first.");
-  }
-
-  await chrome.tabs.update(link.devTabId, { active: true });
-  await chrome.windows.update(link.windowId, { focused: true });
-  await openInlineChatPanelForLink(link);
-}
 
 chrome.action.onClicked.addListener((tab) => {
-  void handleActionClick(tab).catch((error) => {
-    void showActionError(tab.id, error);
-  });
+  void (async () => {
+    const backend = currentBackend ?? (await readBackend());
+    if (!backend) {
+      await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
+      return;
+    }
+    await connectBackend();
+    const result = await activateForCurrentTab(tab);
+    if (!result.ok) {
+      await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
+    }
+  })();
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete") {
-    return;
-  }
+chrome.tabs.onCreated.addListener(() => void sendTabsSnapshot());
+chrome.tabs.onUpdated.addListener(() => void sendTabsSnapshot());
+chrome.tabs.onRemoved.addListener(() => void sendTabsSnapshot());
+chrome.tabs.onActivated.addListener(() => void sendTabsSnapshot());
+chrome.windows.onFocusChanged.addListener(() => void sendTabsSnapshot());
 
-  void wait(250)
-    .then(() => restoreInlineSidePanelForDevTab(tabId, tab))
-    .catch(() => {
-      // A restored page can still be mid-navigation or blocked by the target
-      // page; the toolbar action can reattach the panel on demand.
-    });
-});
+chrome.runtime.onStartup.addListener(() => void connectBackend());
+chrome.runtime.onInstalled.addListener(() => void connectBackend());
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  void removeLinksForTab(tabId);
-});
+void connectBackend();

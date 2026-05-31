@@ -6,14 +6,11 @@ import {
   PickFolderOptionsSchema,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
-import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
@@ -36,20 +33,6 @@ function toWebSocketBaseUrl(httpBaseUrl: URL): string {
   const url = new URL(httpBaseUrl.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.href;
-}
-
-function browserExtensionPathCandidates(
-  metadata: ElectronApp.ElectronAppMetadata,
-  path: Path.Path,
-): readonly string[] {
-  return [
-    path.resolve(metadata.resourcesPath, "chrome-extension"),
-    path.resolve(metadata.appPath, "apps/chrome-extension"),
-    path.resolve(metadata.appPath, "../chrome-extension"),
-    path.resolve(process.cwd(), "../chrome-extension"),
-    path.resolve(process.cwd(), "../../apps/chrome-extension"),
-    path.resolve(process.cwd(), "apps/chrome-extension"),
-  ];
 }
 
 export const getAppBranding = makeSyncIpcMethod({
@@ -158,27 +141,5 @@ export const openInChrome = makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.openInChrome")(function* (url) {
     const shell = yield* ElectronShell.ElectronShell;
     return yield* shell.openInChrome(url);
-  }),
-});
-
-export const getBrowserExtensionInstallPath = makeIpcMethod({
-  channel: IpcChannels.GET_BROWSER_EXTENSION_INSTALL_PATH_CHANNEL,
-  payload: Schema.Void,
-  result: Schema.String,
-  handler: Effect.fn("desktop.ipc.window.getBrowserExtensionInstallPath")(function* () {
-    const app = yield* ElectronApp.ElectronApp;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const metadata = yield* app.metadata;
-    const candidates = browserExtensionPathCandidates(metadata, path);
-    for (const candidate of candidates) {
-      const exists = yield* fileSystem
-        .exists(path.join(candidate, "manifest.json"))
-        .pipe(Effect.orElseSucceed(() => false));
-      if (exists) {
-        return candidate;
-      }
-    }
-    return path.resolve(metadata.resourcesPath, "chrome-extension");
   }),
 });

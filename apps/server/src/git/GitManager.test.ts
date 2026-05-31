@@ -31,6 +31,7 @@ import { type TextGenerationShape, TextGeneration } from "../textGeneration/Text
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubSourceControlProvider from "../sourceControl/GitHubSourceControlProvider.ts";
+import type * as SourceControlProvider from "../sourceControl/SourceControlProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../config.ts";
@@ -651,6 +652,7 @@ function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   textGeneration?: Partial<FakeGitTextGeneration>;
   setupScriptRunner?: ProjectSetupScriptRunnerShape;
+  sourceControlRegistry?: SourceControlProviderRegistry.SourceControlProviderRegistryShape;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
@@ -665,20 +667,25 @@ function makeManager(input?: {
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerConfigLayer),
   );
-  const sourceControlRegistryLayer = Layer.effect(
-    SourceControlProviderRegistry.SourceControlProviderRegistry,
-    GitHubSourceControlProvider.make().pipe(
-      Effect.map((provider) =>
-        SourceControlProviderRegistry.SourceControlProviderRegistry.of({
-          get: () => Effect.succeed(provider),
-          resolveHandle: () => Effect.succeed({ provider, context: null }),
-          resolve: () => Effect.succeed(provider),
-          discover: Effect.succeed([]),
-        }),
-      ),
-      Effect.provide(Layer.succeed(GitHubCli, gitHubCli)),
-    ),
-  );
+  const sourceControlRegistryLayer = input?.sourceControlRegistry
+    ? Layer.succeed(
+        SourceControlProviderRegistry.SourceControlProviderRegistry,
+        SourceControlProviderRegistry.SourceControlProviderRegistry.of(input.sourceControlRegistry),
+      )
+    : Layer.effect(
+        SourceControlProviderRegistry.SourceControlProviderRegistry,
+        GitHubSourceControlProvider.make().pipe(
+          Effect.map((provider) =>
+            SourceControlProviderRegistry.SourceControlProviderRegistry.of({
+              get: () => Effect.succeed(provider),
+              resolveHandle: () => Effect.succeed({ provider, context: null }),
+              resolve: () => Effect.succeed(provider),
+              discover: Effect.succeed([]),
+            }),
+          ),
+          Effect.provide(Layer.succeed(GitHubCli, gitHubCli)),
+        ),
+      );
 
   const managerLayer = Layer.mergeAll(
     Layer.succeed(TextGeneration, textGeneration),
@@ -944,6 +951,45 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         aheadOfDefaultCount: 0,
         pr: null,
       });
+    }),
+  );
+
+  it.effect("status skips PR lookup when the source control provider is unknown", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-unknown-provider-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/unknown-provider"]);
+      let listChangeRequestCalls = 0;
+      const unknownProvider: SourceControlProvider.SourceControlProviderShape = {
+        kind: "unknown",
+        listChangeRequests: () =>
+          Effect.sync(() => {
+            listChangeRequestCalls += 1;
+            return [];
+          }),
+        getChangeRequest: () => Effect.die("unexpected getChangeRequest"),
+        createChangeRequest: () => Effect.die("unexpected createChangeRequest"),
+        getRepositoryCloneUrls: () => Effect.die("unexpected getRepositoryCloneUrls"),
+        createRepository: () => Effect.die("unexpected createRepository"),
+        getDefaultBranch: () => Effect.die("unexpected getDefaultBranch"),
+        checkoutChangeRequest: () => Effect.die("unexpected checkoutChangeRequest"),
+      };
+      const { manager } = yield* makeManager({
+        sourceControlRegistry: {
+          get: () => Effect.succeed(unknownProvider),
+          resolveHandle: () => Effect.succeed({ provider: unknownProvider, context: null }),
+          resolve: () => Effect.succeed(unknownProvider),
+          discover: Effect.succeed([]),
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.isRepo).toBe(true);
+      expect(status.hasPrimaryRemote).toBe(false);
+      expect(status.refName).toBe("feature/unknown-provider");
+      expect(status.pr).toBeNull();
+      expect(listChangeRequestCalls).toBe(0);
     }),
   );
 

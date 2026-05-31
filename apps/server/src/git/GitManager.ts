@@ -534,6 +534,12 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
   const crypto = yield* Crypto.Crypto;
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
+  const sourceControlProviderForChangeRequestLookup = Effect.fn(
+    "sourceControlProviderForChangeRequestLookup",
+  )(function* (cwd: string) {
+    const handle = yield* sourceControlProviders.resolveHandle({ cwd });
+    return handle.provider.kind === "unknown" ? null : handle.provider;
+  });
   const serverSettingsService = yield* ServerSettingsService;
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
     Effect.mapError((cause) =>
@@ -906,8 +912,13 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       | "isCrossRepository"
     >,
   ) {
+    const provider = yield* sourceControlProviderForChangeRequestLookup(cwd);
+    if (!provider) {
+      return null;
+    }
+
     for (const headSelector of headContext.headSelectors) {
-      const pullRequests = yield* (yield* sourceControlProvider(cwd)).listChangeRequests({
+      const pullRequests = yield* provider.listChangeRequests({
         cwd,
         headSelector,
         state: "open",
@@ -939,10 +950,15 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     details: { branch: string; upstreamRef: string | null },
   ) {
     const headContext = yield* resolveBranchHeadContext(cwd, details);
+    const provider = yield* sourceControlProviderForChangeRequestLookup(cwd);
+    if (!provider) {
+      return null;
+    }
+
     const parsedByNumber = new Map<number, PullRequestInfo>();
 
     for (const headSelector of headContext.headSelectors) {
-      const pullRequests = yield* (yield* sourceControlProvider(cwd)).listChangeRequests({
+      const pullRequests = yield* provider.listChangeRequests({
         cwd,
         headSelector,
         state: "all",

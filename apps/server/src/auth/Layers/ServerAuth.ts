@@ -98,7 +98,7 @@ export const makeServerAuth = Effect.gen(function* () {
   const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
-    const credential = cookieToken ?? bearerToken;
+    const credential = bearerToken ?? cookieToken;
     if (!credential) {
       return Effect.fail(
         new AuthError({

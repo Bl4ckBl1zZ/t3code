@@ -28,6 +28,7 @@ vi.mock("../primary", () => ({
     },
     environmentId: EnvironmentId.make("env-1"),
   })),
+  readPrimaryBrowserAgentSidebarSessionToken: vi.fn(() => null),
 }));
 
 vi.mock("../../lib/runtime", () => ({

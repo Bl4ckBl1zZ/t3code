@@ -1252,6 +1252,49 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("issues same-session bearer tokens for authenticated sessions", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const response = yield* HttpClient.post("/api/auth/session/bearer-token", {
+        headers: {
+          cookie,
+        },
+      });
+      const body = (yield* response.json) as {
+        readonly authenticated: boolean;
+        readonly role: string;
+        readonly sessionMethod: string;
+        readonly sessionToken?: string;
+        readonly expiresAt: string;
+      };
+
+      assert.equal(response.status, 200);
+      assert.equal(body.authenticated, true);
+      assert.equal(body.role, "owner");
+      assert.equal(body.sessionMethod, "bearer-session-token");
+      assert.equal(typeof body.sessionToken, "string");
+      assert.isTrue((body.sessionToken?.length ?? 0) > 0);
+
+      const sessionResponse = yield* HttpClient.get("/api/auth/session", {
+        headers: {
+          authorization: `Bearer ${body.sessionToken ?? ""}`,
+        },
+      });
+      const sessionBody = (yield* sessionResponse.json) as {
+        readonly authenticated: boolean;
+        readonly role?: string;
+        readonly sessionMethod?: string;
+      };
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(sessionBody.role, "owner");
+      assert.equal(sessionBody.sessionMethod, "bearer-session-token");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("issues short-lived websocket tokens for authenticated bearer sessions", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -1306,6 +1349,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertBrowserApiCorsHeaders(sessionResponse.headers);
       assert.equal(sessionBody.authenticated, true);
       assert.equal(sessionBody.sessionMethod, "bearer-session-token");
+
+      const aliasTokenResponse = yield* HttpClient.post("/api/auth/session/bearer-token", {
+        headers: {
+          authorization: `Bearer ${bootstrapBody.sessionToken ?? ""}`,
+          origin,
+        },
+      });
+      const aliasTokenBody = (yield* aliasTokenResponse.json) as {
+        readonly sessionToken?: string;
+      };
+
+      assert.equal(aliasTokenResponse.status, 200);
+      assertBrowserApiCorsHeaders(aliasTokenResponse.headers);
+      assert.equal(typeof aliasTokenBody.sessionToken, "string");
 
       const wsTokenResponse = yield* HttpClient.post("/api/auth/ws-token", {
         headers: {
