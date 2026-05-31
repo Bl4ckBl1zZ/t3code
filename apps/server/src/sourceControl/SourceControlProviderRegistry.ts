@@ -112,7 +112,7 @@ function selectProviderContext(
   );
 }
 
-function bindProviderContext(
+export function bindProviderContext(
   provider: SourceControlProvider.SourceControlProviderShape,
   context: SourceControlProvider.SourceControlProviderContext | null,
 ): SourceControlProvider.SourceControlProviderShape {
