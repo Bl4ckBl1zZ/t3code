@@ -3748,7 +3748,7 @@ export default function ChatView(props: ChatViewProps) {
         },
       ]);
       sendInFlightRef.current = false;
-      return;
+      return true;
     }
 
     let turnStartSucceeded = false;
