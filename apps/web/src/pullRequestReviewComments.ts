@@ -49,6 +49,26 @@ function commentAuthor(comment: ReviewPullRequestComment): string {
   return comment.authorLogin ? `@${comment.authorLogin}` : "Unknown author";
 }
 
+function normalizeReviewCommentTitleLine(line: string): string {
+  return line
+    .trim()
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+[.)]\s+/, "")
+    .replace(/^\*\*(.*)\*\*$/, "$1")
+    .replace(/^__(.*)__$/, "$1")
+    .trim();
+}
+
+export function pullRequestCommentTitle(comment: ReviewPullRequestComment): string {
+  return (
+    comment.body
+      .split(/\r?\n/)
+      .map(normalizeReviewCommentTitleLine)
+      .find((line) => line.length > 0) ?? "(empty comment)"
+  );
+}
+
 export function buildPullRequestCommentPromptBlock(comment: ReviewPullRequestComment): string {
   const header = [
     `PR comment from ${commentAuthor(comment)}`,

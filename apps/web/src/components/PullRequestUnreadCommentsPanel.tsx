@@ -3,6 +3,7 @@ import { MessageSquareTextIcon, PanelLeftCloseIcon, RefreshCwIcon } from "lucide
 
 import { formatWorkspaceRelativePath } from "~/filePathDisplay";
 import { cn } from "~/lib/utils";
+import { pullRequestCommentTitle } from "~/pullRequestReviewComments";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
@@ -48,6 +49,8 @@ function PullRequestCommentCard({
   readonly comment: ReviewPullRequestComment;
   readonly workspaceRoot: string | undefined;
 }) {
+  const title = pullRequestCommentTitle(comment);
+
   return (
     <div
       className={cn(
@@ -63,8 +66,8 @@ function PullRequestCommentCard({
           {commentLocation(comment, workspaceRoot)}
         </div>
       </div>
-      <div className="mt-1 whitespace-pre-wrap text-muted-foreground text-xs leading-relaxed">
-        {comment.body.trim() || "(empty comment)"}
+      <div className="mt-1 line-clamp-2 text-xs font-medium leading-relaxed" title={title}>
+        {title}
       </div>
     </div>
   );
