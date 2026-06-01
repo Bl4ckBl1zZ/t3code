@@ -79,6 +79,12 @@ export function shouldShowTransferToBrowserButton(input: {
   return !input.browserAgentSidebarMode && shouldShowBrowserAgentControls(input);
 }
 
+export function shouldShowProjectScriptsControl(input: {
+  readonly activeProjectScripts: ProjectScript[] | undefined;
+}): boolean {
+  return input.activeProjectScripts !== undefined;
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
@@ -108,7 +114,7 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const browserAgentSidebarMode = typeof window !== "undefined" && isBrowserAgentSidebarMode();
-  const showProjectScriptsControl = !browserAgentSidebarMode && activeProjectScripts !== undefined;
+  const showProjectScriptsControl = shouldShowProjectScriptsControl({ activeProjectScripts });
   const showOpenInPicker =
     !browserAgentSidebarMode &&
     shouldShowOpenInPicker({
@@ -173,7 +179,7 @@ export const ChatHeader = memo(function ChatHeader({
       </div>
       {showHeaderActions && (
         <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:shrink-0 sm:justify-end @3xl/header-actions:gap-3">
-          {showProjectScriptsControl && (
+          {showProjectScriptsControl && activeProjectScripts !== undefined && (
             <ProjectScriptsControl
               scripts={activeProjectScripts}
               keybindings={keybindings}

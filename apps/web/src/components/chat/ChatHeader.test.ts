@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   shouldShowBrowserAnnotationButton,
   shouldShowOpenInPicker,
+  shouldShowProjectScriptsControl,
   shouldShowTransferToBrowserButton,
 } from "./ChatHeader";
 
@@ -96,6 +97,16 @@ describe("shouldShowBrowserAnnotationButton", () => {
         browserAgentSidebarMode: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldShowProjectScriptsControl", () => {
+  it("shows project actions when project scripts are loaded", () => {
+    expect(shouldShowProjectScriptsControl({ activeProjectScripts: [] })).toBe(true);
+  });
+
+  it("hides project actions when there is no active project", () => {
+    expect(shouldShowProjectScriptsControl({ activeProjectScripts: undefined })).toBe(false);
   });
 });
 
