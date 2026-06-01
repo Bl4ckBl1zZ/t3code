@@ -174,6 +174,7 @@ function createClient() {
       upsertKeybinding: vi.fn(async () => undefined),
       getSettings: vi.fn(async () => undefined),
       updateSettings: vi.fn(async () => undefined),
+      transcribeAudio: vi.fn(),
     },
     orchestration: {
       subscribeShell: vi.fn(() => () => undefined),

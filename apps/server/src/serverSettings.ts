@@ -56,6 +56,7 @@ const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const OPENROUTER_AUDIO_TRANSCRIPTION_API_KEY_SECRET_NAME = "openrouter-audio-transcription-api-key";
 
 const normalizeServerSettings = (
   settings: ServerSettings,
@@ -93,6 +94,23 @@ function redactProviderEnvironmentVariable(
   };
 }
 
+function redactOpenRouterSettings(
+  settings: ServerSettings["openRouter"],
+): ServerSettings["openRouter"] {
+  const audioTranscription = settings.audioTranscription;
+  if (!audioTranscription.apiKey && !audioTranscription.apiKeyRedacted) {
+    return settings;
+  }
+  return {
+    ...settings,
+    audioTranscription: {
+      ...audioTranscription,
+      apiKey: "",
+      apiKeyRedacted: true,
+    },
+  };
+}
+
 export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
   const providerInstances = Object.fromEntries(
     Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
@@ -105,7 +123,11 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
         : instance,
     ]),
   );
-  return { ...settings, providerInstances };
+  return {
+    ...settings,
+    providerInstances,
+    openRouter: redactOpenRouterSettings(settings.openRouter),
+  };
 }
 
 export interface ServerSettingsShape {
@@ -447,6 +469,84 @@ const makeServerSettings = Effect.gen(function* () {
       };
     });
 
+  const materializeOpenRouterSecrets = (
+    settings: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const audioTranscription = settings.openRouter.audioTranscription;
+      if (!audioTranscription.apiKeyRedacted) {
+        return settings;
+      }
+      const secret = yield* secretStore
+        .get(OPENROUTER_AUDIO_TRANSCRIPTION_API_KEY_SECRET_NAME)
+        .pipe(
+          Effect.mapError((cause) =>
+            toSettingsError("failed to read OpenRouter audio transcription API key", cause),
+          ),
+        );
+      return {
+        ...settings,
+        openRouter: {
+          ...settings.openRouter,
+          audioTranscription: {
+            ...audioTranscription,
+            apiKey: secret ? textDecoder.decode(secret) : "",
+          },
+        },
+      };
+    });
+
+  const persistOpenRouterSecrets = (
+    next: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const audioTranscription = next.openRouter.audioTranscription;
+      const apiKey = audioTranscription.apiKey.trim();
+
+      if (apiKey.length > 0) {
+        yield* secretStore
+          .set(OPENROUTER_AUDIO_TRANSCRIPTION_API_KEY_SECRET_NAME, textEncoder.encode(apiKey))
+          .pipe(
+            Effect.mapError((cause) =>
+              toSettingsError("failed to persist OpenRouter audio transcription API key", cause),
+            ),
+          );
+        return {
+          ...next,
+          openRouter: {
+            ...next.openRouter,
+            audioTranscription: {
+              ...audioTranscription,
+              apiKey: "",
+              apiKeyRedacted: true,
+            },
+          },
+        };
+      }
+
+      if (audioTranscription.apiKeyRedacted) {
+        return {
+          ...next,
+          openRouter: {
+            ...next.openRouter,
+            audioTranscription: {
+              ...audioTranscription,
+              apiKey: "",
+            },
+          },
+        };
+      }
+
+      yield* secretStore
+        .remove(OPENROUTER_AUDIO_TRANSCRIPTION_API_KEY_SECRET_NAME)
+        .pipe(
+          Effect.mapError((cause) =>
+            toSettingsError("failed to remove OpenRouter audio transcription API key", cause),
+          ),
+        );
+      return next;
+    });
+
   const writeSettingsAtomically = Effect.fnUntraced(
     function* (settings: ServerSettings) {
       const sparseSettingsJson = yield* encodeServerSettingsJson(
@@ -544,6 +644,7 @@ const makeServerSettings = Effect.gen(function* () {
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeProviderEnvironmentSecrets),
+      Effect.flatMap(materializeOpenRouterSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
@@ -553,7 +654,7 @@ const makeServerSettings = Effect.gen(function* () {
           const nextPersisted = yield* persistProviderEnvironmentSecrets(
             current,
             applyServerSettingsPatch(current, patch),
-          );
+          ).pipe(Effect.flatMap(persistOpenRouterSecrets));
           const next = yield* normalizeServerSettings(nextPersisted);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
@@ -566,6 +667,7 @@ const makeServerSettings = Effect.gen(function* () {
       return Stream.fromPubSub(changesPubSub).pipe(
         Stream.mapEffect((settings) =>
           materializeProviderEnvironmentSecrets(settings).pipe(
+            Effect.flatMap(materializeOpenRouterSecrets),
             Effect.catch((error: ServerSettingsError) =>
               Effect.logWarning("failed to materialize provider environment secrets", {
                 detail: error.detail,

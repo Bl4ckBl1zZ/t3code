@@ -17,6 +17,7 @@ import {
   type DesktopServerExposureState,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import { DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL } from "@t3tools/contracts/settings";
 import { WsRpcClient } from "@t3tools/client-runtime";
 import * as DateTime from "effect/DateTime";
 
@@ -59,6 +60,7 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { DraftInput } from "../ui/draft-input";
 import { Group, GroupSeparator } from "../ui/group";
 import { AnimatedHeight } from "../AnimatedHeight";
 import {
@@ -103,6 +105,7 @@ import {
 import { useUiStateStore } from "~/uiStateStore";
 import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { useServerConfig } from "~/rpc/serverState";
+import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 
@@ -1354,6 +1357,128 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
     </div>
   );
 });
+
+function OpenRouterConnectionsSection() {
+  const openRouterSettings = useSettings((settings) => settings.openRouter);
+  const { updateSettings } = useUpdateSettings();
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const audioTranscription = openRouterSettings.audioTranscription;
+  const hasSavedApiKey =
+    audioTranscription.apiKey.trim().length > 0 || audioTranscription.apiKeyRedacted;
+
+  const updateAudioTranscriptionSettings = useCallback(
+    (patch: Partial<typeof audioTranscription>) => {
+      updateSettings({
+        openRouter: {
+          ...openRouterSettings,
+          audioTranscription: {
+            ...audioTranscription,
+            ...patch,
+          },
+        },
+      });
+    },
+    [audioTranscription, openRouterSettings, updateSettings],
+  );
+
+  const commitApiKeyDraft = useCallback(() => {
+    const nextApiKey = apiKeyDraft.trim();
+    if (!nextApiKey) {
+      return;
+    }
+    updateAudioTranscriptionSettings({
+      apiKey: nextApiKey,
+      apiKeyRedacted: false,
+    });
+    setApiKeyDraft("");
+  }, [apiKeyDraft, updateAudioTranscriptionSettings]);
+
+  const clearApiKey = useCallback(() => {
+    setApiKeyDraft("");
+    updateAudioTranscriptionSettings({
+      apiKey: "",
+      apiKeyRedacted: false,
+    });
+  }, [updateAudioTranscriptionSettings]);
+
+  return (
+    <SettingsSection title="OpenRouter">
+      <SettingsRow
+        title="Audio transcription"
+        description="Microphone dictation transcribes through OpenRouter and inserts cleaned text into the chat composer."
+      />
+      <SettingsRow
+        title="API key"
+        description="Stored by the backend and redacted from clients after saving."
+        status={hasSavedApiKey ? "API key saved. Enter a new key to replace it." : null}
+        control={
+          <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+            <Input
+              className="w-full sm:w-80"
+              type="password"
+              value={apiKeyDraft}
+              onChange={(event) => setApiKeyDraft(event.target.value)}
+              onBlur={commitApiKeyDraft}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.currentTarget.blur();
+              }}
+              placeholder={hasSavedApiKey ? "Saved OpenRouter API key" : "sk-or-v1-..."}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="OpenRouter API key"
+            />
+            {hasSavedApiKey || apiKeyDraft.trim().length > 0 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={clearApiKey}
+              >
+                Clear
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
+      <SettingsRow
+        title="Model"
+        description="Use an OpenRouter model that accepts audio input."
+        resetAction={
+          audioTranscription.model !== DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Reset OpenRouter transcription model"
+              className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+              onClick={() =>
+                updateAudioTranscriptionSettings({
+                  model: DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL,
+                })
+              }
+            >
+              <RefreshCwIcon className="size-3" />
+            </Button>
+          ) : null
+        }
+        control={
+          <DraftInput
+            className="w-full sm:w-80"
+            value={audioTranscription.model}
+            onCommit={(next) =>
+              updateAudioTranscriptionSettings({
+                model: next.trim() || DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL,
+              })
+            }
+            placeholder={DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL}
+            spellCheck={false}
+            aria-label="OpenRouter transcription model"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
@@ -2611,6 +2736,8 @@ export function ConnectionsSettings() {
           />
         </SettingsSection>
       )}
+
+      <OpenRouterConnectionsSection />
 
       <SettingsSection
         title="Remote environments"

@@ -156,6 +156,7 @@ export interface WsRpcClient {
       typeof WS_METHODS.serverGetProcessResourceHistory
     >;
     readonly signalProcess: RpcUnaryMethod<typeof WS_METHODS.serverSignalProcess>;
+    readonly transcribeAudio: RpcUnaryMethod<typeof WS_METHODS.serverTranscribeAudio>;
   };
   readonly orchestration: {
     readonly dispatchCommand: RpcUnaryMethod<typeof ORCHESTRATION_WS_METHODS.dispatchCommand>;
@@ -341,6 +342,8 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.serverGetProcessResourceHistory](input)),
       signalProcess: (input) =>
         transport.request((client) => client[WS_METHODS.serverSignalProcess](input)),
+      transcribeAudio: (input) =>
+        transport.request((client) => client[WS_METHODS.serverTranscribeAudio](input)),
     },
     orchestration: {
       dispatchCommand: (input) =>

@@ -82,6 +82,7 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import type { AudioTranscriptionInput, AudioTranscriptionResult } from "./audioTranscription.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -487,6 +488,7 @@ export interface LocalApi {
       input: ServerProcessResourceHistoryInput,
     ) => Promise<ServerProcessResourceHistoryResult>;
     signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
+    transcribeAudio: (input: AudioTranscriptionInput) => Promise<AudioTranscriptionResult>;
   };
 }
 

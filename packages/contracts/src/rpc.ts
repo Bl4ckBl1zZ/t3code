@@ -3,6 +3,11 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
+import {
+  AudioTranscriptionError,
+  AudioTranscriptionInput,
+  AudioTranscriptionResult,
+} from "./audioTranscription.ts";
 import { AuthAccessStreamEvent } from "./auth.ts";
 import {
   BrowserAgentActivateAnnotationInput,
@@ -172,6 +177,7 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
+  serverTranscribeAudio: "server.transcribeAudio",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -268,6 +274,12 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+});
+
+export const WsServerTranscribeAudioRpc = Rpc.make(WS_METHODS.serverTranscribeAudio, {
+  payload: AudioTranscriptionInput,
+  success: AudioTranscriptionResult,
+  error: AudioTranscriptionError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -574,6 +586,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
+  WsServerTranscribeAudioRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

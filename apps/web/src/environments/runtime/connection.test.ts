@@ -34,6 +34,7 @@ function createTestClient(config?: { readonly emitInitialSnapshot?: boolean }) {
       upsertKeybinding: vi.fn(async () => undefined),
       getSettings: vi.fn(async () => undefined),
       updateSettings: vi.fn(async () => undefined),
+      transcribeAudio: vi.fn(),
     },
     orchestration: {
       dispatchCommand: vi.fn(async () => undefined),

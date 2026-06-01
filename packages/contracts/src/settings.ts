@@ -338,6 +338,34 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+export const DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL = "google/gemini-3.1-flash-lite";
+
+const makeTrimmedStringSetting = (fallback: string) =>
+  TrimmedString.pipe(
+    Schema.decodeTo(
+      Schema.String,
+      SchemaTransformation.transformOrFail({
+        decode: (value) => Effect.succeed(value || fallback),
+        encode: (value) => Effect.succeed(value),
+      }),
+    ),
+    Schema.withDecodingDefault(Effect.succeed(fallback)),
+  );
+
+export const OpenRouterAudioTranscriptionSettings = Schema.Struct({
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  apiKeyRedacted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  model: makeTrimmedStringSetting(DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL),
+});
+export type OpenRouterAudioTranscriptionSettings = typeof OpenRouterAudioTranscriptionSettings.Type;
+
+export const OpenRouterSettings = Schema.Struct({
+  audioTranscription: OpenRouterAudioTranscriptionSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type OpenRouterSettings = typeof OpenRouterSettings.Type;
+
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 
 export const ServerSettings = Schema.Struct({
@@ -381,6 +409,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  openRouter: OpenRouterSettings,
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -457,6 +486,17 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  openRouter: Schema.optionalKey(
+    Schema.Struct({
+      audioTranscription: Schema.optionalKey(
+        Schema.Struct({
+          apiKey: Schema.optionalKey(TrimmedString),
+          apiKeyRedacted: Schema.optionalKey(Schema.Boolean),
+          model: Schema.optionalKey(TrimmedString),
+        }),
+      ),
     }),
   ),
   providers: Schema.optionalKey(

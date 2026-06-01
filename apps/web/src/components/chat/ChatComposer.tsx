@@ -84,11 +84,14 @@ import { toastManager } from "../ui/toast";
 import {
   BotIcon,
   CircleAlertIcon,
+  LoaderCircleIcon,
   ListTodoIcon,
   type LucideIcon,
   LockIcon,
   LockOpenIcon,
+  MicIcon,
   PenLineIcon,
+  SquareIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
@@ -108,6 +111,16 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { ensureLocalApi } from "../../localApi";
+import {
+  appendTranscriptionToPrompt,
+  audioMimeTypeToTranscriptionFormat,
+  blobToBase64,
+  getPreferredAudioRecordingOptions,
+  isAudioRecordingSupported,
+  MAX_AUDIO_TRANSCRIPTION_BYTES,
+  MAX_AUDIO_TRANSCRIPTION_SIZE_LABEL,
+} from "../../audioTranscription";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 
@@ -796,6 +809,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [voiceTranscriptionState, setVoiceTranscriptionState] = useState<
+    "idle" | "recording" | "transcribing"
+  >("idle");
   const isMobileViewport = useMediaQuery("max-sm");
   const isComposerCollapsedMobile = isMobileViewport && !isComposerFocused;
 
@@ -815,6 +831,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const mobileComposerExpandReleaseFrameRef = useRef<number | null>(null);
   const mobileComposerExpandInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceRecorderStreamRef = useRef<MediaStream | null>(null);
+  const voiceRecorderChunksRef = useRef<Blob[]>([]);
+  const voiceRecorderListenerCleanupRef = useRef<(() => void) | null>(null);
 
   // ------------------------------------------------------------------
   // Derived: composer send state
@@ -1044,6 +1064,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
+  const openRouterAudioTranscriptionSettings = settings.openRouter.audioTranscription;
+  const hasOpenRouterAudioTranscriptionApiKey =
+    openRouterAudioTranscriptionSettings.apiKey.trim().length > 0 ||
+    openRouterAudioTranscriptionSettings.apiKeyRedacted;
+  const voiceTranscriptionDisabledReason = !hasOpenRouterAudioTranscriptionApiKey
+    ? "Set an OpenRouter API key in Settings > Connections"
+    : isComposerApprovalState
+      ? "Resolve the approval request before dictating"
+      : isConnecting
+        ? "Wait for the backend connection"
+        : environmentUnavailable !== null && activePendingProgress === null
+          ? `${environmentUnavailable.label} is disconnected`
+          : null;
+  const isVoiceTranscriptionButtonDisabled =
+    voiceTranscriptionState === "recording"
+      ? false
+      : voiceTranscriptionState === "transcribing" || voiceTranscriptionDisabledReason !== null;
+  const voiceTranscriptionButtonLabel =
+    voiceTranscriptionState === "recording"
+      ? "Stop voice recording"
+      : voiceTranscriptionState === "transcribing"
+        ? "Transcribing voice"
+        : "Record voice";
 
   // ------------------------------------------------------------------
   // Prompt helpers
@@ -1053,6 +1096,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
     },
     [composerDraftTarget, setComposerDraftPrompt],
+  );
+
+  const commitPromptText = useCallback(
+    (nextPrompt: string, options?: { focusAtEnd?: boolean }) => {
+      const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
+      const nextExpandedCursor = expandCollapsedComposerCursor(nextPrompt, nextCursor);
+      promptRef.current = nextPrompt;
+      const activePendingQuestion = activePendingProgress?.activeQuestion;
+      if (activePendingQuestion && activePendingUserInput) {
+        onChangeActivePendingUserInputCustomAnswer(
+          activePendingQuestion.id,
+          nextPrompt,
+          nextCursor,
+          nextExpandedCursor,
+          false,
+        );
+      } else {
+        setPrompt(nextPrompt);
+      }
+      setComposerCursor(nextCursor);
+      setComposerTrigger(detectComposerTrigger(nextPrompt, nextExpandedCursor));
+      if (options?.focusAtEnd) {
+        window.requestAnimationFrame(() => {
+          composerEditorRef.current?.focusAt(nextCursor);
+        });
+      }
+    },
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      onChangeActivePendingUserInputCustomAnswer,
+      promptRef,
+      setPrompt,
+    ],
   );
 
   const addComposerImage = useCallback(
@@ -1614,6 +1691,152 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [blurMobileComposerAfterSend, onSend, shouldBlurMobileComposerOnSubmit],
   );
+
+  const stopVoiceRecorderTracks = useCallback(() => {
+    voiceRecorderStreamRef.current?.getTracks().forEach((track) => track.stop());
+    voiceRecorderStreamRef.current = null;
+  }, []);
+
+  const finishVoiceRecording = useCallback(
+    async (blob: Blob) => {
+      stopVoiceRecorderTracks();
+      voiceRecorderListenerCleanupRef.current?.();
+      voiceRecorderListenerCleanupRef.current = null;
+      voiceRecorderRef.current = null;
+      voiceRecorderChunksRef.current = [];
+
+      if (blob.size === 0) {
+        setVoiceTranscriptionState("idle");
+        toastManager.add({
+          type: "error",
+          title: "No audio captured",
+          description: "Try recording again.",
+        });
+        return;
+      }
+      if (blob.size > MAX_AUDIO_TRANSCRIPTION_BYTES) {
+        setVoiceTranscriptionState("idle");
+        toastManager.add({
+          type: "error",
+          title: "Recording is too large",
+          description: `Recordings must be ${MAX_AUDIO_TRANSCRIPTION_SIZE_LABEL} or smaller.`,
+        });
+        return;
+      }
+
+      setVoiceTranscriptionState("transcribing");
+      try {
+        const snapshot = readComposerSnapshot();
+        const result = await ensureLocalApi().server.transcribeAudio({
+          audioBase64: await blobToBase64(blob),
+          existingText: snapshot.value,
+          format: audioMimeTypeToTranscriptionFormat(blob.type),
+          mimeType: blob.type,
+        });
+        const nextPrompt = appendTranscriptionToPrompt(snapshot.value, result.text);
+        commitPromptText(nextPrompt, { focusAtEnd: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Audio transcription failed.";
+        toastManager.add({
+          type: "error",
+          title: "Could not transcribe audio",
+          description: message,
+        });
+      } finally {
+        setVoiceTranscriptionState("idle");
+      }
+    },
+    [commitPromptText, readComposerSnapshot, stopVoiceRecorderTracks],
+  );
+
+  const stopVoiceRecording = useCallback(() => {
+    const recorder = voiceRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      return;
+    }
+    setVoiceTranscriptionState("transcribing");
+    recorder.stop();
+  }, []);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (!isAudioRecordingSupported()) {
+      toastManager.add({
+        type: "error",
+        title: "Voice recording is unavailable",
+        description: "Your browser does not expose a compatible microphone recorder.",
+      });
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      voiceRecorderStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream, getPreferredAudioRecordingOptions());
+      voiceRecorderChunksRef.current = [];
+      voiceRecorderRef.current = recorder;
+
+      const handleDataAvailable = (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          voiceRecorderChunksRef.current.push(event.data);
+        }
+      };
+      const handleStop = () => {
+        const mimeType = recorder.mimeType || getPreferredAudioRecordingOptions()?.mimeType || "";
+        const blob = new Blob(voiceRecorderChunksRef.current, { type: mimeType });
+        void finishVoiceRecording(blob);
+      };
+      const handleError = () => {
+        voiceRecorderListenerCleanupRef.current?.();
+        voiceRecorderListenerCleanupRef.current = null;
+        stopVoiceRecorderTracks();
+        voiceRecorderRef.current = null;
+        voiceRecorderChunksRef.current = [];
+        setVoiceTranscriptionState("idle");
+        toastManager.add({
+          type: "error",
+          title: "Voice recording stopped",
+          description: "The browser could not continue recording from the microphone.",
+        });
+      };
+      recorder.addEventListener("dataavailable", handleDataAvailable);
+      recorder.addEventListener("stop", handleStop);
+      recorder.addEventListener("error", handleError);
+      voiceRecorderListenerCleanupRef.current = () => {
+        recorder.removeEventListener("dataavailable", handleDataAvailable);
+        recorder.removeEventListener("stop", handleStop);
+        recorder.removeEventListener("error", handleError);
+      };
+
+      recorder.start();
+      setVoiceTranscriptionState("recording");
+    } catch (error) {
+      stopVoiceRecorderTracks();
+      const message = error instanceof Error ? error.message : "Microphone access was denied.";
+      toastManager.add({
+        type: "error",
+        title: "Could not start voice recording",
+        description: message,
+      });
+      setVoiceTranscriptionState("idle");
+    }
+  }, [finishVoiceRecording, stopVoiceRecorderTracks]);
+
+  const handleVoiceTranscriptionClick = useCallback(() => {
+    if (voiceTranscriptionState === "recording") {
+      stopVoiceRecording();
+      return;
+    }
+    if (voiceTranscriptionState === "transcribing") {
+      return;
+    }
+    void startVoiceRecording();
+  }, [startVoiceRecording, stopVoiceRecording, voiceTranscriptionState]);
+
   const expandMobileComposer = useCallback(() => {
     if (composerBlurFrameRef.current !== null) {
       window.cancelAnimationFrame(composerBlurFrameRef.current);
@@ -1810,6 +2033,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useEffect(() => {
     return () => {
+      const recorder = voiceRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        voiceRecorderListenerCleanupRef.current?.();
+        voiceRecorderListenerCleanupRef.current = null;
+        recorder.stop();
+      } else {
+        voiceRecorderListenerCleanupRef.current?.();
+        voiceRecorderListenerCleanupRef.current = null;
+      }
+      stopVoiceRecorderTracks();
       if (composerBlurFrameRef.current !== null) {
         window.cancelAnimationFrame(composerBlurFrameRef.current);
       }
@@ -1820,7 +2053,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         window.cancelAnimationFrame(mobileComposerExpandReleaseFrameRef.current);
       }
     };
-  }, []);
+  }, [stopVoiceRecorderTracks]);
 
   // ------------------------------------------------------------------
   // Imperative handle
@@ -2374,6 +2607,43 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex">
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant={
+                            voiceTranscriptionState === "recording" ? "destructive" : "ghost"
+                          }
+                          className={cn(
+                            "rounded-full text-muted-foreground hover:text-foreground",
+                            voiceTranscriptionState === "recording" &&
+                              "text-white hover:text-white",
+                          )}
+                          disabled={isVoiceTranscriptionButtonDisabled}
+                          aria-label={voiceTranscriptionButtonLabel}
+                          onPointerDown={(event) => {
+                            event.preventDefault();
+                          }}
+                          onClick={handleVoiceTranscriptionClick}
+                        >
+                          {voiceTranscriptionState === "transcribing" ? (
+                            <LoaderCircleIcon className="size-4 animate-spin" />
+                          ) : voiceTranscriptionState === "recording" ? (
+                            <SquareIcon className="size-3.5 fill-current" />
+                          ) : (
+                            <MicIcon className="size-4" />
+                          )}
+                        </Button>
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top" align="end">
+                    {voiceTranscriptionDisabledReason ?? voiceTranscriptionButtonLabel}
+                  </TooltipPopup>
+                </Tooltip>
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
