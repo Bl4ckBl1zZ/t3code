@@ -1,7 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
-import * as Queue from "effect/Queue";
+import { Queue } from "effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";

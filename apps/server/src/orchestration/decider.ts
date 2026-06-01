@@ -222,6 +222,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const tabGroupId = command.tabGroupId ?? command.threadId;
+      if (tabGroupId !== command.threadId) {
+        const tabGroupThread = yield* requireThread({
+          readModel,
+          command,
+          threadId: tabGroupId,
+        });
+        if (tabGroupThread.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Tab group thread '${tabGroupId}' belongs to a different project.`,
+          });
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -233,6 +247,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          tabGroupId,
+          tabType: command.tabType ?? "chat",
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,

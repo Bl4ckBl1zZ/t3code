@@ -323,6 +323,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          tab_group_id AS "tabGroupId",
+          tab_type AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -351,6 +353,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          tab_group_id AS "tabGroupId",
+          tab_type AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -381,6 +385,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          tab_group_id AS "tabGroupId",
+          tab_type AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -743,6 +749,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          tab_group_id AS "tabGroupId",
+          tab_type AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -1175,6 +1183,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
                 projectId: row.projectId,
+                tabGroupId: row.tabGroupId,
+                tabType: row.tabType,
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -1373,6 +1383,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
+                  tabGroupId: row.tabGroupId,
+                  tabType: row.tabType,
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -1502,6 +1514,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ? Result.succeed({
                       id: row.threadId,
                       projectId: row.projectId,
+                      tabGroupId: row.tabGroupId,
+                      tabType: row.tabType,
                       title: row.title,
                       modelSelection: row.modelSelection,
                       runtimeMode: row.runtimeMode,
@@ -1636,6 +1650,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 (row): OrchestrationThreadShell => ({
                   id: row.threadId,
                   projectId: row.projectId,
+                  tabGroupId: row.tabGroupId,
+                  tabType: row.tabType,
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -1876,6 +1892,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       return Option.some({
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        tabGroupId: threadRow.value.tabGroupId,
+        tabType: threadRow.value.tabType,
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
@@ -1970,6 +1988,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       const thread = {
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        tabGroupId: threadRow.value.tabGroupId,
+        tabType: threadRow.value.tabType,
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,

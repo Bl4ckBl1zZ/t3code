@@ -253,6 +253,8 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            tabGroupId: payload.tabGroupId ?? payload.threadId,
+            tabType: payload.tabType ?? "chat",
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,

@@ -78,6 +78,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       yield* threads.upsert({
         threadId: ThreadId.make("thread-null-options"),
         projectId: ProjectId.make("project-null-options"),
+        tabGroupId: ThreadId.make("thread-null-options"),
+        tabType: "chat",
         title: "Null options thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("claudeAgent"),

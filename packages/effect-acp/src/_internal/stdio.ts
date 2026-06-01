@@ -1,4 +1,4 @@
-import * as Queue from "effect/Queue";
+import { Queue } from "effect";
 import * as Stream from "effect/Stream";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";

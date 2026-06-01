@@ -81,6 +81,7 @@ import {
 } from "../pendingUserInput";
 import {
   selectProjectsAcrossEnvironments,
+  selectSidebarThreadsAcrossEnvironments,
   selectThreadsAcrossEnvironments,
   useStore,
 } from "../store";
@@ -135,7 +136,7 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
-import { buildDraftThreadRouteParams } from "../threadRoutes";
+import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -196,6 +197,8 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
+import { ThreadTabStrip } from "./thread-tabs/ThreadTabStrip";
+import { buildThreadContentTabs, type ThreadContentTab } from "../threadTabs";
 import {
   buildVersionMismatchDismissalKey,
   dismissVersionMismatch,
@@ -1034,6 +1037,17 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const sidebarThreadSummaries = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const threadTabs = useMemo(
+    () =>
+      buildThreadContentTabs({
+        activeThread,
+        activeThreadRef,
+        sidebarThreads: sidebarThreadSummaries,
+      }),
+    [activeThread, activeThreadRef, sidebarThreadSummaries],
+  );
+  const [creatingChatTab, setCreatingChatTab] = useState(false);
 
   useEffect(() => {
     if (!activeThreadRef) {
@@ -2840,6 +2854,77 @@ export default function ChatView(props: ChatViewProps) {
     canOverrideServerThreadEnvMode && pendingServerThreadBranch !== undefined
       ? pendingServerThreadBranch
       : (activeThread?.branch ?? null);
+  const navigateToThreadTab = useCallback(
+    (tab: ThreadContentTab) => {
+      if (tab.active) {
+        return;
+      }
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(tab.threadRef),
+        search: (previous) => previous,
+      });
+    },
+    [navigate],
+  );
+  const createChatTab = useCallback(() => {
+    if (!isServerThread || !activeThread || !activeProject || creatingChatTab) {
+      return;
+    }
+    const api = readEnvironmentApi(activeThread.environmentId);
+    if (!api) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const nextThreadId = newThreadId();
+    setCreatingChatTab(true);
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.create",
+        commandId: newCommandId(),
+        threadId: nextThreadId,
+        projectId: activeProject.id,
+        tabGroupId: activeThread.tabGroupId ?? activeThread.id,
+        tabType: "chat",
+        title: "New chat",
+        modelSelection: activeThread.modelSelection,
+        runtimeMode,
+        interactionMode,
+        branch: activeThreadBranch,
+        worktreePath: activeThread.worktreePath,
+        createdAt,
+      })
+      .then(() =>
+        navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: activeThread.environmentId,
+            threadId: nextThreadId,
+          },
+          search: (previous) => previous,
+        }),
+      )
+      .catch((error) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not create chat tab",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      })
+      .finally(() => setCreatingChatTab(false));
+  }, [
+    activeProject,
+    activeThread,
+    activeThreadBranch,
+    creatingChatTab,
+    interactionMode,
+    isServerThread,
+    navigate,
+    runtimeMode,
+  ]);
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
@@ -4012,6 +4097,17 @@ export default function ChatView(props: ChatViewProps) {
           onToggleDiff={onToggleDiff}
         />
       </header>
+      {(threadTabs.length > 1 || isServerThread) && (
+        <div className="border-b border-border px-[calc(env(safe-area-inset-left)+0.75rem)] py-1.5 pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:px-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]">
+          <ThreadTabStrip
+            tabs={threadTabs}
+            canCreateChatTab={isServerThread}
+            creatingChatTab={creatingChatTab}
+            onSelectTab={navigateToThreadTab}
+            onCreateChatTab={createChatTab}
+          />
+        </div>
+      )}
 
       {/* Error banner */}
       <ProviderStatusBanner status={activeProviderStatus} />
