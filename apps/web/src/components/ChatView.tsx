@@ -220,6 +220,7 @@ import { ThreadTabStrip } from "./thread-tabs/ThreadTabStrip";
 import {
   buildThreadContentTabs,
   resolveFallbackThreadTabAfterClose,
+  threadTabGroupId,
   type ThreadContentTab,
 } from "../threadTabs";
 import {
@@ -957,7 +958,7 @@ export default function ChatView(props: ChatViewProps) {
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
-  // Used by "Implement in a new thread" to carry the sidebar-open intent across navigation.
+  // Used by "Implement in a new chat" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -4235,6 +4236,8 @@ export default function ChatView(props: ChatViewProps) {
         commandId: newCommandId(),
         threadId: nextThreadId,
         projectId: activeProject.id,
+        tabGroupId: threadTabGroupId(activeThread),
+        tabType: "chat",
         title: nextThreadTitle,
         modelSelection: nextThreadModelSelection,
         runtimeMode,

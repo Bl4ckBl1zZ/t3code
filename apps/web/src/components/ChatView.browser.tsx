@@ -6446,6 +6446,81 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("implements a ready plan in a new chat tab from the dropdown", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithPlanFollowUpPrompt(),
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      await waitForButtonByText("Implement");
+      const implementActionsButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Implementation actions"]'),
+        "Unable to find implementation actions trigger.",
+      );
+      implementActionsButton.click();
+
+      const newChatItem = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
+            (item) => item.textContent?.trim() === "Implement in a new chat",
+          ) ?? null,
+        'Unable to find "Implement in a new chat" menu item.',
+      );
+      newChatItem.click();
+
+      let implementationThreadId: ThreadId | null = null;
+      await vi.waitFor(
+        () => {
+          const createRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.create",
+          ) as
+            | {
+                _tag: string;
+                type?: string;
+                threadId?: ThreadId;
+                projectId?: string;
+                tabGroupId?: string;
+                tabType?: string;
+                interactionMode?: string;
+              }
+            | undefined;
+          expect(createRequest).toMatchObject({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            type: "thread.create",
+            projectId: PROJECT_ID,
+            tabGroupId: THREAD_ID,
+            tabType: "chat",
+            interactionMode: "default",
+          });
+          implementationThreadId = createRequest?.threadId ?? null;
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(implementationThreadId).not.toBeNull();
+      await materializePromotedDraftThreadViaDomainEvent(implementationThreadId!);
+      await startPromotedServerThreadViaDomainEvent(implementationThreadId!);
+      await waitForURL(
+        mounted.router,
+        (path) => path === serverThreadPath(implementationThreadId!),
+        "Expected implementation chat tab to open.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the wide desktop follow-up layout expanded when the footer still fits", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
