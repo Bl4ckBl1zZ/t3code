@@ -129,6 +129,8 @@ interface RunGitActionWithToastInput {
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
+const PULL_QUICK_ACTION_CLASS_NAME =
+  "border-cyan-500/50 bg-cyan-500/12 text-cyan-700 shadow-cyan-500/20 shadow-sm [:hover,[data-pressed]]:bg-cyan-500/18 dark:border-cyan-300/45 dark:bg-cyan-300/12 dark:text-cyan-100 dark:shadow-cyan-300/20 dark:[:hover,[data-pressed]]:bg-cyan-300/18";
 
 const PUBLISH_PROVIDER_OPTIONS = [
   {
@@ -357,6 +359,13 @@ function gitQuickActionToneClassName(tone: GitQuickAction["tone"]): string | und
     return "border-destructive/40 bg-destructive/8 text-destructive-foreground hover:bg-destructive/12 dark:text-destructive";
   }
   return undefined;
+}
+
+function gitQuickActionClassName(quickAction: GitQuickAction): string | undefined {
+  if (quickAction.kind === "run_pull") {
+    return PULL_QUICK_ACTION_CLASS_NAME;
+  }
+  return gitQuickActionToneClassName(quickAction.tone);
 }
 
 interface PublishRepositoryDialogProps {
@@ -1677,7 +1686,7 @@ export default function GitActionsControl({
                     aria-disabled="true"
                     className={cn(
                       "cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
-                      gitQuickActionToneClassName(quickAction.tone),
+                      gitQuickActionClassName(quickAction),
                     )}
                     size="xs"
                     variant="outline"
@@ -1700,7 +1709,7 @@ export default function GitActionsControl({
             <Button
               variant="outline"
               size="xs"
-              className={gitQuickActionToneClassName(quickAction.tone)}
+              className={gitQuickActionClassName(quickAction)}
               disabled={isGitActionRunning || quickAction.disabled}
               onClick={runQuickAction}
             >
