@@ -2555,6 +2555,7 @@ export default function ChatView(props: ChatViewProps) {
         command: input.command,
         icon: input.icon,
         runOnWorktreeCreate: input.runOnWorktreeCreate,
+        pinnedToTopBar: input.pinnedToTopBar,
       };
       const nextScripts = input.runOnWorktreeCreate
         ? [
@@ -2590,6 +2591,7 @@ export default function ChatView(props: ChatViewProps) {
         command: input.command,
         icon: input.icon,
         runOnWorktreeCreate: input.runOnWorktreeCreate,
+        pinnedToTopBar: input.pinnedToTopBar,
       };
       const nextScripts = activeProject.scripts.map((script) =>
         script.id === scriptId
