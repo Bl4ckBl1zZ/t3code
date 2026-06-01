@@ -566,6 +566,7 @@ interface PersistentThreadTerminalDrawerProps {
   visible: boolean;
   launchContext: PersistentTerminalLaunchContext | null;
   focusRequestId: number;
+  toggleShortcutLabel: string | undefined;
   splitShortcutLabel: string | undefined;
   newShortcutLabel: string | undefined;
   closeShortcutLabel: string | undefined;
@@ -579,6 +580,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   visible,
   launchContext,
   focusRequestId,
+  toggleShortcutLabel,
   splitShortcutLabel,
   newShortcutLabel,
   closeShortcutLabel,
@@ -647,6 +649,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     [knownTerminalSessions],
   );
   const storeSetTerminalHeight = useTerminalUiStateStore((state) => state.setTerminalHeight);
+  const storeSetTerminalOpen = useTerminalUiStateStore((state) => state.setTerminalOpen);
   const storeSplitTerminal = useTerminalUiStateStore((state) => state.splitTerminal);
   const storeNewTerminal = useTerminalUiStateStore((state) => state.newTerminal);
   const storeSetActiveTerminal = useTerminalUiStateStore((state) => state.setActiveTerminal);
@@ -707,6 +710,10 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     },
     [storeSetTerminalHeight, threadRef],
   );
+
+  const collapseTerminal = useCallback(() => {
+    storeSetTerminalOpen(threadRef, false);
+  }, [storeSetTerminalOpen, threadRef]);
 
   const splitTerminal = useCallback(() => {
     const api = readEnvironmentApi(threadRef.environmentId);
@@ -839,8 +846,10 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         terminalGroups={terminalUiState.terminalGroups}
         activeTerminalGroupId={terminalUiState.activeTerminalGroupId}
         focusRequestId={focusRequestId + localFocusRequestId + (visible ? 1 : 0)}
+        onCollapseTerminal={collapseTerminal}
         onSplitTerminal={splitTerminal}
         onNewTerminal={createNewTerminal}
+        toggleShortcutLabel={visible ? toggleShortcutLabel : undefined}
         splitShortcutLabel={visible ? splitShortcutLabel : undefined}
         newShortcutLabel={visible ? newShortcutLabel : undefined}
         closeShortcutLabel={visible ? closeShortcutLabel : undefined}
@@ -4834,6 +4843,7 @@ export default function ChatView(props: ChatViewProps) {
             mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
           }
           focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
+          toggleShortcutLabel={terminalToggleShortcutLabel ?? undefined}
           splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
           newShortcutLabel={newTerminalShortcutLabel ?? undefined}
           closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
