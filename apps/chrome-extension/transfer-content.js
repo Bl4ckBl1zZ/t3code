@@ -1,8 +1,26 @@
 const HIGHLIGHT_ID = "t3code-browser-agent-highlight";
 const ANNOTATION_STATUS_ID = "t3code-browser-agent-annotation-status";
+const ANNOTATION_INPUT_CONTAINER_ID = "t3code-browser-agent-annotation-input-container";
 const ANNOTATION_INPUT_ID = "t3code-browser-agent-annotation-input";
+const ANNOTATION_MIC_BUTTON_ID = "t3code-browser-agent-annotation-mic";
 const OPEN_SIDE_PANEL_PROMPT_ID = "t3code-browser-agent-open-side-panel-prompt";
 const CANCEL_ANNOTATION_MESSAGE_TYPE = "t3code.browserAgent.cancelAnnotation";
+const MAX_AUDIO_TRANSCRIPTION_BYTES = 24 * 1024 * 1024;
+const MAX_AUDIO_TRANSCRIPTION_SIZE_LABEL = "24MB";
+const PREFERRED_AUDIO_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/mp4",
+  "audio/ogg;codecs=opus",
+  "audio/ogg",
+];
+
+const MIC_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></svg>';
+const STOP_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
+const LOADING_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"></path></svg>';
 
 let annotationState = null;
 
@@ -21,6 +39,251 @@ function sendRuntimeMessage(message) {
       resolve(response);
     });
   });
+}
+
+function getPreferredAudioRecordingOptions() {
+  if (typeof MediaRecorder === "undefined") {
+    return undefined;
+  }
+  const mimeType = PREFERRED_AUDIO_MIME_TYPES.find((candidate) =>
+    MediaRecorder.isTypeSupported(candidate),
+  );
+  return mimeType ? { mimeType } : undefined;
+}
+
+function audioMimeTypeToTranscriptionFormat(mimeType) {
+  const normalized = mimeType.toLowerCase();
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return "mp3";
+  if (normalized.includes("mp4") || normalized.includes("m4a")) return "m4a";
+  if (normalized.includes("ogg")) return "ogg";
+  if (normalized.includes("wav")) return "wav";
+  if (normalized.includes("flac")) return "flac";
+  if (normalized.includes("aac")) return "aac";
+  if (normalized.includes("aiff")) return "aiff";
+  if (normalized.includes("webm")) return "webm";
+  return "webm";
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener(
+      "load",
+      () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        const separatorIndex = result.indexOf(",");
+        resolve(separatorIndex >= 0 ? result.slice(separatorIndex + 1) : result);
+      },
+      { once: true },
+    );
+    reader.addEventListener(
+      "error",
+      () => reject(reader.error ?? new Error("Failed to read audio recording.")),
+      { once: true },
+    );
+    reader.readAsDataURL(blob);
+  });
+}
+
+function appendTranscriptionToAnnotation(existingText, transcription) {
+  const addition = transcription.trim();
+  if (!addition) {
+    return existingText;
+  }
+
+  const existingWithoutHorizontalTrailingSpace = existingText.replace(/[ \t]+$/u, "");
+  if (!existingWithoutHorizontalTrailingSpace.trim()) {
+    return addition;
+  }
+  if (existingWithoutHorizontalTrailingSpace.endsWith("\n")) {
+    return `${existingWithoutHorizontalTrailingSpace}${addition}`;
+  }
+  if (/^[,.;:!?)]/u.test(addition)) {
+    return `${existingWithoutHorizontalTrailingSpace}${addition}`;
+  }
+  if (/[([{]$/u.test(existingWithoutHorizontalTrailingSpace)) {
+    return `${existingWithoutHorizontalTrailingSpace}${addition}`;
+  }
+  return `${existingWithoutHorizontalTrailingSpace} ${addition}`;
+}
+
+function createAnnotationAudioRecorder(stream) {
+  const recorder = new MediaRecorder(stream, getPreferredAudioRecordingOptions());
+  const chunks = [];
+  let stopPromise = null;
+
+  const handleDataAvailable = (event) => {
+    if (event.data.size > 0) {
+      chunks.push(event.data);
+    }
+  };
+  recorder.addEventListener("dataavailable", handleDataAvailable);
+
+  const cleanup = () => {
+    recorder.removeEventListener("dataavailable", handleDataAvailable);
+  };
+
+  return {
+    start: () => {
+      recorder.start();
+    },
+    stop: () => {
+      if (stopPromise) {
+        return stopPromise;
+      }
+
+      stopPromise = new Promise((resolve, reject) => {
+        const handleStop = () => {
+          cleanup();
+          const mimeType = recorder.mimeType || getPreferredAudioRecordingOptions()?.mimeType || "";
+          resolve(new Blob(chunks, { type: mimeType }));
+        };
+        const handleError = () => {
+          cleanup();
+          reject(new Error("The browser could not continue recording from the microphone."));
+        };
+
+        recorder.addEventListener("stop", handleStop, { once: true });
+        recorder.addEventListener("error", handleError, { once: true });
+        recorder.stop();
+      });
+
+      return stopPromise;
+    },
+    cancel: () => {
+      cleanup();
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+    },
+  };
+}
+
+function setAnnotationVoiceButtonState(button, state) {
+  button.dataset.recordingState = state;
+  button.disabled = state === "transcribing";
+  button.title =
+    state === "recording"
+      ? "Stop recording"
+      : state === "transcribing"
+        ? "Transcribing"
+        : "Record annotation";
+  button.setAttribute("aria-label", button.title);
+  button.style.background = state === "recording" ? "#dc2626" : "rgba(255,255,255,0.08)";
+  button.style.color = state === "recording" ? "#fff" : "#d4d4d8";
+  button.innerHTML =
+    state === "recording" ? STOP_ICON : state === "transcribing" ? LOADING_ICON : MIC_ICON;
+}
+
+function stopAnnotationVoiceCapture(state) {
+  state.voiceRecorder?.cancel();
+  state.voiceRecorder = null;
+  state.voiceStream?.getTracks().forEach((track) => track.stop());
+  state.voiceStream = null;
+  state.voiceRecordingState = "idle";
+}
+
+async function finishAnnotationVoiceRecording(state, input, button, blob) {
+  state.voiceRecorder = null;
+  state.voiceStream?.getTracks().forEach((track) => track.stop());
+  state.voiceStream = null;
+
+  if (blob.size === 0) {
+    setAnnotationStatus("No audio captured. Try recording again.");
+    setAnnotationVoiceButtonState(button, "idle");
+    return;
+  }
+  if (blob.size > MAX_AUDIO_TRANSCRIPTION_BYTES) {
+    setAnnotationStatus(`Recordings must be ${MAX_AUDIO_TRANSCRIPTION_SIZE_LABEL} or smaller.`);
+    setAnnotationVoiceButtonState(button, "idle");
+    return;
+  }
+
+  const response = await sendRuntimeMessage({
+    type: "t3code.browserAgent.transcribeAudio",
+    audioBase64: await blobToBase64(blob),
+    existingText: input.value,
+    format: audioMimeTypeToTranscriptionFormat(blob.type),
+    mimeType: blob.type,
+  });
+  if (annotationState !== state) {
+    return;
+  }
+
+  const text = typeof response.text === "string" ? response.text : "";
+  input.value = appendTranscriptionToAnnotation(input.value, text);
+  input.focus();
+  setAnnotationStatus(
+    text.trim() ? "Transcription added. Press Enter to send." : "No speech detected.",
+  );
+  setAnnotationVoiceButtonState(button, "idle");
+}
+
+async function stopAnnotationVoiceRecording(state, input, button) {
+  const recorder = state.voiceRecorder;
+  if (!recorder || state.voiceRecordingState !== "recording") {
+    return;
+  }
+
+  state.voiceRecordingState = "transcribing";
+  setAnnotationVoiceButtonState(button, "transcribing");
+  setAnnotationStatus("Transcribing annotation audio...");
+  try {
+    const blob = await recorder.stop();
+    await finishAnnotationVoiceRecording(state, input, button, blob);
+  } catch (error) {
+    if (annotationState === state) {
+      state.voiceRecorder = null;
+      state.voiceStream?.getTracks().forEach((track) => track.stop());
+      state.voiceStream = null;
+      setAnnotationStatus(error instanceof Error ? error.message : "Audio transcription failed.");
+      setAnnotationVoiceButtonState(button, "idle");
+    }
+  } finally {
+    if (annotationState === state) {
+      state.voiceRecordingState = "idle";
+    }
+  }
+}
+
+async function startAnnotationVoiceRecording(state, input, button) {
+  if (state.voiceRecordingState !== "idle") {
+    return;
+  }
+  if (
+    typeof navigator.mediaDevices?.getUserMedia !== "function" ||
+    typeof MediaRecorder === "undefined"
+  ) {
+    setAnnotationStatus("This browser does not expose a compatible microphone recorder.");
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+    if (annotationState !== state) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    const recorder = createAnnotationAudioRecorder(stream);
+    state.voiceStream = stream;
+    state.voiceRecorder = recorder;
+    state.voiceRecordingState = "recording";
+    recorder.start();
+    setAnnotationVoiceButtonState(button, "recording");
+    setAnnotationStatus("Recording annotation audio. Click the microphone to stop.");
+    input.focus();
+  } catch (error) {
+    if (annotationState === state) {
+      setAnnotationStatus(error instanceof Error ? error.message : "Microphone access was denied.");
+      setAnnotationVoiceButtonState(button, "idle");
+    }
+  }
 }
 
 function removeOpenSidePanelPrompt() {
@@ -243,6 +506,7 @@ function cleanupAnnotation(options = {}) {
   if (!annotationState) {
     return;
   }
+  stopAnnotationVoiceCapture(annotationState);
   window.removeEventListener("mousemove", annotationState.onMove, true);
   window.removeEventListener("click", annotationState.onClick, true);
   window.removeEventListener("keydown", annotationState.onKeyDown, true);
@@ -256,25 +520,76 @@ function cancelAnnotation() {
 }
 
 function showAnnotationInput(capture) {
+  const container = document.createElement("div");
+  container.id = ANNOTATION_INPUT_CONTAINER_ID;
+  container.style.position = "fixed";
+  container.style.left = `${Math.min(window.innerWidth - 360, Math.max(16, capture.rect.left))}px`;
+  container.style.top = `${Math.min(window.innerHeight - 56, Math.max(16, capture.rect.bottom + 12))}px`;
+  container.style.zIndex = "2147483647";
+  container.style.display = "flex";
+  container.style.alignItems = "center";
+  container.style.width = "340px";
+  container.style.height = "40px";
+  container.style.boxSizing = "border-box";
+  container.style.border = "1px solid rgba(255,255,255,0.18)";
+  container.style.borderRadius = "8px";
+  container.style.background = "rgba(17,17,18,0.98)";
+  container.style.boxShadow = "0 18px 44px rgba(0,0,0,0.32)";
+  container.style.overflow = "hidden";
+
   const input = document.createElement("input");
   input.id = ANNOTATION_INPUT_ID;
   input.type = "text";
   input.placeholder = "Annotation";
-  input.style.position = "fixed";
-  input.style.left = `${Math.min(window.innerWidth - 360, Math.max(16, capture.rect.left))}px`;
-  input.style.top = `${Math.min(window.innerHeight - 56, Math.max(16, capture.rect.bottom + 12))}px`;
-  input.style.zIndex = "2147483647";
-  input.style.width = "340px";
-  input.style.height = "40px";
+  input.style.flex = "1";
+  input.style.minWidth = "0";
+  input.style.height = "100%";
   input.style.boxSizing = "border-box";
-  input.style.border = "1px solid rgba(255,255,255,0.18)";
-  input.style.borderRadius = "8px";
-  input.style.background = "rgba(17,17,18,0.98)";
+  input.style.border = "0";
+  input.style.background = "transparent";
   input.style.color = "#fff";
   input.style.font = "14px system-ui, sans-serif";
   input.style.outline = "none";
-  input.style.padding = "0 12px";
-  document.documentElement.appendChild(input);
+  input.style.padding = "0 10px 0 12px";
+
+  const micButton = document.createElement("button");
+  micButton.id = ANNOTATION_MIC_BUTTON_ID;
+  micButton.type = "button";
+  micButton.style.width = "40px";
+  micButton.style.height = "100%";
+  micButton.style.border = "0";
+  micButton.style.borderLeft = "1px solid rgba(255,255,255,0.12)";
+  micButton.style.borderRadius = "0";
+  micButton.style.cursor = "pointer";
+  micButton.style.display = "inline-flex";
+  micButton.style.alignItems = "center";
+  micButton.style.justifyContent = "center";
+  micButton.style.padding = "0";
+  micButton.style.font = "700 13px system-ui, sans-serif";
+  setAnnotationVoiceButtonState(micButton, "idle");
+
+  micButton.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+  });
+  micButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const state = annotationState;
+    if (!state) {
+      return;
+    }
+    if (state.voiceRecordingState === "recording") {
+      void stopAnnotationVoiceRecording(state, input, micButton);
+      return;
+    }
+    void startAnnotationVoiceRecording(state, input, micButton);
+  });
+
+  container.append(input, micButton);
+  document.documentElement.appendChild(container);
   input.focus();
 
   input.addEventListener("keydown", (event) => {
@@ -289,6 +604,9 @@ function showAnnotationInput(capture) {
       return;
     }
     event.preventDefault();
+    if (annotationState?.voiceRecordingState !== "idle") {
+      return;
+    }
     const text = input.value.trim();
     if (!text) {
       return;
@@ -321,7 +639,7 @@ function showAnnotationInput(capture) {
   });
 
   if (annotationState) {
-    annotationState.input = input;
+    annotationState.input = container;
   }
 }
 
@@ -329,8 +647,11 @@ function isBrowserAgentElement(element) {
   return (
     element.id === HIGHLIGHT_ID ||
     element.id === ANNOTATION_STATUS_ID ||
+    element.id === ANNOTATION_INPUT_CONTAINER_ID ||
     element.id === ANNOTATION_INPUT_ID ||
+    element.id === ANNOTATION_MIC_BUTTON_ID ||
     element.id === OPEN_SIDE_PANEL_PROMPT_ID ||
+    Boolean(element.closest?.(`#${ANNOTATION_INPUT_CONTAINER_ID}`)) ||
     Boolean(element.closest?.(`#${OPEN_SIDE_PANEL_PROMPT_ID}`))
   );
 }
@@ -341,6 +662,9 @@ function startAnnotationMode(link) {
 
   const state = {
     input: null,
+    voiceRecorder: null,
+    voiceRecordingState: "idle",
+    voiceStream: null,
     onMove: (event) => {
       const target = document.elementFromPoint(event.clientX, event.clientY);
       if (!target || isBrowserAgentElement(target)) {

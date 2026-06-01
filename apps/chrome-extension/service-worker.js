@@ -158,7 +158,14 @@ async function fetchJson(baseUrl, path, options = {}) {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(text || `Request failed with status ${response.status}`);
+    let message = text;
+    try {
+      const json = JSON.parse(text);
+      message = json?.error ?? json?.message ?? text;
+    } catch {
+      // Keep the raw response text.
+    }
+    throw new Error(message || `Request failed with status ${response.status}`);
   }
   return await response.json();
 }
@@ -939,6 +946,27 @@ async function captureVisibleTab(sender) {
   return await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: "png" });
 }
 
+async function transcribeAudio(input) {
+  const backend = currentBackend ?? (await readBackend());
+  if (!backend) {
+    throw new Error("Pair this browser with T3 Code before recording audio.");
+  }
+  const result = await fetchJson(backend.baseUrl, "/api/audio-transcription", {
+    method: "POST",
+    token: backend.sessionToken,
+    body: {
+      audioBase64: input.audioBase64,
+      existingText: input.existingText ?? "",
+      format: input.format,
+      mimeType: input.mimeType ?? "",
+    },
+  });
+  return {
+    ok: true,
+    text: typeof result.text === "string" ? result.text : "",
+  };
+}
+
 async function activateForCurrentTab(tab) {
   if (!tab?.id || !tab.url) {
     return { ok: false, reason: "No active tab." };
@@ -1048,6 +1076,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return respond(clearBackend().then(() => ({ ok: true })));
     case "t3code.browserAgent.captureVisibleTab":
       return respond(captureVisibleTab(sender).then((dataUrl) => ({ ok: true, dataUrl })));
+    case "t3code.browserAgent.transcribeAudio":
+      return respond(transcribeAudio(message));
     case "t3code.browserAgent.annotationSubmitted":
       return respond(
         (async () => {

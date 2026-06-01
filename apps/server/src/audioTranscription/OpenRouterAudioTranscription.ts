@@ -145,12 +145,6 @@ export function makeOpenRouterAudioTranscription(
       }
 
       const text = extractOpenRouterMessageText(responseJson).trim();
-      if (!text) {
-        return yield* new AudioTranscriptionError({
-          message: "OpenRouter returned an empty transcription.",
-        });
-      }
-
       return { text };
     });
 
@@ -178,6 +172,7 @@ function buildAudioTranscriptionPrompt(existingText: string): string {
     "Correct grammar, punctuation, and flow.",
     "Remove filler words, false starts, and repeated fragments.",
     "When the speaker misspeaks and corrects themselves, keep the corrected version.",
+    "If the user did not say anything, do not return anything.",
     "Return only the cleaned text. Do not wrap it in quotes or Markdown.",
   ].join(" ");
 

@@ -6,6 +6,11 @@ import {
   BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR,
   BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME,
 } from "@t3tools/shared/browserAgent";
+import {
+  AudioTranscriptionError,
+  AudioTranscriptionInput,
+  type AudioTranscriptionResult,
+} from "@t3tools/contracts";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -45,8 +50,10 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { makeOpenRouterAudioTranscription } from "./audioTranscription/OpenRouterAudioTranscription.ts";
 import { createBrowserAgentExtensionZip } from "./browserAgentExtensionZip.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { ServerSettingsService } from "./serverSettings.ts";
 import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
@@ -210,6 +217,50 @@ const requireAuthenticatedRequest = Effect.gen(function* () {
   const serverAuth = yield* ServerAuth;
   yield* serverAuth.authenticateHttpRequest(request);
 });
+
+const respondToAudioTranscriptionError = (error: AudioTranscriptionError) =>
+  Effect.gen(function* () {
+    yield* Effect.logWarning("audio transcription route failed", {
+      message: error.message,
+      cause: error.cause,
+    });
+    return HttpServerResponse.jsonUnsafe(
+      {
+        error: error.message,
+      },
+      { status: 400, headers: browserApiCorsHeaders },
+    );
+  });
+
+export const audioTranscriptionRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/audio-transcription",
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const serverSettings = yield* ServerSettingsService;
+    const input = yield* HttpServerRequest.schemaBodyJson(AudioTranscriptionInput).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AudioTranscriptionError({
+            message: "Invalid audio transcription payload.",
+            cause,
+          }),
+      ),
+    );
+    const audioTranscription = makeOpenRouterAudioTranscription(serverSettings);
+    const result = yield* audioTranscription.transcribe(input);
+
+    return HttpServerResponse.jsonUnsafe(result satisfies AudioTranscriptionResult, {
+      status: 200,
+      headers: browserApiCorsHeaders,
+    });
+  }).pipe(
+    Effect.catchTags({
+      AuthError: respondToAuthError,
+      AudioTranscriptionError: respondToAudioTranscriptionError,
+    }),
+  ),
+);
 
 const fetchGitHubProjectImageMetadataWithCli = (
   processRunner: ProcessRunnerShape,
