@@ -4,7 +4,7 @@ import {
   BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR,
-  BROWSER_AGENT_EXTENSION_PACKAGE_FILENAMES,
+  BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME,
 } from "@t3tools/shared/browserAgent";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
@@ -45,6 +45,7 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { createBrowserAgentExtensionZip } from "./browserAgentExtensionZip.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   browserApiCorsAllowedHeaders,
@@ -124,28 +125,35 @@ export const browserAgentAutoPairRouteLayer = HttpRouter.add(
   ),
 );
 
-const resolveBrowserAgentExtensionPackagePath = Effect.fn(function* () {
+const resolveBrowserAgentExtensionSourceDir = Effect.fn(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const appsDir = path.resolve(import.meta.dirname, "../..");
+  const serverModuleDir = import.meta.dirname;
+  const appsDir = path.resolve(serverModuleDir, "../..");
+  const packagedResourcesDir = path.resolve(serverModuleDir, "../../../..");
   const staticDownloadsDir = config.staticDir
     ? path.join(config.staticDir, BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR)
     : undefined;
   const candidatePaths = [
     ...(staticDownloadsDir
-      ? BROWSER_AGENT_EXTENSION_PACKAGE_FILENAMES.map((fileName) =>
-          path.join(staticDownloadsDir, fileName),
-        )
+      ? [path.join(staticDownloadsDir, BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME)]
       : []),
-    ...BROWSER_AGENT_EXTENSION_PACKAGE_FILENAMES.map((fileName) => path.join(appsDir, fileName)),
+    path.join(serverModuleDir, BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME),
+    path.join(appsDir, BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME),
+    path.join(packagedResourcesDir, BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME),
   ];
+  const seen = new Set<string>();
 
   for (const candidatePath of candidatePaths) {
+    if (seen.has(candidatePath)) {
+      continue;
+    }
+    seen.add(candidatePath);
     const fileInfo = yield* fileSystem
       .stat(candidatePath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (fileInfo?.type === "File") {
+    if (fileInfo?.type === "Directory") {
       return candidatePath;
     }
   }
@@ -157,26 +165,28 @@ export const browserAgentExtensionDownloadRouteLayer = HttpRouter.add(
   "GET",
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
   Effect.gen(function* () {
-    const packagePath = yield* resolveBrowserAgentExtensionPackagePath();
-    if (!packagePath) {
-      return HttpServerResponse.text("T3 Code Browser Agent extension package not found.", {
+    const sourceDir = yield* resolveBrowserAgentExtensionSourceDir();
+    if (!sourceDir) {
+      return HttpServerResponse.text("T3 Code Browser Agent extension source folder not found.", {
         status: 404,
       });
     }
 
-    return yield* HttpServerResponse.file(packagePath, {
+    const zipBytes = yield* createBrowserAgentExtensionZip(sourceDir);
+
+    return HttpServerResponse.uint8Array(zipBytes, {
       status: 200,
-      contentType: "application/x-chrome-extension",
+      contentType: "application/zip",
       headers: {
         "Cache-Control": "no-store",
         "Content-Disposition": `inline; filename="${BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME}"`,
       },
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
-    );
-  }),
+    });
+  }).pipe(
+    Effect.catch(() =>
+      Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+    ),
+  ),
 );
 
 export function isLoopbackHostname(hostname: string): boolean {

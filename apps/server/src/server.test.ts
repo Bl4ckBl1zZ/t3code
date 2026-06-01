@@ -5,6 +5,7 @@ import {
   BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR,
+  BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME,
 } from "@t3tools/shared/browserAgent";
 
 import {
@@ -986,9 +987,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         prefix: "t3-router-extension-download-",
       });
       const downloadsDir = path.join(staticDir, BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR);
-      yield* fileSystem.makeDirectory(downloadsDir, { recursive: true });
+      const extensionDir = path.join(downloadsDir, BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME);
+      yield* fileSystem.makeDirectory(extensionDir, { recursive: true });
       yield* fileSystem.writeFileString(
-        path.join(downloadsDir, BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME),
+        path.join(extensionDir, "manifest.json"),
         "extension-package-ok",
       );
 
@@ -1004,12 +1006,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(response.status, 200);
-      assert.equal(response.headers["content-type"], "application/x-chrome-extension");
+      assert.equal(response.headers["content-type"], "application/zip");
       assert.equal(
         response.headers["content-disposition"],
         `inline; filename="${BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME}"`,
       );
-      assert.equal(yield* response.text, "extension-package-ok");
+      const body = Buffer.from(yield* response.arrayBuffer);
+      assert.equal(body.subarray(0, 2).toString("utf8"), "PK");
+      assert.include(
+        body.toString("utf8"),
+        `${BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME}/manifest.json`,
+      );
+      assert.include(body.toString("utf8"), "extension-package-ok");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

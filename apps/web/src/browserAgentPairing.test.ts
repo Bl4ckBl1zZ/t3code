@@ -148,7 +148,7 @@ describe("browser agent pairing", () => {
 
   it("detects the extension unavailable pairing failure", () => {
     const error = new BrowserAgentExtensionUnavailableError({
-      downloadUrl: "http://localhost:3773/downloads/t3-code-browser-agent.crx",
+      downloadUrl: "http://localhost:3773/downloads/t3-code-browser-agent.zip",
     });
 
     expect(isBrowserAgentExtensionUnavailableError(error)).toBe(true);

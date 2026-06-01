@@ -307,6 +307,23 @@ function isTransientBootstrapError(error: unknown): boolean {
 }
 
 async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
+  const browserAgentSidebarCredential = isBrowserAgentSidebarMode()
+    ? takePairingTokenFromUrl()
+    : null;
+  if (browserAgentSidebarCredential) {
+    try {
+      await exchangeBootstrapCredential(browserAgentSidebarCredential);
+      return { status: "authenticated" };
+    } catch (error) {
+      const currentSession = await fetchSessionState();
+      return {
+        status: "requires-auth",
+        auth: currentSession.auth,
+        errorMessage: error instanceof Error ? error.message : "Authentication failed.",
+      };
+    }
+  }
+
   const currentSession = await fetchSessionState();
   if (currentSession.authenticated) {
     stripPairingTokenFromUrl();
