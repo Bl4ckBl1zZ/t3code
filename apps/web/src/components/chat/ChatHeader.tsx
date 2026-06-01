@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo, useEffect, useState } from "react";
-import GitActionsControl from "../GitActionsControl";
+import GitActionsControl, { type GitPullRequestCommentsAction } from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { DiffIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
@@ -52,6 +52,7 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
+  pullRequestCommentsAction?: GitPullRequestCommentsAction;
   onRunProjectScript: (script: ProjectScript, options?: RunProjectScriptOptions) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -128,6 +129,7 @@ export const ChatHeader = memo(function ChatHeader({
   diffToggleShortcutLabel,
   gitCwd,
   diffOpen,
+  pullRequestCommentsAction,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -199,7 +201,6 @@ export const ChatHeader = memo(function ChatHeader({
     showProjectScriptsControl ||
     showOpenInPicker ||
     showPreviewButton ||
-    showTransferToBrowser ||
     showBrowserAnnotationButton ||
     showGitActionsControl ||
     showTerminalToggle ||
@@ -265,6 +266,7 @@ export const ChatHeader = memo(function ChatHeader({
               gitCwd={gitCwd}
               activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
               {...(draftId ? { draftId } : {})}
+              {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}
             />
           )}
           {showBrowserAnnotationButton && (

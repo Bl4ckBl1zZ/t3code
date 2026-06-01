@@ -25,6 +25,7 @@ import {
   LockIcon,
   GlobeIcon,
   ArchiveIcon,
+  MessageSquareTextIcon,
 } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "~/components/Icons";
@@ -58,7 +59,7 @@ import {
 } from "~/components/ui/dialog";
 import { Group, GroupSeparator } from "~/components/ui/group";
 import { Input } from "~/components/ui/input";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
@@ -89,6 +90,14 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
+  pullRequestCommentsAction?: GitPullRequestCommentsAction;
+}
+
+export interface GitPullRequestCommentsAction {
+  readonly unreadCount: number;
+  readonly isFetching: boolean;
+  readonly hasError: boolean;
+  readonly onOpen: () => void;
 }
 
 interface PendingDefaultBranchAction {
@@ -983,6 +992,7 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadRef,
   draftId,
+  pullRequestCommentsAction,
 }: GitActionsControlProps) {
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
   const threadToastData = useMemo(
@@ -1845,6 +1855,35 @@ export default function GitActionsControl({
                   </MenuItem>
                 );
               })}
+              {pullRequestCommentsAction ? (
+                <>
+                  <MenuSeparator />
+                  <MenuItem
+                    aria-label={
+                      pullRequestCommentsAction.unreadCount > 0
+                        ? `PR comments, ${pullRequestCommentsAction.unreadCount} unread`
+                        : "PR comments"
+                    }
+                    onClick={pullRequestCommentsAction.onOpen}
+                  >
+                    {pullRequestCommentsAction.isFetching ? (
+                      <Spinner className="size-4" />
+                    ) : (
+                      <MessageSquareTextIcon />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">PR comments</span>
+                    {pullRequestCommentsAction.hasError ? (
+                      <span className="ms-auto rounded-sm bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">
+                        Error
+                      </span>
+                    ) : pullRequestCommentsAction.unreadCount > 0 ? (
+                      <span className="ms-auto rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                        {pullRequestCommentsAction.unreadCount} unread
+                      </span>
+                    ) : null}
+                  </MenuItem>
+                </>
+              ) : null}
               {canPublishRepository ? (
                 <MenuItem
                   disabled={isGitActionRunning}

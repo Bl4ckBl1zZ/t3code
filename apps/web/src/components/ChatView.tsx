@@ -165,7 +165,7 @@ import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../termin
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
-import { PullRequestUnreadCommentsPanel } from "./PullRequestUnreadCommentsPanel";
+import { PullRequestUnreadCommentsSidePanel } from "./PullRequestUnreadCommentsPanel";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -218,6 +218,7 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
+import { Sheet, SheetPopup } from "./ui/sheet";
 import { ThreadTabStrip } from "./thread-tabs/ThreadTabStrip";
 import {
   buildThreadContentTabs,
@@ -239,6 +240,8 @@ const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const PULL_REQUEST_COMMENTS_SHEET_CLASS_NAME =
+  "w-[min(42vw,28rem)] min-w-80 max-w-[28rem] p-0 max-[760px]:w-[min(88vw,24rem)] max-[760px]:min-w-0 wco:mt-[env(titlebar-area-height)] wco:h-[calc(100%-env(titlebar-area-height))] wco:max-h-[calc(100%-env(titlebar-area-height))]";
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -957,6 +960,7 @@ export default function ChatView(props: ChatViewProps) {
     useState<Record<string, number>>({});
   const [draftPlanSidebarOpen, setDraftPlanSidebarOpen] = useState(false);
   const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const shouldUsePullRequestCommentsSheet = shouldUsePlanSidebarSheet;
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -965,6 +969,7 @@ export default function ChatView(props: ChatViewProps) {
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
+  const [pullRequestCommentsPanelOpen, setPullRequestCommentsPanelOpen] = useState(false);
   const [terminalUiLaunchContext, setTerminalUiLaunchContext] =
     useState<TerminalLaunchContext | null>(null);
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
@@ -1426,6 +1431,12 @@ export default function ChatView(props: ChatViewProps) {
 
   const closePullRequestDialog = useCallback(() => {
     setPullRequestDialogState(null);
+  }, []);
+  const openPullRequestCommentsPanel = useCallback(() => {
+    setPullRequestCommentsPanelOpen(true);
+  }, []);
+  const closePullRequestCommentsPanel = useCallback(() => {
+    setPullRequestCommentsPanelOpen(false);
   }, []);
 
   const openOrReuseProjectDraftThread = useCallback(
@@ -2080,6 +2091,30 @@ export default function ChatView(props: ChatViewProps) {
     pullRequestComments.data?.comments,
     seenPullRequestCommentIdsByScope,
   ]);
+  const pullRequestCommentsAction = useMemo(() => {
+    if (!activePullRequest || !supportsPullRequestComments) {
+      return undefined;
+    }
+    return {
+      unreadCount: unreadPullRequestComments.length,
+      isFetching: pullRequestComments.isFetching,
+      hasError: Boolean(pullRequestComments.error),
+      onOpen: openPullRequestCommentsPanel,
+    };
+  }, [
+    activePullRequest,
+    openPullRequestCommentsPanel,
+    pullRequestComments.error,
+    pullRequestComments.isFetching,
+    supportsPullRequestComments,
+    unreadPullRequestComments.length,
+  ]);
+  useEffect(() => {
+    if (activePullRequest && supportsPullRequestComments) {
+      return;
+    }
+    setPullRequestCommentsPanelOpen(false);
+  }, [activePullRequest, supportsPullRequestComments]);
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
   // Prefer an instance-id match so a custom Codex instance (e.g.
@@ -4575,6 +4610,7 @@ export default function ChatView(props: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
+          {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
@@ -4602,8 +4638,24 @@ export default function ChatView(props: ChatViewProps) {
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
-      {/* Main content area with optional plan sidebar */}
+      {/* Main content area with optional sidebars */}
       <div className="flex min-h-0 min-w-0 flex-1">
+        {pullRequestCommentsPanelOpen &&
+        activePullRequest &&
+        supportsPullRequestComments &&
+        !shouldUsePullRequestCommentsSheet ? (
+          <PullRequestUnreadCommentsSidePanel
+            comments={unreadPullRequestComments}
+            pullRequestNumber={activePullRequest.number}
+            pullRequestTitle={activePullRequest.title}
+            workspaceRoot={activeWorkspaceRoot}
+            isFetching={pullRequestComments.isFetching}
+            error={pullRequestComments.error}
+            onAddAll={addUnreadPullRequestCommentsToComposer}
+            onRefresh={pullRequestComments.refresh}
+            onClose={closePullRequestCommentsPanel}
+          />
+        ) : null}
         {/* Chat column */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
@@ -4660,18 +4712,6 @@ export default function ChatView(props: ChatViewProps) {
             )}
           >
             <div className="relative isolate">
-              {activePullRequest && supportsPullRequestComments ? (
-                <PullRequestUnreadCommentsPanel
-                  comments={unreadPullRequestComments}
-                  pullRequestNumber={activePullRequest.number}
-                  pullRequestTitle={activePullRequest.title}
-                  workspaceRoot={activeWorkspaceRoot}
-                  isFetching={pullRequestComments.isFetching}
-                  error={pullRequestComments.error}
-                  onAddAll={addUnreadPullRequestCommentsToComposer}
-                  onRefresh={pullRequestComments.refresh}
-                />
-              ) : null}
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
                 <ChatComposer
@@ -4840,6 +4880,42 @@ export default function ChatView(props: ChatViewProps) {
             onClose={closePlanSidebar}
           />
         </RightPanelSheet>
+      ) : null}
+      {shouldUsePullRequestCommentsSheet ? (
+        <Sheet
+          open={Boolean(
+            pullRequestCommentsPanelOpen && activePullRequest && supportsPullRequestComments,
+          )}
+          onOpenChange={(open) => {
+            if (open) {
+              openPullRequestCommentsPanel();
+              return;
+            }
+            closePullRequestCommentsPanel();
+          }}
+        >
+          <SheetPopup
+            side="left"
+            showCloseButton={false}
+            keepMounted
+            className={PULL_REQUEST_COMMENTS_SHEET_CLASS_NAME}
+          >
+            {activePullRequest && supportsPullRequestComments ? (
+              <PullRequestUnreadCommentsSidePanel
+                comments={unreadPullRequestComments}
+                pullRequestNumber={activePullRequest.number}
+                pullRequestTitle={activePullRequest.title}
+                workspaceRoot={activeWorkspaceRoot}
+                isFetching={pullRequestComments.isFetching}
+                error={pullRequestComments.error}
+                onAddAll={addUnreadPullRequestCommentsToComposer}
+                onRefresh={pullRequestComments.refresh}
+                onClose={closePullRequestCommentsPanel}
+                mode="sheet"
+              />
+            ) : null}
+          </SheetPopup>
+        </Sheet>
       ) : null}
 
       {expandedImage && (
