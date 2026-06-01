@@ -5,6 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import { ServerConfig } from "../config.ts";
+import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ReviewService from "./ReviewService.ts";
@@ -24,6 +26,26 @@ function makeLayer(input: {
             input.detectCalls?.push({ cwd: request.cwd });
             return null;
           }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+        get: () => Effect.die("unexpected source control provider get"),
+        resolve: () => Effect.die("unexpected source control provider resolve"),
+        resolveHandle: () => Effect.die("unexpected source control provider resolveHandle"),
+        discover: Effect.succeed([]),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(GitHubCli.GitHubCli)({
+        execute: () => Effect.die("unexpected GitHub CLI execute"),
+        listOpenPullRequests: () => Effect.die("unexpected GitHub CLI listOpenPullRequests"),
+        getPullRequest: () => Effect.die("unexpected GitHub CLI getPullRequest"),
+        getRepositoryCloneUrls: () => Effect.die("unexpected GitHub CLI getRepositoryCloneUrls"),
+        createRepository: () => Effect.die("unexpected GitHub CLI createRepository"),
+        createPullRequest: () => Effect.die("unexpected GitHub CLI createPullRequest"),
+        getDefaultBranch: () => Effect.die("unexpected GitHub CLI getDefaultBranch"),
+        checkoutPullRequest: () => Effect.die("unexpected GitHub CLI checkoutPullRequest"),
       }),
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

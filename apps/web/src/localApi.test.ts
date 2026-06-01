@@ -90,6 +90,7 @@ const rpcClientMock = {
   },
   review: {
     getDiffPreview: vi.fn(),
+    listPullRequestComments: vi.fn(),
   },
   server: {
     getConfig: vi.fn(),

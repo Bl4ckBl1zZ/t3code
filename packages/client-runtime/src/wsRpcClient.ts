@@ -123,6 +123,9 @@ export interface WsRpcClient {
   };
   readonly review: {
     readonly getDiffPreview: RpcUnaryMethod<typeof WS_METHODS.reviewGetDiffPreview>;
+    readonly listPullRequestComments: RpcUnaryMethod<
+      typeof WS_METHODS.reviewListPullRequestComments
+    >;
   };
   readonly browserAgents: {
     readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.browserAgentsList>;
@@ -287,6 +290,8 @@ export function createWsRpcClient(
     review: {
       getDiffPreview: (input) =>
         transport.request((client) => client[WS_METHODS.reviewGetDiffPreview](input)),
+      listPullRequestComments: (input) =>
+        transport.request((client) => client[WS_METHODS.reviewListPullRequestComments](input)),
     },
     browserAgents: {
       list: () => transport.request((client) => client[WS_METHODS.browserAgentsList]({})),

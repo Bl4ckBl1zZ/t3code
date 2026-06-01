@@ -18,7 +18,12 @@ import type {
   VcsStatusInput,
   VcsStatusResult,
 } from "./git.ts";
-import type { ReviewDiffPreviewInput, ReviewDiffPreviewResult } from "./review.ts";
+import type {
+  ReviewDiffPreviewInput,
+  ReviewDiffPreviewResult,
+  ReviewPullRequestCommentsInput,
+  ReviewPullRequestCommentsResult,
+} from "./review.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
   ProjectSearchEntriesInput,
@@ -569,6 +574,9 @@ export interface EnvironmentApi {
   };
   review: {
     getDiffPreview: (input: ReviewDiffPreviewInput) => Promise<ReviewDiffPreviewResult>;
+    listPullRequestComments: (
+      input: ReviewPullRequestCommentsInput,
+    ) => Promise<ReviewPullRequestCommentsResult>;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;

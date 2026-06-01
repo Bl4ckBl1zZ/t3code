@@ -1199,6 +1199,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(WS_METHODS.reviewGetDiffPreview, review.getDiffPreview(input), {
             "rpc.aggregate": "review",
           }),
+        [WS_METHODS.reviewListPullRequestComments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.reviewListPullRequestComments,
+            review.listPullRequestComments(input),
+            {
+              "rpc.aggregate": "review",
+            },
+          ),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
             "rpc.aggregate": "terminal",

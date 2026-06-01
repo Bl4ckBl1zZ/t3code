@@ -132,6 +132,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
     },
     review: {
       getDiffPreview: vi.fn(),
+      listPullRequestComments: vi.fn(),
     },
     browserAgents: {
       list: vi.fn(),

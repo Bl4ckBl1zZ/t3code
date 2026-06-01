@@ -119,6 +119,8 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as GitHubCli from "./sourceControl/GitHubCli.ts";
+import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
@@ -517,6 +519,27 @@ const buildAppUnderTest = (options?: {
         })
       : ReviewService.layer.pipe(
           Layer.provideMerge(gitVcsDriverLayer),
+          Layer.provide(
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              get: () => Effect.die("unexpected source control provider get"),
+              resolve: () => Effect.die("unexpected source control provider resolve"),
+              resolveHandle: () => Effect.die("unexpected source control provider resolveHandle"),
+              discover: Effect.succeed([]),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(GitHubCli.GitHubCli)({
+              execute: () => Effect.die("unexpected GitHub CLI execute"),
+              listOpenPullRequests: () => Effect.die("unexpected GitHub CLI listOpenPullRequests"),
+              getPullRequest: () => Effect.die("unexpected GitHub CLI getPullRequest"),
+              getRepositoryCloneUrls: () =>
+                Effect.die("unexpected GitHub CLI getRepositoryCloneUrls"),
+              createRepository: () => Effect.die("unexpected GitHub CLI createRepository"),
+              createPullRequest: () => Effect.die("unexpected GitHub CLI createPullRequest"),
+              getDefaultBranch: () => Effect.die("unexpected GitHub CLI getDefaultBranch"),
+              checkoutPullRequest: () => Effect.die("unexpected GitHub CLI checkoutPullRequest"),
+            }),
+          ),
           Layer.provide(vcsDriverRegistryLayer),
         );
     const vcsStatusBroadcasterLayer = options?.layers?.vcsStatusBroadcaster

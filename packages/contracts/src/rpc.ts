@@ -51,6 +51,9 @@ import {
   ReviewDiffPreviewError,
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
+  ReviewPullRequestCommentsError,
+  ReviewPullRequestCommentsInput,
+  ReviewPullRequestCommentsResult,
 } from "./review.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
@@ -153,6 +156,7 @@ export const WS_METHODS = {
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
+  reviewListPullRequestComments: "review.listPullRequestComments",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -435,6 +439,15 @@ export const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPrevie
   error: ReviewDiffPreviewError,
 });
 
+export const WsReviewListPullRequestCommentsRpc = Rpc.make(
+  WS_METHODS.reviewListPullRequestComments,
+  {
+    payload: ReviewPullRequestCommentsInput,
+    success: ReviewPullRequestCommentsResult,
+    error: ReviewPullRequestCommentsError,
+  },
+);
+
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   payload: TerminalOpenInput,
   success: TerminalSessionSnapshot,
@@ -610,6 +623,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
+  WsReviewListPullRequestCommentsRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,

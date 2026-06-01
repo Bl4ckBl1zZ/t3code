@@ -48,6 +48,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     },
     review: {
       getDiffPreview: rpcClient.review.getDiffPreview,
+      listPullRequestComments: rpcClient.review.listPullRequestComments,
     },
     orchestration: {
       dispatchCommand: rpcClient.orchestration.dispatchCommand,

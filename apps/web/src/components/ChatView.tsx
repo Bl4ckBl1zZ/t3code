@@ -162,6 +162,7 @@ import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../termin
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { PullRequestUnreadCommentsPanel } from "./PullRequestUnreadCommentsPanel";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -197,6 +198,13 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { usePullRequestReviewComments } from "~/lib/pullRequestReviewCommentsState";
+import {
+  appendPullRequestCommentsPrompt,
+  PULL_REQUEST_COMMENT_SEEN_STORAGE_KEY,
+  PullRequestCommentSeenStateSchema,
+  pullRequestCommentSeenScopeKey,
+} from "~/pullRequestReviewComments";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   useServerAvailableEditors,
@@ -959,6 +967,11 @@ export default function ChatView(props: ChatViewProps) {
       {},
       ProjectScriptTerminalIdsByRunKeySchema,
     );
+  const [seenPullRequestCommentIdsByScope, setSeenPullRequestCommentIdsByScope] = useLocalStorage(
+    PULL_REQUEST_COMMENT_SEEN_STORAGE_KEY,
+    {},
+    PullRequestCommentSeenStateSchema,
+  );
   const [projectScriptDetectedWebServerByRunKey, setProjectScriptDetectedWebServerByRunKey] =
     useState<Record<string, ProjectScriptDetectedWebServerState>>({});
   const legendListRef = useRef<LegendListRef | null>(null);
@@ -966,6 +979,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const pendingSeenPullRequestCommentIdsRef = useRef<Set<string>>(new Set());
   const previousActiveThreadIdRef = useRef<ThreadId | null>(null);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
   const projectScriptWebServerDetectionGenerationRef = useRef<Record<string, number>>({});
@@ -2015,6 +2029,37 @@ export default function ChatView(props: ChatViewProps) {
       })
     : null;
   const gitStatusQuery = useVcsStatus({ environmentId, cwd: gitCwd });
+  const activePullRequest = gitStatusQuery.data?.pr ?? null;
+  const supportsPullRequestComments = gitStatusQuery.data?.sourceControlProvider?.kind === "github";
+  const pullRequestComments = usePullRequestReviewComments({
+    environmentId: activeThread?.environmentId ?? null,
+    cwd: gitCwd,
+    pullRequestNumber: supportsPullRequestComments ? (activePullRequest?.number ?? null) : null,
+  });
+  const pullRequestCommentSeenScope = useMemo(
+    () =>
+      activeThread && pullRequestComments.data
+        ? pullRequestCommentSeenScopeKey({
+            environmentId: activeThread.environmentId,
+            threadId: activeThread.id,
+            repository: pullRequestComments.data.repository,
+            pullRequestNumber: pullRequestComments.data.pullRequestNumber,
+          })
+        : null,
+    [activeThread, pullRequestComments.data],
+  );
+  const unreadPullRequestComments = useMemo(() => {
+    const comments = pullRequestComments.data?.comments ?? [];
+    if (!pullRequestCommentSeenScope) {
+      return comments;
+    }
+    const seen = new Set(seenPullRequestCommentIdsByScope[pullRequestCommentSeenScope] ?? []);
+    return comments.filter((comment) => !seen.has(comment.id));
+  }, [
+    pullRequestCommentSeenScope,
+    pullRequestComments.data?.comments,
+    seenPullRequestCommentIdsByScope,
+  ]);
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
   // Prefer an instance-id match so a custom Codex instance (e.g.
@@ -2169,6 +2214,49 @@ export default function ChatView(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const markPendingPullRequestCommentsSeen = useCallback(() => {
+    if (!pullRequestCommentSeenScope || pendingSeenPullRequestCommentIdsRef.current.size === 0) {
+      return;
+    }
+    const pendingIds = Array.from(pendingSeenPullRequestCommentIdsRef.current);
+    pendingSeenPullRequestCommentIdsRef.current.clear();
+    setSeenPullRequestCommentIdsByScope((existing) => {
+      const nextIds = new Set(existing[pullRequestCommentSeenScope] ?? []);
+      for (const id of pendingIds) {
+        nextIds.add(id);
+      }
+      return {
+        ...existing,
+        [pullRequestCommentSeenScope]: Array.from(nextIds),
+      };
+    });
+  }, [pullRequestCommentSeenScope, setSeenPullRequestCommentIdsByScope]);
+  const addUnreadPullRequestCommentsToComposer = useCallback(() => {
+    if (unreadPullRequestComments.length === 0) {
+      return;
+    }
+    const nextPrompt = appendPullRequestCommentsPrompt({
+      currentPrompt: promptRef.current,
+      comments: unreadPullRequestComments,
+    });
+    promptRef.current = nextPrompt;
+    for (const comment of unreadPullRequestComments) {
+      pendingSeenPullRequestCommentIdsRef.current.add(comment.id);
+    }
+    setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+    composerRef.current?.resetCursorState({
+      cursor: collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+      prompt: nextPrompt,
+      detectTrigger: true,
+    });
+    scheduleComposerFocus();
+  }, [
+    composerRef.current,
+    composerDraftTarget,
+    scheduleComposerFocus,
+    setComposerDraftPrompt,
+    unreadPullRequestComments,
+  ]);
   const addTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
   }, []);
@@ -3584,6 +3672,7 @@ export default function ChatView(props: ChatViewProps) {
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      markPendingPullRequestCommentsSeen();
     })().catch(async (err: unknown) => {
       if (
         !turnStartSucceeded &&
@@ -3905,6 +3994,7 @@ export default function ChatView(props: ChatViewProps) {
             : {}),
           createdAt: messageCreatedAt,
         });
+        markPendingPullRequestCommentsSeen();
         // Optimistically open the plan sidebar when implementing (not refining).
         // "default" mode here means the agent is executing the plan, which produces
         // step-tracking activities that the sidebar will display.
@@ -3940,6 +4030,7 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError,
       autoOpenPlanSidebar,
       environmentId,
+      markPendingPullRequestCommentsSeen,
     ],
   );
 
@@ -4353,6 +4444,18 @@ export default function ChatView(props: ChatViewProps) {
             )}
           >
             <div className="relative isolate">
+              {activePullRequest && supportsPullRequestComments ? (
+                <PullRequestUnreadCommentsPanel
+                  comments={unreadPullRequestComments}
+                  pullRequestNumber={activePullRequest.number}
+                  pullRequestTitle={activePullRequest.title}
+                  workspaceRoot={activeWorkspaceRoot}
+                  isFetching={pullRequestComments.isFetching}
+                  error={pullRequestComments.error}
+                  onAddAll={addUnreadPullRequestCommentsToComposer}
+                  onRefresh={pullRequestComments.refresh}
+                />
+              ) : null}
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
                 <ChatComposer
