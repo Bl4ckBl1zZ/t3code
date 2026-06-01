@@ -91,6 +91,114 @@ describe("when: ref is clean and has an open PR", () => {
   });
 });
 
+describe("when: PR status has merge metadata", () => {
+  it("resolveQuickAction shows merged PRs as merged", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 20,
+          title: "Merged PR",
+          url: "https://example.com/pr/20",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "merged",
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "open_pr",
+      label: "Merged",
+      tone: "merged",
+      disabled: false,
+    });
+  });
+
+  it("resolveQuickAction disables while checks are still running", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 21,
+          title: "Pending checks",
+          url: "https://example.com/pr/21",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "mergeable",
+          checks: {
+            total: 4,
+            completed: 2,
+            successful: 2,
+            failed: 0,
+            pending: 2,
+          },
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "show_hint",
+      label: "2 / 4 Checks",
+      tone: "warning",
+      disabled: true,
+    });
+  });
+
+  it("resolveQuickAction prompts the agent for conflicts", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 22,
+          title: "Conflict PR",
+          url: "https://example.com/pr/22",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "conflicting",
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "prompt_ai",
+      label: "Resolve conflicts",
+      tone: "destructive",
+      disabled: false,
+    });
+    assert.include(quick.prompt ?? "", "Resolve the merge conflicts");
+  });
+
+  it("resolveQuickAction shows merge when a clean PR is mergeable", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 23,
+          title: "Mergeable PR",
+          url: "https://example.com/pr/23",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "mergeable",
+          checks: {
+            total: 2,
+            completed: 2,
+            successful: 2,
+            failed: 0,
+            pending: 0,
+          },
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "open_pr",
+      label: "Merge",
+      tone: "success",
+      disabled: false,
+    });
+  });
+});
+
 describe("when: actions are busy", () => {
   it("resolveQuickAction returns running disabled state", () => {
     const quick = resolveQuickAction(status(), true);
@@ -342,7 +450,7 @@ describe("when: ref is clean, up to date, and has no open PR", () => {
 describe("when: ref is behind upstream", () => {
   it("resolveQuickAction returns pull", () => {
     const quick = resolveQuickAction(status({ behindCount: 2 }), false);
-    assert.deepInclude(quick, { kind: "run_pull", label: "Pull", disabled: false });
+    assert.deepInclude(quick, { kind: "run_pull", label: "Rebase / pull", disabled: false });
   });
 
   it("buildMenuItems disables push and create PR", () => {
@@ -380,10 +488,11 @@ describe("when: ref has diverged from upstream", () => {
   it("resolveQuickAction returns a disabled sync hint", () => {
     const quick = resolveQuickAction(status({ aheadCount: 2, behindCount: 1 }), false);
     assert.deepEqual(quick, {
-      label: "Sync ref",
+      label: "Rebase / pull",
       disabled: true,
       kind: "show_hint",
       hint: "Branch has diverged from upstream. Rebase/merge first.",
+      tone: "warning",
     });
   });
 });
@@ -546,7 +655,7 @@ describe("when: working tree has local changes and ref is behind upstream", () =
     );
     assert.deepInclude(quick, {
       kind: "run_pull",
-      label: "Pull",
+      label: "Rebase / pull",
       disabled: false,
     });
   });

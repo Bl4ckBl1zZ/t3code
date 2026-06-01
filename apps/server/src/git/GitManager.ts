@@ -49,7 +49,11 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 import { GitVcsDriver, type GitStatusDetails } from "../vcs/GitVcsDriver.ts";
 import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
-import type { ChangeRequest } from "@t3tools/contracts";
+import type {
+  ChangeRequest,
+  ChangeRequestCheckSummary,
+  ChangeRequestMergeStatus,
+} from "@t3tools/contracts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -114,6 +118,8 @@ interface OpenPrInfo {
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   updatedAt: Option.Option<DateTime.Utc>;
+  mergeStatus?: ChangeRequestMergeStatus;
+  checks?: ChangeRequestCheckSummary;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -317,6 +323,8 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     ...(summary.headRepositoryOwnerLogin !== undefined
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
+    ...(summary.mergeStatus !== undefined ? { mergeStatus: summary.mergeStatus } : {}),
+    ...(summary.checks !== undefined ? { checks: summary.checks } : {}),
   };
 }
 
@@ -469,6 +477,8 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  mergeStatus?: ChangeRequestMergeStatus;
+  checks?: ChangeRequestCheckSummary;
 } {
   return {
     number: pr.number,
@@ -477,6 +487,8 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.mergeStatus !== undefined ? { mergeStatus: pr.mergeStatus } : {}),
+    ...(pr.checks !== undefined ? { checks: pr.checks } : {}),
   };
 }
 

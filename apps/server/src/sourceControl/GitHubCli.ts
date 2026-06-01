@@ -7,6 +7,8 @@ import * as SchemaIssue from "effect/SchemaIssue";
 
 import {
   TrimmedNonEmptyString,
+  type ChangeRequestCheckSummary,
+  type ChangeRequestMergeStatus,
   type SourceControlRepositoryVisibility,
   type VcsError,
 } from "@t3tools/contracts";
@@ -15,6 +17,8 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubPullRequests from "./gitHubPullRequests.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const PULL_REQUEST_JSON_FIELDS =
+  "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,isCrossRepository,headRepository,headRepositoryOwner";
 
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
   operation: Schema.String,
@@ -36,6 +40,8 @@ export interface GitHubPullRequestSummary {
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
+  readonly mergeStatus?: ChangeRequestMergeStatus;
+  readonly checks?: ChangeRequestCheckSummary;
 }
 
 export interface GitHubRepositoryCloneUrls {
@@ -265,7 +271,7 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
           "--limit",
           String(input.limit ?? 1),
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          PULL_REQUEST_JSON_FIELDS,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -300,7 +306,7 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
           input.reference,
           ...repoArgs(input.repository),
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          PULL_REQUEST_JSON_FIELDS,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),

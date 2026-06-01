@@ -19,16 +19,19 @@ export interface GitActionMenuItem {
   label: string;
   disabled: boolean;
   icon: GitActionIconName;
-  kind: "open_dialog" | "open_pr";
+  kind: "open_dialog" | "open_pr" | "prompt_ai";
   dialogAction?: GitDialogAction;
+  prompt?: string;
 }
 
 export interface GitQuickAction {
   label: string;
   disabled: boolean;
-  kind: "run_action" | "run_pull" | "open_pr" | "open_publish" | "show_hint";
+  kind: "run_action" | "run_pull" | "open_pr" | "open_publish" | "prompt_ai" | "show_hint";
   action?: GitStackedAction;
   hint?: string;
+  tone?: "default" | "success" | "merged" | "warning" | "destructive";
+  prompt?: string;
 }
 
 export interface DefaultBranchActionDialogCopy {
@@ -49,6 +52,44 @@ function resolveChangeRequestTerminology(
   return gitStatus?.sourceControlProvider
     ? getChangeRequestTerminology(gitStatus.sourceControlProvider)
     : DEFAULT_CHANGE_REQUEST_TERMINOLOGY;
+}
+
+function formatChecksLabel(
+  checks: NonNullable<NonNullable<VcsStatusResult["pr"]>["checks"]>,
+): string {
+  return `${checks.completed} / ${checks.total} Checks`;
+}
+
+function resolveChangeRequestPrompt(input: {
+  action: "resolve_conflicts" | "sync_base";
+  gitStatus: VcsStatusResult;
+}): string {
+  const pr = input.gitStatus.pr;
+  const branch = input.gitStatus.refName ?? pr?.headRef ?? "the current branch";
+  const baseRef = pr?.baseRef ?? "the base branch";
+
+  if (input.action === "resolve_conflicts") {
+    return [
+      `Resolve the merge conflicts for ${pr ? `PR #${pr.number} (${pr.title})` : "the current pull request"}.`,
+      `Current branch: ${branch}`,
+      `Base branch: ${baseRef}`,
+      "Update the branch safely, resolve conflicts, run the relevant checks, and commit the conflict resolution.",
+    ].join("\n");
+  }
+
+  return [
+    `Update ${branch} against ${baseRef}${pr ? ` for PR #${pr.number} (${pr.title})` : ""}.`,
+    "Prefer a rebase when it is safe for this branch; otherwise pull/merge according to the repository's conventions.",
+    "Resolve any conflicts, run the relevant checks, and push the updated branch if needed.",
+  ].join("\n");
+}
+
+function isPrMergeable(pr: NonNullable<VcsStatusResult["pr"]>): boolean {
+  return (
+    pr.state === "open" &&
+    pr.mergeStatus === "mergeable" &&
+    (pr.checks === undefined || (pr.checks.pending === 0 && pr.checks.failed === 0))
+  );
 }
 
 export function buildGitActionProgressStages(input: {
@@ -120,7 +161,29 @@ export function buildMenuItems(
     hasDefaultBranchDelta &&
     !isBehind &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
-  const canOpenPr = !isBusy && hasOpenPr;
+  const prItemLabel = (() => {
+    const pr = gitStatus.pr;
+    if (!pr) return `Create ${terminology.shortLabel}`;
+    if (pr.state === "merged") return "Merged";
+    if (pr.state === "open" && pr.checks && pr.checks.pending > 0) {
+      return formatChecksLabel(pr.checks);
+    }
+    if (pr.state === "open" && pr.mergeStatus === "conflicting") return "Resolve conflicts";
+    if (pr.state === "open" && pr.mergeStatus === "behind") return "Rebase / pull";
+    if (pr.state === "open" && !hasChanges && isPrMergeable(pr)) return "Merge";
+    return `View ${terminology.shortLabel}`;
+  })();
+  const prItemKind =
+    gitStatus.pr?.state === "open" &&
+    (gitStatus.pr.mergeStatus === "conflicting" || gitStatus.pr.mergeStatus === "behind")
+      ? "prompt_ai"
+      : "open_pr";
+  const prItemPrompt =
+    gitStatus.pr?.state === "open" && gitStatus.pr.mergeStatus === "conflicting"
+      ? resolveChangeRequestPrompt({ action: "resolve_conflicts", gitStatus })
+      : gitStatus.pr?.state === "open" && gitStatus.pr.mergeStatus === "behind"
+        ? resolveChangeRequestPrompt({ action: "sync_base", gitStatus })
+        : undefined;
 
   const commitItem: GitActionMenuItem = {
     id: "commit",
@@ -145,13 +208,18 @@ export function buildMenuItems(
       kind: "open_dialog",
       dialogAction: "push",
     },
-    hasOpenPr
+    gitStatus.pr
       ? {
           id: "pr",
-          label: `View ${terminology.shortLabel}`,
-          disabled: !canOpenPr,
+          label: prItemLabel,
+          disabled:
+            isBusy ||
+            (gitStatus.pr.state === "open" &&
+              !!gitStatus.pr.checks &&
+              gitStatus.pr.checks.pending > 0),
           icon: "pr",
-          kind: "open_pr",
+          kind: prItemKind,
+          ...(prItemPrompt ? { prompt: prItemPrompt } : {}),
         }
       : {
           id: "pr",
@@ -185,7 +253,8 @@ export function resolveQuickAction(
 
   const hasBranch = gitStatus.refName !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
-  const hasOpenPr = gitStatus.pr?.state === "open";
+  const pr = gitStatus.pr;
+  const hasOpenPr = pr?.state === "open";
   const isAhead = gitStatus.aheadCount > 0;
   const hasDefaultBranchDelta = (gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) > 0;
   const isBehind = gitStatus.behindCount > 0;
@@ -201,20 +270,56 @@ export function resolveQuickAction(
     };
   }
 
+  if (pr?.state === "merged") {
+    return { label: "Merged", disabled: false, kind: "open_pr", tone: "merged" };
+  }
+
   if (isDiverged) {
     return {
-      label: "Sync ref",
+      label: "Rebase / pull",
       disabled: true,
       kind: "show_hint",
       hint: "Branch has diverged from upstream. Rebase/merge first.",
+      tone: "warning",
     };
   }
 
   if (isBehind) {
     return {
-      label: "Pull",
+      label: "Rebase / pull",
       disabled: false,
       kind: "run_pull",
+      tone: "warning",
+    };
+  }
+
+  if (hasOpenPr && pr?.checks && pr.checks.pending > 0) {
+    return {
+      label: formatChecksLabel(pr.checks),
+      disabled: true,
+      kind: "show_hint",
+      hint: "Checks are still running.",
+      tone: "warning",
+    };
+  }
+
+  if (hasOpenPr && pr?.mergeStatus === "conflicting") {
+    return {
+      label: "Resolve conflicts",
+      disabled: false,
+      kind: "prompt_ai",
+      prompt: resolveChangeRequestPrompt({ action: "resolve_conflicts", gitStatus }),
+      tone: "destructive",
+    };
+  }
+
+  if (hasOpenPr && pr?.mergeStatus === "behind") {
+    return {
+      label: "Rebase / pull",
+      disabled: false,
+      kind: "prompt_ai",
+      prompt: resolveChangeRequestPrompt({ action: "sync_base", gitStatus }),
+      tone: "warning",
     };
   }
 
@@ -236,6 +341,9 @@ export function resolveQuickAction(
   if (!gitStatus.hasUpstream) {
     if (!hasPrimaryRemote) {
       if (hasOpenPr && !isAhead) {
+        if (pr && isPrMergeable(pr)) {
+          return { label: "Merge", disabled: false, kind: "open_pr", tone: "success" };
+        }
         return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
       }
       return {
@@ -246,6 +354,9 @@ export function resolveQuickAction(
     }
     if (!isAhead) {
       if (hasOpenPr) {
+        if (pr && isPrMergeable(pr)) {
+          return { label: "Merge", disabled: false, kind: "open_pr", tone: "success" };
+        }
         return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
       }
       return {
@@ -289,6 +400,9 @@ export function resolveQuickAction(
   }
 
   if (hasOpenPr && gitStatus.hasUpstream) {
+    if (pr && isPrMergeable(pr)) {
+      return { label: "Merge", disabled: false, kind: "open_pr", tone: "success" };
+    }
     return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
   }
 

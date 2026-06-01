@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { VcsDriverKind } from "./vcs.ts";
 
 export const SourceControlProviderKind = Schema.Literals([
@@ -21,6 +21,26 @@ export type SourceControlProviderInfo = typeof SourceControlProviderInfo.Type;
 export const ChangeRequestState = Schema.Literals(["open", "closed", "merged"]);
 export type ChangeRequestState = typeof ChangeRequestState.Type;
 
+export const ChangeRequestMergeStatus = Schema.Literals([
+  "mergeable",
+  "conflicting",
+  "blocked",
+  "behind",
+  "draft",
+  "unstable",
+  "unknown",
+]);
+export type ChangeRequestMergeStatus = typeof ChangeRequestMergeStatus.Type;
+
+export const ChangeRequestCheckSummary = Schema.Struct({
+  total: NonNegativeInt,
+  completed: NonNegativeInt,
+  successful: NonNegativeInt,
+  failed: NonNegativeInt,
+  pending: NonNegativeInt,
+});
+export type ChangeRequestCheckSummary = typeof ChangeRequestCheckSummary.Type;
+
 export const ChangeRequest = Schema.Struct({
   provider: SourceControlProviderKind,
   number: PositiveInt,
@@ -33,6 +53,8 @@ export const ChangeRequest = Schema.Struct({
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepositoryNameWithOwner: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   headRepositoryOwnerLogin: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  mergeStatus: Schema.optional(ChangeRequestMergeStatus),
+  checks: Schema.optional(ChangeRequestCheckSummary),
 });
 export type ChangeRequest = typeof ChangeRequest.Type;
 

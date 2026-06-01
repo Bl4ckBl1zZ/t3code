@@ -44,6 +44,20 @@ describe("GitHubCli.layer", () => {
               headRefName: "feature/pr-threads",
               state: "OPEN",
               mergedAt: null,
+              isDraft: false,
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+                {
+                  __typename: "StatusContext",
+                  state: "PENDING",
+                },
+              ],
               isCrossRepository: true,
               headRepository: {
                 nameWithOwner: "octocat/codething-mvp",
@@ -72,6 +86,14 @@ describe("GitHubCli.layer", () => {
         isCrossRepository: true,
         headRepositoryNameWithOwner: "octocat/codething-mvp",
         headRepositoryOwnerLogin: "octocat",
+        mergeStatus: "mergeable",
+        checks: {
+          total: 2,
+          completed: 1,
+          successful: 1,
+          failed: 0,
+          pending: 1,
+        },
       });
       expect(mockRun).toHaveBeenCalledWith({
         operation: "GitHubCli.execute",
@@ -81,7 +103,7 @@ describe("GitHubCli.layer", () => {
           "view",
           "#42",
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,isCrossRepository,headRepository,headRepositoryOwner",
         ],
         cwd: "/repo",
         timeoutMs: 30_000,
