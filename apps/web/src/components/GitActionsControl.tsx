@@ -1,3 +1,4 @@
+import { scopedThreadKey } from "@t3tools/client-runtime";
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import type {
   GitActionProgressEvent,
@@ -23,6 +24,7 @@ import {
   InfoIcon,
   LockIcon,
   GlobeIcon,
+  ArchiveIcon,
 } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "~/components/Icons";
@@ -81,6 +83,7 @@ import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useStore } from "~/store";
 import { createThreadSelectorByRef } from "~/storeSelectors";
+import { useThreadActions } from "~/hooks/useThreadActions";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -330,6 +333,7 @@ function GitQuickActionIcon({
   SourceControlIcon: ReturnType<typeof getSourceControlPresentation>["Icon"];
 }) {
   const iconClassName = "size-3.5";
+  if (quickAction.label === "Archive") return <ArchiveIcon className={iconClassName} />;
   if (quickAction.kind === "open_pr") return <SourceControlIcon className={iconClassName} />;
   if (quickAction.kind === "prompt_ai") return <SourceControlIcon className={iconClassName} />;
   if (quickAction.kind === "open_publish") return <CloudUploadIcon className={iconClassName} />;
@@ -1006,12 +1010,21 @@ export default function GitActionsControl({
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
+  const [mergedArchiveArmedThreadKey, setMergedArchiveArmedThreadKey] = useState<string | null>(
+    null,
+  );
+  const [isArchivingMergedThread, setIsArchivingMergedThread] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
+  const { archiveThread } = useThreadActions();
   const sourceControlScope = useMemo(
     () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
     [activeEnvironmentId, gitCwd],
+  );
+  const activeThreadKey = useMemo(
+    () => (activeThreadRef ? scopedThreadKey(activeThreadRef) : null),
+    [activeThreadRef],
   );
   let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
@@ -1157,8 +1170,17 @@ export default function GitActionsControl({
       resolveQuickAction(gitStatusForActions, isGitActionRunning, isDefaultRef, hasPrimaryRemote),
     [gitStatusForActions, hasPrimaryRemote, isDefaultRef, isGitActionRunning],
   );
-  const quickActionDisabledReason = quickAction.disabled
-    ? (quickAction.hint ?? "This action is currently unavailable.")
+  const isMergedQuickAction =
+    gitStatusForActions?.pr?.state === "merged" && quickAction.tone === "merged";
+  const isMergedArchiveArmed =
+    isMergedQuickAction &&
+    activeThreadKey !== null &&
+    mergedArchiveArmedThreadKey === activeThreadKey;
+  const renderedQuickAction: GitQuickAction = isMergedArchiveArmed
+    ? { ...quickAction, label: "Archive", tone: "destructive" }
+    : quickAction;
+  const quickActionDisabledReason = renderedQuickAction.disabled
+    ? (renderedQuickAction.hint ?? "This action is currently unavailable.")
     : null;
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
@@ -1181,6 +1203,16 @@ export default function GitActionsControl({
       window.clearInterval(interval);
     };
   }, [updateActiveProgressToast]);
+
+  useEffect(() => {
+    setMergedArchiveArmedThreadKey(null);
+  }, [activeThreadKey]);
+
+  useEffect(() => {
+    if (!isMergedQuickAction) {
+      setMergedArchiveArmedThreadKey(null);
+    }
+  }, [isMergedQuickAction]);
 
   useEffect(() => {
     if (gitCwd === null) {
@@ -1545,6 +1577,39 @@ export default function GitActionsControl({
   };
 
   const runQuickAction = () => {
+    if (isMergedQuickAction) {
+      if (!activeThreadRef || !activeThreadKey) {
+        toastManager.add({
+          type: "error",
+          title: "No active thread to archive.",
+          data: threadToastData,
+        });
+        return;
+      }
+      if (!isMergedArchiveArmed) {
+        setMergedArchiveArmedThreadKey(activeThreadKey);
+        return;
+      }
+      setIsArchivingMergedThread(true);
+      void archiveThread(activeThreadRef)
+        .then(() => {
+          setMergedArchiveArmedThreadKey(null);
+        })
+        .catch((err: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to archive thread",
+              description: err instanceof Error ? err.message : "An error occurred.",
+              ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+            }),
+          );
+        })
+        .finally(() => {
+          setIsArchivingMergedThread(false);
+        });
+      return;
+    }
     if (quickAction.kind === "open_pr") {
       void openExistingPr();
       return;
@@ -1686,7 +1751,7 @@ export default function GitActionsControl({
                     aria-disabled="true"
                     className={cn(
                       "min-w-0 max-w-56 cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
-                      gitQuickActionClassName(quickAction),
+                      gitQuickActionClassName(renderedQuickAction),
                     )}
                     size="xs"
                     variant="outline"
@@ -1694,10 +1759,10 @@ export default function GitActionsControl({
                 }
               >
                 <GitQuickActionIcon
-                  quickAction={quickAction}
+                  quickAction={renderedQuickAction}
                   SourceControlIcon={SourceControlIcon}
                 />
-                <span className="ml-0.5 min-w-0 truncate">{quickAction.label}</span>
+                <span className="ml-0.5 min-w-0 truncate">{renderedQuickAction.label}</span>
               </PopoverTrigger>
               <PopoverPopup tooltipStyle side="bottom" align="start">
                 {quickActionDisabledReason}
@@ -1707,12 +1772,17 @@ export default function GitActionsControl({
             <Button
               variant="outline"
               size="xs"
-              className={cn("min-w-0 max-w-56", gitQuickActionClassName(quickAction))}
-              disabled={isGitActionRunning || quickAction.disabled}
+              className={cn("min-w-0 max-w-56", gitQuickActionClassName(renderedQuickAction))}
+              disabled={
+                isGitActionRunning || renderedQuickAction.disabled || isArchivingMergedThread
+              }
               onClick={runQuickAction}
             >
-              <GitQuickActionIcon quickAction={quickAction} SourceControlIcon={SourceControlIcon} />
-              <span className="ml-0.5 min-w-0 truncate">{quickAction.label}</span>
+              <GitQuickActionIcon
+                quickAction={renderedQuickAction}
+                SourceControlIcon={SourceControlIcon}
+              />
+              <span className="ml-0.5 min-w-0 truncate">{renderedQuickAction.label}</span>
             </Button>
           )}
           <GroupSeparator className="hidden @3xl/header-actions:block" />
