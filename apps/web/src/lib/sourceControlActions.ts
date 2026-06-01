@@ -19,6 +19,7 @@ import {
   type SourceControlRepositoryVisibility,
   type ThreadId,
   type VcsPullResult,
+  type VcsSyncBaseResult,
 } from "@t3tools/contracts";
 import {
   useCallback,
@@ -38,6 +39,7 @@ import { vcsRefManager } from "./vcsRefState";
 type SourceControlActionKind =
   | "init"
   | "pull"
+  | "syncBase"
   | "publishRepository"
   | "runStackedAction"
   | "preparePullRequestThread";
@@ -117,6 +119,7 @@ function getVcsActionOperationForKind(kind: SourceControlActionKind): VcsActionO
       return "pull";
     case "runStackedAction":
       return "run_change_request";
+    case "syncBase":
     case "publishRepository":
     case "preparePullRequestThread":
       return null;
@@ -328,6 +331,19 @@ export function useVcsPullAction(scope: SourceControlActionScope) {
     operation: "pull",
     scope,
     unavailableMessage: "Git pull is unavailable.",
+    action,
+  });
+}
+
+export function useVcsSyncBaseAction(scope: SourceControlActionScope) {
+  const action = useCallback(async (): Promise<VcsSyncBaseResult> => {
+    if (!scope.cwd || !scope.environmentId) throw new Error("Base sync is unavailable.");
+    return ensureEnvironmentApi(scope.environmentId).vcs.syncBase({ cwd: scope.cwd });
+  }, [scope]);
+
+  return useSourceControlAction({
+    kind: "syncBase",
+    scope,
     action,
   });
 }

@@ -8,6 +8,7 @@ import {
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
   VcsStatusResult,
+  VcsSyncBaseResult,
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
@@ -18,6 +19,7 @@ const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedAction
 const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
 const decodeVcsStatusResult = Schema.decodeUnknownSync(VcsStatusResult);
+const decodeVcsSyncBaseResult = Schema.decodeUnknownSync(VcsSyncBaseResult);
 
 describe("VcsCreateWorktreeInput", () => {
   it("accepts omitted newRefName for existing-refName worktrees", () => {
@@ -88,6 +90,7 @@ describe("VcsStatusResult", () => {
       hasUpstream: true,
       aheadCount: 0,
       behindCount: 0,
+      behindOfDefaultCount: 1,
       pr: {
         number: 42,
         title: "Status button",
@@ -108,6 +111,19 @@ describe("VcsStatusResult", () => {
 
     expect(parsed.pr?.mergeStatus).toBe("mergeable");
     expect(parsed.pr?.checks?.pending).toBe(1);
+    expect(parsed.behindOfDefaultCount).toBe(1);
+  });
+});
+
+describe("VcsSyncBaseResult", () => {
+  it("decodes base sync results", () => {
+    const parsed = decodeVcsSyncBaseResult({
+      status: "rebased",
+      refName: "feature/worktree",
+      baseRef: "origin/main",
+    });
+
+    expect(parsed.baseRef).toBe("origin/main");
   });
 });
 

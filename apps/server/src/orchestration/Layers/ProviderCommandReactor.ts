@@ -4,6 +4,7 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationThread,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
@@ -112,6 +113,13 @@ function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolea
   return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
     ? trimmedCurrentTitle === trimmedTitleSeed
     : false;
+}
+
+function isThreadBusyForQueuedTurn(thread: OrchestrationThread): boolean {
+  if (thread.session?.status === "running") {
+    return true;
+  }
+  return thread.latestTurn?.state === "running";
 }
 
 function findProviderAdapterRequestError(
@@ -303,6 +311,16 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const waitForQueuedTurnSlot = Effect.fn("waitForQueuedTurnSlot")(function* (threadId: ThreadId) {
+    while (true) {
+      const thread = yield* resolveThread(threadId);
+      if (!thread || !isThreadBusyForQueuedTurn(thread)) {
+        return;
+      }
+      yield* Effect.sleep("250 millis");
+    }
   });
 
   const ensureSessionForThread = Effect.fn("ensureSessionForThread")(function* (
@@ -531,6 +549,7 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
+    readonly deliveryMode?: "queue" | "steer";
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -583,6 +602,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.deliveryMode !== undefined ? { deliveryMode: input.deliveryMode } : {}),
     };
   });
 
@@ -712,6 +732,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (event.payload.deliveryMode === "queue") {
+      yield* waitForQueuedTurnSlot(event.payload.threadId);
+    }
+
     const isFirstUserMessageTurn =
       thread.messages.filter((entry) => entry.role === "user").length === 1;
     if (isFirstUserMessageTurn) {
@@ -787,6 +811,9 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      ...(event.payload.deliveryMode !== undefined
+        ? { deliveryMode: event.payload.deliveryMode }
+        : {}),
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),
@@ -970,6 +997,22 @@ const make = Effect.gen(function* () {
         return;
       }
       case "thread.turn-start-requested":
+        if (event.payload.deliveryMode === "queue") {
+          yield* processTurnStartRequested(event).pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) {
+                return Effect.failCause(cause);
+              }
+              return Effect.logWarning("queued provider turn start processing failed", {
+                eventType: event.type,
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              });
+            }),
+            Effect.forkScoped,
+          );
+          return;
+        }
         yield* processTurnStartRequested(event);
         return;
       case "thread.turn-interrupt-requested":

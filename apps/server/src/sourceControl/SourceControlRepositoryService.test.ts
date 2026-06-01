@@ -302,6 +302,7 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
               aheadCount: 0,
               behindCount: 0,
               aheadOfDefaultCount: 0,
+              behindOfDefaultCount: 0,
             }),
           pushCurrentBranch: () =>
             Effect.sync(() => {

@@ -2869,6 +2869,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 refName: "main",
                 upstreamRef: "origin/main",
               }),
+            syncCurrentBranchWithBase: () =>
+              Effect.succeed({
+                status: "rebased",
+                refName: "feature/demo",
+                baseRef: "origin/main",
+              }),
             listRefs: () =>
               Effect.succeed({
                 refs: [
@@ -2945,6 +2951,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(wsUrl, (client) => client[WS_METHODS.vcsPull]({ cwd: "/tmp/repo" })),
       );
       assert.equal(pull.status, "pulled");
+
+      const syncBase = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.vcsSyncBase]({ cwd: "/tmp/repo" })),
+      );
+      assert.equal(syncBase.status, "rebased");
 
       const refreshedStatus = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>

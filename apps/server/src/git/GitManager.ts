@@ -737,6 +737,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     aheadCount: 0,
     behindCount: 0,
     aheadOfDefaultCount: 0,
+    behindOfDefaultCount: 0,
   } satisfies GitStatusDetails;
   const readLocalStatus = Effect.fn("readLocalStatus")(function* (cwd: string) {
     const details = yield* gitCore
@@ -796,6 +797,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       aheadCount: details.aheadCount,
       behindCount: details.behindCount,
       aheadOfDefaultCount: details.aheadOfDefaultCount,
+      behindOfDefaultCount: details.behindOfDefaultCount,
       pr,
     } satisfies VcsStatusRemoteResult;
   });
@@ -1087,6 +1089,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     if (!providerHandle) {
       return null;
     }
+
     const parsedByNumber = new Map<number, PullRequestInfo>();
 
     for (const headSelector of headContext.headSelectors) {

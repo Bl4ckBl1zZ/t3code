@@ -99,6 +99,7 @@ export interface WsRpcClient {
   };
   readonly vcs: {
     readonly pull: RpcUnaryMethod<typeof WS_METHODS.vcsPull>;
+    readonly syncBase: RpcUnaryMethod<typeof WS_METHODS.vcsSyncBase>;
     readonly refreshStatus: RpcUnaryMethod<typeof WS_METHODS.vcsRefreshStatus>;
     readonly onStatus: (
       input: RpcInput<typeof WS_METHODS.subscribeVcsStatus>,
@@ -243,6 +244,7 @@ export function createWsRpcClient(
     },
     vcs: {
       pull: (input) => transport.request((client) => client[WS_METHODS.vcsPull](input)),
+      syncBase: (input) => transport.request((client) => client[WS_METHODS.vcsSyncBase](input)),
       refreshStatus: (input) =>
         transport.request((client) => client[WS_METHODS.vcsRefreshStatus](input)),
       onStatus: (input, listener, options) => {

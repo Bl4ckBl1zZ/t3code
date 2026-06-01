@@ -207,6 +207,7 @@ const EMPTY_GIT_STATUS_REMOTE: VcsStatusRemoteResult = {
   aheadCount: 0,
   behindCount: 0,
   aheadOfDefaultCount: 0,
+  behindOfDefaultCount: 0,
   pr: null,
 };
 
@@ -228,6 +229,9 @@ function toRemoteStatusPart(status: VcsStatusResult): VcsStatusRemoteResult {
     ...(status.aheadOfDefaultCount === undefined
       ? {}
       : { aheadOfDefaultCount: status.aheadOfDefaultCount }),
+    ...(status.behindOfDefaultCount === undefined
+      ? {}
+      : { behindOfDefaultCount: status.behindOfDefaultCount }),
     pr: status.pr,
   };
 }

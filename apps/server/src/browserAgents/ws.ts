@@ -146,6 +146,7 @@ export const browserAgentRouteLayer = Layer.unwrap(
               },
               runtimeMode: DEFAULT_RUNTIME_MODE,
               interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              deliveryMode: "queue",
               createdAt,
             });
 

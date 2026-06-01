@@ -235,6 +235,46 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(status.aheadOfDefaultCount, 1);
       }),
     );
+
+    it.effect("reports behind-of-default count from the refreshed remote base", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        const cloneParent = yield* makeTmpDir("git-remote-clone-parent-");
+        const clonePath = `${cloneParent}/clone`;
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "-u", "origin", "main"]);
+        yield* git(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+        yield* (yield* GitVcsDriver.GitVcsDriver).createRef({
+          cwd,
+          refName: "feature/behind-base",
+        });
+        yield* (yield* GitVcsDriver.GitVcsDriver).switchRef({
+          cwd,
+          refName: "feature/behind-base",
+        });
+        yield* writeTextFile(cwd, "feature.txt", "feature\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "Add feature"]);
+
+        yield* git(cloneParent, ["clone", remote, clonePath]);
+        yield* git(clonePath, ["config", "user.email", "test@test.com"]);
+        yield* git(clonePath, ["config", "user.name", "Test"]);
+        yield* writeTextFile(clonePath, "main.txt", "main\n");
+        yield* git(clonePath, ["add", "."]);
+        yield* git(clonePath, ["commit", "-m", "Update main"]);
+        yield* git(clonePath, ["push", "origin", "main"]);
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+
+        assert.equal(status.behindCount, 0);
+        assert.equal(status.aheadOfDefaultCount, 1);
+        assert.equal(status.behindOfDefaultCount, 1);
+      }),
+    );
   });
 
   describe("refName operations", () => {
@@ -415,6 +455,46 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("remote operations", () => {
+    it.effect("rebases the current worktree branch onto the refreshed base branch", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "-u", "origin", "main"]);
+        yield* git(remote, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "sync-base");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: "main",
+          newRefName: "feature/sync-base",
+        });
+        yield* writeTextFile(worktreePath, "feature.txt", "feature\n");
+        yield* git(worktreePath, ["add", "."]);
+        yield* git(worktreePath, ["commit", "-m", "Add feature"]);
+        yield* writeTextFile(cwd, "main.txt", "main\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "Update main"]);
+        yield* git(cwd, ["push", "origin", "main"]);
+
+        const result = yield* driver.syncCurrentBranchWithBase(worktreePath);
+
+        assert.deepStrictEqual(result, {
+          status: "rebased",
+          refName: "feature/sync-base",
+          baseRef: "origin/main",
+        });
+        yield* git(worktreePath, ["merge-base", "--is-ancestor", "origin/main", "HEAD"]);
+        assert.equal(yield* git(worktreePath, ["log", "-1", "--pretty=%s"]), "Add feature");
+      }),
+    );
+
     it.effect("pushes with upstream setup and skips when already up to date", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

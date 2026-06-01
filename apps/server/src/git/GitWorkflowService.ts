@@ -18,6 +18,7 @@ import {
   type GitPreparePullRequestThreadResult,
   type GitPullRequestRefInput,
   type VcsPullResult,
+  type VcsSyncBaseResult,
   type VcsRemoveWorktreeInput,
   type GitResolvePullRequestResult,
   type GitRunStackedActionInput,
@@ -46,6 +47,9 @@ export interface GitWorkflowServiceShape {
   readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
   readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
   readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
+  readonly syncCurrentBranchWithBase: (
+    cwd: string,
+  ) => Effect.Effect<VcsSyncBaseResult, GitCommandError>;
   readonly runStackedAction: (
     input: GitRunStackedActionInput,
     options?: GitRunStackedActionOptions,
@@ -115,6 +119,7 @@ function nonRepositoryStatus(): VcsStatusResult {
     aheadCount: 0,
     behindCount: 0,
     aheadOfDefaultCount: 0,
+    behindOfDefaultCount: 0,
     pr: null,
   };
 }
@@ -271,6 +276,10 @@ export const make = Effect.fn("makeGitWorkflowService")(function* () {
     pullCurrentBranch: (cwd) =>
       ensureGitCommand("GitWorkflowService.pullCurrentBranch", cwd).pipe(
         Effect.andThen(git.pullCurrentBranch(cwd)),
+      ),
+    syncCurrentBranchWithBase: (cwd) =>
+      ensureGitCommand("GitWorkflowService.syncCurrentBranchWithBase", cwd).pipe(
+        Effect.andThen(git.syncCurrentBranchWithBase(cwd)),
       ),
     runStackedAction: (input, options) =>
       ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(

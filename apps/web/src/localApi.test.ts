@@ -72,6 +72,7 @@ const rpcClientMock = {
   },
   vcs: {
     pull: vi.fn(),
+    syncBase: vi.fn(),
     refreshStatus: vi.fn(),
     onStatus: vi.fn((input: { cwd: string }, listener: (event: VcsStatusResult) => void) =>
       registerListener(gitStatusListeners, listener),
@@ -632,7 +633,6 @@ describe("wsApi", () => {
   it("reads and writes persistence through the desktop bridge when available", async () => {
     const clientSettings = {
       autoOpenPlanSidebar: false,
-      browserAgentPreviewUrl: "http://localhost:5173/",
       confirmThreadArchive: true,
       confirmThreadDelete: false,
       dismissedProviderUpdateNotificationKeys: [],
@@ -645,6 +645,7 @@ describe("wsApi", () => {
       sidebarProjectGroupingOverrides: {
         "environment-local:/tmp/project": "separate" as const,
       },
+      sidebarProjectFolders: [],
       sidebarProjectSortOrder: "manual" as const,
       sidebarThreadSortOrder: "created_at" as const,
       sidebarThreadPreviewCount: 6,
@@ -697,7 +698,6 @@ describe("wsApi", () => {
     const api = createLocalApi(rpcClientMock as never);
     const clientSettings = {
       autoOpenPlanSidebar: false,
-      browserAgentPreviewUrl: "http://localhost:5173/",
       confirmThreadArchive: true,
       confirmThreadDelete: false,
       dismissedProviderUpdateNotificationKeys: [],
@@ -710,6 +710,7 @@ describe("wsApi", () => {
       sidebarProjectGroupingOverrides: {
         "environment-local:/tmp/project": "separate" as const,
       },
+      sidebarProjectFolders: [],
       sidebarProjectSortOrder: "manual" as const,
       sidebarThreadSortOrder: "created_at" as const,
       sidebarThreadPreviewCount: 6,

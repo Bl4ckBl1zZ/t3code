@@ -66,6 +66,7 @@ describe("GitWorkflowService", () => {
         aheadCount: 0,
         behindCount: 0,
         aheadOfDefaultCount: 0,
+        behindOfDefaultCount: 0,
         pr: null,
       });
     }).pipe(

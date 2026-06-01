@@ -61,6 +61,7 @@ import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
+import { normalizeBrowserAgentPreviewUrl } from "../browserAgents";
 import {
   deriveCompletionDividerBeforeEntryId,
   derivePendingApprovals,
@@ -130,7 +131,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { writeProjectConfigScripts } from "~/projectConfigFile";
+import { writeProjectConfigUpdate } from "~/projectConfigFile";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
@@ -2673,7 +2674,6 @@ export default function ChatView(props: ChatViewProps) {
     async (input: {
       projectId: ProjectId;
       projectCwd: string;
-      previousScripts: ProjectScript[];
       nextScripts: ProjectScript[];
       browserPreviewUrl: string | null | undefined;
       keybinding?: string | null;
@@ -2682,11 +2682,13 @@ export default function ChatView(props: ChatViewProps) {
       const api = readEnvironmentApi(environmentId);
       if (!api) return;
 
-      await writeProjectConfigScripts({
+      await writeProjectConfigUpdate({
         api,
         projectCwd: input.projectCwd,
-        scripts: input.nextScripts,
-        browserPreviewUrl: input.browserPreviewUrl,
+        update: {
+          scripts: input.nextScripts,
+          browserPreviewUrl: input.browserPreviewUrl,
+        },
       });
 
       await api.orchestration.dispatchCommand({
@@ -2738,7 +2740,6 @@ export default function ChatView(props: ChatViewProps) {
       await persistProjectScripts({
         projectId: activeProject.id,
         projectCwd: activeProject.cwd,
-        previousScripts: activeProject.scripts,
         nextScripts,
         browserPreviewUrl: activeProject.browserPreviewUrl,
         keybinding: input.keybinding,
@@ -2774,7 +2775,6 @@ export default function ChatView(props: ChatViewProps) {
       await persistProjectScripts({
         projectId: activeProject.id,
         projectCwd: activeProject.cwd,
-        previousScripts: activeProject.scripts,
         nextScripts,
         browserPreviewUrl: activeProject.browserPreviewUrl,
         keybinding: input.keybinding,
@@ -2794,7 +2794,6 @@ export default function ChatView(props: ChatViewProps) {
         await persistProjectScripts({
           projectId: activeProject.id,
           projectCwd: activeProject.cwd,
-          previousScripts: activeProject.scripts,
           nextScripts,
           browserPreviewUrl: activeProject.browserPreviewUrl,
           keybinding: null,
@@ -2815,6 +2814,34 @@ export default function ChatView(props: ChatViewProps) {
       }
     },
     [activeProject, persistProjectScripts],
+  );
+  const updateProjectPreviewUrl = useCallback(
+    async (rawPreviewUrl: string) => {
+      if (!activeProject) return;
+      const api = readEnvironmentApi(environmentId);
+      if (!api) return;
+
+      const normalizedPreviewUrl = normalizeBrowserAgentPreviewUrl(rawPreviewUrl);
+      const nextBrowserPreviewUrl =
+        normalizedPreviewUrl.trim().length > 0 ? normalizedPreviewUrl : null;
+
+      await writeProjectConfigUpdate({
+        api,
+        projectCwd: activeProject.cwd,
+        update: {
+          scripts: activeProject.scripts,
+          browserPreviewUrl: nextBrowserPreviewUrl,
+        },
+      });
+
+      await api.orchestration.dispatchCommand({
+        type: "project.meta.update",
+        commandId: newCommandId(),
+        projectId: activeProject.id,
+        browserPreviewUrl: nextBrowserPreviewUrl,
+      });
+    },
+    [activeProject, environmentId],
   );
 
   const handleRuntimeModeChange = useCallback(
@@ -4598,6 +4625,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
+          onUpdateProjectPreviewUrl={updateProjectPreviewUrl}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
           onSubmitGitPrompt={onSubmitGitPrompt}

@@ -84,6 +84,7 @@ describe("applyGitStatusStreamEvent", () => {
       hasUpstream: true,
       aheadCount: 2,
       behindCount: 1,
+      behindOfDefaultCount: 1,
       pr: null,
     };
 
@@ -97,6 +98,7 @@ describe("applyGitStatusStreamEvent", () => {
       hasUpstream: true,
       aheadCount: 2,
       behindCount: 1,
+      behindOfDefaultCount: 1,
       pr: null,
     });
   });
@@ -128,6 +130,7 @@ describe("applyGitStatusStreamEvent", () => {
       hasUpstream: true,
       aheadCount: 2,
       behindCount: 1,
+      behindOfDefaultCount: 1,
       pr: null,
     };
 
@@ -136,6 +139,7 @@ describe("applyGitStatusStreamEvent", () => {
       hasUpstream: true,
       aheadCount: 2,
       behindCount: 1,
+      behindOfDefaultCount: 1,
       pr: null,
     });
   });

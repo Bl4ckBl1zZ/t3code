@@ -117,6 +117,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
     },
     vcs: {
       pull: vi.fn(),
+      syncBase: vi.fn(),
       refreshStatus: vi.fn(),
       onStatus: vi.fn(() => () => undefined),
       listRefs: vi.fn(),

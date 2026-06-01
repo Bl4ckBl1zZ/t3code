@@ -24,6 +24,7 @@ import {
   type VcsListRefsInput,
   type VcsListRefsResult,
   type VcsPullResult,
+  type VcsSyncBaseResult,
   type VcsRemoveWorktreeInput,
   type VcsStatusInput,
   type VcsStatusResult,
@@ -66,6 +67,7 @@ export interface GitStatusDetails {
   aheadCount: number;
   behindCount: number;
   aheadOfDefaultCount: number;
+  behindOfDefaultCount: number;
 }
 
 export interface GitPreparedCommitContext {
@@ -190,6 +192,9 @@ export interface GitVcsDriverShape {
   ) => Effect.Effect<string | null, GitCommandError>;
   readonly listRefs: (input: VcsListRefsInput) => Effect.Effect<VcsListRefsResult, GitCommandError>;
   readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
+  readonly syncCurrentBranchWithBase: (
+    cwd: string,
+  ) => Effect.Effect<VcsSyncBaseResult, GitCommandError>;
   readonly createWorktree: (
     input: VcsCreateWorktreeInput,
   ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;

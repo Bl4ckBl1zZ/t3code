@@ -28,7 +28,6 @@ import {
   usePrimaryEnvironmentId,
 } from "../../environments/primary";
 import { shouldShowBrowserAgentControls } from "../../browserAgents";
-import { useSettings } from "../../hooks/useSettings";
 import { topBarMainProjectScript } from "../../projectScripts";
 
 interface ChatHeaderProps {
@@ -57,6 +56,7 @@ interface ChatHeaderProps {
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
+  onUpdateProjectPreviewUrl: (previewUrl: string) => Promise<void>;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
   onSubmitGitPrompt: (prompt: string) => boolean | Promise<boolean>;
@@ -92,12 +92,9 @@ export function shouldShowPreviewButton(input: {
   readonly browserAgentSidebarMode: boolean;
   readonly mainActionRunning: boolean;
   readonly projectPreviewUrl?: string | null | undefined;
-  readonly customPreviewUrl: string;
 }): boolean {
   return (
-    (input.mainActionRunning ||
-      (input.projectPreviewUrl?.trim().length ?? 0) > 0 ||
-      input.customPreviewUrl.trim().length > 0) &&
+    (input.mainActionRunning || (input.projectPreviewUrl?.trim().length ?? 0) > 0) &&
     !input.browserAgentSidebarMode &&
     shouldShowBrowserAgentControls(input)
   );
@@ -135,12 +132,12 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  onUpdateProjectPreviewUrl,
   onToggleTerminal,
   onToggleDiff,
   onSubmitGitPrompt,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const customPreviewUrl = useSettings((settings) => settings.browserAgentPreviewUrl);
   const [currentSessionRole, setCurrentSessionRole] = useState<AuthSessionRole | null>(() =>
     typeof window !== "undefined" && window.desktopBridge ? "owner" : null,
   );
@@ -188,7 +185,6 @@ export const ChatHeader = memo(function ChatHeader({
     browserAgentSidebarMode,
     mainActionRunning: mainProjectScriptRunning,
     projectPreviewUrl,
-    customPreviewUrl,
   });
   const showBrowserAnnotationButton = shouldShowBrowserAnnotationButton({
     activeProjectName,
@@ -233,108 +229,114 @@ export const ChatHeader = memo(function ChatHeader({
         )}
       </div>
       {showHeaderActions && (
-        <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:shrink-0 sm:justify-end @3xl/header-actions:gap-3">
-          {showProjectScriptsControl && activeProjectScripts !== undefined && (
-            <ProjectScriptsControl
-              scripts={activeProjectScripts}
-              keybindings={keybindings}
-              preferredScriptId={preferredScriptId}
-              runningScriptIds={runningProjectScriptIds}
-              onRunScript={onRunProjectScript}
-              onAddScript={onAddProjectScript}
-              onUpdateScript={onUpdateProjectScript}
-              onDeleteScript={onDeleteProjectScript}
-            />
-          )}
-          {showOpenInPicker && (
-            <OpenInPicker
-              keybindings={keybindings}
-              availableEditors={availableEditors}
-              openInCwd={openInCwd}
-            />
-          )}
-          {showPreviewButton && (
-            <PreviewButton
-              activeProjectName={activeProjectName}
-              activeProjectScripts={activeProjectScripts}
-              projectPreviewUrl={projectPreviewUrl}
-              activeThreadEnvironmentId={activeThreadEnvironmentId}
-              activeThreadId={activeThreadId}
-              detectedDevServerUrl={detectedDevServerUrl}
-            />
-          )}
-          {showGitActionsControl && (
-            <GitActionsControl
-              gitCwd={gitCwd}
-              activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
-              onSubmitPrompt={onSubmitGitPrompt}
-              {...(draftId ? { draftId } : {})}
-              {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}
-            />
-          )}
+        <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:flex-1 sm:flex-nowrap @3xl/header-actions:gap-3">
           {showBrowserAnnotationButton && (
             <BrowserAnnotationButton
               activeThreadEnvironmentId={activeThreadEnvironmentId}
               activeThreadId={activeThreadId}
             />
           )}
-          {showTerminalToggle && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Toggle
-                    className={browserAgentSidebarMode ? "shrink-0 px-2" : "shrink-0"}
-                    pressed={terminalOpen}
-                    onPressedChange={onToggleTerminal}
-                    aria-label={
-                      browserAgentSidebarMode ? "Toggle CLI terminal" : "Toggle terminal drawer"
-                    }
-                    variant="outline"
-                    size="xs"
-                    disabled={!terminalAvailable}
-                  >
-                    <TerminalSquareIcon className="size-3" />
-                    {browserAgentSidebarMode ? (
-                      <span className="text-[10px] font-semibold uppercase leading-none">CLI</span>
-                    ) : null}
-                  </Toggle>
-                }
+          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 sm:flex-nowrap @3xl/header-actions:gap-3">
+            {showProjectScriptsControl && activeProjectScripts !== undefined && (
+              <ProjectScriptsControl
+                scripts={activeProjectScripts}
+                keybindings={keybindings}
+                preferredScriptId={preferredScriptId}
+                runningScriptIds={runningProjectScriptIds}
+                previewUrl={projectPreviewUrl}
+                onRunScript={onRunProjectScript}
+                onAddScript={onAddProjectScript}
+                onUpdateScript={onUpdateProjectScript}
+                onDeleteScript={onDeleteProjectScript}
+                onUpdatePreviewUrl={onUpdateProjectPreviewUrl}
               />
-              <TooltipPopup side="bottom">
-                {!terminalAvailable
-                  ? "Terminal is unavailable until this thread has an active project."
-                  : terminalToggleShortcutLabel
-                    ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
-                    : "Toggle terminal drawer"}
-              </TooltipPopup>
-            </Tooltip>
-          )}
-          {showDiffToggle && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Toggle
-                    className="shrink-0"
-                    pressed={diffOpen}
-                    onPressedChange={onToggleDiff}
-                    aria-label="Toggle diff panel"
-                    variant="outline"
-                    size="xs"
-                    disabled={!isGitRepo && !diffOpen}
-                  >
-                    <DiffIcon className="size-3" />
-                  </Toggle>
-                }
+            )}
+            {showOpenInPicker && (
+              <OpenInPicker
+                keybindings={keybindings}
+                availableEditors={availableEditors}
+                openInCwd={openInCwd}
               />
-              <TooltipPopup side="bottom">
-                {!isGitRepo && !diffOpen
-                  ? "Diff panel is unavailable because this project is not a git repository."
-                  : diffToggleShortcutLabel
-                    ? `Toggle diff panel (${diffToggleShortcutLabel})`
-                    : "Toggle diff panel"}
-              </TooltipPopup>
-            </Tooltip>
-          )}
+            )}
+            {showPreviewButton && (
+              <PreviewButton
+                activeProjectName={activeProjectName}
+                activeProjectScripts={activeProjectScripts}
+                projectPreviewUrl={projectPreviewUrl}
+                activeThreadEnvironmentId={activeThreadEnvironmentId}
+                activeThreadId={activeThreadId}
+                detectedDevServerUrl={detectedDevServerUrl}
+              />
+            )}
+            {showTerminalToggle && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Toggle
+                      className={browserAgentSidebarMode ? "shrink-0 px-2" : "shrink-0"}
+                      pressed={terminalOpen}
+                      onPressedChange={onToggleTerminal}
+                      aria-label={
+                        browserAgentSidebarMode ? "Toggle CLI terminal" : "Toggle terminal drawer"
+                      }
+                      variant="outline"
+                      size="xs"
+                      disabled={!terminalAvailable}
+                    >
+                      <TerminalSquareIcon className="size-3" />
+                      {browserAgentSidebarMode ? (
+                        <span className="text-[10px] font-semibold uppercase leading-none">
+                          CLI
+                        </span>
+                      ) : null}
+                    </Toggle>
+                  }
+                />
+                <TooltipPopup side="bottom">
+                  {!terminalAvailable
+                    ? "Terminal is unavailable until this thread has an active project."
+                    : terminalToggleShortcutLabel
+                      ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
+                      : "Toggle terminal drawer"}
+                </TooltipPopup>
+              </Tooltip>
+            )}
+            {showDiffToggle && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Toggle
+                      className="shrink-0"
+                      pressed={diffOpen}
+                      onPressedChange={onToggleDiff}
+                      aria-label="Toggle diff panel"
+                      variant="outline"
+                      size="xs"
+                      disabled={!isGitRepo && !diffOpen}
+                    >
+                      <DiffIcon className="size-3" />
+                    </Toggle>
+                  }
+                />
+                <TooltipPopup side="bottom">
+                  {!isGitRepo && !diffOpen
+                    ? "Diff panel is unavailable because this project is not a git repository."
+                    : diffToggleShortcutLabel
+                      ? `Toggle diff panel (${diffToggleShortcutLabel})`
+                      : "Toggle diff panel"}
+                </TooltipPopup>
+              </Tooltip>
+            )}
+            {showGitActionsControl && (
+              <GitActionsControl
+                gitCwd={gitCwd}
+                activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
+                onSubmitPrompt={onSubmitGitPrompt}
+                {...(draftId ? { draftId } : {})}
+                {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

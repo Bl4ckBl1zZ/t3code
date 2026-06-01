@@ -416,6 +416,45 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
+  it.effect("starts a queued Codex turn instead of steering the active turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("sess-queue");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      runtime.sendTurnImpl.mockClear();
+      runtime.steerTurnImpl.mockClear();
+      runtime.getSessionImpl.mockResolvedValue({
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        runtimeMode: "full-access",
+        threadId,
+        activeTurnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      } satisfies ProviderSession);
+
+      yield* Effect.ignore(
+        adapter.sendTurn({
+          threadId,
+          input: "start this after the current turn",
+          deliveryMode: "queue",
+          attachments: [],
+        }),
+      );
+
+      assert.equal(runtime.steerTurnImpl.mock.calls.length, 0);
+      assert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
+        input: "start this after the current turn",
+      });
+    }),
+  );
+
   it.effect("maps codex model options for the adapter's bound custom instance id", () => {
     const customInstanceId = ProviderInstanceId.make("codex_personal");
     const customRuntimeFactory = makeRuntimeFactory();

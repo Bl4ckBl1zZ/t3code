@@ -7,9 +7,15 @@ import {
 } from "@t3tools/contracts";
 import { setupProjectScript } from "@t3tools/shared/projectScripts";
 
+import { normalizeBrowserAgentPreviewUrl } from "./browserAgents";
 import { nextProjectScriptId } from "./projectScripts";
 
 type ProjectConfigJson = Record<string, unknown>;
+
+export interface ProjectConfigFileUpdate {
+  readonly scripts?: readonly ProjectScript[] | undefined;
+  readonly browserPreviewUrl?: string | null | undefined;
+}
 
 const WORKTREE_SETUP_SCRIPT_NAME = "Worktree setup";
 const WORKTREE_SETUP_SCRIPT_ICON: ProjectScript["icon"] = "configure";
@@ -28,18 +34,73 @@ function pruneEmptyObjectProperty(config: ProjectConfigJson, key: string): void 
   }
 }
 
-export function parseProjectConfigContents(contents: string | null): ProjectConfigJson {
+export function parseProjectConfigContents(contents: string | null | undefined): ProjectConfigJson {
   const trimmed = contents?.trim() ?? "";
   if (trimmed.length === 0) {
     return {};
   }
 
-  const parsed = JSON.parse(trimmed) as unknown;
-  const config = asRecord(parsed);
-  if (!config) {
-    throw new Error("Project config must be a JSON object.");
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const config = asRecord(parsed);
+    if (!config) {
+      throw new Error("Project config must be a JSON object.");
+    }
+    return { ...config };
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Invalid ${PROJECT_CONFIG_RELATIVE_PATH}: ${error.message}`
+        : `Invalid ${PROJECT_CONFIG_RELATIVE_PATH}.`,
+      { cause: error },
+    );
   }
-  return { ...config };
+}
+
+function normalizedPreviewUrl(rawUrl: string | null): string | null {
+  if (rawUrl === null) {
+    return null;
+  }
+  const normalized = normalizeBrowserAgentPreviewUrl(rawUrl);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function applyBrowserPreviewUrl(config: ProjectConfigJson, rawUrl: string | null): void {
+  const previewUrl = normalizedPreviewUrl(rawUrl);
+  const browser = { ...asRecord(config.browser) };
+
+  if (previewUrl === null) {
+    delete browser.previewUrl;
+  } else {
+    browser.previewUrl = previewUrl;
+  }
+
+  config.browser = browser;
+  pruneEmptyObjectProperty(config, "browser");
+}
+
+function applyProjectConfigUpdate(
+  config: ProjectConfigJson,
+  update: ProjectConfigFileUpdate,
+): void {
+  if (update.browserPreviewUrl !== undefined) {
+    applyBrowserPreviewUrl(config, update.browserPreviewUrl);
+  }
+
+  if (update.scripts !== undefined) {
+    config.scripts = [...update.scripts];
+  }
+}
+
+export function updateProjectConfigJson(
+  contents: string | null | undefined,
+  update: ProjectConfigFileUpdate,
+): string {
+  const config = parseProjectConfigContents(contents);
+  config.$schema = typeof config.$schema === "string" ? config.$schema : PROJECT_CONFIG_SCHEMA_URL;
+  applyProjectConfigUpdate(config, update);
+
+  return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 export async function readProjectConfigFile(
@@ -71,6 +132,23 @@ export async function updateProjectConfigFile(input: {
   return config;
 }
 
+export async function writeProjectConfigUpdate(input: {
+  readonly api: EnvironmentApi;
+  readonly projectCwd: string;
+  readonly update: ProjectConfigFileUpdate;
+}): Promise<void> {
+  const existing = await input.api.projects.readFile({
+    cwd: input.projectCwd,
+    relativePath: PROJECT_CONFIG_RELATIVE_PATH,
+  });
+
+  await input.api.projects.writeFile({
+    cwd: input.projectCwd,
+    relativePath: PROJECT_CONFIG_RELATIVE_PATH,
+    contents: updateProjectConfigJson(existing.contents, input.update),
+  });
+}
+
 export function getProjectConfigNewThreadEnvMode(config: ProjectConfigJson): ThreadEnvMode | null {
   const thread = asRecord(config.thread);
   const value = thread?.newThreadEnvMode;
@@ -98,15 +176,7 @@ export function getProjectConfigBrowserPreviewUrl(config: ProjectConfigJson): st
 }
 
 export function setProjectConfigBrowserPreviewUrl(config: ProjectConfigJson, previewUrl: string) {
-  const trimmed = previewUrl.trim();
-  const browser = { ...asRecord(config.browser) };
-  if (trimmed.length === 0) {
-    delete browser.previewUrl;
-  } else {
-    browser.previewUrl = trimmed;
-  }
-  config.browser = browser;
-  pruneEmptyObjectProperty(config, "browser");
+  applyBrowserPreviewUrl(config, previewUrl);
 }
 
 export function getWorktreeSetupCommand(scripts: readonly ProjectScript[]): string {
@@ -160,7 +230,7 @@ export function buildScriptsWithWorktreeSetupCommand(
 export async function writeProjectConfigScripts(input: {
   readonly api: EnvironmentApi;
   readonly projectCwd: string;
-  readonly scripts: ProjectScript[];
+  readonly scripts: readonly ProjectScript[];
   readonly browserPreviewUrl: string | null | undefined;
 }): Promise<void> {
   await updateProjectConfigFile({
@@ -175,7 +245,7 @@ export async function writeProjectConfigScripts(input: {
       ) {
         setProjectConfigBrowserPreviewUrl(config, input.browserPreviewUrl);
       }
-      config.scripts = input.scripts;
+      config.scripts = [...input.scripts];
     },
   });
 }

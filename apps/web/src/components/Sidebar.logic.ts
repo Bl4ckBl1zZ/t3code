@@ -23,6 +23,27 @@ type SidebarProject = {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
+export type SidebarProjectFolderSettings = {
+  id: string;
+  name: string;
+  projectKeys: readonly string[];
+};
+export type SidebarFolderableProject = {
+  projectKey: string;
+  memberProjects: readonly { physicalProjectKey: string }[];
+};
+export type SidebarProjectFolderEntry<TProject extends SidebarFolderableProject> =
+  | {
+      kind: "project";
+      project: TProject;
+    }
+  | {
+      kind: "folder";
+      folder: SidebarProjectFolderSettings;
+      folderKey: string;
+      iconProject: TProject;
+      projects: readonly TProject[];
+    };
 type SidebarThreadIdentity = Pick<SidebarThreadSummary, "id" | "tabGroupId">;
 
 export type ThreadTraversalDirection = "previous" | "next";
@@ -256,6 +277,128 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   });
   const remaining = items.filter((item) => !preferredIdSet.has(getId(item)));
   return [...ordered, ...remaining];
+}
+
+export function sidebarProjectFolderKey(folderId: string): string {
+  return `folder:${folderId}`;
+}
+
+export function getSidebarProjectPhysicalKeys(project: SidebarFolderableProject): string[] {
+  return project.memberProjects.map((member) => member.physicalProjectKey);
+}
+
+export function findSidebarProjectFolderForProject(
+  folders: readonly SidebarProjectFolderSettings[],
+  project: SidebarFolderableProject,
+): SidebarProjectFolderSettings | null {
+  const projectKeys = new Set(getSidebarProjectPhysicalKeys(project));
+  return folders.find((folder) => folder.projectKeys.some((key) => projectKeys.has(key))) ?? null;
+}
+
+export function buildSidebarProjectFolderEntries<TProject extends SidebarFolderableProject>(
+  projects: readonly TProject[],
+  folders: readonly SidebarProjectFolderSettings[],
+): SidebarProjectFolderEntry<TProject>[] {
+  if (folders.length === 0) {
+    return projects.map((project) => ({ kind: "project", project }));
+  }
+
+  const projectByPhysicalKey = new Map<string, TProject>();
+  for (const project of projects) {
+    for (const physicalProjectKey of getSidebarProjectPhysicalKeys(project)) {
+      projectByPhysicalKey.set(physicalProjectKey, project);
+    }
+  }
+
+  const assignedProjectKeys = new Set<string>();
+  const folderEntryById = new Map<
+    string,
+    Extract<SidebarProjectFolderEntry<TProject>, { kind: "folder" }>
+  >();
+  for (const folder of folders) {
+    const folderProjects: TProject[] = [];
+    const seenProjectKeys = new Set<string>();
+    for (const projectKey of folder.projectKeys) {
+      const project = projectByPhysicalKey.get(projectKey);
+      if (!project || seenProjectKeys.has(project.projectKey)) {
+        continue;
+      }
+      seenProjectKeys.add(project.projectKey);
+      folderProjects.push(project);
+    }
+
+    if (folderProjects.length === 0) {
+      continue;
+    }
+
+    for (const project of folderProjects) {
+      assignedProjectKeys.add(project.projectKey);
+    }
+
+    folderEntryById.set(folder.id, {
+      kind: "folder",
+      folder,
+      folderKey: sidebarProjectFolderKey(folder.id),
+      iconProject: folderProjects[0]!,
+      projects: folderProjects,
+    });
+  }
+
+  const emittedFolderIds = new Set<string>();
+  const entries: SidebarProjectFolderEntry<TProject>[] = [];
+  for (const project of projects) {
+    const folder = findSidebarProjectFolderForProject(folders, project);
+    const folderEntry = folder ? folderEntryById.get(folder.id) : undefined;
+    if (folderEntry) {
+      if (!emittedFolderIds.has(folderEntry.folder.id)) {
+        emittedFolderIds.add(folderEntry.folder.id);
+        entries.push(folderEntry);
+      }
+      continue;
+    }
+
+    if (!assignedProjectKeys.has(project.projectKey)) {
+      entries.push({ kind: "project", project });
+    }
+  }
+
+  return entries;
+}
+
+export function moveSidebarProjectToFolder(input: {
+  folders: readonly SidebarProjectFolderSettings[];
+  folderId: string;
+  projectKeys: readonly string[];
+}): SidebarProjectFolderSettings[] {
+  const movingKeys = [...new Set(input.projectKeys.filter((key) => key.length > 0))];
+  if (movingKeys.length === 0) {
+    return [...input.folders];
+  }
+  const movingKeySet = new Set(movingKeys);
+  return input.folders.map((folder) => {
+    const projectKeys = folder.projectKeys.filter((key) => !movingKeySet.has(key));
+    if (folder.id === input.folderId) {
+      projectKeys.push(...movingKeys);
+    }
+    return {
+      ...folder,
+      projectKeys,
+    };
+  });
+}
+
+export function removeSidebarProjectFromFolders(input: {
+  folders: readonly SidebarProjectFolderSettings[];
+  projectKeys: readonly string[];
+}): SidebarProjectFolderSettings[] {
+  const removingKeys = new Set(input.projectKeys);
+  if (removingKeys.size === 0) {
+    return [...input.folders];
+  }
+  return input.folders.map((folder) => ({
+    ...folder,
+    projectKeys: folder.projectKeys.filter((key) => !removingKeys.has(key)),
+  }));
 }
 
 export function getVisibleSidebarThreadIds<TThreadId>(

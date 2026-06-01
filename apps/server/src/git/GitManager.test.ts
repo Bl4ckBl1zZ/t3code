@@ -31,7 +31,10 @@ import { type TextGenerationShape, TextGeneration } from "../textGeneration/Text
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitHubSourceControlProvider from "../sourceControl/GitHubSourceControlProvider.ts";
-import type * as SourceControlProvider from "../sourceControl/SourceControlProvider.ts";
+import type {
+  SourceControlProviderContext,
+  SourceControlProviderShape,
+} from "../sourceControl/SourceControlProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../config.ts";
@@ -674,7 +677,7 @@ function makeManager(input?: {
   textGeneration?: Partial<FakeGitTextGeneration>;
   setupScriptRunner?: ProjectSetupScriptRunnerShape;
   sourceControlRegistry?: SourceControlProviderRegistry.SourceControlProviderRegistryShape;
-  sourceControlContext?: SourceControlProvider.SourceControlProviderContext | null;
+  sourceControlContext?: SourceControlProviderContext | null;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
@@ -950,6 +953,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         aheadCount: 0,
         behindCount: 0,
         aheadOfDefaultCount: 0,
+        behindOfDefaultCount: 0,
         pr: null,
       });
     }),
@@ -980,6 +984,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         aheadCount: 0,
         behindCount: 0,
         aheadOfDefaultCount: 0,
+        behindOfDefaultCount: 0,
         pr: null,
       });
     }),
@@ -991,7 +996,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* initRepo(repoDir);
       yield* runGit(repoDir, ["checkout", "-b", "feature/unknown-provider"]);
       let listChangeRequestCalls = 0;
-      const unknownProvider: SourceControlProvider.SourceControlProviderShape = {
+      const unknownProvider: SourceControlProviderShape = {
         kind: "unknown",
         listChangeRequests: () =>
           Effect.sync(() => {

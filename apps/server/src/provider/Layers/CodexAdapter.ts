@@ -1522,7 +1522,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
     };
     const runtimeSession = yield* session.runtime.getSession;
-    if (runtimeSession.status === "running" && runtimeSession.activeTurnId) {
+    if (
+      input.deliveryMode !== "queue" &&
+      runtimeSession.status === "running" &&
+      runtimeSession.activeTurnId
+    ) {
       return yield* session.runtime
         .steerTurn(runtimeInput)
         .pipe(
