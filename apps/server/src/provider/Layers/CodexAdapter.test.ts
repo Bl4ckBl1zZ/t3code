@@ -83,6 +83,18 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
+  public readonly steerTurnImpl = vi.fn(
+    (
+      _input: Pick<CodexSessionRuntimeSendTurnInput, "input" | "attachments">,
+    ): Promise<ProviderTurnStartResult> =>
+      Promise.resolve({
+        threadId: this.options.threadId,
+        turnId: asTurnId("turn-1"),
+      }),
+  );
+
+  public readonly getSessionImpl = vi.fn((): Promise<ProviderSession> => this.startImpl());
+
   public readonly interruptTurnImpl = vi.fn(
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
@@ -125,10 +137,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.startImpl());
   }
 
-  getSession = Effect.promise(() => this.startImpl());
+  getSession = Effect.promise(() => this.getSessionImpl());
 
   sendTurn(input: CodexSessionRuntimeSendTurnInput) {
     return Effect.promise(() => this.sendTurnImpl(input));
+  }
+
+  steerTurn(input: Pick<CodexSessionRuntimeSendTurnInput, "input" | "attachments">) {
+    return Effect.promise(() => this.steerTurnImpl(input));
   }
 
   interruptTurn(turnId?: TurnId) {
@@ -355,6 +371,47 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
+      });
+    }),
+  );
+
+  it.effect("steers an active Codex turn instead of starting a second turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("sess-steer");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      runtime.sendTurnImpl.mockClear();
+      runtime.steerTurnImpl.mockClear();
+      runtime.getSessionImpl.mockResolvedValue({
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        runtimeMode: "full-access",
+        threadId,
+        activeTurnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      } satisfies ProviderSession);
+
+      yield* Effect.ignore(
+        adapter.sendTurn({
+          threadId,
+          input: "use this extra constraint",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
+            { id: "reasoningEffort", value: "high" },
+          ]),
+          attachments: [],
+        }),
+      );
+
+      assert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+      assert.deepStrictEqual(runtime.steerTurnImpl.mock.calls[0]?.[0], {
+        input: "use this extra constraint",
       });
     }),
   );

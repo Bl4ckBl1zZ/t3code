@@ -1517,9 +1517,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode")
         : undefined;
+    const runtimeInput = {
+      ...(input.input !== undefined ? { input: input.input } : {}),
+      ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+    };
+    const runtimeSession = yield* session.runtime.getSession;
+    if (runtimeSession.status === "running" && runtimeSession.activeTurnId) {
+      return yield* session.runtime
+        .steerTurn(runtimeInput)
+        .pipe(
+          Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/steer", cause)),
+        );
+    }
+
     return yield* session.runtime
       .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...runtimeInput,
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
@@ -1530,7 +1543,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           : {}),
         ...(fastMode === true ? { serviceTier: "fast" } : {}),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-        ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
       .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));
   });

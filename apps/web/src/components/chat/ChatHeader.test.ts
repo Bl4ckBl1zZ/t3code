@@ -17,6 +17,7 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+        currentSessionRole: "owner",
       }),
     ).toBe(true);
   });
@@ -27,6 +28,7 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId: null,
+        currentSessionRole: "owner",
       }),
     ).toBe(false);
   });
@@ -37,6 +39,18 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId,
+        currentSessionRole: "owner",
+      }),
+    ).toBe(false);
+  });
+
+  it("hides the picker for paired client sessions", () => {
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: primaryEnvironmentId,
+        primaryEnvironmentId,
+        currentSessionRole: "client",
       }),
     ).toBe(false);
   });
@@ -47,6 +61,7 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+        currentSessionRole: "owner",
       }),
     ).toBe(false);
   });

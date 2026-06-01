@@ -32,6 +32,21 @@ describe("ClientSettings browser preview", () => {
   });
 });
 
+describe("ClientSettings running message delivery", () => {
+  it("queues messages sent while an agent is working by default", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.runningMessageDeliveryMode).toBe("queue");
+    expect(decodeClientSettings({}).runningMessageDeliveryMode).toBe("queue");
+  });
+
+  it("accepts immediate steering as a client settings patch", () => {
+    const patch = decodeClientSettingsPatch({
+      runningMessageDeliveryMode: "steer",
+    });
+
+    expect(patch.runningMessageDeliveryMode).toBe("steer");
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});

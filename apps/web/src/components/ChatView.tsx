@@ -15,6 +15,7 @@ import {
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
+  type UploadChatAttachment,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
@@ -395,6 +396,18 @@ interface TerminalLaunchContext {
 }
 
 type PersistentTerminalLaunchContext = Pick<TerminalLaunchContext, "cwd" | "worktreePath">;
+
+interface QueuedRunningTurnMessage {
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly createdAt: string;
+  readonly text: string;
+  readonly attachments: Promise<UploadChatAttachment[]>;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly titleSeed: string;
+}
 
 function useLocalDispatchState(input: {
   activeThread: Thread | undefined;
@@ -920,6 +933,9 @@ export default function ChatView(props: ChatViewProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
+  const [queuedRunningTurnMessages, setQueuedRunningTurnMessages] = useState<
+    QueuedRunningTurnMessage[]
+  >([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
@@ -979,6 +995,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const queuedRunningTurnDispatchInFlightRef = useRef<MessageId | null>(null);
   const pendingSeenPullRequestCommentIdsRef = useRef<Set<string>>(new Set());
   const previousActiveThreadIdRef = useRef<ThreadId | null>(null);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -3004,6 +3021,8 @@ export default function ChatView(props: ChatViewProps) {
       }
       return [];
     });
+    setQueuedRunningTurnMessages([]);
+    queuedRunningTurnDispatchInFlightRef.current = null;
     resetLocalDispatch();
     setExpandedImage(null);
   }, [draftId, resetLocalDispatch, threadId]);
@@ -3502,9 +3521,10 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    sendInFlightRef.current = true;
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
-
+    const isRunningTurnSubmission = phase === "running" && isServerThread;
+    const shouldQueueRunningTurn =
+      isRunningTurnSubmission && settings.runningMessageDeliveryMode === "queue";
+    const shouldTrackLocalDispatch = !isRunningTurnSubmission && !shouldQueueRunningTurn;
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const messageTextForSend = appendTerminalContextsToPrompt(
@@ -3520,6 +3540,24 @@ export default function ChatView(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
+    let firstComposerImageName: string | null = null;
+    if (composerImagesSnapshot.length > 0) {
+      const firstComposerImage = composerImagesSnapshot[0];
+      if (firstComposerImage) {
+        firstComposerImageName = firstComposerImage.name;
+      }
+    }
+    let titleSeed = trimmed;
+    if (!titleSeed) {
+      if (firstComposerImageName) {
+        titleSeed = `Image: ${firstComposerImageName}`;
+      } else if (composerTerminalContextsSnapshot.length > 0) {
+        titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
+      } else {
+        titleSeed = "New thread";
+      }
+    }
+    const title = truncate(titleSeed);
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
@@ -3537,6 +3575,10 @@ export default function ChatView(props: ChatViewProps) {
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
     }));
+    sendInFlightRef.current = true;
+    if (shouldTrackLocalDispatch) {
+      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    }
     // Scroll to the current end *before* adding the optimistic message.
     // This sets LegendList's internal isAtEnd=true so maintainScrollAtEnd
     // automatically pins to the new item when the data changes.
@@ -3575,26 +3617,27 @@ export default function ChatView(props: ChatViewProps) {
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
 
+    if (shouldQueueRunningTurn) {
+      setQueuedRunningTurnMessages((existing) => [
+        ...existing,
+        {
+          threadId: threadIdForSend,
+          messageId: messageIdForSend,
+          createdAt: messageCreatedAt,
+          text: outgoingMessageText,
+          attachments: turnAttachmentsPromise,
+          modelSelection: ctxSelectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          titleSeed: title,
+        },
+      ]);
+      sendInFlightRef.current = false;
+      return;
+    }
+
     let turnStartSucceeded = false;
     await (async () => {
-      let firstComposerImageName: string | null = null;
-      if (composerImagesSnapshot.length > 0) {
-        const firstComposerImage = composerImagesSnapshot[0];
-        if (firstComposerImage) {
-          firstComposerImageName = firstComposerImage.name;
-        }
-      }
-      let titleSeed = trimmed;
-      if (!titleSeed) {
-        if (firstComposerImageName) {
-          titleSeed = `Image: ${firstComposerImageName}`;
-        } else if (composerTerminalContextsSnapshot.length > 0) {
-          titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
-        } else {
-          titleSeed = "New thread";
-        }
-      }
-      const title = truncate(titleSeed);
       const threadCreateModelSelection = createModelSelection(
         ctxSelectedModelSelection.instanceId,
         ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
@@ -3611,7 +3654,7 @@ export default function ChatView(props: ChatViewProps) {
         });
       }
 
-      if (isServerThread) {
+      if (isServerThread && !isRunningTurnSubmission) {
         await persistThreadSettingsForNextTurn({
           threadId: threadIdForSend,
           createdAt: messageCreatedAt,
@@ -3653,7 +3696,9 @@ export default function ChatView(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
+      if (shouldTrackLocalDispatch) {
+        beginLocalDispatch({ preparingWorktree: false });
+      }
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -3664,7 +3709,7 @@ export default function ChatView(props: ChatViewProps) {
           text: outgoingMessageText,
           attachments: turnAttachments,
         },
-        modelSelection: ctxSelectedModelSelection,
+        ...(isRunningTurnSubmission ? {} : { modelSelection: ctxSelectedModelSelection }),
         titleSeed: title,
         runtimeMode,
         interactionMode,
@@ -3707,10 +3752,111 @@ export default function ChatView(props: ChatViewProps) {
       );
     });
     sendInFlightRef.current = false;
-    if (!turnStartSucceeded) {
+    if (!turnStartSucceeded && shouldTrackLocalDispatch) {
       resetLocalDispatch();
     }
   };
+
+  useEffect(() => {
+    if (!activeThread?.id || queuedRunningTurnMessages.length === 0) {
+      return;
+    }
+    if (
+      phase === "running" ||
+      !latestTurnSettled ||
+      isSendBusy ||
+      isConnecting ||
+      activeEnvironmentUnavailable ||
+      sendInFlightRef.current ||
+      queuedRunningTurnDispatchInFlightRef.current
+    ) {
+      return;
+    }
+
+    const queuedMessage = queuedRunningTurnMessages.find(
+      (message) => message.threadId === activeThread.id,
+    );
+    if (!queuedMessage) {
+      return;
+    }
+
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      return;
+    }
+
+    queuedRunningTurnDispatchInFlightRef.current = queuedMessage.messageId;
+    sendInFlightRef.current = true;
+    beginLocalDispatch({ preparingWorktree: false });
+    setThreadError(queuedMessage.threadId, null);
+
+    void (async () => {
+      try {
+        const attachments = await queuedMessage.attachments;
+        await persistThreadSettingsForNextTurn({
+          threadId: queuedMessage.threadId,
+          createdAt: queuedMessage.createdAt,
+          modelSelection: queuedMessage.modelSelection,
+          runtimeMode: queuedMessage.runtimeMode,
+          interactionMode: queuedMessage.interactionMode,
+        });
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: queuedMessage.threadId,
+          message: {
+            messageId: queuedMessage.messageId,
+            role: "user",
+            text: queuedMessage.text,
+            attachments,
+          },
+          modelSelection: queuedMessage.modelSelection,
+          titleSeed: queuedMessage.titleSeed,
+          runtimeMode: queuedMessage.runtimeMode,
+          interactionMode: queuedMessage.interactionMode,
+          createdAt: queuedMessage.createdAt,
+        });
+        markPendingPullRequestCommentsSeen();
+        setQueuedRunningTurnMessages((existing) =>
+          existing.filter((message) => message.messageId !== queuedMessage.messageId),
+        );
+      } catch (err) {
+        setQueuedRunningTurnMessages((existing) =>
+          existing.filter((message) => message.messageId !== queuedMessage.messageId),
+        );
+        setOptimisticUserMessages((existing) => {
+          const removed = existing.filter((message) => message.id === queuedMessage.messageId);
+          for (const message of removed) {
+            revokeUserMessagePreviewUrls(message);
+          }
+          const next = existing.filter((message) => message.id !== queuedMessage.messageId);
+          return next.length === existing.length ? existing : next;
+        });
+        setThreadError(
+          queuedMessage.threadId,
+          err instanceof Error ? err.message : "Failed to send queued message.",
+        );
+        resetLocalDispatch();
+      } finally {
+        sendInFlightRef.current = false;
+        queuedRunningTurnDispatchInFlightRef.current = null;
+      }
+    })();
+  }, [
+    activeEnvironmentUnavailable,
+    activeThread?.id,
+    beginLocalDispatch,
+    environmentId,
+    isConnecting,
+    isSendBusy,
+    latestTurnSettled,
+    markPendingPullRequestCommentsSeen,
+    persistThreadSettingsForNextTurn,
+    phase,
+    queuedRunningTurnMessages,
+    resetLocalDispatch,
+    setThreadError,
+  ]);
 
   const onInterrupt = async () => {
     const api = readEnvironmentApi(environmentId);

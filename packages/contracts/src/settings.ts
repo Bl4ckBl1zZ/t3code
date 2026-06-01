@@ -21,6 +21,10 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+export const RunningMessageDeliveryMode = Schema.Literals(["queue", "steer"]);
+export type RunningMessageDeliveryMode = typeof RunningMessageDeliveryMode.Type;
+export const DEFAULT_RUNNING_MESSAGE_DELIVERY_MODE: RunningMessageDeliveryMode = "queue";
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -74,6 +78,9 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  runningMessageDeliveryMode: RunningMessageDeliveryMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNNING_MESSAGE_DELIVERY_MODE)),
+  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -543,6 +550,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  runningMessageDeliveryMode: Schema.optionalKey(RunningMessageDeliveryMode),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

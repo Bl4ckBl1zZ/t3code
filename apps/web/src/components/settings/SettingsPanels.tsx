@@ -102,6 +102,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
+const RUNNING_MESSAGE_DELIVERY_LABELS = {
+  queue: "Queue for next turn",
+  steer: "Send immediately",
+} as const;
+
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 function withoutProviderInstanceKey<V>(
@@ -414,6 +419,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
+      ...(settings.runningMessageDeliveryMode !==
+      DEFAULT_UNIFIED_SETTINGS.runningMessageDeliveryMode
+        ? ["Messages while working"]
+        : []),
       ...(Duration.toMillis(settings.automaticGitFetchInterval) !==
       Duration.toMillis(DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval)
         ? ["Automatic Git fetch interval"]
@@ -444,6 +453,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.automaticGitFetchInterval,
       settings.browserAgentPreviewUrl,
       settings.enableAssistantStreaming,
+      settings.runningMessageDeliveryMode,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       theme,
@@ -468,6 +478,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
+      runningMessageDeliveryMode: DEFAULT_UNIFIED_SETTINGS.runningMessageDeliveryMode,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
@@ -674,6 +685,48 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Stream assistant messages"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Messages while working"
+          description="Choose what happens when you send a message during an active agent turn."
+          resetAction={
+            settings.runningMessageDeliveryMode !==
+            DEFAULT_UNIFIED_SETTINGS.runningMessageDeliveryMode ? (
+              <SettingResetButton
+                label="messages while working"
+                onClick={() =>
+                  updateSettings({
+                    runningMessageDeliveryMode: DEFAULT_UNIFIED_SETTINGS.runningMessageDeliveryMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.runningMessageDeliveryMode}
+              onValueChange={(value) => {
+                if (value === "queue" || value === "steer") {
+                  updateSettings({ runningMessageDeliveryMode: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-52" aria-label="Messages while working">
+                <SelectValue>
+                  {RUNNING_MESSAGE_DELIVERY_LABELS[settings.runningMessageDeliveryMode]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="queue">
+                  {RUNNING_MESSAGE_DELIVERY_LABELS.queue}
+                </SelectItem>
+                <SelectItem hideIndicator value="steer">
+                  {RUNNING_MESSAGE_DELIVERY_LABELS.steer}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 

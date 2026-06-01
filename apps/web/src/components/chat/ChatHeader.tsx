@@ -1,4 +1,5 @@
 import {
+  type AuthSessionRole,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
@@ -6,7 +7,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { DiffIcon, TerminalSquareIcon } from "lucide-react";
@@ -21,7 +22,11 @@ import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { PreviewButton } from "./PreviewButton";
 import { BrowserAnnotationButton } from "./BrowserAnnotationButton";
-import { isBrowserAgentSidebarMode, usePrimaryEnvironmentId } from "../../environments/primary";
+import {
+  fetchSessionState,
+  isBrowserAgentSidebarMode,
+  usePrimaryEnvironmentId,
+} from "../../environments/primary";
 import { shouldShowBrowserAgentControls } from "../../browserAgents";
 import { useSettings } from "../../hooks/useSettings";
 import { topBarMainProjectScript } from "../../projectScripts";
@@ -58,9 +63,11 @@ export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly currentSessionRole: AuthSessionRole | null;
 }): boolean {
   return (
     Boolean(input.activeProjectName) &&
+    input.currentSessionRole === "owner" &&
     input.primaryEnvironmentId !== null &&
     input.activeThreadEnvironmentId === input.primaryEnvironmentId
   );
@@ -125,6 +132,30 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const customPreviewUrl = useSettings((settings) => settings.browserAgentPreviewUrl);
+  const [currentSessionRole, setCurrentSessionRole] = useState<AuthSessionRole | null>(() =>
+    typeof window !== "undefined" && window.desktopBridge ? "owner" : null,
+  );
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.desktopBridge) {
+      setCurrentSessionRole("owner");
+      return;
+    }
+
+    let cancelled = false;
+    void fetchSessionState()
+      .then((session) => {
+        if (cancelled) return;
+        setCurrentSessionRole(session.authenticated ? (session.role ?? null) : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCurrentSessionRole(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const browserAgentSidebarMode = typeof window !== "undefined" && isBrowserAgentSidebarMode();
   const showProjectScriptsControl = shouldShowProjectScriptsControl({ activeProjectScripts });
   const mainProjectScript = activeProjectScripts
@@ -139,6 +170,7 @@ export const ChatHeader = memo(function ChatHeader({
       activeProjectName,
       activeThreadEnvironmentId,
       primaryEnvironmentId,
+      currentSessionRole,
     });
   const showPreviewButton = shouldShowPreviewButton({
     activeProjectName,

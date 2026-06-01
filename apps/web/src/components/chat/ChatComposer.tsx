@@ -314,6 +314,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
+  allowSendWhileRunning: boolean;
+  runningSendLabel: string;
+  runningSendAriaLabel: string;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -336,6 +339,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
+        allowSendWhileRunning={props.allowSendWhileRunning}
+        runningSendLabel={props.runningSendLabel}
+        runningSendAriaLabel={props.runningSendAriaLabel}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
@@ -970,15 +976,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const showCollapsedMobilePromptRow =
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
+  const canSubmitWhileRunning =
+    phase === "running" &&
+    !isComposerApprovalState &&
+    pendingUserInputs.length === 0 &&
+    composerSendState.hasSendableContent;
+  const runningSendLabel = settings.runningMessageDeliveryMode === "queue" ? "Queue" : "Send";
+  const runningSendAriaLabel =
+    settings.runningMessageDeliveryMode === "queue"
+      ? "Queue message for next turn"
+      : "Send message to running agent";
 
-  const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  const composerFooterHasWideActions =
+    showPlanFollowUpPrompt || activePendingProgress !== null || canSubmitWhileRunning;
   const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan || planSidebarOpen);
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
     if (phase === "running") {
-      return "running";
+      return `running:${settings.runningMessageDeliveryMode}:${composerSendState.hasSendableContent}:${isSendBusy}:${isConnecting}`;
     }
     if (showPlanFollowUpPrompt) {
       return prompt.trim().length > 0 ? "plan:refine" : "plan:implement";
@@ -993,6 +1010,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy,
     phase,
     prompt,
+    settings.runningMessageDeliveryMode,
     showPlanFollowUpPrompt,
   ]);
 
@@ -1091,7 +1109,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     showCollapsedMobilePromptRow && phase !== "running" && !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionDisabled = collapsedComposerPrimaryActionIsVoice
     ? isVoiceTranscriptionButtonDisabled
-    : phase === "running" || isSendBusy || isConnecting || !composerSendState.hasSendableContent;
+    : (phase === "running" && !canSubmitWhileRunning) ||
+      isSendBusy ||
+      isConnecting ||
+      !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionLabel = collapsedComposerPrimaryActionIsVoice
     ? voiceTranscriptionButtonLabel
     : "Send message";
@@ -1674,7 +1695,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const shouldBlurMobileComposerOnSubmit = useCallback(() => {
     if (!isMobileViewport) return false;
-    if (isSendBusy || isConnecting || phase === "running") return false;
+    if (isSendBusy || isConnecting) return false;
+    if (phase === "running") return canSubmitWhileRunning;
     if (activePendingProgress) {
       return activePendingProgress.isLastQuestion && Boolean(activePendingResolvedAnswers);
     }
@@ -1682,6 +1704,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [
     activePendingProgress,
     activePendingResolvedAnswers,
+    canSubmitWhileRunning,
     composerSendState.hasSendableContent,
     isConnecting,
     isMobileViewport,
@@ -2656,6 +2679,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isEnvironmentUnavailable={environmentUnavailable !== null}
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
+                  allowSendWhileRunning={canSubmitWhileRunning}
+                  runningSendLabel={runningSendLabel}
+                  runningSendAriaLabel={runningSendAriaLabel}
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}

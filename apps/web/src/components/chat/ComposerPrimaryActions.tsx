@@ -23,6 +23,9 @@ interface ComposerPrimaryActionsProps {
   isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
+  allowSendWhileRunning?: boolean;
+  runningSendLabel?: string;
+  runningSendAriaLabel?: string;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -62,6 +65,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isEnvironmentUnavailable,
   isPreparingWorktree,
   hasSendableContent,
+  allowSendWhileRunning = false,
+  runningSendLabel = "Send",
+  runningSendAriaLabel = "Send message",
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -123,6 +129,34 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
+    if (allowSendWhileRunning && hasSendableContent) {
+      return (
+        <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
+          <button
+            type="button"
+            className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+            {...pointerFocusProps}
+            onClick={onInterrupt}
+            aria-label="Stop generation"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+              <rect x="2" y="2" width="8" height="8" rx="1.5" />
+            </svg>
+          </button>
+          <Button
+            type="submit"
+            size="sm"
+            className={cn("h-8 rounded-full", compact ? "px-3" : "px-3.5")}
+            {...pointerFocusProps}
+            disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+            aria-label={runningSendAriaLabel}
+          >
+            {isConnecting || isSendBusy ? "Sending..." : runningSendLabel}
+          </Button>
+        </div>
+      );
+    }
+
     return (
       <button
         type="button"
