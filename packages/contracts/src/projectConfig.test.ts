@@ -57,6 +57,16 @@ it.effect("decodes project config with only browser preview URL", () =>
   }),
 );
 
+it.effect("decodes per-project thread defaults", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectConfig({
+      thread: { newThreadEnvMode: "worktree" },
+    });
+
+    assert.strictEqual(parsed.thread?.newThreadEnvMode, "worktree");
+  }),
+);
+
 it.effect("rejects invalid script icons", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(

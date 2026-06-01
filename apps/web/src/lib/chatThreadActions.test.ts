@@ -88,6 +88,7 @@ describe("chatThreadActions", () => {
     expect(didStart).toBe(true);
     expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
       envMode: "worktree",
+      useProjectDefault: true,
     });
   });
 

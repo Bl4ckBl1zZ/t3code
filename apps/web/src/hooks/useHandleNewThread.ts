@@ -20,11 +20,14 @@ import { selectProjectsAcrossEnvironments, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
+import { readEnvironmentApi } from "../environmentApi";
+import { getProjectConfigNewThreadEnvMode, readProjectConfigFile } from "../projectConfigFile";
 import { useSettings } from "./useSettings";
 
 function useNewThreadState() {
   const projects = useStore(useShallow((store) => selectProjectsAcrossEnvironments(store)));
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
+  const defaultThreadEnvMode = useSettings((settings) => settings.defaultThreadEnvMode);
   const router = useRouter();
   const getCurrentRouteTarget = useCallback(() => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
@@ -39,6 +42,7 @@ function useNewThreadState() {
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
         worktreeMode?: DraftThreadWorktreeMode;
+        useProjectDefault?: boolean;
       },
     ): Promise<void> => {
       const {
@@ -58,30 +62,66 @@ function useNewThreadState() {
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
         : scopedProjectKey(projectRef);
-      const hasBranchOption = options?.branch !== undefined;
-      const hasWorktreePathOption = options?.worktreePath !== undefined;
-      const hasEnvModeOption = options?.envMode !== undefined;
-      const hasWorktreeModeOption = options?.worktreeMode !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const latestActiveDraftThread: DraftThreadState | null = currentRouteTarget
         ? currentRouteTarget.kind === "server"
           ? getDraftThread(currentRouteTarget.threadRef)
           : getDraftSession(currentRouteTarget.draftId)
         : null;
-      if (storedDraftThread) {
-        return (async () => {
+
+      const resolveProjectDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
+        if (!project) {
+          return defaultThreadEnvMode;
+        }
+        const api = readEnvironmentApi(project.environmentId);
+        if (!api) {
+          return defaultThreadEnvMode;
+        }
+        try {
+          const config = await readProjectConfigFile(api, project.cwd);
+          return getProjectConfigNewThreadEnvMode(config) ?? defaultThreadEnvMode;
+        } catch {
+          return defaultThreadEnvMode;
+        }
+      };
+
+      return (async () => {
+        const projectDefaultEnvMode =
+          options?.useProjectDefault === true ? await resolveProjectDefaultEnvMode() : null;
+        const hasProjectDefault = projectDefaultEnvMode !== null;
+        const hasBranchOption = hasProjectDefault || options?.branch !== undefined;
+        const hasWorktreePathOption = hasProjectDefault || options?.worktreePath !== undefined;
+        const hasEnvModeOption = hasProjectDefault || options?.envMode !== undefined;
+        const hasWorktreeModeOption = hasProjectDefault || options?.worktreeMode !== undefined;
+        const nextBranch = hasProjectDefault ? null : (options?.branch ?? null);
+        const nextWorktreePath = hasProjectDefault ? null : (options?.worktreePath ?? null);
+        const nextEnvMode = projectDefaultEnvMode ?? options?.envMode;
+        const nextWorktreeMode = hasProjectDefault ? "newBranch" : options?.worktreeMode;
+        const buildDraftContextPatch = (): Parameters<typeof setDraftThreadContext>[1] => {
+          const patch: Parameters<typeof setDraftThreadContext>[1] = {};
+          if (hasBranchOption) {
+            patch.branch = nextBranch;
+          }
+          if (hasWorktreePathOption) {
+            patch.worktreePath = nextWorktreePath;
+          }
+          if (hasEnvModeOption && nextEnvMode !== undefined) {
+            patch.envMode = nextEnvMode;
+          }
+          if (hasWorktreeModeOption && nextWorktreeMode !== undefined) {
+            patch.worktreeMode = nextWorktreeMode;
+          }
+          return patch;
+        };
+
+        if (storedDraftThread) {
           if (
             hasBranchOption ||
             hasWorktreePathOption ||
             hasEnvModeOption ||
             hasWorktreeModeOption
           ) {
-            setDraftThreadContext(storedDraftThread.draftId, {
-              ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
-              ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
-              ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
-              ...(hasWorktreeModeOption ? { worktreeMode: options?.worktreeMode } : {}),
-            });
+            setDraftThreadContext(storedDraftThread.draftId, buildDraftContextPatch());
           }
           setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, storedDraftThread.draftId, {
             threadId: storedDraftThread.threadId,
@@ -96,47 +136,60 @@ function useNewThreadState() {
             to: "/draft/$draftId",
             params: { draftId: storedDraftThread.draftId },
           });
-        })();
-      }
-
-      if (
-        latestActiveDraftThread &&
-        currentRouteTarget?.kind === "draft" &&
-        latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
-        latestActiveDraftThread.promotedTo == null
-      ) {
-        if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption || hasWorktreeModeOption) {
-          setDraftThreadContext(currentRouteTarget.draftId, {
-            ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
-            ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
-            ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
-            ...(hasWorktreeModeOption ? { worktreeMode: options?.worktreeMode } : {}),
-          });
+          return;
         }
-        setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, currentRouteTarget.draftId, {
-          threadId: latestActiveDraftThread.threadId,
-          createdAt: latestActiveDraftThread.createdAt,
-          runtimeMode: latestActiveDraftThread.runtimeMode,
-          interactionMode: latestActiveDraftThread.interactionMode,
-          ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
-          ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
-          ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
-          ...(hasWorktreeModeOption ? { worktreeMode: options?.worktreeMode } : {}),
-        });
-        return Promise.resolve();
-      }
 
-      const draftId = newDraftId();
-      const threadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      return (async () => {
+        if (
+          latestActiveDraftThread &&
+          currentRouteTarget?.kind === "draft" &&
+          latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
+          latestActiveDraftThread.promotedTo == null
+        ) {
+          if (
+            hasBranchOption ||
+            hasWorktreePathOption ||
+            hasEnvModeOption ||
+            hasWorktreeModeOption
+          ) {
+            setDraftThreadContext(currentRouteTarget.draftId, buildDraftContextPatch());
+          }
+          const logicalDraftPatch: Parameters<typeof setLogicalProjectDraftThreadId>[3] = {
+            threadId: latestActiveDraftThread.threadId,
+            createdAt: latestActiveDraftThread.createdAt,
+            runtimeMode: latestActiveDraftThread.runtimeMode,
+            interactionMode: latestActiveDraftThread.interactionMode,
+          };
+          if (hasBranchOption) {
+            logicalDraftPatch.branch = nextBranch;
+          }
+          if (hasWorktreePathOption) {
+            logicalDraftPatch.worktreePath = nextWorktreePath;
+          }
+          if (hasEnvModeOption && nextEnvMode !== undefined) {
+            logicalDraftPatch.envMode = nextEnvMode;
+          }
+          if (hasWorktreeModeOption && nextWorktreeMode !== undefined) {
+            logicalDraftPatch.worktreeMode = nextWorktreeMode;
+          }
+          setLogicalProjectDraftThreadId(
+            logicalProjectKey,
+            projectRef,
+            currentRouteTarget.draftId,
+            logicalDraftPatch,
+          );
+          return;
+        }
+
+        const draftId = newDraftId();
+        const threadId = newThreadId();
+        const createdAt = new Date().toISOString();
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
           threadId,
           createdAt,
-          branch: options?.branch ?? null,
-          worktreePath: options?.worktreePath ?? null,
-          envMode: options?.envMode ?? "local",
-          worktreeMode: options?.worktreeMode ?? "newBranch",
+          branch: nextBranch,
+          worktreePath: nextWorktreePath,
+          envMode: nextEnvMode ?? "local",
+          worktreeMode: nextWorktreeMode ?? "newBranch",
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
         applyStickyState(draftId);
@@ -147,7 +200,7 @@ function useNewThreadState() {
         });
       })();
     },
-    [getCurrentRouteTarget, projectGroupingSettings, router, projects],
+    [defaultThreadEnvMode, getCurrentRouteTarget, projectGroupingSettings, router, projects],
   );
 }
 

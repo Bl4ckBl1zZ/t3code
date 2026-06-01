@@ -22,6 +22,7 @@ interface NewThreadHandler {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       worktreeMode?: DraftThreadWorktreeMode;
+      useProjectDefault?: boolean;
     },
   ): Promise<void>;
 }
@@ -68,6 +69,7 @@ function buildContextualThreadOptions(context: ChatThreadActionContext): NewThre
 function buildDefaultThreadOptions(context: ChatThreadActionContext): NewThreadOptions {
   return {
     envMode: context.defaultThreadEnvMode,
+    useProjectDefault: true,
   };
 }
 

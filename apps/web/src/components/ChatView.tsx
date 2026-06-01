@@ -17,8 +17,6 @@ import {
   type KeybindingCommand,
   type UploadChatAttachment,
   OrchestrationThreadActivity,
-  PROJECT_CONFIG_RELATIVE_PATH,
-  PROJECT_CONFIG_SCHEMA_URL,
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
@@ -132,6 +130,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
+import { writeProjectConfigScripts } from "~/projectConfigFile";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
@@ -2660,59 +2659,6 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
-  const writeProjectConfigScripts = useCallback(
-    async (input: {
-      api: NonNullable<ReturnType<typeof readEnvironmentApi>>;
-      projectCwd: string;
-      scripts: ProjectScript[];
-      browserPreviewUrl: string | null | undefined;
-    }) => {
-      const existing = await input.api.projects.readFile({
-        cwd: input.projectCwd,
-        relativePath: PROJECT_CONFIG_RELATIVE_PATH,
-      });
-      const trimmedContents = existing.contents?.trim() ?? "";
-      let config: Record<string, unknown>;
-      if (trimmedContents.length === 0) {
-        config = {};
-      } else {
-        try {
-          const parsed = JSON.parse(trimmedContents) as unknown;
-          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-            throw new Error("Project config must be a JSON object.");
-          }
-          config = { ...parsed };
-        } catch (error) {
-          throw new Error(
-            error instanceof Error
-              ? `Invalid ${PROJECT_CONFIG_RELATIVE_PATH}: ${error.message}`
-              : `Invalid ${PROJECT_CONFIG_RELATIVE_PATH}.`,
-            { cause: error },
-          );
-        }
-      }
-
-      config.$schema =
-        typeof config.$schema === "string" ? config.$schema : PROJECT_CONFIG_SCHEMA_URL;
-      if (
-        !("browser" in config) &&
-        input.browserPreviewUrl !== undefined &&
-        input.browserPreviewUrl !== null &&
-        input.browserPreviewUrl.trim().length > 0
-      ) {
-        config.browser = { previewUrl: input.browserPreviewUrl };
-      }
-      config.scripts = input.scripts;
-
-      await input.api.projects.writeFile({
-        cwd: input.projectCwd,
-        relativePath: PROJECT_CONFIG_RELATIVE_PATH,
-        contents: `${JSON.stringify(config, null, 2)}\n`,
-      });
-    },
-    [],
-  );
-
   const persistProjectScripts = useCallback(
     async (input: {
       projectId: ProjectId;
@@ -2753,7 +2699,7 @@ export default function ChatView(props: ChatViewProps) {
         await localApi.server.upsertKeybinding(keybindingRule);
       }
     },
-    [environmentId, writeProjectConfigScripts],
+    [environmentId],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput) => {

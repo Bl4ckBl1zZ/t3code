@@ -628,6 +628,7 @@ function OpenCommandPaletteDialog() {
 
       await handleNewThread(scopeProjectRef(project.environmentId, project.id), {
         envMode: settings.defaultThreadEnvMode,
+        useProjectDefault: true,
       });
     },
     [
@@ -1124,6 +1125,7 @@ function OpenCommandPaletteDialog() {
           try {
             await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
               envMode: settings.defaultThreadEnvMode,
+              useProjectDefault: true,
             });
           } catch (error) {
             toastManager.add(
@@ -1157,6 +1159,7 @@ function OpenCommandPaletteDialog() {
         });
         await handleNewThread(scopeProjectRef(browseEnvironmentId, projectId), {
           envMode: settings.defaultThreadEnvMode,
+          useProjectDefault: true,
         });
         setOpen(false);
       } catch (error) {

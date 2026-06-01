@@ -1707,6 +1707,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           : {}),
         envMode: seedContext.envMode,
         ...(seedContext.worktreeMode ? { worktreeMode: seedContext.worktreeMode } : {}),
+        useProjectDefault: true,
       });
     },
     [defaultThreadEnvMode, handleNewThread, isMobile, router, setOpenMobile],
