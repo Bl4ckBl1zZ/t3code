@@ -1727,15 +1727,7 @@ export default function GitActionsControl({
             }}
           >
             <MenuTrigger
-              render={
-                <Button
-                  aria-label="Git action options"
-                  className={quickActionClassName}
-                  size="icon-xs"
-                  variant="outline"
-                />
-              }
-              disabled={isGitActionRunning}
+              render={<Button aria-label="Git action options" size="icon-xs" variant="outline" />}
             >
               <ChevronDownIcon aria-hidden="true" className="size-4" />
             </MenuTrigger>

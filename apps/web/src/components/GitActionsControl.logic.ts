@@ -165,25 +165,8 @@ export function buildMenuItems(
     const pr = gitStatus.pr;
     if (!pr) return `Create ${terminology.shortLabel}`;
     if (pr.state === "merged") return "Merged";
-    if (pr.state === "open" && pr.checks && pr.checks.pending > 0) {
-      return formatChecksLabel(pr.checks);
-    }
-    if (pr.state === "open" && pr.mergeStatus === "conflicting") return "Resolve conflicts";
-    if (pr.state === "open" && pr.mergeStatus === "behind") return "Rebase / pull";
-    if (pr.state === "open" && !hasChanges && isPrMergeable(pr)) return "Merge";
     return `View ${terminology.shortLabel}`;
   })();
-  const prItemKind =
-    gitStatus.pr?.state === "open" &&
-    (gitStatus.pr.mergeStatus === "conflicting" || gitStatus.pr.mergeStatus === "behind")
-      ? "prompt_ai"
-      : "open_pr";
-  const prItemPrompt =
-    gitStatus.pr?.state === "open" && gitStatus.pr.mergeStatus === "conflicting"
-      ? resolveChangeRequestPrompt({ action: "resolve_conflicts", gitStatus })
-      : gitStatus.pr?.state === "open" && gitStatus.pr.mergeStatus === "behind"
-        ? resolveChangeRequestPrompt({ action: "sync_base", gitStatus })
-        : undefined;
 
   const commitItem: GitActionMenuItem = {
     id: "commit",
@@ -212,14 +195,9 @@ export function buildMenuItems(
       ? {
           id: "pr",
           label: prItemLabel,
-          disabled:
-            isBusy ||
-            (gitStatus.pr.state === "open" &&
-              !!gitStatus.pr.checks &&
-              gitStatus.pr.checks.pending > 0),
+          disabled: false,
           icon: "pr",
-          kind: prItemKind,
-          ...(prItemPrompt ? { prompt: prItemPrompt } : {}),
+          kind: "open_pr",
         }
       : {
           id: "pr",
@@ -293,16 +271,6 @@ export function resolveQuickAction(
     };
   }
 
-  if (hasOpenPr && pr?.checks && pr.checks.pending > 0) {
-    return {
-      label: formatChecksLabel(pr.checks),
-      disabled: true,
-      kind: "show_hint",
-      hint: "Checks are still running.",
-      tone: "warning",
-    };
-  }
-
   if (hasOpenPr && pr?.mergeStatus === "conflicting") {
     return {
       label: "Resolve conflicts",
@@ -310,6 +278,16 @@ export function resolveQuickAction(
       kind: "prompt_ai",
       prompt: resolveChangeRequestPrompt({ action: "resolve_conflicts", gitStatus }),
       tone: "destructive",
+    };
+  }
+
+  if (hasOpenPr && pr?.checks && pr.checks.pending > 0) {
+    return {
+      label: formatChecksLabel(pr.checks),
+      disabled: true,
+      kind: "show_hint",
+      hint: "Checks are still running.",
+      tone: "warning",
     };
   }
 

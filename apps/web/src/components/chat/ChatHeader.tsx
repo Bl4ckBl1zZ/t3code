@@ -155,7 +155,7 @@ export const ChatHeader = memo(function ChatHeader({
     browserAgentSidebarMode,
   });
   const showGitActionsControl = Boolean(activeProjectName);
-  const showTerminalToggle = !browserAgentSidebarMode;
+  const showTerminalToggle = true;
   const showDiffToggle = !browserAgentSidebarMode;
   const showHeaderActions =
     showProjectScriptsControl ||
@@ -239,15 +239,20 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipTrigger
                 render={
                   <Toggle
-                    className="shrink-0"
+                    className={browserAgentSidebarMode ? "shrink-0 px-2" : "shrink-0"}
                     pressed={terminalOpen}
                     onPressedChange={onToggleTerminal}
-                    aria-label="Toggle terminal drawer"
+                    aria-label={
+                      browserAgentSidebarMode ? "Toggle CLI terminal" : "Toggle terminal drawer"
+                    }
                     variant="outline"
                     size="xs"
                     disabled={!terminalAvailable}
                   >
                     <TerminalSquareIcon className="size-3" />
+                    {browserAgentSidebarMode ? (
+                      <span className="text-[10px] font-semibold uppercase leading-none">CLI</span>
+                    ) : null}
                   </Toggle>
                 }
               />

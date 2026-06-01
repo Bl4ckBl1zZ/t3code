@@ -144,6 +144,37 @@ describe("when: PR status has merge metadata", () => {
     });
   });
 
+  it("buildMenuItems keeps View PR available while checks are still running", () => {
+    const items = buildMenuItems(
+      status({
+        pr: {
+          number: 21,
+          title: "Pending checks",
+          url: "https://example.com/pr/21",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "mergeable",
+          checks: {
+            total: 4,
+            completed: 2,
+            successful: 2,
+            failed: 0,
+            pending: 2,
+          },
+        },
+      }),
+      false,
+    );
+
+    assert.deepInclude(items[2] ?? {}, {
+      id: "pr",
+      kind: "open_pr",
+      label: "View PR",
+      disabled: false,
+    });
+  });
+
   it("resolveQuickAction prompts the agent for conflicts", () => {
     const quick = resolveQuickAction(
       status({
@@ -166,6 +197,37 @@ describe("when: PR status has merge metadata", () => {
       disabled: false,
     });
     assert.include(quick.prompt ?? "", "Resolve the merge conflicts");
+  });
+
+  it("resolveQuickAction prefers conflicts over running checks", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 22,
+          title: "Conflict PR",
+          url: "https://example.com/pr/22",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "conflicting",
+          checks: {
+            total: 4,
+            completed: 2,
+            successful: 2,
+            failed: 0,
+            pending: 2,
+          },
+        },
+      }),
+      false,
+    );
+
+    assert.deepInclude(quick, {
+      kind: "prompt_ai",
+      label: "Resolve conflicts",
+      tone: "destructive",
+      disabled: false,
+    });
   });
 
   it("resolveQuickAction shows merge when a clean PR is mergeable", () => {
@@ -238,6 +300,29 @@ describe("when: actions are busy", () => {
         dialogAction: "create_pr",
       },
     ]);
+  });
+
+  it("buildMenuItems keeps existing PR links enabled while actions are busy", () => {
+    const items = buildMenuItems(
+      status({
+        pr: {
+          number: 24,
+          title: "Open PR",
+          url: "https://example.com/pr/24",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+        },
+      }),
+      true,
+    );
+
+    assert.deepInclude(items[2] ?? {}, {
+      id: "pr",
+      label: "View PR",
+      disabled: false,
+      kind: "open_pr",
+    });
   });
 });
 
