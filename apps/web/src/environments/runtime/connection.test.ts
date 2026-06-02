@@ -90,6 +90,7 @@ function createTestClient(config?: { readonly emitInitialSnapshot?: boolean }) {
       runStackedAction: vi.fn(async () => ({}) as any),
       resolvePullRequest: vi.fn(async () => undefined),
       preparePullRequestThread: vi.fn(async () => undefined),
+      markPullRequestReadyForReview: vi.fn(async () => undefined),
     },
     review: {
       getDiffPreview: vi.fn(async () => undefined),

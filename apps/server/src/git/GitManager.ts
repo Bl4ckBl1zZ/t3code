@@ -83,6 +83,9 @@ export interface GitManagerShape {
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,
   ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+  readonly markPullRequestReadyForReview: (
+    input: GitPullRequestRefInput,
+  ) => Effect.Effect<void, GitManagerServiceError>;
   readonly runStackedAction: (
     input: GitRunStackedActionInput,
     options?: GitRunStackedActionOptions,
@@ -118,6 +121,7 @@ interface OpenPrInfo {
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   updatedAt: Option.Option<DateTime.Utc>;
+  isDraft?: boolean;
   mergeStatus?: ChangeRequestMergeStatus;
   checks?: ChangeRequestCheckSummary;
 }
@@ -314,6 +318,7 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: summary.updatedAt,
+    ...(summary.isDraft !== undefined ? { isDraft: summary.isDraft } : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -477,6 +482,7 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  isDraft?: boolean;
   mergeStatus?: ChangeRequestMergeStatus;
   checks?: ChangeRequestCheckSummary;
 } {
@@ -487,6 +493,7 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.isDraft !== undefined ? { isDraft: pr.isDraft } : {}),
     ...(pr.mergeStatus !== undefined ? { mergeStatus: pr.mergeStatus } : {}),
     ...(pr.checks !== undefined ? { checks: pr.checks } : {}),
   };
@@ -1722,6 +1729,24 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     }).pipe(Effect.ensuring(invalidateStatus(input.cwd)));
   });
 
+  const markPullRequestReadyForReview: GitManagerShape["markPullRequestReadyForReview"] = Effect.fn(
+    "markPullRequestReadyForReview",
+  )(function* (input) {
+    const provider = yield* sourceControlProvider(input.cwd);
+    if (!provider.markChangeRequestReadyForReview) {
+      return yield* gitManagerError(
+        "markPullRequestReadyForReview",
+        `${provider.kind} does not support marking pull requests ready for review.`,
+      );
+    }
+
+    yield* provider.markChangeRequestReadyForReview({
+      cwd: input.cwd,
+      reference: normalizePullRequestReference(input.reference),
+    });
+    yield* invalidateStatus(input.cwd);
+  });
+
   const runFeatureBranchStep = Effect.fn("runFeatureBranchStep")(function* (
     modelSelection: ModelSelection,
     cwd: string,
@@ -1958,6 +1983,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     invalidateStatus,
     resolvePullRequest,
     preparePullRequestThread,
+    markPullRequestReadyForReview,
     runStackedAction,
   } satisfies GitManagerShape;
 });

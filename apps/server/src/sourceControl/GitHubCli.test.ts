@@ -83,6 +83,7 @@ describe("GitHubCli.layer", () => {
         baseRefName: "main",
         headRefName: "feature/pr-threads",
         state: "open",
+        isDraft: false,
         isCrossRepository: true,
         headRepositoryNameWithOwner: "octocat/codething-mvp",
         headRepositoryOwnerLogin: "octocat",
@@ -105,6 +106,27 @@ describe("GitHubCli.layer", () => {
           "--json",
           "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isDraft,mergeable,mergeStateStatus,statusCheckRollup,isCrossRepository,headRepository,headRepositoryOwner",
         ],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("marks pull requests ready for review", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+
+      const gh = yield* GitHubCli.GitHubCli;
+      yield* gh.markPullRequestReadyForReview({
+        cwd: "/repo",
+        repository: "Bl4ckBl1zZ/t3code",
+        reference: "42",
+      });
+
+      expect(mockRun).toHaveBeenCalledWith({
+        operation: "GitHubCli.execute",
+        command: "gh",
+        args: ["pr", "ready", "42", "--repo", "Bl4ckBl1zZ/t3code"],
         cwd: "/repo",
         timeoutMs: 30_000,
       });

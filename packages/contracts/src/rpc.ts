@@ -163,6 +163,7 @@ export const WS_METHODS = {
   gitRunStackedAction: "git.runStackedAction",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
+  gitMarkPullRequestReadyForReview: "git.markPullRequestReadyForReview",
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
@@ -425,6 +426,14 @@ export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePu
   error: GitManagerServiceError,
 });
 
+export const WsGitMarkPullRequestReadyForReviewRpc = Rpc.make(
+  WS_METHODS.gitMarkPullRequestReadyForReview,
+  {
+    payload: GitPullRequestRefInput,
+    error: GitManagerServiceError,
+  },
+);
+
 export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
@@ -650,6 +659,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsGitMarkPullRequestReadyForReviewRpc,
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,

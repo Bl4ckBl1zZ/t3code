@@ -34,6 +34,7 @@ export interface GitQuickAction {
     | "run_sync_base"
     | "open_pr"
     | "open_publish"
+    | "mark_pr_ready_for_review"
     | "prompt_ai"
     | "show_hint";
   action?: GitStackedAction;
@@ -136,6 +137,15 @@ function isPrWaitingOnChecks(pr: NonNullable<VcsStatusResult["pr"]>): boolean {
     pr.checks !== undefined &&
     pr.checks.pending > 0 &&
     pr.checks.failed === 0
+  );
+}
+
+function canMarkPrReadyForReview(gitStatus: VcsStatusResult): boolean {
+  const pr = gitStatus.pr;
+  return (
+    gitStatus.sourceControlProvider?.kind === "github" &&
+    pr?.state === "open" &&
+    (pr.isDraft === true || pr.mergeStatus === "draft")
   );
 }
 
@@ -601,6 +611,14 @@ export function resolveQuickAction(
       disabled: false,
       kind: "run_sync_base",
       tone: "warning",
+    };
+  }
+
+  if (canMarkPrReadyForReview(gitStatus)) {
+    return {
+      label: "mark for review",
+      disabled: false,
+      kind: "mark_pr_ready_for_review",
     };
   }
 

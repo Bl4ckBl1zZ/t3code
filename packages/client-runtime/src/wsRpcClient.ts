@@ -122,6 +122,9 @@ export interface WsRpcClient {
     readonly preparePullRequestThread: RpcUnaryMethod<
       typeof WS_METHODS.gitPreparePullRequestThread
     >;
+    readonly markPullRequestReadyForReview: RpcUnaryMethod<
+      typeof WS_METHODS.gitMarkPullRequestReadyForReview
+    >;
   };
   readonly review: {
     readonly getDiffPreview: RpcUnaryMethod<typeof WS_METHODS.reviewGetDiffPreview>;
@@ -294,6 +297,8 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.gitResolvePullRequest](input)),
       preparePullRequestThread: (input) =>
         transport.request((client) => client[WS_METHODS.gitPreparePullRequestThread](input)),
+      markPullRequestReadyForReview: (input) =>
+        transport.request((client) => client[WS_METHODS.gitMarkPullRequestReadyForReview](input)),
     },
     review: {
       getDiffPreview: (input) =>

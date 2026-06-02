@@ -203,6 +203,7 @@ const VcsStatusChangeRequest = Schema.Struct({
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
+  isDraft: Schema.optional(Schema.Boolean),
   mergeStatus: Schema.optional(ChangeRequestMergeStatus),
   checks: Schema.optional(ChangeRequestCheckSummary),
 });

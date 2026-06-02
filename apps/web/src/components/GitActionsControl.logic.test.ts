@@ -160,6 +160,34 @@ describe("when: ref is clean and has an open PR", () => {
 });
 
 describe("when: PR status has merge metadata", () => {
+  it("resolveQuickAction marks draft GitHub PRs for review", () => {
+    const quick = resolveQuickAction(
+      status({
+        sourceControlProvider: {
+          kind: "github",
+          name: "GitHub",
+          baseUrl: "https://github.com",
+        },
+        pr: {
+          number: 19,
+          title: "Draft PR",
+          url: "https://example.com/pr/19",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          isDraft: true,
+          mergeStatus: "draft",
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "mark_pr_ready_for_review",
+      label: "mark for review",
+      disabled: false,
+    });
+  });
+
   it("resolveQuickAction shows merged PRs as merged", () => {
     const quick = resolveQuickAction(
       status({

@@ -34,6 +34,7 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
           baseRefName: "main",
           headRefName: "feature/source-control",
           state: "open",
+          isDraft: true,
           isCrossRepository: true,
           headRepositoryNameWithOwner: "fork/t3code",
           headRepositoryOwnerLogin: "fork",
@@ -62,6 +63,7 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
       headRefName: "feature/source-control",
       state: "open",
       updatedAt: Option.none(),
+      isDraft: true,
       isCrossRepository: true,
       headRepositoryNameWithOwner: "fork/t3code",
       headRepositoryOwnerLogin: "fork",
@@ -73,6 +75,34 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
         failed: 0,
         pending: 0,
       },
+    });
+  }),
+);
+
+it.effect("marks GitHub PRs ready for review through provider-neutral input names", () =>
+  Effect.gen(function* () {
+    let readyInput:
+      | Parameters<GitHubCli.GitHubCliShape["markPullRequestReadyForReview"]>[0]
+      | null = null;
+    const provider = yield* makeProvider({
+      markPullRequestReadyForReview: (input) => {
+        readyInput = input;
+        return Effect.void;
+      },
+    });
+
+    if (!provider.markChangeRequestReadyForReview) {
+      assert.fail("Expected GitHub provider to support marking PRs ready for review");
+    }
+
+    yield* provider.markChangeRequestReadyForReview({
+      cwd: "/repo",
+      reference: "42",
+    });
+
+    assert.deepStrictEqual(readyInput, {
+      cwd: "/repo",
+      reference: "42",
     });
   }),
 );

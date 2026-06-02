@@ -70,6 +70,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { openInPreferredEditor } from "~/editorPreferences";
 import {
   useGitStackedAction,
+  useMarkPullRequestReadyForReviewAction,
   useSourceControlActionRunning,
   useSourceControlPublishRepositoryAction,
   useVcsInitAction,
@@ -149,6 +150,7 @@ const RUNNING_SOURCE_CONTROL_ACTIONS = [
   "pull",
   "syncBase",
   "publishRepository",
+  "markPullRequestReadyForReview",
 ] as const;
 const USE_AGENT_PROMPTS_FOR_GIT_ACTIONS = true;
 const PULL_QUICK_ACTION_CLASS_NAME =
@@ -360,6 +362,9 @@ function GitQuickActionIcon({
 }) {
   const iconClassName = "size-3.5";
   if (quickAction.kind === "open_pr") return <SourceControlIcon className={iconClassName} />;
+  if (quickAction.kind === "mark_pr_ready_for_review") {
+    return <CheckIcon className={iconClassName} />;
+  }
   if (quickAction.kind === "prompt_ai") return <SourceControlIcon className={iconClassName} />;
   if (quickAction.kind === "open_publish") return <CloudUploadIcon className={iconClassName} />;
   if (quickAction.kind === "run_pull") return <InfoIcon className={iconClassName} />;
@@ -1196,6 +1201,8 @@ export default function GitActionsControl({
   const runImmediateGitAction = useGitStackedAction(sourceControlScope);
   const pullAction = useVcsPullAction(sourceControlScope);
   const syncBaseAction = useVcsSyncBaseAction(sourceControlScope);
+  const markPullRequestReadyForReviewAction =
+    useMarkPullRequestReadyForReviewAction(sourceControlScope);
   const isGitActionRunning = useSourceControlActionRunning(
     sourceControlScope,
     RUNNING_SOURCE_CONTROL_ACTIONS,
@@ -1786,6 +1793,38 @@ export default function GitActionsControl({
 
     if (renderedQuickAction.kind === "open_pr" && renderedQuickAction.label.startsWith("View ")) {
       void openExistingPr();
+      return;
+    }
+
+    if (renderedQuickAction.kind === "mark_pr_ready_for_review") {
+      const pr = gitStatusForActions?.pr;
+      if (!pr) {
+        toastManager.add({
+          type: "error",
+          title: "No pull request found.",
+          data: threadToastData,
+        });
+        return;
+      }
+
+      const promise = markPullRequestReadyForReviewAction.run({ reference: String(pr.number) });
+      void toastManager.promise<
+        Awaited<ReturnType<typeof markPullRequestReadyForReviewAction.run>>,
+        ThreadToastData
+      >(promise, {
+        loading: { title: "Marking for review...", data: threadToastData },
+        success: () => ({
+          title: "Marked for review",
+          description: `${changeRequestTerminology.shortLabel} #${pr.number} is ready for review.`,
+          data: threadToastData,
+        }),
+        error: (err) => ({
+          title: "Unable to mark for review",
+          description: err instanceof Error ? err.message : "An error occurred.",
+          data: threadToastData,
+        }),
+      });
+      void promise.catch(() => undefined);
       return;
     }
 
