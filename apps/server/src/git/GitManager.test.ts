@@ -59,6 +59,7 @@ interface FakeGhScenario {
     baseRefName: string;
     headRefName: string;
     state?: "open" | "closed" | "merged";
+    isDraft?: boolean;
     isCrossRepository?: boolean;
     headRepositoryNameWithOwner?: string | null;
     headRepositoryOwnerLogin?: string | null;
@@ -156,6 +157,7 @@ function normalizeFakePullRequestSummary(raw: unknown): GitHubPullRequestSummary
       : undefined;
   const isCrossRepository =
     typeof record.isCrossRepository === "boolean" ? record.isCrossRepository : undefined;
+  const isDraft = typeof record.isDraft === "boolean" ? record.isDraft : undefined;
   const headRepositoryNameWithOwner =
     typeof record.headRepositoryNameWithOwner === "string"
       ? record.headRepositoryNameWithOwner
@@ -176,6 +178,7 @@ function normalizeFakePullRequestSummary(raw: unknown): GitHubPullRequestSummary
     baseRefName,
     headRefName,
     ...(state ? { state } : {}),
+    ...(isDraft !== undefined ? { isDraft } : {}),
     ...(isCrossRepository !== undefined ? { isCrossRepository } : {}),
     ...(headRepositoryNameWithOwner ? { headRepositoryNameWithOwner } : {}),
     ...(headRepositoryOwnerLogin ? { headRepositoryOwnerLogin } : {}),
@@ -505,6 +508,10 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       });
     }
 
+    if (args[0] === "pr" && args[1] === "ready") {
+      return Effect.succeed(fakeGhOutput(""));
+    }
+
     if (args[0] === "repo" && args[1] === "view") {
       const repository = args[2];
       if (typeof repository === "string" && args.includes("nameWithOwner,url,sshUrl")) {
@@ -634,6 +641,11 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             ...repoArgs(input.repository),
             ...(input.force ? ["--force"] : []),
           ],
+        }).pipe(Effect.asVoid),
+      markPullRequestReadyForReview: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["pr", "ready", input.reference, ...repoArgs(input.repository)],
         }).pipe(Effect.asVoid),
     },
     ghCalls,
@@ -825,6 +837,48 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseRef: "main",
         headRef: "feature/status-trimmed-pr",
         state: "open",
+      });
+    }),
+  );
+
+  it.effect("status preserves draft PR metadata returned by gh", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/status-draft-pr"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/status-draft-pr"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 18,
+                title: "Draft PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/18",
+                baseRefName: "main",
+                headRefName: "feature/status-draft-pr",
+                isDraft: true,
+              },
+            ]),
+          ],
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.pr).toEqual({
+        number: 18,
+        title: "Draft PR",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/18",
+        baseRef: "main",
+        headRef: "feature/status-draft-pr",
+        state: "open",
+        isDraft: true,
+        mergeStatus: "draft",
       });
     }),
   );

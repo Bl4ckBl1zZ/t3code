@@ -60,6 +60,9 @@ export interface GitWorkflowServiceShape {
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,
   ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+  readonly markPullRequestReadyForReview: (
+    input: GitPullRequestRefInput,
+  ) => Effect.Effect<void, GitManagerServiceError>;
   readonly listRefs: (input: VcsListRefsInput) => Effect.Effect<VcsListRefsResult, GitCommandError>;
   readonly createWorktree: (
     input: VcsCreateWorktreeInput,
@@ -292,6 +295,10 @@ export const make = Effect.fn("makeGitWorkflowService")(function* () {
     preparePullRequestThread: routeGitManager(
       "GitWorkflowService.preparePullRequestThread",
       gitManager.preparePullRequestThread,
+    ),
+    markPullRequestReadyForReview: routeGitManager(
+      "GitWorkflowService.markPullRequestReadyForReview",
+      gitManager.markPullRequestReadyForReview,
     ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(

@@ -1235,6 +1235,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "git" },
           ),
+        [WS_METHODS.gitMarkPullRequestReadyForReview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitMarkPullRequestReadyForReview,
+            gitWorkflow
+              .markPullRequestReadyForReview(input)
+              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "git" },
+          ),
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
             "rpc.aggregate": "vcs",

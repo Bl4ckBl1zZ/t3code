@@ -577,6 +577,7 @@ export interface EnvironmentApi {
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
+    markPullRequestReadyForReview: (input: GitPullRequestRefInput) => Promise<void>;
   };
   review: {
     getDiffPreview: (input: ReviewDiffPreviewInput) => Promise<ReviewDiffPreviewResult>;

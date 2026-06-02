@@ -94,6 +94,11 @@ export interface SourceControlProviderShape {
     readonly reference: string;
     readonly force?: boolean;
   }) => Effect.Effect<void, SourceControlProviderError>;
+  readonly markChangeRequestReadyForReview?: (input: {
+    readonly cwd: string;
+    readonly context?: SourceControlProviderContext;
+    readonly reference: string;
+  }) => Effect.Effect<void, SourceControlProviderError>;
 }
 
 export class SourceControlProvider extends Context.Service<

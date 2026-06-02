@@ -42,6 +42,7 @@ type SourceControlActionKind =
   | "syncBase"
   | "publishRepository"
   | "runStackedAction"
+  | "markPullRequestReadyForReview"
   | "preparePullRequestThread";
 
 interface SourceControlActionScope {
@@ -121,6 +122,7 @@ function getVcsActionOperationForKind(kind: SourceControlActionKind): VcsActionO
       return "run_change_request";
     case "syncBase":
     case "publishRepository":
+    case "markPullRequestReadyForReview":
     case "preparePullRequestThread":
       return null;
   }
@@ -393,6 +395,27 @@ export function usePreparePullRequestThreadAction(scope: SourceControlActionScop
 
   return useSourceControlAction({
     kind: "preparePullRequestThread",
+    scope,
+    action,
+  });
+}
+
+export function useMarkPullRequestReadyForReviewAction(scope: SourceControlActionScope) {
+  const action = useCallback(
+    async (args: { reference: string }): Promise<void> => {
+      if (!scope.cwd || !scope.environmentId) {
+        throw new Error("Pull request review publishing is unavailable.");
+      }
+      await ensureEnvironmentApi(scope.environmentId).git.markPullRequestReadyForReview({
+        cwd: scope.cwd,
+        reference: args.reference,
+      });
+    },
+    [scope],
+  );
+
+  return useSourceControlAction({
+    kind: "markPullRequestReadyForReview",
     scope,
     action,
   });

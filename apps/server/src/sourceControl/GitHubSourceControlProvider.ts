@@ -38,6 +38,7 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: Option.none(),
+    ...(summary.isDraft !== undefined ? { isDraft: summary.isDraft } : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -226,6 +227,16 @@ export const make = Effect.fn("makeGitHubSourceControlProvider")(function* () {
           ...(repository ? { repository } : {}),
         })
         .pipe(Effect.mapError((error) => providerError("checkoutChangeRequest", error)));
+    },
+    markChangeRequestReadyForReview: (input) => {
+      const repository = repositoryFromContext(input.context);
+      return github
+        .markPullRequestReadyForReview({
+          cwd: input.cwd,
+          ...(repository ? { repository } : {}),
+          reference: input.reference,
+        })
+        .pipe(Effect.mapError((error) => providerError("markChangeRequestReadyForReview", error)));
     },
   });
 });

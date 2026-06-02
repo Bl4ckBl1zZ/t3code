@@ -37,6 +37,7 @@ export interface GitHubPullRequestSummary {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state?: "open" | "closed" | "merged";
+  readonly isDraft?: boolean;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
@@ -100,6 +101,12 @@ export interface GitHubCliShape {
     readonly repository?: string;
     readonly reference: string;
     readonly force?: boolean;
+  }) => Effect.Effect<void, GitHubCliError>;
+
+  readonly markPullRequestReadyForReview: (input: {
+    readonly cwd: string;
+    readonly repository?: string;
+    readonly reference: string;
   }) => Effect.Effect<void, GitHubCliError>;
 }
 
@@ -400,6 +407,11 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
           ...repoArgs(input.repository),
           ...(input.force ? ["--force"] : []),
         ],
+      }).pipe(Effect.asVoid),
+    markPullRequestReadyForReview: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "ready", input.reference, ...repoArgs(input.repository)],
       }).pipe(Effect.asVoid),
   });
 });

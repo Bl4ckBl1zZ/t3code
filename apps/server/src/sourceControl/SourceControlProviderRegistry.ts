@@ -153,6 +153,15 @@ export function bindProviderContext(
         ...input,
         context: input.context ?? context,
       }),
+    ...(provider.markChangeRequestReadyForReview
+      ? {
+          markChangeRequestReadyForReview: (input) =>
+            provider.markChangeRequestReadyForReview?.({
+              ...input,
+              context: input.context ?? context,
+            }) ?? Effect.void,
+        }
+      : {}),
   });
 }
 
