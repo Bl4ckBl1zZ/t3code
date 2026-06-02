@@ -18,6 +18,21 @@ import {
   BrowserAgentStreamEvent,
 } from "./browserAgent.ts";
 import {
+  OrganizationPanelError,
+  OrganizationPanelEventsSubscribeInput,
+  OrganizationPanelEvent,
+  OrganizationPanelGetInput,
+  OrganizationPanelGetResult,
+  OrganizationPanelHistoryListInput,
+  OrganizationPanelHistoryListResult,
+  OrganizationPanelRollbackInput,
+  OrganizationPanelRollbackResult,
+  OrganizationPanelTurnStartInput,
+  OrganizationPanelTurnStartResult,
+  OrganizationPanelTurnStopInput,
+  OrganizationPanelTurnStopResult,
+} from "./organizationPanel.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -207,6 +222,14 @@ export const WS_METHODS = {
   browserAgentsOpenOrFocusPreview: "browserAgents.openOrFocusPreview",
   browserAgentsActivateAnnotation: "browserAgents.activateAnnotation",
 
+  // Organization panel methods
+  organizationPanelGet: "organizationPanel.get",
+  organizationPanelTurnStart: "organizationPanel.turn.start",
+  organizationPanelTurnStop: "organizationPanel.turn.stop",
+  organizationPanelHistoryList: "organizationPanel.history.list",
+  organizationPanelRollback: "organizationPanel.rollback",
+  subscribeOrganizationPanelEvents: "organizationPanel.event",
+
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
@@ -352,6 +375,36 @@ export const WsBrowserAgentsActivateAnnotationRpc = Rpc.make(
     error: BrowserAgentCommandError,
   },
 );
+
+export const WsOrganizationPanelGetRpc = Rpc.make(WS_METHODS.organizationPanelGet, {
+  payload: OrganizationPanelGetInput,
+  success: OrganizationPanelGetResult,
+  error: OrganizationPanelError,
+});
+
+export const WsOrganizationPanelTurnStartRpc = Rpc.make(WS_METHODS.organizationPanelTurnStart, {
+  payload: OrganizationPanelTurnStartInput,
+  success: OrganizationPanelTurnStartResult,
+  error: OrganizationPanelError,
+});
+
+export const WsOrganizationPanelTurnStopRpc = Rpc.make(WS_METHODS.organizationPanelTurnStop, {
+  payload: OrganizationPanelTurnStopInput,
+  success: OrganizationPanelTurnStopResult,
+  error: OrganizationPanelError,
+});
+
+export const WsOrganizationPanelHistoryListRpc = Rpc.make(WS_METHODS.organizationPanelHistoryList, {
+  payload: OrganizationPanelHistoryListInput,
+  success: OrganizationPanelHistoryListResult,
+  error: OrganizationPanelError,
+});
+
+export const WsOrganizationPanelRollbackRpc = Rpc.make(WS_METHODS.organizationPanelRollback, {
+  payload: OrganizationPanelRollbackInput,
+  success: OrganizationPanelRollbackResult,
+  error: OrganizationPanelError,
+});
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
@@ -626,6 +679,15 @@ export const WsSubscribeBrowserAgentsRpc = Rpc.make(WS_METHODS.subscribeBrowserA
   stream: true,
 });
 
+export const WsSubscribeOrganizationPanelEventsRpc = Rpc.make(
+  WS_METHODS.subscribeOrganizationPanelEvents,
+  {
+    payload: OrganizationPanelEventsSubscribeInput,
+    success: OrganizationPanelEvent,
+    stream: true,
+  },
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -647,6 +709,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsBrowserAgentsListRpc,
   WsBrowserAgentsOpenOrFocusPreviewRpc,
   WsBrowserAgentsActivateAnnotationRpc,
+  WsOrganizationPanelGetRpc,
+  WsOrganizationPanelTurnStartRpc,
+  WsOrganizationPanelTurnStopRpc,
+  WsOrganizationPanelHistoryListRpc,
+  WsOrganizationPanelRollbackRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsWriteFileRpc,
@@ -682,6 +749,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsSubscribeBrowserAgentsRpc,
+  WsSubscribeOrganizationPanelEventsRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

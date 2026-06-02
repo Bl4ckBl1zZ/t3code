@@ -5,6 +5,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   FolderPlusIcon,
+  PanelTopIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -3179,6 +3180,15 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
 const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const handleOrganizationPanelClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    void navigate({
+      to: "/organizations/$organizationId",
+      params: { organizationId: "acme" },
+    });
+  }, [isMobile, navigate, setOpenMobile]);
   const handleSettingsClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -3191,6 +3201,16 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            size="sm"
+            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            onClick={handleOrganizationPanelClick}
+          >
+            <PanelTopIcon className="size-3.5" />
+            <span className="text-xs">Acme panel</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
             size="sm"

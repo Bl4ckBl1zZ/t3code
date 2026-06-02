@@ -22,5 +22,6 @@ export * from "./projectConfig.ts";
 export * from "./filesystem.ts";
 export * from "./review.ts";
 export * from "./browserAgent.ts";
+export * from "./organizationPanel.ts";
 export * from "./audioTranscription.ts";
 export * from "./rpc.ts";
