@@ -24,6 +24,12 @@ import type {
 
 export type ProviderPickerKind = ProviderDriverKind;
 
+export interface WorkLogFileStat {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 export const PROVIDER_OPTIONS: Array<{
   value: ProviderPickerKind;
   label: string;
@@ -55,10 +61,12 @@ export interface WorkLogEntry {
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
+  changedFileStats?: ReadonlyArray<WorkLogFileStat>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  turnId?: TurnId;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -515,7 +523,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       ? (activity.payload as Record<string, unknown>)
       : null;
   const commandPreview = extractToolCommand(payload);
-  const changedFiles = extractChangedFiles(payload);
+  const changedFileStats = extractChangedFileStats(payload);
+  const changedFiles = mergeChangedFiles(
+    extractChangedFiles(payload),
+    changedFileStats.map((stat) => stat.path),
+  );
   const title = extractToolTitle(payload);
   const isTaskActivity = activity.kind === "task.progress" || activity.kind === "task.completed";
   const taskSummary =
@@ -564,6 +576,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (changedFiles.length > 0) {
     entry.changedFiles = changedFiles;
+  }
+  if (changedFileStats.length > 0) {
+    entry.changedFileStats = changedFileStats;
+  }
+  if (activity.turnId) {
+    entry.turnId = activity.turnId;
   }
   if (title) {
     entry.toolTitle = title;
@@ -629,6 +647,7 @@ function mergeDerivedWorkLogEntries(
   next: DerivedWorkLogEntry,
 ): DerivedWorkLogEntry {
   const changedFiles = mergeChangedFiles(previous.changedFiles, next.changedFiles);
+  const changedFileStats = mergeChangedFileStats(previous.changedFileStats, next.changedFileStats);
   const detail = next.detail ?? previous.detail;
   const command = next.command ?? previous.command;
   const rawCommand = next.rawCommand ?? previous.rawCommand;
@@ -644,12 +663,27 @@ function mergeDerivedWorkLogEntries(
     ...(command ? { command } : {}),
     ...(rawCommand ? { rawCommand } : {}),
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
+    ...(changedFileStats.length > 0 ? { changedFileStats } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(itemType ? { itemType } : {}),
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolCallId ? { toolCallId } : {}),
   };
+}
+
+function mergeChangedFileStats(
+  previous: ReadonlyArray<WorkLogFileStat> | undefined,
+  next: ReadonlyArray<WorkLogFileStat> | undefined,
+): WorkLogFileStat[] {
+  const statsByPath = new Map<string, WorkLogFileStat>();
+  for (const stat of previous ?? []) {
+    statsByPath.set(stat.path, stat);
+  }
+  for (const stat of next ?? []) {
+    statsByPath.set(stat.path, stat);
+  }
+  return [...statsByPath.values()];
 }
 
 function mergeChangedFiles(
@@ -1058,6 +1092,50 @@ function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {
   target.push(normalized);
 }
 
+function readChangedFilePath(record: Record<string, unknown>): string | null {
+  return (
+    asTrimmedString(record.path) ??
+    asTrimmedString(record.filePath) ??
+    asTrimmedString(record.relativePath) ??
+    asTrimmedString(record.filename) ??
+    asTrimmedString(record.newPath) ??
+    asTrimmedString(record.oldPath)
+  );
+}
+
+function readNonNegativeStat(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && /^\d+$/u.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
+  }
+  return null;
+}
+
+function readChangedFileStat(record: Record<string, unknown>): WorkLogFileStat | null {
+  const path = readChangedFilePath(record);
+  if (!path) return null;
+  const additions =
+    readNonNegativeStat(record.additions) ??
+    readNonNegativeStat(record.insertions) ??
+    readNonNegativeStat(record.added) ??
+    readNonNegativeStat(record.linesAdded);
+  const deletions =
+    readNonNegativeStat(record.deletions) ??
+    readNonNegativeStat(record.deleted) ??
+    readNonNegativeStat(record.removed) ??
+    readNonNegativeStat(record.linesDeleted);
+  if (additions === null && deletions === null) {
+    return null;
+  }
+  return {
+    path,
+    additions: additions ?? 0,
+    deletions: deletions ?? 0,
+  };
+}
+
 function collectChangedFiles(value: unknown, target: string[], seen: Set<string>, depth: number) {
   if (depth > 4 || target.length >= 12) {
     return;
@@ -1111,6 +1189,65 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   const seen = new Set<string>();
   collectChangedFiles(asRecord(payload?.data), changedFiles, seen, 0);
   return changedFiles;
+}
+
+function collectChangedFileStats(
+  value: unknown,
+  target: WorkLogFileStat[],
+  seen: Set<string>,
+  depth: number,
+) {
+  if (depth > 4 || target.length >= 12) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectChangedFileStats(entry, target, seen, depth + 1);
+      if (target.length >= 12) {
+        return;
+      }
+    }
+    return;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return;
+  }
+
+  const stat = readChangedFileStat(record);
+  if (stat && !seen.has(stat.path)) {
+    seen.add(stat.path);
+    target.push(stat);
+  }
+
+  for (const nestedKey of [
+    "item",
+    "result",
+    "input",
+    "data",
+    "changes",
+    "files",
+    "edits",
+    "patch",
+    "patches",
+    "operations",
+  ]) {
+    if (!(nestedKey in record)) {
+      continue;
+    }
+    collectChangedFileStats(record[nestedKey], target, seen, depth + 1);
+    if (target.length >= 12) {
+      return;
+    }
+  }
+}
+
+function extractChangedFileStats(payload: Record<string, unknown> | null): WorkLogFileStat[] {
+  const changedFileStats: WorkLogFileStat[] = [];
+  const seen = new Set<string>();
+  collectChangedFileStats(asRecord(payload?.data), changedFileStats, seen, 0);
+  return changedFileStats;
 }
 
 function compareActivitiesByOrder(
