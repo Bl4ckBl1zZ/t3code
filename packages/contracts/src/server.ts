@@ -80,6 +80,25 @@ export const ServerProviderSlashCommand = Schema.Struct({
 });
 export type ServerProviderSlashCommand = typeof ServerProviderSlashCommand.Type;
 
+export const ProviderSlashCommandsListInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderSlashCommandsListInput = typeof ProviderSlashCommandsListInput.Type;
+
+export const ProviderSlashCommandsListResult = Schema.Struct({
+  slashCommands: Schema.Array(ServerProviderSlashCommand),
+});
+export type ProviderSlashCommandsListResult = typeof ProviderSlashCommandsListResult.Type;
+
+export class ProviderSlashCommandsListError extends Schema.TaggedErrorClass<ProviderSlashCommandsListError>()(
+  "ProviderSlashCommandsListError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
+
 export const ServerProviderSkill = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),

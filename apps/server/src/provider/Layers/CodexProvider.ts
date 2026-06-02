@@ -28,6 +28,7 @@ import {
   buildServerProvider,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { CODEX_BUILT_IN_SLASH_COMMANDS } from "../codexSlashCommands.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
@@ -348,6 +349,7 @@ const makePendingCodexProvider = (
         enabled: false,
         checkedAt,
         models,
+        slashCommands: CODEX_BUILT_IN_SLASH_COMMANDS,
         skills: [],
         probe: {
           installed: false,
@@ -364,6 +366,7 @@ const makePendingCodexProvider = (
       enabled: true,
       checkedAt,
       models,
+      slashCommands: CODEX_BUILT_IN_SLASH_COMMANDS,
       skills: [],
       probe: {
         installed: false,
@@ -432,6 +435,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       enabled: false,
       checkedAt,
       models: emptyModels,
+      slashCommands: CODEX_BUILT_IN_SLASH_COMMANDS,
       skills: [],
       probe: {
         installed: false,
@@ -463,6 +467,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       enabled: codexSettings.enabled,
       checkedAt,
       models: emptyModels,
+      slashCommands: CODEX_BUILT_IN_SLASH_COMMANDS,
       skills: [],
       probe: {
         installed,
@@ -482,6 +487,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       enabled: codexSettings.enabled,
       checkedAt,
       models: emptyModels,
+      slashCommands: CODEX_BUILT_IN_SLASH_COMMANDS,
       skills: [],
       probe: {
         installed: true,
@@ -501,6 +507,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     enabled: codexSettings.enabled,
     checkedAt,
     models: snapshot.models,
+    slashCommands: CODEX_BUILT_IN_SLASH_COMMANDS,
     skills: snapshot.skills,
     probe: {
       installed: true,

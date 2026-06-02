@@ -17,6 +17,7 @@ import {
   type BrowserAgentStreamEvent,
   CommandId,
   EventId,
+  CodexSettings,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -32,6 +33,8 @@ import {
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
+  ProviderSlashCommandsListError,
+  type ProviderInstanceId,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -57,6 +60,7 @@ import {
   observeRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { listCodexSlashCommands } from "./provider/codexSlashCommands.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
@@ -100,6 +104,7 @@ import { browserAgentRegistry } from "./browserAgents/registry.ts";
 import { makeOpenRouterAudioTranscription } from "./audioTranscription/OpenRouterAudioTranscription.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
+const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -639,6 +644,34 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const listProviderSlashCommands = (input: {
+        readonly instanceId: ProviderInstanceId;
+        readonly cwd?: string | undefined;
+      }) =>
+        Effect.gen(function* () {
+          const providers = yield* providerRegistry.getProviders;
+          const provider = providers.find((snapshot) => snapshot.instanceId === input.instanceId);
+          if (provider === undefined) {
+            return { slashCommands: [] };
+          }
+          if (provider.driver !== "codex") {
+            return { slashCommands: provider.slashCommands };
+          }
+
+          const settings = yield* serverSettings.getSettings;
+          const explicitInstance = settings.providerInstances[input.instanceId];
+          const rawCodexSettings =
+            explicitInstance?.driver === "codex"
+              ? explicitInstance.config
+              : settings.providers.codex;
+          const codexSettings = yield* decodeCodexSettings(rawCodexSettings ?? {});
+          const slashCommands = yield* listCodexSlashCommands({
+            codexSettings,
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+          });
+          return { slashCommands };
+        });
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -943,6 +976,20 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.providerListSlashCommands]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerListSlashCommands,
+            listProviderSlashCommands(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderSlashCommandsListError({
+                    message: "Failed to list provider slash commands.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           observeRpcEffect(
