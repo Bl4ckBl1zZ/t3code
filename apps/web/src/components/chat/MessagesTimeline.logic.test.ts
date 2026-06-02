@@ -5,6 +5,7 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveCompactWorkEntryText,
 } from "./MessagesTimeline.logic";
 
 describe("computeMessageDurationStart", () => {
@@ -147,6 +148,36 @@ describe("normalizeCompactToolLabel", () => {
 
   it("removes trailing completion wording from other labels", () => {
     expect(normalizeCompactToolLabel("Read file completed")).toBe("Read file");
+  });
+});
+
+describe("resolveCompactWorkEntryText", () => {
+  it("uses the concrete preview as the visible activity text", () => {
+    expect(
+      resolveCompactWorkEntryText({
+        heading: "Ran command",
+        rawPreview: "sed -n '1,40p' app/api/route.ts",
+      }),
+    ).toEqual({
+      preview: "sed -n '1,40p' app/api/route.ts",
+      visibleText: "sed -n '1,40p' app/api/route.ts",
+      contextText: "Ran command - sed -n '1,40p' app/api/route.ts",
+      visibleTextIsPreview: true,
+    });
+  });
+
+  it("falls back to the heading when the preview duplicates it", () => {
+    expect(
+      resolveCompactWorkEntryText({
+        heading: "Read file",
+        rawPreview: "Read file completed",
+      }),
+    ).toEqual({
+      preview: null,
+      visibleText: "Read file",
+      contextText: "Read file",
+      visibleTextIsPreview: false,
+    });
   });
 });
 

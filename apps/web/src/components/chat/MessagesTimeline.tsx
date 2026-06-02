@@ -51,6 +51,7 @@ import {
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveCompactWorkEntryText,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -1187,14 +1188,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
-  const preview =
-    rawPreview &&
-    normalizeCompactToolLabel(rawPreview).toLowerCase() ===
-      normalizeCompactToolLabel(heading).toLowerCase()
-      ? null
-      : rawPreview;
+  const compactText = resolveCompactWorkEntryText({ heading, rawPreview });
+  const { preview, visibleText, visibleTextIsPreview } = compactText;
   const rawCommand = workEntryRawCommand(workEntry);
-  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const displayText = compactText.contextText;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
 
@@ -1209,41 +1206,40 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         <div className="min-w-0 flex-1 overflow-hidden">
           {rawCommand ? (
             <div className="max-w-full">
-              <p
-                className={cn(
-                  "truncate text-xs leading-5",
-                  workToneClass(workEntry.tone),
-                  preview ? "text-muted-foreground/70" : "",
-                )}
-                title={displayText}
-              >
-                <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                  {heading}
-                </span>
-                {preview && (
-                  <Tooltip>
-                    <TooltipTrigger
-                      closeDelay={0}
-                      delay={75}
-                      render={
-                        <span className="max-w-full cursor-default text-muted-foreground/55 transition-colors hover:text-muted-foreground/75 focus-visible:text-muted-foreground/75">
-                          {" "}
-                          - {preview}
-                        </span>
-                      }
+              <Tooltip>
+                <TooltipTrigger
+                  closeDelay={0}
+                  delay={75}
+                  render={
+                    <p
+                      className={cn(
+                        "truncate text-xs leading-5",
+                        workToneClass(workEntry.tone),
+                        preview ? "text-muted-foreground/70" : "",
+                      )}
+                      title={displayText}
                     />
-                    <TooltipPopup
-                      align="start"
-                      className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
-                      side="top"
-                    >
-                      <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
-                        {rawCommand}
-                      </div>
-                    </TooltipPopup>
-                  </Tooltip>
-                )}
-              </p>
+                  }
+                >
+                  <span
+                    className={cn(
+                      workToneClass(workEntry.tone),
+                      visibleTextIsPreview ? "text-muted-foreground/70" : "text-foreground/80",
+                    )}
+                  >
+                    {visibleText}
+                  </span>
+                </TooltipTrigger>
+                <TooltipPopup
+                  align="start"
+                  className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
+                  side="top"
+                >
+                  <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
+                    {rawCommand}
+                  </div>
+                </TooltipPopup>
+              </Tooltip>
             </div>
           ) : (
             <Tooltip>
@@ -1259,10 +1255,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     preview ? "text-muted-foreground/70" : "",
                   )}
                 >
-                  <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                    {heading}
+                  <span
+                    className={cn(
+                      workToneClass(workEntry.tone),
+                      visibleTextIsPreview ? "text-muted-foreground/70" : "text-foreground/80",
+                    )}
+                  >
+                    {visibleText}
                   </span>
-                  {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
               <TooltipPopup className="max-w-[min(720px,calc(100vw-2rem))]">

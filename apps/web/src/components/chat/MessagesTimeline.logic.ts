@@ -68,6 +68,40 @@ export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
+export function resolveCompactWorkEntryText(input: {
+  readonly heading: string;
+  readonly rawPreview: string | null;
+}): {
+  readonly preview: string | null;
+  readonly visibleText: string;
+  readonly contextText: string;
+  readonly visibleTextIsPreview: boolean;
+} {
+  const rawPreview = input.rawPreview?.trim() ? input.rawPreview : null;
+  const preview =
+    rawPreview &&
+    normalizeCompactToolLabel(rawPreview).toLowerCase() ===
+      normalizeCompactToolLabel(input.heading).toLowerCase()
+      ? null
+      : rawPreview;
+
+  if (!preview) {
+    return {
+      preview: null,
+      visibleText: input.heading,
+      contextText: input.heading,
+      visibleTextIsPreview: false,
+    };
+  }
+
+  return {
+    preview,
+    visibleText: preview,
+    contextText: `${input.heading} - ${preview}`,
+    visibleTextIsPreview: true,
+  };
+}
+
 export function resolveAssistantMessageCopyState({
   text,
   showCopyButton,
