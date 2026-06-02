@@ -16,6 +16,7 @@ import {
   BrowserAgentCommandError,
   type BrowserAgentStreamEvent,
   CommandId,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   EventId,
   CodexSettings,
   OrganizationPanelTurnId,
@@ -38,7 +39,7 @@ import {
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
   ProviderSlashCommandsListError,
-  type ProviderInstanceId,
+  ProviderInstanceId,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -64,6 +65,7 @@ import {
   observeRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { ProviderService } from "./provider/Services/ProviderService.ts";
 import { listCodexSlashCommands } from "./provider/codexSlashCommands.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
@@ -199,6 +201,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager;
       const providerRegistry = yield* ProviderRegistry;
+      const providerService = yield* ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const config = yield* ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents;
@@ -217,6 +220,25 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           Effect.logWarning("Failed to read automatic Git fetch interval setting", {
             detail: cause.message,
           }).pipe(Effect.as(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
+        ),
+      );
+      const organizationPanelSettings = serverSettings.getSettings.pipe(
+        Effect.map((settings) => ({
+          sidebarProjectFolders: settings.sidebarProjectFolders,
+          textGenerationModelSelection: settings.textGenerationModelSelection,
+        })),
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to read organization panel settings", {
+            detail: cause.message,
+          }).pipe(
+            Effect.as({
+              sidebarProjectFolders: [],
+              textGenerationModelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+              },
+            }),
+          ),
         ),
       );
       const sourceControlRepositories = yield* SourceControlRepositoryService;
@@ -991,10 +1013,12 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.organizationPanelGet,
             nowIso.pipe(
-              Effect.flatMap((now) =>
+              Effect.zipWith(organizationPanelSettings, (now, settings) => ({ now, settings })),
+              Effect.flatMap(({ now, settings }) =>
                 getOrganizationPanel({
                   config,
                   organizationId: input.organizationId,
+                  settings,
                   now,
                 }),
               ),
@@ -1004,11 +1028,16 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         [WS_METHODS.organizationPanelHistoryList]: (input) =>
           observeRpcEffect(
             WS_METHODS.organizationPanelHistoryList,
-            listOrganizationPanelHistory({
-              config,
-              organizationId: input.organizationId,
-              ...(input.limit !== undefined ? { limit: input.limit } : {}),
-            }),
+            organizationPanelSettings.pipe(
+              Effect.flatMap((settings) =>
+                listOrganizationPanelHistory({
+                  config,
+                  organizationId: input.organizationId,
+                  settings,
+                  ...(input.limit !== undefined ? { limit: input.limit } : {}),
+                }),
+              ),
+            ),
             { "rpc.aggregate": "organization-panel" },
           ),
         [WS_METHODS.organizationPanelTurnStart]: (input) =>
@@ -1016,13 +1045,19 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             WS_METHODS.organizationPanelTurnStart,
             Effect.all({
               now: nowIso,
+              settings: organizationPanelSettings,
               turnId: organizationPanelTurnId("panel-turn"),
               versionId: organizationPanelVersionId("panel-version"),
             }).pipe(
-              Effect.flatMap(({ now, turnId, versionId }) =>
+              Effect.flatMap(({ now, settings, turnId, versionId }) =>
                 startOrganizationPanelTurn({
                   config,
                   organizationId: input.organizationId,
+                  settings,
+                  agent: {
+                    providerService,
+                    modelSelection: settings.textGenerationModelSelection,
+                  },
                   prompt: input.prompt,
                   turnId,
                   versionId,
@@ -1038,6 +1073,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             stopOrganizationPanelTurn({
               organizationId: input.organizationId,
               turnId: input.turnId,
+              agent: { providerService },
             }),
             { "rpc.aggregate": "organization-panel" },
           ),
@@ -1046,13 +1082,15 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             WS_METHODS.organizationPanelRollback,
             Effect.all({
               now: nowIso,
+              settings: organizationPanelSettings,
               rollbackVersionId: organizationPanelVersionId("panel-rollback"),
               turnId: organizationPanelTurnId("panel-rollback"),
             }).pipe(
-              Effect.flatMap(({ now, rollbackVersionId, turnId }) =>
+              Effect.flatMap(({ now, settings, rollbackVersionId, turnId }) =>
                 rollbackOrganizationPanel({
                   config,
                   organizationId: input.organizationId,
+                  settings,
                   versionId: input.versionId,
                   rollbackVersionId,
                   turnId,

@@ -2619,6 +2619,12 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
   const sidebarProjectFolders = useSettings((settings) => settings.sidebarProjectFolders);
   const sidebarProjectExpandedById = useSettings((settings) => settings.sidebarProjectExpandedById);
   const { updateSettings } = useUpdateSettings();
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const activeOrganizationId = useParams({
+    strict: false,
+    select: (params) => (typeof params.organizationId === "string" ? params.organizationId : null),
+  });
   const folderExpanded = sidebarProjectExpandedById[folderEntry.folderKey] ?? true;
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(folderEntry.folder.name);
@@ -2683,6 +2689,7 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
   const handleFolderContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
+      projectItemProps.suppressProjectClickForContextMenuRef.current = true;
       void (async () => {
         const api = readLocalApi();
         if (!api) {
@@ -2737,6 +2744,7 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
       deleteFolder,
       folderEntry.folder.iconProjectKey,
       folderEntry.projects,
+      projectItemProps.suppressProjectClickForContextMenuRef,
       setFolderIconProjectKey,
     ],
   );
@@ -2781,6 +2789,47 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
     ],
   );
 
+  const handleFolderPanelClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (projectItemProps.suppressProjectClickForContextMenuRef.current) {
+        projectItemProps.suppressProjectClickForContextMenuRef.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (projectItemProps.dragInProgressRef.current) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (projectItemProps.suppressProjectClickAfterDragRef.current) {
+        projectItemProps.suppressProjectClickAfterDragRef.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (useThreadSelectionStore.getState().hasSelection()) {
+        useThreadSelectionStore.getState().clearSelection();
+      }
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      void navigate({
+        to: "/organizations/$organizationId",
+        params: { organizationId: folderEntry.folder.id },
+      });
+    },
+    [
+      folderEntry.folder.id,
+      isMobile,
+      navigate,
+      projectItemProps.dragInProgressRef,
+      projectItemProps.suppressProjectClickAfterDragRef,
+      projectItemProps.suppressProjectClickForContextMenuRef,
+      setOpenMobile,
+    ],
+  );
+
   const handleFolderPointerDownCapture = useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
       projectItemProps.suppressProjectClickForContextMenuRef.current = false;
@@ -2804,37 +2853,50 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
 
   const content = (
     <>
-      <SidebarMenuButton
-        ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
-        size="sm"
-        className={cn(
-          "gap-2 px-2 py-1.5 pr-8 text-left hover:bg-accent",
-          isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-        )}
-        {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
-        {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
-        onPointerDownCapture={handleFolderPointerDownCapture}
-        onClick={handleFolderClick}
-        onContextMenu={handleFolderContextMenu}
-      >
-        <ChevronRightIcon
-          className={`-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
-            folderExpanded ? "rotate-90" : ""
-          }`}
-        />
-        <ProjectFavicon
-          environmentId={folderEntry.iconProject.environmentId}
-          cwd={folderEntry.iconProject.cwd}
-        />
-        <span className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex w-full gap-1">
+        <SidebarMenuButton
+          ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+          size="sm"
+          className={cn(
+            "min-w-0 flex-1 basis-1/2 gap-2 px-2 py-1.5 text-left hover:bg-accent",
+            isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+          )}
+          {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
+          {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
+          aria-label={`${folderExpanded ? "Collapse" : "Expand"} ${folderEntry.folder.name}`}
+          onPointerDownCapture={handleFolderPointerDownCapture}
+          onClick={handleFolderClick}
+          onContextMenu={handleFolderContextMenu}
+        >
+          <ChevronRightIcon
+            className={`-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
+              folderExpanded ? "rotate-90" : ""
+            }`}
+          />
+          <ProjectFavicon
+            environmentId={folderEntry.iconProject.environmentId}
+            cwd={folderEntry.iconProject.cwd}
+          />
           <span className="truncate text-xs font-medium text-foreground/90">
             {folderEntry.folder.name}
           </span>
+        </SidebarMenuButton>
+        <SidebarMenuButton
+          size="sm"
+          isActive={activeOrganizationId === folderEntry.folder.id}
+          className="min-w-0 flex-1 basis-1/2 gap-2 px-2 py-1.5 text-left text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+          aria-label={`Open ${folderEntry.folder.name} organization panel`}
+          onPointerDownCapture={handleFolderPointerDownCapture}
+          onClick={handleFolderPanelClick}
+          onContextMenu={handleFolderContextMenu}
+        >
+          <PanelTopIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">Panel</span>
           <span className="shrink-0 text-[10px] text-muted-foreground/60">
             {folderEntry.projects.length} projects
           </span>
-        </span>
-      </SidebarMenuButton>
+        </SidebarMenuButton>
+      </div>
 
       <Collapsible open={folderExpanded}>
         <CollapsibleContent>
@@ -3180,15 +3242,6 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
 const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const handleOrganizationPanelClick = useCallback(() => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({
-      to: "/organizations/$organizationId",
-      params: { organizationId: "acme" },
-    });
-  }, [isMobile, navigate, setOpenMobile]);
   const handleSettingsClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -3201,16 +3254,6 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={handleOrganizationPanelClick}
-          >
-            <PanelTopIcon className="size-3.5" />
-            <span className="text-xs">Acme panel</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
             size="sm"

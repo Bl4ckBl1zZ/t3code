@@ -245,7 +245,7 @@ function OrganizationPanelControls(props: {
         <Textarea
           value={props.prompt}
           rows={3}
-          placeholder="Add monthly revenue, active users, and open tickets."
+          placeholder="Describe what this panel should show."
           className="min-h-20 resize-y"
           onChange={(event) => props.setPrompt(event.target.value)}
           onKeyDown={(event) => {
