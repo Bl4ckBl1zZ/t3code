@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import type { ServerConfigShape } from "./config.ts";
@@ -81,6 +82,7 @@ const encodeStoredOrganizationPanelVersion = Schema.encodeEffect(
 
 const eventSubscribers = new Set<(event: OrganizationPanelEvent) => void>();
 const activeTurnsByOrganization = new Map<OrganizationId, OrganizationPanelTurnId>();
+const organizationLocks = new Map<OrganizationId, Semaphore.Semaphore>();
 
 export function isValidOrganizationPanelSlug(slug: string): boolean {
   return PANEL_SLUG_PATTERN.test(slug);
@@ -221,130 +223,137 @@ export const startOrganizationPanelTurn = (input: {
   FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    if (activeTurnsByOrganization.has(input.organizationId)) {
-      return yield* panelError(
-        "active-turn-running",
-        "An organization panel turn is already running.",
-      );
-    }
+    const lock = yield* getOrganizationLock(input.organizationId);
+    return yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (activeTurnsByOrganization.has(input.organizationId)) {
+          return yield* panelError(
+            "active-turn-running",
+            "An organization panel turn is already running.",
+          );
+        }
 
-    activeTurnsByOrganization.set(input.organizationId, input.turnId);
-    const runTurn = Effect.gen(function* () {
-      const context = yield* loadPanelContext(input);
-      const beforeContents = yield* readPanelFile(context.path);
-      const afterContents = renderPanelSourceFromPrompt({
-        organization: context.organization,
-        prompt: input.prompt,
-      });
-      const validationErrors = validateOrganizationPanelSource(afterContents);
+        activeTurnsByOrganization.set(input.organizationId, input.turnId);
+        const runTurn = Effect.gen(function* () {
+          const context = yield* loadPanelContext(input);
+          const beforeContents = yield* readPanelFile(context.path);
+          const afterContents = renderPanelSourceFromPrompt({
+            organization: context.organization,
+            prompt: input.prompt,
+          });
+          const validationErrors = validateOrganizationPanelSource(afterContents);
 
-      publishPanelEvent({
-        type: "turn.started",
-        organizationId: input.organizationId,
-        turnId: input.turnId,
-        prompt: input.prompt,
-      });
-      publishPanelEvent({
-        type: "turn.delta",
-        organizationId: input.organizationId,
-        turnId: input.turnId,
-        message: "Generated a bounded Panel.tsx update.",
-      });
+          publishPanelEvent({
+            type: "turn.started",
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+            prompt: input.prompt,
+          });
+          publishPanelEvent({
+            type: "turn.delta",
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+            message: "Generated a bounded Panel.tsx update.",
+          });
 
-      if (validationErrors.length > 0) {
-        publishPanelEvent({
-          type: "validation.result",
-          organizationId: input.organizationId,
-          turnId: input.turnId,
-          status: "failed",
-          errors: validationErrors,
-        });
-        publishPanelEvent({
-          type: "turn.failed",
-          organizationId: input.organizationId,
-          turnId: input.turnId,
-          reason: validationErrors.join(" "),
-        });
-        return yield* panelError(
-          "validation-failed",
-          "Generated panel failed validation.",
-          validationErrors,
-        );
-      }
-
-      const diff = createUnifiedDiff(
-        context.path.panelFileRelativePath,
-        beforeContents,
-        afterContents,
-      );
-      yield* writePanelFile(context.path, afterContents);
-      const version = yield* appendStoredVersion(input.config, {
-        id: input.versionId,
-        organizationId: input.organizationId,
-        panelSlug: context.organization.panelSlug,
-        turnId: input.turnId,
-        prompt: input.prompt,
-        filePath: context.path.panelFileRelativePath,
-        beforeHash: hashContents(beforeContents),
-        afterHash: hashContents(afterContents),
-        diff,
-        status: "applied",
-        createdAt: input.now,
-        beforeContents,
-        afterContents,
-      });
-
-      publishPanelEvent({
-        type: "file.patch",
-        organizationId: input.organizationId,
-        turnId: input.turnId,
-        filePath: context.path.panelFileRelativePath,
-        diff,
-      });
-      publishPanelEvent({
-        type: "validation.result",
-        organizationId: input.organizationId,
-        turnId: input.turnId,
-        status: "passed",
-        errors: [],
-      });
-      publishPanelEvent({
-        type: "compile.result",
-        organizationId: input.organizationId,
-        turnId: input.turnId,
-        status: "passed",
-        errors: [],
-      });
-      publishPanelEvent({
-        type: "turn.completed",
-        organizationId: input.organizationId,
-        turnId: input.turnId,
-        versionId: version.id,
-      });
-
-      const snapshot = toSnapshot({
-        context: { ...context, contents: afterContents },
-        now: input.now,
-        latestVersion: version,
-      });
-      publishSnapshotEvent(snapshot);
-      return { turnId: input.turnId, version, snapshot };
-    });
-
-    return yield* runTurn.pipe(
-      Effect.tapError((error) =>
-        Effect.sync(() => {
-          if (error.code !== "validation-failed") {
+          if (validationErrors.length > 0) {
+            publishPanelEvent({
+              type: "validation.result",
+              organizationId: input.organizationId,
+              turnId: input.turnId,
+              status: "failed",
+              errors: validationErrors,
+            });
             publishPanelEvent({
               type: "turn.failed",
               organizationId: input.organizationId,
               turnId: input.turnId,
-              reason: error.message,
+              reason: validationErrors.join(" "),
             });
+            return yield* panelError(
+              "validation-failed",
+              "Generated panel failed validation.",
+              validationErrors,
+            );
           }
-        }),
-      ),
-      Effect.ensuring(Effect.sync(() => activeTurnsByOrganization.delete(input.organizationId))),
+
+          const diff = createUnifiedDiff(
+            context.path.panelFileRelativePath,
+            beforeContents,
+            afterContents,
+          );
+          yield* writePanelFile(context.path, afterContents);
+          const version = yield* appendStoredVersion(input.config, {
+            id: input.versionId,
+            organizationId: input.organizationId,
+            panelSlug: context.organization.panelSlug,
+            turnId: input.turnId,
+            prompt: input.prompt,
+            filePath: context.path.panelFileRelativePath,
+            beforeHash: hashContents(beforeContents),
+            afterHash: hashContents(afterContents),
+            diff,
+            status: "applied",
+            createdAt: input.now,
+            beforeContents,
+            afterContents,
+          });
+
+          publishPanelEvent({
+            type: "file.patch",
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+            filePath: context.path.panelFileRelativePath,
+            diff,
+          });
+          publishPanelEvent({
+            type: "validation.result",
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+            status: "passed",
+            errors: [],
+          });
+          publishPanelEvent({
+            type: "compile.result",
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+            status: "passed",
+            errors: [],
+          });
+          publishPanelEvent({
+            type: "turn.completed",
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+            versionId: version.id,
+          });
+
+          const snapshot = toSnapshot({
+            context: { ...context, contents: afterContents },
+            now: input.now,
+            latestVersion: version,
+          });
+          publishSnapshotEvent(snapshot);
+          return { turnId: input.turnId, version, snapshot };
+        });
+
+        return yield* runTurn.pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              if (error.code !== "validation-failed") {
+                publishPanelEvent({
+                  type: "turn.failed",
+                  organizationId: input.organizationId,
+                  turnId: input.turnId,
+                  reason: error.message,
+                });
+              }
+            }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => activeTurnsByOrganization.delete(input.organizationId)),
+          ),
+        );
+      }),
     );
   });
 
@@ -381,89 +390,124 @@ export const rollbackOrganizationPanel = (input: {
   FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    const context = yield* loadPanelContext(input);
-    const versions = yield* readStoredVersions(input.config);
-    const target = versions.find(
-      (version) =>
-        version.organizationId === input.organizationId && version.id === input.versionId,
-    );
-
-    if (!target) {
+    if (activeTurnsByOrganization.has(input.organizationId)) {
       return yield* panelError(
-        "rollback-unavailable",
-        "Selected organization panel version was not found.",
+        "active-turn-running",
+        "Cannot rollback while a panel turn is active.",
       );
     }
 
-    const validationErrors = validateOrganizationPanelSource(target.beforeContents);
-    if (validationErrors.length > 0) {
-      return yield* panelError(
-        "rollback-failed",
-        "Previous organization panel source failed validation.",
-        validationErrors,
-      );
+    const lock = yield* getOrganizationLock(input.organizationId);
+    return yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (activeTurnsByOrganization.has(input.organizationId)) {
+          return yield* panelError(
+            "active-turn-running",
+            "Cannot rollback while a panel turn is active.",
+          );
+        }
+
+        const context = yield* loadPanelContext(input);
+        const versions = yield* readStoredVersions(input.config);
+        const target = versions.find(
+          (version) =>
+            version.organizationId === input.organizationId && version.id === input.versionId,
+        );
+
+        if (!target) {
+          return yield* panelError(
+            "rollback-unavailable",
+            "Selected organization panel version was not found.",
+          );
+        }
+
+        const validationErrors = validateOrganizationPanelSource(target.beforeContents);
+        if (validationErrors.length > 0) {
+          return yield* panelError(
+            "rollback-failed",
+            "Previous organization panel source failed validation.",
+            validationErrors,
+          );
+        }
+
+        const beforeContents = yield* readPanelFile(context.path);
+        const afterContents = target.beforeContents;
+        const diff = createUnifiedDiff(
+          context.path.panelFileRelativePath,
+          beforeContents,
+          afterContents,
+        );
+        yield* writePanelFile(context.path, afterContents);
+
+        const version = yield* appendStoredVersion(input.config, {
+          id: input.rollbackVersionId,
+          organizationId: input.organizationId,
+          panelSlug: context.organization.panelSlug,
+          turnId: input.turnId,
+          prompt: `Rollback ${target.id}`,
+          filePath: context.path.panelFileRelativePath,
+          beforeHash: hashContents(beforeContents),
+          afterHash: hashContents(afterContents),
+          diff,
+          status: "rolled-back",
+          createdAt: input.now,
+          beforeContents,
+          afterContents,
+        });
+
+        publishPanelEvent({
+          type: "file.patch",
+          organizationId: input.organizationId,
+          turnId: input.turnId,
+          filePath: context.path.panelFileRelativePath,
+          diff,
+        });
+        publishPanelEvent({
+          type: "validation.result",
+          organizationId: input.organizationId,
+          turnId: input.turnId,
+          status: "passed",
+          errors: [],
+        });
+        publishPanelEvent({
+          type: "compile.result",
+          organizationId: input.organizationId,
+          turnId: input.turnId,
+          status: "passed",
+          errors: [],
+        });
+        publishPanelEvent({
+          type: "turn.completed",
+          organizationId: input.organizationId,
+          turnId: input.turnId,
+          versionId: version.id,
+        });
+
+        const snapshot = toSnapshot({
+          context: { ...context, contents: afterContents },
+          now: input.now,
+          latestVersion: version,
+        });
+        publishSnapshotEvent(snapshot);
+        return { version, snapshot };
+      }),
+    );
+  });
+
+const getOrganizationLock = (organizationId: OrganizationId) =>
+  Effect.gen(function* () {
+    const existing = organizationLocks.get(organizationId);
+    if (existing) {
+      return existing;
     }
 
-    const beforeContents = yield* readPanelFile(context.path);
-    const afterContents = target.beforeContents;
-    const diff = createUnifiedDiff(
-      context.path.panelFileRelativePath,
-      beforeContents,
-      afterContents,
-    );
-    yield* writePanelFile(context.path, afterContents);
-
-    const version = yield* appendStoredVersion(input.config, {
-      id: input.rollbackVersionId,
-      organizationId: input.organizationId,
-      panelSlug: context.organization.panelSlug,
-      turnId: input.turnId,
-      prompt: `Rollback ${target.id}`,
-      filePath: context.path.panelFileRelativePath,
-      beforeHash: hashContents(beforeContents),
-      afterHash: hashContents(afterContents),
-      diff,
-      status: "rolled-back",
-      createdAt: input.now,
-      beforeContents,
-      afterContents,
-    });
-
-    publishPanelEvent({
-      type: "file.patch",
-      organizationId: input.organizationId,
-      turnId: input.turnId,
-      filePath: context.path.panelFileRelativePath,
-      diff,
-    });
-    publishPanelEvent({
-      type: "validation.result",
-      organizationId: input.organizationId,
-      turnId: input.turnId,
-      status: "passed",
-      errors: [],
-    });
-    publishPanelEvent({
-      type: "compile.result",
-      organizationId: input.organizationId,
-      turnId: input.turnId,
-      status: "passed",
-      errors: [],
-    });
-    publishPanelEvent({
-      type: "turn.completed",
-      organizationId: input.organizationId,
-      turnId: input.turnId,
-      versionId: version.id,
-    });
-
-    const snapshot = toSnapshot({
-      context: { ...context, contents: afterContents },
-      now: input.now,
-      latestVersion: version,
-    });
-    publishSnapshotEvent(snapshot);
-    return { version, snapshot };
+    const lock = yield* Semaphore.make(1);
+    const current = organizationLocks.get(organizationId);
+    if (current) {
+      return current;
+    }
+    organizationLocks.set(organizationId, lock);
+    return lock;
   });
 
 function collectImportSpecifiers(source: string): readonly string[] {

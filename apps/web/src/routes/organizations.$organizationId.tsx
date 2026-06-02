@@ -299,8 +299,8 @@ function PanelActivitySurface({ activity }: { readonly activity: ActivityState }
           <p className="text-sm text-muted-foreground">No panel activity yet.</p>
         ) : (
           <div className="flex flex-col gap-2">
-            {activity.events.map((event) => (
-              <div key={eventKey(event)} className="rounded-md border border-border/70 p-2">
+            {activity.events.map((event, index) => (
+              <div key={eventKey(event, index)} className="rounded-md border border-border/70 p-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium">{eventLabel(event)}</span>
                   <Badge size="sm" variant={eventTone(event)}>
@@ -356,6 +356,7 @@ function PanelHistorySurface(props: {
                   <Button
                     size="xs"
                     variant="outline"
+                    aria-label={`Rollback version from ${new Date(version.createdAt).toLocaleString()}`}
                     disabled={props.rollbackPending}
                     onClick={() => props.rollback(version)}
                   >
@@ -393,7 +394,13 @@ function applyActivityEvent(state: ActivityState, event: OrganizationPanelEvent)
   const events = [...state.events, event].slice(-40);
   switch (event.type) {
     case "turn.started":
-      return { ...state, events, activeTurnId: event.turnId };
+      return {
+        ...state,
+        events,
+        activeTurnId: event.turnId,
+        validationStatus: "idle",
+        compileStatus: "idle",
+      };
     case "validation.result":
       return { ...state, events, validationStatus: event.status };
     case "compile.result":
@@ -445,23 +452,23 @@ function eventTone(event: OrganizationPanelEvent): "outline" | "success" | "erro
   return "outline";
 }
 
-function eventKey(event: OrganizationPanelEvent): string {
+function eventKey(event: OrganizationPanelEvent, index: number): string {
   switch (event.type) {
     case "panel.snapshot":
-      return `${event.type}:${event.organizationId}:${event.versionId}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.versionId}`;
     case "turn.started":
-      return `${event.type}:${event.organizationId}:${event.turnId}:${event.prompt}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.prompt}`;
     case "turn.delta":
-      return `${event.type}:${event.organizationId}:${event.turnId}:${event.message}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.message}`;
     case "file.patch":
-      return `${event.type}:${event.organizationId}:${event.turnId}:${event.filePath}:${event.diff.length}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.filePath}:${event.diff.length}`;
     case "validation.result":
     case "compile.result":
-      return `${event.type}:${event.organizationId}:${event.turnId}:${event.status}:${event.errors.join("|")}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.status}:${event.errors.join("|")}`;
     case "turn.completed":
-      return `${event.type}:${event.organizationId}:${event.turnId}:${event.versionId}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.versionId}`;
     case "turn.failed":
-      return `${event.type}:${event.organizationId}:${event.turnId}:${event.reason}`;
+      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.reason}`;
   }
 }
 
