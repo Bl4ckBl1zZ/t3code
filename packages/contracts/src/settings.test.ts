@@ -45,7 +45,11 @@ describe("ClientSettings running message delivery", () => {
 describe("ClientSettings sidebar project folders", () => {
   it("defaults project folders to an empty list", () => {
     expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectFolders).toEqual([]);
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectExpandedById).toEqual({});
+    expect(DEFAULT_CLIENT_SETTINGS.sidebarProjectOrder).toEqual([]);
     expect(decodeClientSettings({}).sidebarProjectFolders).toEqual([]);
+    expect(decodeClientSettings({}).sidebarProjectExpandedById).toEqual({});
+    expect(decodeClientSettings({}).sidebarProjectOrder).toEqual([]);
   });
 
   it("decodes project folders and trims persisted values", () => {
@@ -87,11 +91,33 @@ describe("ClientSettings sidebar project folders", () => {
       },
     ]);
   });
+
+  it("accepts project organization as a synced server settings patch", () => {
+    const patch = decodeServerSettingsPatch({
+      sidebarProjectExpandedById: {
+        "folder-1": false,
+      },
+      sidebarProjectOrder: ["environment-local:/repo-b", "environment-local:/repo-a"],
+      sidebarProjectSortOrder: "manual",
+    });
+
+    expect(patch.sidebarProjectExpandedById).toEqual({
+      "folder-1": false,
+    });
+    expect(patch.sidebarProjectOrder).toEqual([
+      "environment-local:/repo-b",
+      "environment-local:/repo-a",
+    ]);
+    expect(patch.sidebarProjectSortOrder).toBe("manual");
+  });
 });
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
+    expect(DEFAULT_SERVER_SETTINGS.sidebarProjectFolders).toEqual([]);
+    expect(DEFAULT_SERVER_SETTINGS.sidebarProjectExpandedById).toEqual({});
+    expect(DEFAULT_SERVER_SETTINGS.sidebarProjectOrder).toEqual([]);
   });
 
   it("decodes a fully empty config (legacy on-disk shape) without complaint", () => {

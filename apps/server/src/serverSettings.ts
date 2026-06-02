@@ -1,9 +1,9 @@
 /**
  * ServerSettings - Server-authoritative settings service.
  *
- * Owns persistence, validation, and change notification of settings that affect
- * server-side behavior (binary paths, streaming mode, env mode, custom models,
- * text generation model selection).
+ * Owns persistence, validation, and change notification of settings that must
+ * stay consistent across clients (provider/runtime config and shared UI
+ * preferences).
  *
  * Follows the same pattern as `keybindings.ts`: JSON file + Cache + PubSub +
  * Semaphore + FileSystem.watch for concurrency and external edit detection.

@@ -56,6 +56,7 @@ const selectProviders = (config: ServerConfig | null) =>
   config?.providers ?? EMPTY_SERVER_PROVIDERS;
 const selectSettings = (config: ServerConfig | null): ServerSettings =>
   config?.settings ?? DEFAULT_SERVER_SETTINGS;
+const selectServerConfigLoaded = (config: ServerConfig | null): boolean => config !== null;
 
 export const welcomeAtom = makeStateAtom<ServerLifecycleWelcomePayload | null>(
   "server-welcome",
@@ -266,6 +267,10 @@ function useLatestAtomSubscription<A>(
 
 export function useServerConfig(): ServerConfig | null {
   return useAtomValue(serverConfigAtom);
+}
+
+export function useServerConfigLoaded(): boolean {
+  return useAtomValue(serverConfigAtom, selectServerConfigLoaded);
 }
 
 export function useServerSettings(): ServerSettings {

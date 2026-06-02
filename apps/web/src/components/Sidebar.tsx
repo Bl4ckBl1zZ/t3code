@@ -187,7 +187,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { CommandDialogTrigger } from "./ui/command";
 import { readEnvironmentApi } from "../environmentApi";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
-import { useServerKeybindings } from "../rpc/serverState";
+import { useServerConfigLoaded, useServerKeybindings } from "../rpc/serverState";
 import {
   derivePhysicalProjectKey,
   deriveProjectGroupingOverrideKey,
@@ -219,6 +219,36 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+
+function setSidebarProjectExpandedValue(
+  current: Readonly<Record<string, boolean>>,
+  projectKey: string,
+  expanded: boolean,
+): Record<string, boolean> {
+  const next = { ...current };
+  if (expanded) {
+    delete next[projectKey];
+  } else {
+    next[projectKey] = false;
+  }
+  return next;
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function booleanRecordsEqual(
+  left: Readonly<Record<string, boolean>>,
+  right: Readonly<Record<string, boolean>>,
+): boolean {
+  const leftEntries = Object.entries(left);
+  if (leftEntries.length !== Object.keys(right).length) {
+    return false;
+  }
+  return leftEntries.every(([key, value]) => right[key] === value);
+}
+
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -956,6 +986,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const sidebarProjectFolders = useSettings((settings) => settings.sidebarProjectFolders);
+  const sidebarProjectExpandedById = useSettings((settings) => settings.sidebarProjectExpandedById);
   const { updateSettings } = useUpdateSettings();
   const sidebarThreadPreviewCount = useSettings<SidebarThreadPreviewCount>(
     (settings) => settings.sidebarThreadPreviewCount,
@@ -963,7 +994,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
-  const toggleProject = useUiStateStore((state) => state.toggleProject);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -1060,9 +1090,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     () => sidebarThreads.filter(isSidebarTopLevelThread),
     [sidebarThreads],
   );
-  const projectExpanded = useUiStateStore(
-    (state) => state.projectExpandedById[project.projectKey] ?? true,
-  );
+  const projectExpanded = sidebarProjectExpandedById[project.projectKey] ?? true;
   const threadLastVisitedAts = useUiStateStore(
     useShallow((state) =>
       projectThreads.map(
@@ -1227,6 +1255,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     visibleProjectThreads,
   ]);
 
+  const toggleProjectExpanded = useCallback(() => {
+    const nextExpanded = !projectExpanded;
+    useUiStateStore.getState().setProjectExpanded(project.projectKey, nextExpanded);
+    updateSettings({
+      sidebarProjectExpandedById: setSidebarProjectExpandedValue(
+        sidebarProjectExpandedById,
+        project.projectKey,
+        nextExpanded,
+      ),
+    });
+  }, [project.projectKey, projectExpanded, sidebarProjectExpandedById, updateSettings]);
+
   const handleProjectButtonClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (suppressProjectClickForContextMenuRef.current) {
@@ -1249,15 +1289,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (useThreadSelectionStore.getState().hasSelection()) {
         clearSelection();
       }
-      toggleProject(project.projectKey);
+      toggleProjectExpanded();
     },
     [
       clearSelection,
       dragInProgressRef,
-      project.projectKey,
       suppressProjectClickAfterDragRef,
       suppressProjectClickForContextMenuRef,
-      toggleProject,
+      toggleProjectExpanded,
     ],
   );
 
@@ -1268,9 +1307,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (dragInProgressRef.current) {
         return;
       }
-      toggleProject(project.projectKey);
+      toggleProjectExpanded();
     },
-    [dragInProgressRef, project.projectKey, toggleProject],
+    [dragInProgressRef, toggleProjectExpanded],
   );
 
   const handleProjectButtonPointerDownCapture = useCallback(
@@ -2460,11 +2499,9 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
     ...projectItemProps
   } = props;
   const sidebarProjectFolders = useSettings((settings) => settings.sidebarProjectFolders);
+  const sidebarProjectExpandedById = useSettings((settings) => settings.sidebarProjectExpandedById);
   const { updateSettings } = useUpdateSettings();
-  const folderExpanded = useUiStateStore(
-    (state) => state.projectExpandedById[folderEntry.folderKey] ?? true,
-  );
-  const toggleProject = useUiStateStore((state) => state.toggleProject);
+  const folderExpanded = sidebarProjectExpandedById[folderEntry.folderKey] ?? true;
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(folderEntry.folder.name);
 
@@ -2535,8 +2572,16 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
   );
 
   const handleFolderClick = useCallback(() => {
-    toggleProject(folderEntry.folderKey);
-  }, [folderEntry.folderKey, toggleProject]);
+    const nextExpanded = !folderExpanded;
+    useUiStateStore.getState().setProjectExpanded(folderEntry.folderKey, nextExpanded);
+    updateSettings({
+      sidebarProjectExpandedById: setSidebarProjectExpandedValue(
+        sidebarProjectExpandedById,
+        folderEntry.folderKey,
+        nextExpanded,
+      ),
+    });
+  }, [folderEntry.folderKey, folderExpanded, sidebarProjectExpandedById, updateSettings]);
 
   return (
     <SidebarMenuItem className="rounded-md">
@@ -3201,8 +3246,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 export default function Sidebar() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
-  const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
-  const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const localProjectExpandedById = useUiStateStore((store) => store.projectExpandedById);
+  const localProjectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
@@ -3212,6 +3257,8 @@ export default function Sidebar() {
   const sidebarProjectGroupingMode = useSettings((s) => s.sidebarProjectGroupingMode);
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const sidebarProjectFolders = useSettings((s) => s.sidebarProjectFolders);
+  const syncedProjectExpandedById = useSettings((s) => s.sidebarProjectExpandedById);
+  const syncedProjectOrder = useSettings((s) => s.sidebarProjectOrder);
   const sidebarThreadPreviewCount = useSettings((s) => s.sidebarThreadPreviewCount);
   const { updateSettings } = useUpdateSettings();
   const { handleNewThread } = useNewThreadHandler();
@@ -3237,9 +3284,34 @@ export default function Sidebar() {
   const platform = navigator.platform;
   const shortcutModifiers = useShortcutModifierState();
   const modelPickerOpen = useModelPickerOpen();
+  const serverConfigLoaded = useServerConfigLoaded();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
+  const projectExpandedById = useMemo(
+    () =>
+      serverConfigLoaded || Object.keys(syncedProjectExpandedById).length > 0
+        ? syncedProjectExpandedById
+        : localProjectExpandedById,
+    [localProjectExpandedById, serverConfigLoaded, syncedProjectExpandedById],
+  );
+  const projectOrder =
+    serverConfigLoaded || syncedProjectOrder.length > 0 ? syncedProjectOrder : localProjectOrder;
+
+  useEffect(() => {
+    if (booleanRecordsEqual(useUiStateStore.getState().projectExpandedById, projectExpandedById)) {
+      return;
+    }
+    useUiStateStore.setState({ projectExpandedById: { ...projectExpandedById } });
+  }, [projectExpandedById]);
+
+  useEffect(() => {
+    if (stringArraysEqual(useUiStateStore.getState().projectOrder, projectOrder)) {
+      return;
+    }
+    useUiStateStore.setState({ projectOrder: [...projectOrder] });
+  }, [projectOrder]);
+
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
       items: projects,
@@ -3426,8 +3498,9 @@ export default function Sidebar() {
       );
       const overMemberKeys = overProject.memberProjects.map((member) => member.physicalProjectKey);
       reorderProjects(activeMemberKeys, overMemberKeys);
+      updateSettings({ sidebarProjectOrder: useUiStateStore.getState().projectOrder });
     },
-    [sidebarProjectSortOrder, reorderProjects, sidebarProjects],
+    [sidebarProjectSortOrder, reorderProjects, sidebarProjects, updateSettings],
   );
 
   const handleProjectDragStart = useCallback(

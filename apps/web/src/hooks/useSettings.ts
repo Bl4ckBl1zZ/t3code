@@ -2,26 +2,38 @@
  * Unified settings hook.
  *
  * Abstracts the split between server-authoritative settings (persisted in
- * `settings.json` on the server, fetched via `server.getConfig`) and
- * client-only settings (persisted in localStorage).
+ * `settings.json` on the server, fetched via `server.getConfig`) and the
+ * legacy client settings cache used for migration/fallback.
  *
  * Consumers use `useSettings(selector)` to read, and `useUpdateSettings()` to
  * write. The hook transparently routes reads/writes to the correct backing
  * store.
  */
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ServerSettings,
+  type ServerSettingsPatch,
+} from "@t3tools/contracts";
 import {
   type ClientSettingsPatch,
   type ClientSettings,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_UNIFIED_SETTINGS,
+  SYNCED_CLIENT_SETTING_KEYS,
   UnifiedSettings,
 } from "@t3tools/contracts/settings";
 import { ensureLocalApi } from "~/localApi";
 import * as Struct from "effect/Struct";
+import * as Equal from "effect/Equal";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
-import { applySettingsUpdated, getServerConfig, useServerSettings } from "~/rpc/serverState";
+import {
+  applySettingsUpdated,
+  getServerConfig,
+  onServerConfigUpdated,
+  useServerConfigLoaded,
+  useServerSettings,
+} from "~/rpc/serverState";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 
@@ -30,6 +42,9 @@ const clientSettingsHydrationListeners = new Set<() => void>();
 let clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
 let clientSettingsHydrated = false;
 let clientSettingsHydrationPromise: Promise<void> | null = null;
+let legacyClientSettingsMigrationAttempted = false;
+
+const syncedClientSettingKeySet = new Set<string>(SYNCED_CLIENT_SETTING_KEYS);
 
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
@@ -98,6 +113,7 @@ async function hydrateClientSettings(): Promise<void> {
       console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} hydrate failed`, error);
     } finally {
       setClientSettingsHydrated(true);
+      migrateLegacyClientSettingsToServer();
     }
   })();
 
@@ -143,6 +159,71 @@ function splitPatch(patch: Partial<UnifiedSettings>): {
   };
 }
 
+function pickSyncedClientSettings(settings: ServerSettings): ClientSettings {
+  const syncedSettings = { ...DEFAULT_CLIENT_SETTINGS } as Record<string, unknown>;
+  const settingsRecord = settings as unknown as Record<string, unknown>;
+  for (const key of SYNCED_CLIENT_SETTING_KEYS) {
+    syncedSettings[key] = settingsRecord[key];
+  }
+  return syncedSettings as ClientSettings;
+}
+
+function buildLegacyClientSettingsMigrationPatch(
+  localSettings: ClientSettings,
+  serverSettings: ServerSettings,
+): ServerSettingsPatch {
+  const patch: Record<string, unknown> = {};
+  const localRecord = localSettings as unknown as Record<string, unknown>;
+  const clientDefaults = DEFAULT_CLIENT_SETTINGS as unknown as Record<string, unknown>;
+  const serverRecord = serverSettings as unknown as Record<string, unknown>;
+  const serverDefaults = DEFAULT_SERVER_SETTINGS as unknown as Record<string, unknown>;
+
+  for (const key of SYNCED_CLIENT_SETTING_KEYS) {
+    const localValue = localRecord[key];
+    if (Equal.equals(localValue, clientDefaults[key])) {
+      continue;
+    }
+    if (!Equal.equals(serverRecord[key], serverDefaults[key])) {
+      continue;
+    }
+    patch[key] = localValue;
+  }
+
+  return patch as ServerSettingsPatch;
+}
+
+function migrateLegacyClientSettingsToServer(): void {
+  if (legacyClientSettingsMigrationAttempted || !clientSettingsHydrated) {
+    return;
+  }
+
+  const currentServerConfig = getServerConfig();
+  if (!currentServerConfig) {
+    return;
+  }
+
+  const patch = buildLegacyClientSettingsMigrationPatch(
+    getClientSettingsSnapshot(),
+    currentServerConfig.settings,
+  );
+  if (Object.keys(patch).length === 0) {
+    legacyClientSettingsMigrationAttempted = true;
+    return;
+  }
+
+  legacyClientSettingsMigrationAttempted = true;
+  applySettingsUpdated(applyServerSettingsPatch(currentServerConfig.settings, patch));
+  void ensureLocalApi()
+    .server.updateSettings(patch)
+    .catch((error) => {
+      console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} migration failed`, error);
+    });
+}
+
+onServerConfigUpdated(() => {
+  migrateLegacyClientSettingsToServer();
+});
+
 // ── Hooks ────────────────────────────────────────────────────────────
 
 /**
@@ -156,7 +237,15 @@ function splitPatch(patch: Partial<UnifiedSettings>): {
  * settings without subscribing.
  */
 export function getClientSettings(): ClientSettings {
-  return getClientSettingsSnapshot();
+  const serverConfig = getServerConfig();
+  if (!serverConfig) {
+    return getClientSettingsSnapshot();
+  }
+
+  return {
+    ...getClientSettingsSnapshot(),
+    ...pickSyncedClientSettings(serverConfig.settings),
+  };
 }
 
 export function useClientSettingsHydrated(): boolean {
@@ -168,6 +257,7 @@ export function useClientSettingsHydrated(): boolean {
 }
 
 export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings) => T): T {
+  const serverConfigLoaded = useServerConfigLoaded();
   const serverSettings = useServerSettings();
   const clientSettings = useSyncExternalStore(
     subscribeClientSettings,
@@ -176,11 +266,17 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
   );
 
   const merged = useMemo<UnifiedSettings>(
-    () => ({
-      ...serverSettings,
-      ...clientSettings,
-    }),
-    [clientSettings, serverSettings],
+    () =>
+      serverConfigLoaded
+        ? {
+            ...clientSettings,
+            ...serverSettings,
+          }
+        : {
+            ...serverSettings,
+            ...clientSettings,
+          },
+    [clientSettings, serverConfigLoaded, serverSettings],
   );
 
   return useMemo(() => (selector ? selector(merged) : (merged as T)), [merged, selector]);
@@ -208,7 +304,9 @@ export function useUpdateSettings() {
     if (Object.keys(clientPatch).length > 0) {
       persistClientSettings({
         ...getClientSettingsSnapshot(),
-        ...clientPatch,
+        ...Object.fromEntries(
+          Object.entries(clientPatch).filter(([key]) => !syncedClientSettingKeySet.has(key)),
+        ),
       });
     }
   }, []);
@@ -227,6 +325,7 @@ export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
   clientSettingsHydrated = false;
   clientSettingsHydrationPromise = null;
+  legacyClientSettingsMigrationAttempted = false;
   clientSettingsListeners.clear();
   clientSettingsHydrationListeners.clear();
 }

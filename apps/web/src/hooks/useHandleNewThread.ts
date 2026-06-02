@@ -22,6 +22,7 @@ import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
 import { readEnvironmentApi } from "../environmentApi";
 import { getProjectConfigNewThreadEnvMode, readProjectConfigFile } from "../projectConfigFile";
+import { useServerConfigLoaded } from "../rpc/serverState";
 import { useSettings } from "./useSettings";
 
 function useNewThreadState() {
@@ -213,7 +214,11 @@ export function useNewThreadHandler() {
 }
 
 export function useHandleNewThread() {
-  const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const localProjectOrder = useUiStateStore((store) => store.projectOrder);
+  const syncedProjectOrder = useSettings((settings) => settings.sidebarProjectOrder);
+  const serverConfigLoaded = useServerConfigLoaded();
+  const projectOrder =
+    serverConfigLoaded || syncedProjectOrder.length > 0 ? syncedProjectOrder : localProjectOrder;
   const routeTarget = useParams({
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),

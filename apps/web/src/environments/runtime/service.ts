@@ -255,7 +255,9 @@ export function shouldApplyProjectionSnapshot(input: {
     return true;
   }
 
-  return compareAppliedProjectionVersion(input.current, toAppliedProjectionVersion(input.next)) < 0;
+  return (
+    compareAppliedProjectionVersion(input.current, toAppliedProjectionVersion(input.next)) <= 0
+  );
 }
 
 export function shouldApplyProjectionEvent(input: {

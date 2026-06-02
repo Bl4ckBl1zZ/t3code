@@ -628,6 +628,35 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("applies equal-sequence shell snapshots so reconnects can repair local drift", async () => {
+    const { shouldApplyProjectionSnapshot } = await import("./service");
+
+    expect(
+      shouldApplyProjectionSnapshot({
+        current: {
+          sequence: 7,
+          updatedAt: "2026-04-13T00:00:00.000Z",
+        },
+        next: {
+          snapshotSequence: 7,
+          updatedAt: "2026-04-13T00:00:00.000Z",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyProjectionSnapshot({
+        current: {
+          sequence: 7,
+          updatedAt: "2026-04-13T00:00:00.000Z",
+        },
+        next: {
+          snapshotSequence: 6,
+          updatedAt: "2026-04-12T00:00:00.000Z",
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("disposes cached thread detail subscriptions when the environment service resets", async () => {
     const {
       retainThreadDetailSubscription,

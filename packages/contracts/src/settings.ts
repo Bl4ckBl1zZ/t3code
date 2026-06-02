@@ -513,9 +513,7 @@ const SyncedClientSettingsPatchFields = {
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
-  dismissedProviderUpdateNotificationKeys: Schema.optionalKey(
-    Schema.Array(TrimmedNonEmptyString),
-  ),
+  dismissedProviderUpdateNotificationKeys: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   favorites: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
