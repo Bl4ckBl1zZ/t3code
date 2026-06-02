@@ -1,4 +1,4 @@
-import { EnvironmentId, MessageId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -100,6 +100,7 @@ function buildProps() {
     completionDividerBeforeEntryId: null,
     completionSummary: null,
     turnDiffSummaryByAssistantMessageId: new Map(),
+    turnDiffSummaryByTurnId: new Map(),
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
     revertTurnCountByUserMessageId: new Map(),
@@ -256,6 +257,52 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("t3code/apps/web/src/session-logic.ts");
     expect(markup).not.toContain("C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts");
+  });
+
+  it("renders diff stats beside file edit work rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const turnId = TurnId.make("turn-1");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Updated files",
+              tone: "tool",
+              changedFiles: ["apps/web/src/session-logic.ts"],
+              turnId,
+            },
+          },
+        ]}
+        turnDiffSummaryByTurnId={
+          new Map([
+            [
+              turnId,
+              {
+                turnId,
+                completedAt: "2026-03-17T19:12:32.000Z",
+                files: [
+                  {
+                    path: "apps/web/src/session-logic.ts",
+                    additions: 7,
+                    deletions: 2,
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+      />,
+    );
+
+    expect(markup).toContain(">+7<");
+    expect(markup).toContain(">-2<");
   });
 
   it("renders review comment contexts as structured cards instead of raw tags", async () => {

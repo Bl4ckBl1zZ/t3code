@@ -17,7 +17,7 @@ import {
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { FileDiff } from "@pierre/diffs/react";
-import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
+import { deriveTimelineEntries, formatElapsed, type WorkLogFileStat } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import {
@@ -51,6 +51,7 @@ import {
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveCompactWorkEntryText,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -93,6 +94,7 @@ interface TimelineRowSharedState {
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
+  turnDiffSummaryByTurnId: ReadonlyMap<TurnId, TurnDiffSummary>;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -125,6 +127,7 @@ interface MessagesTimelineProps {
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  turnDiffSummaryByTurnId: Map<TurnId, TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -154,6 +157,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   completionDividerBeforeEntryId,
   completionSummary,
   turnDiffSummaryByAssistantMessageId,
+  turnDiffSummaryByTurnId,
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
@@ -227,6 +231,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
+      turnDiffSummaryByTurnId,
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
@@ -239,6 +244,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
+      turnDiffSummaryByTurnId,
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
@@ -615,7 +621,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
-  const { workspaceRoot } = use(TimelineRowCtx);
+  const { workspaceRoot, turnDiffSummaryByTurnId } = use(TimelineRowCtx);
   const [isExpanded, setIsExpanded] = useState(false);
   const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries =
@@ -651,6 +657,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
             key={`work-row:${workEntry.id}`}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
+            turnDiffSummaryByTurnId={turnDiffSummaryByTurnId}
           />
         ))}
       </div>
@@ -1128,6 +1135,105 @@ function workEntryPreview(
     : `${displayPath} +${workEntry.changedFiles!.length - 1} more`;
 }
 
+type WorkEntryDiffStat = Pick<WorkLogFileStat, "additions" | "deletions">;
+
+function summarizeWorkEntryFileStats(
+  stats: ReadonlyArray<WorkLogFileStat> | undefined,
+): WorkEntryDiffStat | null {
+  if (!stats || stats.length === 0) {
+    return null;
+  }
+  const summary = stats.reduce<WorkEntryDiffStat>(
+    (total, stat) => ({
+      additions: total.additions + stat.additions,
+      deletions: total.deletions + stat.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+  return hasNonZeroStat(summary) ? summary : null;
+}
+
+function normalizeDiffLookupPath(path: string): string {
+  return path
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+/, "");
+}
+
+function workspaceLabelFromRoot(workspaceRoot: string | undefined): string | null {
+  if (!workspaceRoot) {
+    return null;
+  }
+  const normalized = workspaceRoot.replaceAll("\\", "/").replace(/[\\/]+$/u, "");
+  const separatorIndex = normalized.lastIndexOf("/");
+  const label = separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) : normalized;
+  return label.length > 0 ? label : null;
+}
+
+function buildDiffPathCandidates(
+  filePath: string,
+  workspaceRoot: string | undefined,
+): ReadonlyArray<string> {
+  const workspaceLabel = workspaceLabelFromRoot(workspaceRoot);
+  const candidates = new Set([
+    normalizeDiffLookupPath(filePath),
+    normalizeDiffLookupPath(formatWorkspaceRelativePath(filePath, workspaceRoot)),
+  ]);
+
+  if (workspaceLabel) {
+    const workspacePrefix = `${workspaceLabel}/`;
+    for (const candidate of candidates) {
+      if (candidate.startsWith(workspacePrefix)) {
+        candidates.add(candidate.slice(workspacePrefix.length));
+      }
+    }
+  }
+
+  candidates.delete("");
+  return [...candidates];
+}
+
+function resolveWorkEntryDiffStat({
+  workEntry,
+  workspaceRoot,
+  turnDiffSummaryByTurnId,
+}: {
+  workEntry: TimelineWorkEntry;
+  workspaceRoot: string | undefined;
+  turnDiffSummaryByTurnId: ReadonlyMap<TurnId, TurnDiffSummary>;
+}): WorkEntryDiffStat | null {
+  const directStat = summarizeWorkEntryFileStats(workEntry.changedFileStats);
+  if (directStat) {
+    return directStat;
+  }
+
+  if (!workEntry.turnId || (workEntry.changedFiles?.length ?? 0) === 0) {
+    return null;
+  }
+
+  const turnSummary = turnDiffSummaryByTurnId.get(workEntry.turnId);
+  if (!turnSummary) {
+    return null;
+  }
+
+  const changedFileCandidates = new Set<string>(
+    workEntry.changedFiles?.flatMap((filePath) =>
+      buildDiffPathCandidates(filePath, workspaceRoot),
+    ) ?? [],
+  );
+  const matchingFiles = turnSummary.files.filter((file) =>
+    buildDiffPathCandidates(file.path, workspaceRoot).some((candidate) =>
+      changedFileCandidates.has(candidate),
+    ),
+  );
+  if (matchingFiles.length === 0) {
+    return null;
+  }
+
+  const summary = summarizeTurnDiffStats(matchingFiles);
+  return hasNonZeroStat(summary) ? summary : null;
+}
+
 function workEntryRawCommand(
   workEntry: Pick<TimelineWorkEntry, "command" | "rawCommand">,
 ): string | null {
@@ -1181,22 +1287,24 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
+  turnDiffSummaryByTurnId: ReadonlyMap<TurnId, TurnDiffSummary>;
 }) {
-  const { workEntry, workspaceRoot } = props;
+  const { workEntry, workspaceRoot, turnDiffSummaryByTurnId } = props;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
-  const preview =
-    rawPreview &&
-    normalizeCompactToolLabel(rawPreview).toLowerCase() ===
-      normalizeCompactToolLabel(heading).toLowerCase()
-      ? null
-      : rawPreview;
+  const compactText = resolveCompactWorkEntryText({ heading, rawPreview });
+  const { preview, visibleText, visibleTextIsPreview } = compactText;
   const rawCommand = workEntryRawCommand(workEntry);
-  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const displayText = compactText.contextText;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const diffStat = resolveWorkEntryDiffStat({
+    workEntry,
+    workspaceRoot,
+    turnDiffSummaryByTurnId,
+  });
 
   return (
     <div className="rounded-lg px-1 py-1">
@@ -1209,41 +1317,40 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         <div className="min-w-0 flex-1 overflow-hidden">
           {rawCommand ? (
             <div className="max-w-full">
-              <p
-                className={cn(
-                  "truncate text-xs leading-5",
-                  workToneClass(workEntry.tone),
-                  preview ? "text-muted-foreground/70" : "",
-                )}
-                title={displayText}
-              >
-                <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                  {heading}
-                </span>
-                {preview && (
-                  <Tooltip>
-                    <TooltipTrigger
-                      closeDelay={0}
-                      delay={75}
-                      render={
-                        <span className="max-w-full cursor-default text-muted-foreground/55 transition-colors hover:text-muted-foreground/75 focus-visible:text-muted-foreground/75">
-                          {" "}
-                          - {preview}
-                        </span>
-                      }
+              <Tooltip>
+                <TooltipTrigger
+                  closeDelay={0}
+                  delay={75}
+                  render={
+                    <p
+                      className={cn(
+                        "truncate text-xs leading-5",
+                        workToneClass(workEntry.tone),
+                        preview ? "text-muted-foreground/70" : "",
+                      )}
+                      title={displayText}
                     />
-                    <TooltipPopup
-                      align="start"
-                      className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
-                      side="top"
-                    >
-                      <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
-                        {rawCommand}
-                      </div>
-                    </TooltipPopup>
-                  </Tooltip>
-                )}
-              </p>
+                  }
+                >
+                  <span
+                    className={cn(
+                      workToneClass(workEntry.tone),
+                      visibleTextIsPreview ? "text-muted-foreground/70" : "text-foreground/80",
+                    )}
+                  >
+                    {visibleText}
+                  </span>
+                </TooltipTrigger>
+                <TooltipPopup
+                  align="start"
+                  className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
+                  side="top"
+                >
+                  <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
+                    {rawCommand}
+                  </div>
+                </TooltipPopup>
+              </Tooltip>
             </div>
           ) : (
             <Tooltip>
@@ -1259,10 +1366,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     preview ? "text-muted-foreground/70" : "",
                   )}
                 >
-                  <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                    {heading}
+                  <span
+                    className={cn(
+                      workToneClass(workEntry.tone),
+                      visibleTextIsPreview ? "text-muted-foreground/70" : "text-foreground/80",
+                    )}
+                  >
+                    {visibleText}
                   </span>
-                  {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
               <TooltipPopup className="max-w-[min(720px,calc(100vw-2rem))]">
@@ -1273,6 +1384,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </Tooltip>
           )}
         </div>
+        {diffStat && <WorkEntryDiffStatBadge stat={diffStat} />}
       </div>
       {hasChangedFiles && !previewIsChangedFiles && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">
@@ -1296,5 +1408,22 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         </div>
       )}
     </div>
+  );
+});
+
+const WorkEntryDiffStatBadge = memo(function WorkEntryDiffStatBadge({
+  stat,
+}: {
+  stat: WorkEntryDiffStat;
+}) {
+  return (
+    <span
+      className="flex shrink-0 items-center gap-1 rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 font-mono text-[10px] leading-4"
+      title={`${stat.additions} additions, ${stat.deletions} deletions`}
+      aria-label={`${stat.additions} additions, ${stat.deletions} deletions`}
+    >
+      {stat.additions > 0 && <span className="text-emerald-500">+{stat.additions}</span>}
+      {stat.deletions > 0 && <span className="text-rose-500">-{stat.deletions}</span>}
+    </span>
   );
 });

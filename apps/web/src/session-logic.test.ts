@@ -906,8 +906,8 @@ describe("deriveWorkLogEntries", () => {
           data: {
             item: {
               changes: [
-                { path: "apps/web/src/components/ChatView.tsx" },
-                { filename: "apps/web/src/session-logic.ts" },
+                { path: "apps/web/src/components/ChatView.tsx", additions: 3, deletions: 1 },
+                { filename: "apps/web/src/session-logic.ts", insertions: 2, deletions: 0 },
               ],
             },
           },
@@ -919,6 +919,18 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.changedFiles).toEqual([
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
+    ]);
+    expect(entry?.changedFileStats).toEqual([
+      {
+        path: "apps/web/src/components/ChatView.tsx",
+        additions: 3,
+        deletions: 1,
+      },
+      {
+        path: "apps/web/src/session-logic.ts",
+        additions: 2,
+        deletions: 0,
+      },
     ]);
   });
 
