@@ -2047,6 +2047,65 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("opens and closes the diff panel from reachable toggle controls", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-diff-toggle" as MessageId,
+        targetText: "diff toggle",
+      }),
+    });
+
+    const expectDiffOpen = async (open: boolean, label: string) => {
+      await vi.waitFor(
+        () => {
+          const search = mounted.router.state.location.search as { diff?: unknown };
+          expect(search.diff === "1", label).toBe(open);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    };
+    const findDiffToggle = () =>
+      waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Toggle diff panel"]'),
+        "Unable to find diff panel toggle.",
+      );
+    const expectDiffTogglePressed = async (pressed: boolean) => {
+      await vi.waitFor(
+        () => {
+          const button = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Toggle diff panel"]',
+          );
+          expect(button?.getAttribute("aria-pressed")).toBe(String(pressed));
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    };
+
+    try {
+      (await findDiffToggle()).click();
+      await expectDiffOpen(true, "Toolbar click should open the diff panel.");
+      await expectDiffTogglePressed(true);
+
+      (await findDiffToggle()).click();
+      await expectDiffOpen(false, "Second toolbar click should close the diff panel.");
+      await expectDiffTogglePressed(false);
+
+      await mounted.setViewport(DEFAULT_VIEWPORT);
+      (await findDiffToggle()).click();
+      await expectDiffOpen(true, "Toolbar click should open the diff sheet.");
+
+      const closeButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Close diff panel"]'),
+        "Unable to find diff panel close button.",
+      );
+      closeButton.click();
+      await expectDiffOpen(false, "Diff panel close button should close the sheet.");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens the project cwd with VS Code Insiders when it is the only available editor", async () => {
     setDraftThreadWithoutWorktree();
 

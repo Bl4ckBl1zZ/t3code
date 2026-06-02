@@ -52,6 +52,16 @@ export function stripRightPanelSearchParams<T extends Record<string, unknown>>(
   return rest as Omit<T, "diff" | "diffTurnId" | "diffFilePath" | "sidePanel">;
 }
 
+export function setDiffOpenSearchParams<T extends Record<string, unknown>>(
+  params: T,
+  open: boolean,
+): Omit<T, "diff" | "diffTurnId" | "diffFilePath" | "sidePanel"> & {
+  diff?: "1" | undefined;
+} {
+  const rest = stripRightPanelSearchParams(params);
+  return open ? { ...rest, diff: "1" } : { ...rest, diff: undefined };
+}
+
 export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRouteSearch {
   const diff = isDiffOpenValue(search.diff) ? "1" : undefined;
   const diffTurnIdRaw = diff ? normalizeSearchString(search.diffTurnId) : undefined;
