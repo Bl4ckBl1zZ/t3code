@@ -6,6 +6,11 @@
   - If changing native mobile code, `bun lint:mobile` must also pass.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
 
+## GitHub Pull Requests
+
+- When creating pull requests from this workspace, target `origin` / `Bl4ckBl1zZ/t3code` unless the user explicitly asks for `upstream` / `pingdotgg/t3code`.
+- Never infer the parent fork as the pull request target.
+
 ## Project Snapshot
 
 T3 Code is a minimal web GUI for using coding agents like Codex and Claude.
