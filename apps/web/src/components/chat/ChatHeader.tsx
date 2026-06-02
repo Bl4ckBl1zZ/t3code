@@ -12,6 +12,7 @@ import GitActionsControl, { type GitPullRequestCommentsAction } from "../GitActi
 import { type DraftId } from "~/composerDraftStore";
 import { DiffIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -58,7 +59,7 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onUpdateProjectPreviewUrl: (previewUrl: string) => Promise<void>;
   onToggleTerminal: () => void;
-  onToggleDiff: () => void;
+  onToggleDiff: (nextOpen?: boolean) => void;
   onSubmitGitPrompt: (prompt: string) => boolean | Promise<boolean>;
 }
 
@@ -297,17 +298,18 @@ export const ChatHeader = memo(function ChatHeader({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <Toggle
+                    <Button
                       className="shrink-0"
-                      pressed={diffOpen}
-                      onPressedChange={onToggleDiff}
+                      aria-pressed={diffOpen}
+                      data-pressed={diffOpen ? "" : undefined}
+                      onClick={() => onToggleDiff(!diffOpen)}
                       aria-label="Toggle diff panel"
                       variant="outline"
-                      size="xs"
+                      size="icon-xs"
                       disabled={!isGitRepo && !diffOpen}
                     >
                       <DiffIcon className="size-3" />
-                    </Toggle>
+                    </Button>
                   }
                 />
                 <TooltipPopup side="bottom">

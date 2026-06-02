@@ -54,6 +54,7 @@ import { readLocalApi } from "../localApi";
 import {
   PLAN_SIDE_PANEL_SEARCH_VALUE,
   parseDiffRouteSearch,
+  setDiffOpenSearchParams,
   stripRightPanelSearchParams,
   stripSidePanelSearchParams,
 } from "../diffRouteSearch";
@@ -556,6 +557,7 @@ type ChatViewProps =
   | {
       environmentId: EnvironmentId;
       threadId: ThreadId;
+      diffOpen?: boolean;
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "server";
@@ -564,6 +566,7 @@ type ChatViewProps =
   | {
       environmentId: EnvironmentId;
       threadId: ThreadId;
+      diffOpen?: boolean;
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       routeKind: "draft";
@@ -1053,6 +1056,7 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     threadId,
     routeKind,
+    diffOpen: routeDiffOpen,
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
   } = props;
@@ -1276,7 +1280,7 @@ export default function ChatView(props: ChatViewProps) {
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
-  const diffOpen = rawSearch.diff === "1";
+  const diffOpen = routeDiffOpen ?? rawSearch.diff === "1";
   const planSidebarOpen = isServerThread
     ? rawSearch.sidePanel === PLAN_SIDE_PANEL_SEARCH_VALUE
     : draftPlanSidebarOpen;
@@ -2382,26 +2386,27 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
-  const onToggleDiff = useCallback(() => {
-    if (!isServerThread) {
-      return;
-    }
-    if (!diffOpen) {
-      onDiffPanelOpen?.();
-    }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: {
-        environmentId,
-        threadId,
-      },
-      replace: true,
-      search: (previous) => {
-        const rest = stripRightPanelSearchParams(previous);
-        return diffOpen ? rest : { ...rest, diff: "1" };
-      },
-    });
-  }, [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, threadId]);
+  const onToggleDiff = useCallback(
+    (nextOpen?: boolean) => {
+      if (!isServerThread) {
+        return;
+      }
+      const shouldOpen = nextOpen ?? !diffOpen;
+      if (shouldOpen) {
+        onDiffPanelOpen?.();
+      }
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId,
+          threadId,
+        },
+        replace: true,
+        search: (previous) => setDiffOpenSearchParams(previous, shouldOpen),
+      });
+    },
+    [diffOpen, environmentId, isServerThread, navigate, onDiffPanelOpen, threadId],
+  );
 
   const envLocked = Boolean(
     activeThread &&

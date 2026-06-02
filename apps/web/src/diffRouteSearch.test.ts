@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiffRouteSearch, stripRightPanelSearchParams } from "./diffRouteSearch";
+import {
+  parseDiffRouteSearch,
+  setDiffOpenSearchParams,
+  stripRightPanelSearchParams,
+} from "./diffRouteSearch";
 
 describe("parseDiffRouteSearch", () => {
   it("parses valid diff search values", () => {
@@ -103,6 +107,38 @@ describe("parseDiffRouteSearch", () => {
         keep: "value",
       }),
     ).toEqual({
+      keep: "value",
+    });
+  });
+
+  it("opens the diff panel while stripping competing right panel state", () => {
+    expect(
+      setDiffOpenSearchParams(
+        {
+          sidePanel: "plan",
+          keep: "value",
+        },
+        true,
+      ),
+    ).toEqual({
+      diff: "1",
+      keep: "value",
+    });
+  });
+
+  it("closes the diff panel and drops stale diff selection params", () => {
+    expect(
+      setDiffOpenSearchParams(
+        {
+          diff: "1",
+          diffTurnId: "turn-1",
+          diffFilePath: "src/app.ts",
+          keep: "value",
+        },
+        false,
+      ),
+    ).toEqual({
+      diff: undefined,
       keep: "value",
     });
   });
