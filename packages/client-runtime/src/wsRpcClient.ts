@@ -4,6 +4,7 @@ import {
   type GitRunStackedActionResult,
   type LocalApi,
   ORCHESTRATION_WS_METHODS,
+  type OrganizationPanelEvent,
   type ServerSettingsPatch,
   type VcsStatusResult,
   type VcsStatusStreamEvent,
@@ -137,6 +138,14 @@ export interface WsRpcClient {
     readonly openOrFocusPreview: RpcUnaryMethod<typeof WS_METHODS.browserAgentsOpenOrFocusPreview>;
     readonly activateAnnotation: RpcUnaryMethod<typeof WS_METHODS.browserAgentsActivateAnnotation>;
     readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeBrowserAgents>;
+  };
+  readonly organizationPanel: {
+    readonly get: RpcUnaryMethod<typeof WS_METHODS.organizationPanelGet>;
+    readonly startTurn: RpcUnaryMethod<typeof WS_METHODS.organizationPanelTurnStart>;
+    readonly stopTurn: RpcUnaryMethod<typeof WS_METHODS.organizationPanelTurnStop>;
+    readonly listHistory: RpcUnaryMethod<typeof WS_METHODS.organizationPanelHistoryList>;
+    readonly rollback: RpcUnaryMethod<typeof WS_METHODS.organizationPanelRollback>;
+    readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeOrganizationPanelEvents>;
   };
   readonly provider: {
     readonly listSlashCommands: RpcUnaryMethod<typeof WS_METHODS.providerListSlashCommands>;
@@ -317,6 +326,23 @@ export function createWsRpcClient(
           (client) => client[WS_METHODS.subscribeBrowserAgents]({}),
           listener,
           subscriptionOptions(options, WS_METHODS.subscribeBrowserAgents),
+        ),
+    },
+    organizationPanel: {
+      get: (input) => transport.request((client) => client[WS_METHODS.organizationPanelGet](input)),
+      startTurn: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationPanelTurnStart](input)),
+      stopTurn: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationPanelTurnStop](input)),
+      listHistory: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationPanelHistoryList](input)),
+      rollback: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationPanelRollback](input)),
+      subscribe: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeOrganizationPanelEvents](input),
+          (event: OrganizationPanelEvent) => listener(event),
+          subscriptionOptions(options, WS_METHODS.subscribeOrganizationPanelEvents),
         ),
     },
     provider: {

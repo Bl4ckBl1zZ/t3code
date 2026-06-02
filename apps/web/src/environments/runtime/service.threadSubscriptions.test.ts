@@ -143,6 +143,14 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       activateAnnotation: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
     },
+    organizationPanel: {
+      get: vi.fn(),
+      startTurn: vi.fn(),
+      stopTurn: vi.fn(),
+      listHistory: vi.fn(),
+      rollback: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    },
     provider: {
       listSlashCommands: vi.fn(async () => ({ slashCommands: [] })),
     },

@@ -18,6 +18,10 @@ import {
   CommandId,
   EventId,
   CodexSettings,
+  OrganizationPanelTurnId,
+  OrganizationPanelVersionId,
+  type OrganizationPanelEvent,
+  OrganizationPanelError,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -102,6 +106,14 @@ import {
 import { respondToAuthError } from "./auth/http.ts";
 import { browserAgentRegistry } from "./browserAgents/registry.ts";
 import { makeOpenRouterAudioTranscription } from "./audioTranscription/OpenRouterAudioTranscription.ts";
+import {
+  getOrganizationPanel,
+  listOrganizationPanelHistory,
+  rollbackOrganizationPanel,
+  startOrganizationPanelTurn,
+  stopOrganizationPanelTurn,
+  subscribeOrganizationPanelEvents,
+} from "./organizationPanels.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
@@ -220,14 +232,33 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               message: cause instanceof Error ? cause.message : fallbackMessage,
               cause,
             });
-      const randomUUID = crypto.randomUUIDv4.pipe(
+      const rawRandomUUID = crypto.randomUUIDv4;
+      const randomUUID = rawRandomUUID.pipe(
         Effect.mapError((cause) =>
           toDispatchCommandError(cause, "Failed to generate orchestration command identifier."),
+        ),
+      );
+      const organizationPanelRandomUUID = rawRandomUUID.pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrganizationPanelError({
+              code: "write-failed",
+              message: "Failed to generate organization panel identifier.",
+              cause,
+            }),
         ),
       );
       const serverEventId = randomUUID.pipe(Effect.map(EventId.make));
       const serverCommandId = (tag: string) =>
         randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+      const organizationPanelTurnId = (tag: string) =>
+        organizationPanelRandomUUID.pipe(
+          Effect.map((uuid) => OrganizationPanelTurnId.make(`${tag}:${uuid}`)),
+        );
+      const organizationPanelVersionId = (tag: string) =>
+        organizationPanelRandomUUID.pipe(
+          Effect.map((uuid) => OrganizationPanelVersionId.make(`${tag}:${uuid}`)),
+        );
 
       const loadAuthAccessSnapshot = () =>
         Effect.all({
@@ -955,6 +986,102 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               ),
             ),
             { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.organizationPanelGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelGet,
+            nowIso.pipe(
+              Effect.flatMap((now) =>
+                getOrganizationPanel({
+                  config,
+                  organizationId: input.organizationId,
+                  now,
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.organizationPanelHistoryList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelHistoryList,
+            listOrganizationPanelHistory({
+              config,
+              organizationId: input.organizationId,
+              ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            }),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.organizationPanelTurnStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelTurnStart,
+            Effect.all({
+              now: nowIso,
+              turnId: organizationPanelTurnId("panel-turn"),
+              versionId: organizationPanelVersionId("panel-version"),
+            }).pipe(
+              Effect.flatMap(({ now, turnId, versionId }) =>
+                startOrganizationPanelTurn({
+                  config,
+                  organizationId: input.organizationId,
+                  prompt: input.prompt,
+                  turnId,
+                  versionId,
+                  now,
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.organizationPanelTurnStop]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelTurnStop,
+            stopOrganizationPanelTurn({
+              organizationId: input.organizationId,
+              turnId: input.turnId,
+            }),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.organizationPanelRollback]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelRollback,
+            Effect.all({
+              now: nowIso,
+              rollbackVersionId: organizationPanelVersionId("panel-rollback"),
+              turnId: organizationPanelTurnId("panel-rollback"),
+            }).pipe(
+              Effect.flatMap(({ now, rollbackVersionId, turnId }) =>
+                rollbackOrganizationPanel({
+                  config,
+                  organizationId: input.organizationId,
+                  versionId: input.versionId,
+                  rollbackVersionId,
+                  turnId,
+                  now,
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.subscribeOrganizationPanelEvents]: (input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeOrganizationPanelEvents,
+            Stream.callback<OrganizationPanelEvent>((queue) =>
+              Effect.acquireRelease(
+                Effect.sync(() =>
+                  subscribeOrganizationPanelEvents((event) => {
+                    if (
+                      input.organizationId !== undefined &&
+                      event.organizationId !== input.organizationId
+                    ) {
+                      return;
+                    }
+                    Effect.runFork(Queue.offer(queue, event));
+                  }),
+                ),
+                (unsubscribe) => Effect.sync(unsubscribe),
+              ),
+            ),
+            { "rpc.aggregate": "organization-panel" },
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
