@@ -16,6 +16,7 @@ import {
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isSidebarTopLevelThread,
+  moveSidebarProjectAcrossFolders,
   moveSidebarProjectToFolder,
   orderItemsByPreferredIds,
   removeSidebarProjectFromFolders,
@@ -286,6 +287,84 @@ describe("sidebar project folders", () => {
         targetProjectKeys: ["local:/work/alpha", "remote:/work/alpha"],
       }),
     ).toEqual(["local:/work/gamma", "local:/work/alpha", "remote:/work/alpha", "local:/work/beta"]);
+  });
+
+  it("moves a project out of folders when dropped outside a folder", () => {
+    expect(
+      moveSidebarProjectAcrossFolders({
+        folders: [
+          {
+            id: "folder-1",
+            name: "One",
+            projectKeys: ["local:/work/alpha", "local:/work/beta"],
+          },
+        ],
+        projectKeys: ["local:/work/alpha"],
+        targetFolderId: null,
+      }),
+    ).toEqual([
+      {
+        id: "folder-1",
+        name: "One",
+        projectKeys: ["local:/work/beta"],
+      },
+    ]);
+  });
+
+  it("moves a project into a folder at the target project position", () => {
+    expect(
+      moveSidebarProjectAcrossFolders({
+        folders: [
+          {
+            id: "folder-1",
+            name: "One",
+            projectKeys: ["local:/work/alpha", "local:/work/beta"],
+          },
+        ],
+        projectKeys: ["local:/work/gamma"],
+        targetFolderId: "folder-1",
+        targetProjectKeys: ["local:/work/beta"],
+      }),
+    ).toEqual([
+      {
+        id: "folder-1",
+        name: "One",
+        projectKeys: ["local:/work/alpha", "local:/work/gamma", "local:/work/beta"],
+      },
+    ]);
+  });
+
+  it("moves grouped project keys between folders together", () => {
+    expect(
+      moveSidebarProjectAcrossFolders({
+        folders: [
+          {
+            id: "folder-1",
+            name: "One",
+            projectKeys: ["local:/work/alpha", "remote:/work/alpha", "local:/work/beta"],
+          },
+          {
+            id: "folder-2",
+            name: "Two",
+            projectKeys: ["local:/work/gamma"],
+          },
+        ],
+        projectKeys: ["local:/work/alpha", "remote:/work/alpha"],
+        targetFolderId: "folder-2",
+        targetProjectKeys: ["local:/work/gamma"],
+      }),
+    ).toEqual([
+      {
+        id: "folder-1",
+        name: "One",
+        projectKeys: ["local:/work/beta"],
+      },
+      {
+        id: "folder-2",
+        name: "Two",
+        projectKeys: ["local:/work/alpha", "remote:/work/alpha", "local:/work/gamma"],
+      },
+    ]);
   });
 });
 

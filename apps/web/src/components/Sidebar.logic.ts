@@ -407,6 +407,42 @@ export function removeSidebarProjectFromFolders(input: {
   }));
 }
 
+export function moveSidebarProjectAcrossFolders(input: {
+  folders: readonly SidebarProjectFolderSettings[];
+  projectKeys: readonly string[];
+  targetFolderId: string | null;
+  targetProjectKeys?: readonly string[];
+}): SidebarProjectFolderSettings[] {
+  const movingKeys = [...new Set(input.projectKeys.filter((key) => key.length > 0))];
+  if (movingKeys.length === 0) {
+    return [...input.folders];
+  }
+
+  const movingKeySet = new Set(movingKeys);
+  const targetKeySet = new Set(input.targetProjectKeys ?? []);
+  return input.folders.map((folder) => {
+    const projectKeys = folder.projectKeys.filter((key) => !movingKeySet.has(key));
+    if (folder.id !== input.targetFolderId) {
+      return { ...folder, projectKeys };
+    }
+
+    const targetIndex = projectKeys.findIndex((key) => targetKeySet.has(key));
+    if (targetIndex < 0) {
+      return {
+        ...folder,
+        projectKeys: [...projectKeys, ...movingKeys],
+      };
+    }
+
+    const nextProjectKeys = [...projectKeys];
+    nextProjectKeys.splice(targetIndex, 0, ...movingKeys);
+    return {
+      ...folder,
+      projectKeys: nextProjectKeys,
+    };
+  });
+}
+
 export function reorderSidebarFolderProjectKeys(input: {
   projectKeys: readonly string[];
   draggedProjectKeys: readonly string[];

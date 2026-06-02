@@ -170,6 +170,7 @@ import {
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   isSidebarTopLevelThread,
+  moveSidebarProjectAcrossFolders,
   moveSidebarProjectToFolder,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
@@ -3781,6 +3782,9 @@ export default function Sidebar() {
       if (!over || active.id === over.id) return;
       const activeProject = sidebarProjectByKey.get(String(active.id));
       const overProject = sidebarProjectByKey.get(String(over.id));
+      const overFolderEntry = sidebarProjectFolders.find(
+        (candidate) => sidebarProjectFolderKey(candidate.id) === String(over.id),
+      );
       if (activeProject && overProject) {
         const activeFolder = findSidebarProjectFolderForProject(
           sidebarProjectFolders,
@@ -3804,6 +3808,25 @@ export default function Sidebar() {
           }
           return;
         }
+
+        if (activeFolder || overFolder) {
+          updateSettings({
+            sidebarProjectFolders: moveSidebarProjectAcrossFolders({
+              folders: sidebarProjectFolders,
+              projectKeys: getSidebarProjectPhysicalKeys(activeProject),
+              targetFolderId: overFolder?.id ?? null,
+              targetProjectKeys: overFolder ? getSidebarProjectPhysicalKeys(overProject) : [],
+            }),
+          });
+        }
+      } else if (activeProject && overFolderEntry) {
+        updateSettings({
+          sidebarProjectFolders: moveSidebarProjectAcrossFolders({
+            folders: sidebarProjectFolders,
+            projectKeys: getSidebarProjectPhysicalKeys(activeProject),
+            targetFolderId: overFolderEntry.id,
+          }),
+        });
       }
       const getProjectOrderKeys = (entryId: string): readonly string[] => {
         const project = sidebarProjectByKey.get(entryId);
