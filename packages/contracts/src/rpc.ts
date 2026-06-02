@@ -102,6 +102,9 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  ProviderSlashCommandsListError,
+  ProviderSlashCommandsListInput,
+  ProviderSlashCommandsListResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -189,6 +192,9 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
   serverTranscribeAudio: "server.transcribeAudio",
+
+  // Provider metadata
+  providerListSlashCommands: "provider.slashCommands.list",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -291,6 +297,12 @@ export const WsServerTranscribeAudioRpc = Rpc.make(WS_METHODS.serverTranscribeAu
   payload: AudioTranscriptionInput,
   success: AudioTranscriptionResult,
   error: AudioTranscriptionError,
+});
+
+export const WsProviderListSlashCommandsRpc = Rpc.make(WS_METHODS.providerListSlashCommands, {
+  payload: ProviderSlashCommandsListInput,
+  success: ProviderSlashCommandsListResult,
+  error: ProviderSlashCommandsListError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -619,6 +631,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
   WsServerTranscribeAudioRpc,
+  WsProviderListSlashCommandsRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

@@ -8,6 +8,7 @@ import type {
   RuntimeMode,
   ScopedThreadRef,
   ServerProvider,
+  ServerProviderSlashCommand,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -112,6 +113,7 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { ensureLocalApi } from "../../localApi";
+import { readEnvironmentConnection } from "../../environments/runtime";
 import {
   appendTranscriptionToPrompt,
   audioMimeTypeToTranscriptionFormat,
@@ -157,6 +159,7 @@ const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="combobox-popup"]',
   '[data-slot="autocomplete-popup"]',
 ].join(",");
+const BUILT_IN_COMPOSER_SLASH_COMMAND_NAMES = new Set(["model", "plan", "default"]);
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -868,6 +871,52 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
+  const slashCommandCatalogKey = `${environmentId}:${selectedInstanceId}:${gitCwd ?? ""}`;
+  const [dynamicSlashCommandCatalog, setDynamicSlashCommandCatalog] = useState<{
+    readonly key: string;
+    readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
+  } | null>(null);
+  const activeDynamicSlashCommands =
+    dynamicSlashCommandCatalog?.key === slashCommandCatalogKey
+      ? dynamicSlashCommandCatalog.slashCommands
+      : null;
+
+  useEffect(() => {
+    if (composerTriggerKind !== "slash-command") {
+      return;
+    }
+
+    const connection = readEnvironmentConnection(environmentId);
+    if (!connection || !gitCwd) {
+      setDynamicSlashCommandCatalog(null);
+      return;
+    }
+
+    let cancelled = false;
+    const requestKey = slashCommandCatalogKey;
+    void connection.client.provider
+      .listSlashCommands({
+        instanceId: selectedInstanceId,
+        cwd: gitCwd,
+      })
+      .then((result) => {
+        if (!cancelled) {
+          setDynamicSlashCommandCatalog({
+            key: requestKey,
+            slashCommands: result.slashCommands,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDynamicSlashCommandCatalog(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [composerTriggerKind, environmentId, gitCwd, selectedInstanceId, slashCommandCatalogKey]);
 
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
@@ -905,16 +954,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: "Switch this thread back to normal build mode",
         },
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const providerSlashCommandItems = (selectedProviderStatus?.slashCommands ?? []).map(
-        (command) => ({
+      const providerSlashCommands =
+        activeDynamicSlashCommands ?? selectedProviderStatus?.slashCommands ?? [];
+      const providerSlashCommandItems = providerSlashCommands
+        .filter((command) => !BUILT_IN_COMPOSER_SLASH_COMMAND_NAMES.has(command.name))
+        .map((command) => ({
           id: `provider-slash-command:${selectedProvider}:${command.name}`,
           type: "provider-slash-command" as const,
           provider: selectedProvider,
           command,
           label: `/${command.name}`,
           description: command.description ?? command.input?.hint ?? "Run provider command",
-        }),
-      );
+        }));
       const query = composerTrigger.query.trim().toLowerCase();
       const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
       if (!query) {
@@ -938,7 +989,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     }
     return [];
-  }, [composerTrigger, selectedProvider, selectedProviderStatus, workspaceEntries.entries]);
+  }, [
+    composerTrigger,
+    activeDynamicSlashCommands,
+    selectedProvider,
+    selectedProviderStatus,
+    workspaceEntries.entries,
+  ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger

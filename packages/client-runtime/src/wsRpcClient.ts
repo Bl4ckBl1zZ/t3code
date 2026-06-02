@@ -135,6 +135,9 @@ export interface WsRpcClient {
     readonly activateAnnotation: RpcUnaryMethod<typeof WS_METHODS.browserAgentsActivateAnnotation>;
     readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeBrowserAgents>;
   };
+  readonly provider: {
+    readonly listSlashCommands: RpcUnaryMethod<typeof WS_METHODS.providerListSlashCommands>;
+  };
   readonly server: {
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
     readonly refreshProviders: (
@@ -310,6 +313,10 @@ export function createWsRpcClient(
           listener,
           subscriptionOptions(options, WS_METHODS.subscribeBrowserAgents),
         ),
+    },
+    provider: {
+      listSlashCommands: (input) =>
+        transport.request((client) => client[WS_METHODS.providerListSlashCommands](input)),
     },
     server: {
       getConfig: () => transport.request((client) => client[WS_METHODS.serverGetConfig]({})),
