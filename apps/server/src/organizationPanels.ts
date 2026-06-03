@@ -1,7 +1,6 @@
 import {
   type ModelSelection,
   OrganizationId,
-  OrganizationPanelDocument as OrganizationPanelDocumentSchema,
   OrganizationPanelError,
   OrganizationPanelSlug,
   OrganizationPanelTurnId,
@@ -45,8 +44,9 @@ export interface OrganizationPanelPath {
 
 const PANEL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const PANEL_STORAGE_ROOT = "organization-panels";
-const PANEL_FILE_NAME = "panel.json";
+const PANEL_FILE_NAME = "panel.html";
 const PANEL_HISTORY_FILE_NAME = "organization-panel-versions.ndjson";
+const PANEL_HTML_MAX_LENGTH = 200_000;
 
 type OrganizationPanelSettings = Pick<ServerSettings, "sidebarProjectFolders">;
 
@@ -124,9 +124,6 @@ const decodeStoredOrganizationPanelVersion = Schema.decodeUnknownEffect(
 const encodeStoredOrganizationPanelVersion = Schema.encodeEffect(
   StoredOrganizationPanelVersionJson,
 );
-const OrganizationPanelDocumentJson = Schema.fromJsonString(OrganizationPanelDocumentSchema);
-const decodeOrganizationPanelDocument = Schema.decodeUnknownEffect(OrganizationPanelDocumentJson);
-const encodeOrganizationPanelDocument = Schema.encodeEffect(OrganizationPanelDocumentJson);
 
 const eventSubscribers = new Set<(event: OrganizationPanelEvent) => void>();
 const activeTurnsByOrganization = new Map<OrganizationId, ActiveOrganizationPanelTurn>();
@@ -483,11 +480,7 @@ export const rollbackOrganizationPanel = (input: {
           );
         }
 
-        const rollbackDocument = yield* decodePanelDocument(target.beforeContents).pipe(
-          Effect.mapError((cause) =>
-            panelError("rollback-failed", "Previous organization panel file was invalid.", cause),
-          ),
-        );
+        const rollbackDocument = parsePanelDocument(target.beforeContents);
         const validationErrors = validateOrganizationPanelDocument(rollbackDocument);
         if (validationErrors.length > 0) {
           return yield* panelError(
@@ -606,7 +599,7 @@ const loadPanelContext = (input: {
     });
     yield* ensureStarterPanel(path, organization);
     const contents = yield* readPanelFile(path);
-    const document = yield* decodePanelDocument(contents);
+    const document = parsePanelDocument(contents);
     return { organization, path, contents, document };
   });
 
@@ -625,7 +618,7 @@ const ensureStarterPanel = (
       );
     if (exists) {
       const existingDocument = yield* readPanelFile(panelPath).pipe(
-        Effect.flatMap(decodePanelDocument),
+        Effect.map(parsePanelDocument),
         Effect.catch(() => Effect.succeed(null)),
       );
       if (existingDocument && isLegacyStarterPanelDocument(existingDocument, organization)) {
@@ -648,60 +641,91 @@ const ensureStarterPanel = (
     yield* writeStarterPanelDocument(panelPath);
   });
 
-const decodePanelDocument = (
-  contents: string,
-): Effect.Effect<OrganizationPanelDocument, OrganizationPanelError> =>
-  decodeOrganizationPanelDocument(contents).pipe(
-    Effect.mapError((cause) =>
-      panelError(
-        "panel-file-create-failed",
-        "Organization panel file contains invalid JSON.",
-        cause,
-      ),
-    ),
-  );
+function parsePanelDocument(contents: string): OrganizationPanelDocument {
+  return {
+    title: extractHtmlTitle(contents) ?? "Organization panel",
+    html: contents.trim(),
+  };
+}
 
-const encodePanelDocument = (
-  document: OrganizationPanelDocument,
-): Effect.Effect<string, OrganizationPanelError> =>
-  encodeOrganizationPanelDocument(document).pipe(
-    Effect.mapError((cause) =>
-      panelError(
-        "panel-file-create-failed",
-        `Failed to encode organization panel document: ${cause.message}`,
-        cause,
-      ),
-    ),
-  );
+function extractHtmlTitle(contents: string): string | null {
+  const match = /<title[^>]*>(?<title>[\s\S]*?)<\/title>/iu.exec(contents);
+  const title = decodeHtmlText(match?.groups?.title ?? "").trim();
+  return title.length > 0 ? title : null;
+}
+
+function decodeHtmlText(value: string): string {
+  return value
+    .replace(/&nbsp;/giu, " ")
+    .replace(/&amp;/giu, "&")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/&quot;/giu, '"')
+    .replace(/&#39;/giu, "'");
+}
 
 function validateOrganizationPanelDocument(document: OrganizationPanelDocument): readonly string[] {
   const errors: string[] = [];
-  if (document.metrics.length > 6) {
-    errors.push("Organization panels can include at most 6 metrics.");
+  const html = document.html;
+  const lowerHtml = html.toLowerCase();
+
+  if (html.length > PANEL_HTML_MAX_LENGTH) {
+    errors.push(`Organization panel HTML must be ${PANEL_HTML_MAX_LENGTH} characters or less.`);
   }
-  if (document.focusItems.length > 8) {
-    errors.push("Organization panels can include at most 8 focus items.");
+  if (!/<!doctype\s+html>/iu.test(html)) {
+    errors.push("Organization panel HTML must include <!doctype html>.");
   }
+  if (!/<html[\s>]/iu.test(html) || !/<head[\s>]/iu.test(html) || !/<body[\s>]/iu.test(html)) {
+    errors.push("Organization panel HTML must include html, head, and body elements.");
+  }
+  if (!/<title[\s>]/iu.test(html)) {
+    errors.push("Organization panel HTML must include a title element.");
+  }
+  if (!/<meta\s+[^>]*name=["']viewport["'][^>]*>/iu.test(html)) {
+    errors.push("Organization panel HTML must include a viewport meta tag for mobile layouts.");
+  }
+  if (!/<style[\s>]/iu.test(html)) {
+    errors.push("Organization panel HTML must include inline CSS in a style element.");
+  }
+  if (!/<script[\s>]/iu.test(html)) {
+    errors.push("Organization panel HTML must include inline JavaScript in a script element.");
+  }
+  if (!/@media\b/iu.test(html)) {
+    errors.push("Organization panel CSS must include at least one media query.");
+  }
+  if (!/box-sizing\s*:\s*border-box/iu.test(html)) {
+    errors.push("Organization panel CSS must set border-box sizing.");
+  }
+  if (/<script\b[^>]*\bsrc\s*=/iu.test(html)) {
+    errors.push("Organization panel HTML must not load external scripts.");
+  }
+  if (/<link\b/iu.test(html) || /<style\b[^>]*\bsrc\s*=/iu.test(html)) {
+    errors.push("Organization panel HTML must not load external stylesheets.");
+  }
+  if (/<(?:iframe|object|embed|base)\b/iu.test(html)) {
+    errors.push("Organization panel HTML must not embed frames, objects, embeds, or base URLs.");
+  }
+  if (/\son[a-z]+\s*=/iu.test(html)) {
+    errors.push("Organization panel interactions must use addEventListener, not inline handlers.");
+  }
+  if (/\b(import\s+.+\s+from|require\s*\(|react|tsx|jsx)\b/iu.test(lowerHtml)) {
+    errors.push("Organization panel source must be plain HTML, CSS, and browser JavaScript.");
+  }
+
   return errors;
 }
 
 const writeStarterPanelDocument = (
   panelPath: OrganizationPanelPath,
 ): Effect.Effect<void, OrganizationPanelError, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    yield* writeFileStringAtomically({
-      filePath: panelPath.panelFileAbsolutePath,
-      contents: yield* encodePanelDocument(renderStarterPanelDocument()),
-    }).pipe(
-      Effect.mapError((cause) =>
-        panelError(
-          "panel-file-create-failed",
-          "Failed to create starter organization panel.",
-          cause,
-        ),
-      ),
-    );
-  });
+  writeFileStringAtomically({
+    filePath: panelPath.panelFileAbsolutePath,
+    contents: renderStarterPanelDocument(),
+  }).pipe(
+    Effect.mapError((cause) =>
+      panelError("panel-file-create-failed", "Failed to create starter organization panel.", cause),
+    ),
+  );
 
 const readPanelFile = (
   panelPath: OrganizationPanelPath,
@@ -813,11 +837,7 @@ const runOrganizationPanelAgent = (input: {
       }
 
       const afterContents = yield* readPanelFile(input.panelPath);
-      const afterDocument = yield* decodePanelDocument(afterContents).pipe(
-        Effect.mapError((cause) =>
-          panelError("validation-failed", "Agent wrote invalid organization panel JSON.", cause),
-        ),
-      );
+      const afterDocument = parsePanelDocument(afterContents);
       return { afterContents, afterDocument };
     }),
   );
@@ -909,36 +929,38 @@ function buildOrganizationPanelAgentPrompt(input: {
 }): string {
   return `You are editing the organization panel for ${input.organization.name}.
 
-Update only ./panel.json in the current working directory. Do not create React, TSX, or source files.
+Update only ./panel.html in the current working directory. Do not create React, TSX, JSX, JSON, or source files.
 
-The file must remain valid JSON with exactly this shape:
-{
-  "title": "non-empty string",
-  "description": "string or null",
-  "metrics": [
-    { "label": "non-empty string", "value": "non-empty string", "tone": "success|info|warning" }
-  ],
-  "focusItems": ["non-empty string"]
-}
+The file must be a complete plain HTML document that the browser can render directly. Use only:
+- HTML in the body.
+- Inline CSS inside a <style> tag in the head.
+- Inline browser JavaScript inside a <script> tag at the end of the body.
 
-Constraints:
-- At most 6 metrics.
-- At most 8 focusItems.
-- Use only the tones "success", "info", or "warning".
-- Keep the JSON human-readable.
-- If the request does not ask for metrics or focus items, leave those arrays empty.
+Strict compatibility and styling rules:
+- Include <!doctype html>, <html>, <head>, <title>, <meta name="viewport" content="width=device-width, initial-scale=1">, <style>, <body>, and <script>.
+- The layout must work at 320px mobile width, tablet width, and desktop width without horizontal scrolling.
+- Use responsive CSS with at least one @media query.
+- Set *, *::before, and *::after to box-sizing: border-box.
+- Use semantic HTML, accessible labels, readable focus states, and contrast-safe colors.
+- Keep typography and spacing container-based; do not scale font sizes with viewport width.
+- Use flexible grids, flexbox, minmax(), clamp() for layout sizes, max-width, and wrapping where useful.
+- Do not use fixed pixel-only page widths, negative letter spacing, text that can overlap, or hover-only controls.
+- Do not load external scripts, stylesheets, fonts, iframes, embeds, objects, or base URLs.
+- Do not use inline event attributes such as onclick; attach interactions with addEventListener in the script.
+- JavaScript must be resilient: guard missing elements, handle fetch failures, and keep the panel usable if an API fails.
+- If external data is needed, use fetch only for explicit HTTPS APIs requested by the user.
 
 Panel file: ${input.panelPath.panelFileRelativePath}
 
-Current panel.json:
-\`\`\`json
+Current panel.html:
+\`\`\`html
 ${input.beforeContents}
 \`\`\`
 
 User request:
 ${input.prompt}
 
-Edit panel.json now and finish after the file is valid.`;
+Edit panel.html now and finish after the file is valid.`;
 }
 
 const readStoredVersions = (
@@ -1098,31 +1120,102 @@ function toPublicVersion(version: StoredOrganizationPanelVersion): OrganizationP
   return publicVersion;
 }
 
-function renderStarterPanelDocument(): OrganizationPanelDocument {
-  return {
-    title: "Organization panel",
-    description: null,
-    metrics: [],
-    focusItems: [],
-  };
+function renderStarterPanelDocument(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Organization panel</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0b0c;
+        color: #f5f5f5;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(42, 161, 104, 0.16), transparent 34rem),
+          #0b0b0c;
+      }
+
+      main {
+        width: min(100%, 72rem);
+        margin: 0 auto;
+        padding: 2rem;
+      }
+
+      .panel {
+        display: grid;
+        gap: 1rem;
+        min-height: 24rem;
+        align-content: center;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        padding: clamp(1rem, 4vw, 2rem);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.75rem;
+        line-height: 1.15;
+      }
+
+      p {
+        max-width: 42rem;
+        margin: 0;
+        color: rgba(245, 245, 245, 0.72);
+        line-height: 1.6;
+      }
+
+      @media (max-width: 640px) {
+        main {
+          padding: 1rem;
+        }
+
+        .panel {
+          min-height: 18rem;
+        }
+
+        h1 {
+          font-size: 1.4rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel" aria-labelledby="panel-title">
+        <h1 id="panel-title">Organization panel</h1>
+        <p>Describe what this panel should show, and the generated result will be saved as plain HTML, CSS, and JavaScript.</p>
+      </section>
+    </main>
+    <script>
+      const panel = document.querySelector(".panel");
+      if (panel) {
+        panel.dataset.ready = "true";
+      }
+    </script>
+  </body>
+</html>
+`;
 }
 
 function isLegacyStarterPanelDocument(
   document: OrganizationPanelDocument,
   organization: OrganizationPanelOrganization,
 ): boolean {
-  return (
-    document.title === "Organization panel" &&
-    document.description === `${organization.name} has a dedicated editable panel.` &&
-    document.metrics.length === 3 &&
-    document.metrics[0]?.label === "Revenue" &&
-    document.metrics[1]?.label === "Active users" &&
-    document.metrics[2]?.label === "Open tickets" &&
-    document.focusItems.length === 3 &&
-    document.focusItems[0] === "Review revenue trend" &&
-    document.focusItems[1] === "Review active users trend" &&
-    document.focusItems[2] === "Review open tickets trend"
-  );
+  return document.html.includes(`${organization.name} has a dedicated editable panel.`);
 }
 
 function createUnifiedDiff(
