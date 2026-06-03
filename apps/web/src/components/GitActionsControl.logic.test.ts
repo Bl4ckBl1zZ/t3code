@@ -385,6 +385,97 @@ describe("when: PR status has merge metadata", () => {
       disabled: false,
     });
   });
+
+  it("resolveQuickAction shows merge for conflict-free PRs blocked by GitHub policy", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 24,
+          title: "Review required",
+          url: "https://example.com/pr/24",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "blocked",
+          checks: {
+            total: 2,
+            completed: 2,
+            successful: 2,
+            failed: 0,
+            pending: 0,
+          },
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "open_pr",
+      label: "Merge",
+      tone: "success",
+      disabled: false,
+    });
+  });
+
+  it("resolveQuickAction arms merge when GitHub policy-blocked checks are still running", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 25,
+          title: "Waiting on checks",
+          url: "https://example.com/pr/25",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "blocked",
+          checks: {
+            total: 3,
+            completed: 1,
+            successful: 1,
+            failed: 0,
+            pending: 2,
+          },
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "open_pr",
+      label: "1 / 3 Checks",
+      tone: "warning",
+      disabled: false,
+    });
+  });
+
+  it("resolveQuickAction prompts to fix failed checks before merging", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 26,
+          title: "Failing checks",
+          url: "https://example.com/pr/26",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "unstable",
+          checks: {
+            total: 3,
+            completed: 3,
+            successful: 2,
+            failed: 1,
+            pending: 0,
+          },
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "prompt_ai",
+      label: "Fix checks",
+      tone: "destructive",
+      disabled: false,
+    });
+    assert.include(quick.prompt ?? "", "failing checks");
+  });
 });
 
 describe("when: actions are busy", () => {
