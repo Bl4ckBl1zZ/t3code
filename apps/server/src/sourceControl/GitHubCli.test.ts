@@ -133,6 +133,109 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("preserves GitHub merge policy states over conflict-only mergeability", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              number: 43,
+              title: "Review required",
+              url: "https://github.com/pingdotgg/codething-mvp/pull/43",
+              baseRefName: "main",
+              headRefName: "feature/review-required",
+              state: "OPEN",
+              mergedAt: null,
+              isDraft: false,
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "BLOCKED",
+              statusCheckRollup: [
+                {
+                  __typename: "CheckRun",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                },
+              ],
+            }),
+          ),
+        ),
+      );
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const result = yield* gh.getPullRequest({
+        cwd: "/repo",
+        reference: "43",
+      });
+
+      assert.strictEqual(result.mergeStatus, "blocked");
+      assert.deepStrictEqual(result.checks, {
+        total: 1,
+        completed: 1,
+        successful: 1,
+        failed: 0,
+        pending: 0,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("normalizes GitHub draft and pre-receive hook merge states", () =>
+    Effect.gen(function* () {
+      mockRun
+        .mockReturnValueOnce(
+          Effect.succeed(
+            processOutput(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                number: 44,
+                title: "Draft by state",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+                baseRefName: "main",
+                headRefName: "feature/draft-state",
+                state: "OPEN",
+                mergedAt: null,
+                isDraft: false,
+                mergeable: "MERGEABLE",
+                mergeStateStatus: "DRAFT",
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            processOutput(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                number: 45,
+                title: "Hooks pass",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/45",
+                baseRefName: "main",
+                headRefName: "feature/hooks",
+                state: "OPEN",
+                mergedAt: null,
+                isDraft: false,
+                mergeable: "MERGEABLE",
+                mergeStateStatus: "HAS_HOOKS",
+              }),
+            ),
+          ),
+        );
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const draft = yield* gh.getPullRequest({
+        cwd: "/repo",
+        reference: "44",
+      });
+      const hooks = yield* gh.getPullRequest({
+        cwd: "/repo",
+        reference: "45",
+      });
+
+      assert.strictEqual(draft.mergeStatus, "draft");
+      assert.strictEqual(hooks.mergeStatus, "mergeable");
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("trims pull request fields decoded from gh json", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(

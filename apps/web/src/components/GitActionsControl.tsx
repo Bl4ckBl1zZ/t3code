@@ -1252,7 +1252,9 @@ export default function GitActionsControl({
     gitStatusForActions?.pr?.state === "merged" && quickAction.tone === "merged";
   const isPendingChecksMergeAction =
     gitStatusForActions?.pr?.state === "open" &&
-    gitStatusForActions.pr.mergeStatus === "mergeable" &&
+    gitStatusForActions.pr.checks !== undefined &&
+    gitStatusForActions.pr.checks.pending > 0 &&
+    gitStatusForActions.pr.checks.failed === 0 &&
     quickAction.kind === "open_pr" &&
     quickAction.tone === "warning";
   const isPendingChecksMergeArmed =

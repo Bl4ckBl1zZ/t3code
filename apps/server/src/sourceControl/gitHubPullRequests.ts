@@ -89,12 +89,13 @@ function normalizeGitHubMergeStatus(
   const mergeable = raw.mergeable?.trim().toUpperCase();
   const mergeStateStatus = raw.mergeStateStatus?.trim().toUpperCase();
 
-  if (raw.isDraft) return "draft";
+  if (raw.isDraft || mergeStateStatus === "DRAFT") return "draft";
   if (mergeable === "CONFLICTING" || mergeStateStatus === "DIRTY") return "conflicting";
   if (mergeStateStatus === "BEHIND") return "behind";
   if (mergeStateStatus === "BLOCKED") return "blocked";
   if (mergeStateStatus === "UNSTABLE") return "unstable";
-  if (mergeable === "MERGEABLE" || mergeStateStatus === "CLEAN") return "mergeable";
+  if (mergeStateStatus === "CLEAN" || mergeStateStatus === "HAS_HOOKS") return "mergeable";
+  if (mergeable === "MERGEABLE" && !mergeStateStatus) return "mergeable";
   if (mergeable || mergeStateStatus) return "unknown";
   return undefined;
 }

@@ -123,21 +123,29 @@ function resolveChangeRequestPrompt(input: {
 }
 
 function isPrMergeable(pr: NonNullable<VcsStatusResult["pr"]>): boolean {
+  const checks = pr.checks;
   return (
     pr.state === "open" &&
-    pr.mergeStatus === "mergeable" &&
-    (pr.checks === undefined || (pr.checks.pending === 0 && pr.checks.failed === 0))
+    (pr.mergeStatus === "mergeable" || pr.mergeStatus === "blocked") &&
+    (checks === undefined || (checks.pending === 0 && checks.failed === 0))
   );
 }
 
 function isPrWaitingOnChecks(pr: NonNullable<VcsStatusResult["pr"]>): boolean {
   return (
     pr.state === "open" &&
-    pr.mergeStatus === "mergeable" &&
+    pr.mergeStatus !== "draft" &&
+    pr.mergeStatus !== "conflicting" &&
+    pr.mergeStatus !== "behind" &&
+    pr.mergeStatus !== "unknown" &&
     pr.checks !== undefined &&
     pr.checks.pending > 0 &&
     pr.checks.failed === 0
   );
+}
+
+function hasPrFailedChecks(pr: NonNullable<VcsStatusResult["pr"]>): boolean {
+  return pr.state === "open" && pr.checks !== undefined && pr.checks.failed > 0;
 }
 
 function canMarkPrReadyForReview(gitStatus: VcsStatusResult): boolean {
@@ -622,13 +630,30 @@ export function resolveQuickAction(
     };
   }
 
-  if (hasOpenPr && pr?.checks && pr.checks.pending > 0) {
+  if (hasOpenPr && pr && pr.checks && pr.checks.pending > 0) {
     return {
       label: formatChecksLabel(pr.checks),
       disabled: !isPrWaitingOnChecks(pr),
       kind: isPrWaitingOnChecks(pr) ? "open_pr" : "show_hint",
       hint: "Checks are still running.",
       tone: "warning",
+    };
+  }
+
+  if (hasOpenPr && pr && hasPrFailedChecks(pr)) {
+    return {
+      label: "Fix checks",
+      disabled: false,
+      kind: "prompt_ai",
+      prompt: buildGitAgentPrompt({
+        intent: "finish_pr",
+        cwd: null,
+        gitStatus,
+        threadRef: null,
+        promptHint:
+          "The pull request has failing checks. Inspect the failed GitHub checks, fix the underlying issue, rerun relevant local checks, commit, and push before attempting to merge.",
+      }),
+      tone: "destructive",
     };
   }
 
