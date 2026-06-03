@@ -36,6 +36,32 @@ const testPanelSettings = {
   ],
 };
 
+function testPanelHtml(input: { readonly title: string; readonly body: string }): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${input.title}</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; }
+      body { margin: 0; font-family: system-ui, sans-serif; }
+      main { width: min(100%, 64rem); margin: 0 auto; padding: 2rem; }
+      @media (max-width: 640px) { main { padding: 1rem; } }
+    </style>
+  </head>
+  <body>
+    <main>${input.body}</main>
+    <script>
+      const main = document.querySelector("main");
+      if (main) {
+        main.dataset.ready = "true";
+      }
+    </script>
+  </body>
+</html>`;
+}
+
 it.layer(NodeServices.layer)("organization panels", (it) => {
   it("validates filesystem-safe panel slugs", () => {
     assert.isTrue(isValidOrganizationPanelSlug("acme"));
@@ -75,9 +101,9 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
 
       assert.strictEqual(
         resolved.panelFileAbsolutePath,
-        "/state/organization-panels/acme/panel.json",
+        "/state/organization-panels/acme/panel.html",
       );
-      assert.strictEqual(resolved.panelFileRelativePath, "organization-panels/acme/panel.json");
+      assert.strictEqual(resolved.panelFileRelativePath, "organization-panels/acme/panel.html");
       assert.strictEqual(resolved.panelImportPath, "runtime:acme");
     }),
   );
@@ -94,12 +120,12 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
         now: "2026-06-02T00:00:00.000Z",
       });
 
-      assert.strictEqual(snapshot.panel.panelFilePath, "organization-panels/acme/panel.json");
+      assert.strictEqual(snapshot.panel.panelFilePath, "organization-panels/acme/panel.html");
       assert.strictEqual(snapshot.panel.panelImportPath, "runtime:acme");
       assert.strictEqual(snapshot.panel.document.title, "Organization panel");
-      assert.deepEqual(snapshot.panel.document.metrics, []);
-      assert.deepEqual(snapshot.panel.document.focusItems, []);
-      assert.isTrue(yield* fs.exists(path.join(stateDir, "organization-panels/acme/panel.json")));
+      assert.match(snapshot.panel.document.html, /<!doctype html>/u);
+      assert.match(snapshot.panel.document.html, /<meta name="viewport"/u);
+      assert.isTrue(yield* fs.exists(path.join(stateDir, "organization-panels/acme/panel.html")));
     }),
   );
 
@@ -108,11 +134,14 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "org-panel-state-" });
-      const panelPath = path.join(stateDir, "organization-panels/acme/panel.json");
+      const panelPath = path.join(stateDir, "organization-panels/acme/panel.html");
       yield* fs.makeDirectory(path.dirname(panelPath), { recursive: true });
       yield* fs.writeFileString(
         panelPath,
-        `{"title":"Organization panel","description":"Acme has a dedicated editable panel.","metrics":[{"label":"Revenue","value":"$128K","tone":"success"},{"label":"Active users","value":"24,812","tone":"info"},{"label":"Open tickets","value":"37","tone":"warning"}],"focusItems":["Review revenue trend","Review active users trend","Review open tickets trend"]}`,
+        testPanelHtml({
+          title: "Organization panel",
+          body: "<h1>Organization panel</h1><p>Acme has a dedicated editable panel.</p>",
+        }),
       );
 
       const snapshot = yield* getOrganizationPanel({
@@ -122,8 +151,8 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
         now: "2026-06-02T00:00:00.000Z",
       });
 
-      assert.deepEqual(snapshot.panel.document.metrics, []);
-      assert.deepEqual(snapshot.panel.document.focusItems, []);
+      assert.notMatch(snapshot.panel.document.html, /Acme has a dedicated editable panel/u);
+      assert.match(snapshot.panel.document.html, /plain HTML, CSS, and JavaScript/u);
     }),
   );
 
@@ -140,16 +169,10 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
         model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
       };
       const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
-      const afterContents = [
-        "{",
-        '  "title": "Agent edited panel",',
-        '  "description": "Edited by the organization panel agent.",',
-        '  "metrics": [',
-        '    { "label": "Open tickets", "value": "12", "tone": "warning" }',
-        "  ],",
-        '  "focusItems": ["Review support queue"]',
-        "}",
-      ].join("\n");
+      const afterContents = testPanelHtml({
+        title: "Agent edited panel",
+        body: '<h1>Agent edited panel</h1><p>Review support queue</p><output id="tickets">12</output>',
+      });
       let sessionCwd: string | null = null;
       let providerPrompt = "";
       const providerService: Parameters<
@@ -178,7 +201,7 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
               return yield* Effect.die(new Error("Organization panel agent session cwd missing"));
             }
             yield* fs
-              .writeFileString(path.join(cwd, "panel.json"), afterContents)
+              .writeFileString(path.join(cwd, "panel.html"), afterContents)
               .pipe(Effect.orDie);
             yield* Queue.offer(runtimeEvents, {
               type: "turn.completed",
@@ -212,15 +235,13 @@ it.layer(NodeServices.layer)("organization panels", (it) => {
       });
 
       assert.strictEqual(sessionCwd, path.join(stateDir, "organization-panels/acme"));
-      assert.match(providerPrompt, /Update only \.\/panel\.json/u);
+      assert.match(providerPrompt, /Update only \.\/panel\.html/u);
+      assert.match(providerPrompt, /320px mobile width/u);
       assert.match(providerPrompt, /Make this an agent-edited support panel/u);
       assert.strictEqual(result.snapshot.panel.document.title, "Agent edited panel");
-      assert.deepEqual(result.snapshot.panel.document.metrics, [
-        { label: "Open tickets", value: "12", tone: "warning" },
-      ]);
-      assert.deepEqual(result.snapshot.panel.document.focusItems, ["Review support queue"]);
+      assert.match(result.snapshot.panel.document.html, /Review support queue/u);
       assert.strictEqual(
-        yield* fs.readFileString(path.join(stateDir, "organization-panels/acme/panel.json")),
+        yield* fs.readFileString(path.join(stateDir, "organization-panels/acme/panel.html")),
         afterContents,
       );
     }),
