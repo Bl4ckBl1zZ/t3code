@@ -11,6 +11,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "./config.ts";
+import { createEmptyReadModel } from "./orchestration/projector.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -128,6 +129,8 @@ it.effect("resolveWelcomeBase derives cwd and project name from server config", 
   }),
 );
 
+const emptyCommandReadModel = createEmptyReadModel("2026-01-01T00:00:00.000Z");
+
 it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and thread ids", () => {
   const bootstrapProjectId = ProjectId.make("project-startup-bootstrap");
   const bootstrapThreadId = ThreadId.make("thread-startup-bootstrap");
@@ -140,7 +143,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
         autoBootstrapProjectFromCwd: true,
       } as never),
       Effect.provideService(ProjectionSnapshotQuery, {
-        getCommandReadModel: () => Effect.die("unused"),
+        getCommandReadModel: () => Effect.succeed(emptyCommandReadModel),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -194,7 +197,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
         autoBootstrapProjectFromCwd: true,
       } as never),
       Effect.provideService(ProjectionSnapshotQuery, {
-        getCommandReadModel: () => Effect.die("unused"),
+        getCommandReadModel: () => Effect.succeed(emptyCommandReadModel),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -242,7 +245,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         autoBootstrapProjectFromCwd: true,
       } as never),
       Effect.provideService(ProjectionSnapshotQuery, {
-        getCommandReadModel: () => Effect.die("unused"),
+        getCommandReadModel: () => Effect.succeed(emptyCommandReadModel),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),

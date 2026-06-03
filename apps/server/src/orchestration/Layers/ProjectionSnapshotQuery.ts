@@ -325,8 +325,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          tab_group_id AS "tabGroupId",
-          tab_type AS "tabType",
+          COALESCE(tab_group_id, thread_id) AS "tabGroupId",
+          COALESCE(tab_type, 'chat') AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -355,8 +355,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          tab_group_id AS "tabGroupId",
-          tab_type AS "tabType",
+          COALESCE(tab_group_id, thread_id) AS "tabGroupId",
+          COALESCE(tab_type, 'chat') AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -387,8 +387,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          tab_group_id AS "tabGroupId",
-          tab_type AS "tabType",
+          COALESCE(tab_group_id, thread_id) AS "tabGroupId",
+          COALESCE(tab_type, 'chat') AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -753,8 +753,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          tab_group_id AS "tabGroupId",
-          tab_type AS "tabType",
+          COALESCE(tab_group_id, thread_id) AS "tabGroupId",
+          COALESCE(tab_type, 'chat') AS "tabType",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",

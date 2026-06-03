@@ -7,33 +7,25 @@ import {
 } from "@t3tools/contracts";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HistoryIcon, PanelTopIcon, RotateCcwIcon, SendIcon, SquareIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { PanelTopIcon, RotateCcwIcon, SquareIcon } from "lucide-react";
+import type { FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "../components/ComposerPromptEditor";
 import { OrganizationPanelHost } from "../organizationPanel/OrganizationPanelHost";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
+import { Separator } from "../components/ui/separator";
 import { SidebarInset, SidebarTrigger } from "../components/ui/sidebar";
-import { Textarea } from "../components/ui/textarea";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import { isElectron } from "../env";
 import { cn } from "../lib/utils";
-
-interface ActivityState {
-  readonly events: readonly OrganizationPanelEvent[];
-  readonly activeTurnId: OrganizationPanelTurnId | null;
-  readonly validationStatus: "idle" | "passed" | "failed";
-  readonly compileStatus: "idle" | "passed" | "failed";
-}
-
-const EMPTY_ACTIVITY: ActivityState = {
-  events: [],
-  activeTurnId: null,
-  validationStatus: "idle",
-  compileStatus: "idle",
-};
 
 export const Route = createFileRoute("/organizations/$organizationId")({
   beforeLoad: async ({ context }) => {
@@ -49,13 +41,9 @@ function OrganizationPanelRouteView() {
   const organizationId = useMemo(() => OrganizationId.make(rawOrganizationId), [rawOrganizationId]);
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
-  const [activity, setActivity] = useState<ActivityState>(EMPTY_ACTIVITY);
+  const [activeTurnId, setActiveTurnId] = useState<OrganizationPanelTurnId | null>(null);
   const panelQueryKey = useMemo(
     () => ["organization-panel", organizationId] as const,
-    [organizationId],
-  );
-  const historyQueryKey = useMemo(
-    () => ["organization-panel-history", organizationId] as const,
     [organizationId],
   );
 
@@ -66,17 +54,9 @@ function OrganizationPanelRouteView() {
         organizationId,
       }),
   });
-  const historyQuery = useQuery({
-    queryKey: historyQueryKey,
-    queryFn: () =>
-      getPrimaryEnvironmentConnection().client.organizationPanel.listHistory({
-        organizationId,
-        limit: 20,
-      }),
-  });
 
   useEffect(() => {
-    setActivity(EMPTY_ACTIVITY);
+    setActiveTurnId(null);
   }, [organizationId]);
 
   useEffect(() => {
@@ -84,20 +64,18 @@ function OrganizationPanelRouteView() {
     return client.organizationPanel.subscribe(
       { organizationId },
       (event) => {
-        setActivity((current) => applyActivityEvent(current, event));
+        setActiveTurnId((current) => applyActiveTurnEvent(current, event));
         if (event.type === "panel.snapshot" || event.type === "turn.completed") {
           void queryClient.invalidateQueries({ queryKey: panelQueryKey });
-          void queryClient.invalidateQueries({ queryKey: historyQueryKey });
         }
       },
       {
         onResubscribe: () => {
           void queryClient.invalidateQueries({ queryKey: panelQueryKey });
-          void queryClient.invalidateQueries({ queryKey: historyQueryKey });
         },
       },
     );
-  }, [historyQueryKey, organizationId, panelQueryKey, queryClient]);
+  }, [organizationId, panelQueryKey, queryClient]);
 
   const startTurnMutation = useMutation({
     mutationFn: (nextPrompt: string) =>
@@ -105,10 +83,13 @@ function OrganizationPanelRouteView() {
         organizationId,
         prompt: nextPrompt,
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setPrompt("");
-      void queryClient.invalidateQueries({ queryKey: panelQueryKey });
-      void queryClient.invalidateQueries({ queryKey: historyQueryKey });
+      setActiveTurnId(null);
+      queryClient.setQueryData(panelQueryKey, result.snapshot);
+    },
+    onError: () => {
+      setActiveTurnId(null);
     },
   });
   const stopTurnMutation = useMutation({
@@ -124,18 +105,15 @@ function OrganizationPanelRouteView() {
         organizationId,
         versionId: version.id,
       }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: panelQueryKey });
-      void queryClient.invalidateQueries({ queryKey: historyQueryKey });
+    onSuccess: (result) => {
+      queryClient.setQueryData(panelQueryKey, result.snapshot);
     },
   });
 
   const snapshot = panelQuery.data ?? null;
-  const history = historyQuery.data?.versions ?? [];
-  const canSubmit =
-    prompt.trim().length > 0 && !startTurnMutation.isPending && !activity.activeTurnId;
+  const canSubmit = prompt.trim().length > 0 && !startTurnMutation.isPending && !activeTurnId;
   const pageTitle = snapshot?.organization.name ?? rawOrganizationId;
-  const latestVersion = snapshot?.latestVersion ?? history[0] ?? null;
+  const latestVersion = snapshot?.latestVersion ?? null;
 
   const startTurn = useCallback(() => {
     const trimmedPrompt = prompt.trim();
@@ -186,7 +164,7 @@ function OrganizationPanelRouteView() {
                   prompt={prompt}
                   setPrompt={setPrompt}
                   canSubmit={canSubmit}
-                  activeTurnId={activity.activeTurnId}
+                  activeTurnId={activeTurnId}
                   startPending={startTurnMutation.isPending}
                   stopPending={stopTurnMutation.isPending}
                   latestVersion={latestVersion}
@@ -196,20 +174,9 @@ function OrganizationPanelRouteView() {
                   rollback={(version) => void rollbackMutation.mutateAsync(version)}
                 />
 
-                <div className="grid min-h-[28rem] gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-                  <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-background">
-                    <OrganizationPanelHost snapshot={snapshot} />
-                  </section>
-
-                  <aside className="flex min-h-0 flex-col gap-4">
-                    <PanelActivitySurface activity={activity} />
-                    <PanelHistorySurface
-                      versions={history}
-                      rollbackPending={rollbackMutation.isPending}
-                      rollback={(version) => void rollbackMutation.mutateAsync(version)}
-                    />
-                  </aside>
-                </div>
+                <section className="min-h-[28rem] min-w-0 overflow-hidden rounded-lg border border-border bg-background">
+                  <OrganizationPanelHost snapshot={snapshot} />
+                </section>
               </>
             ) : !panelQuery.error ? (
               <div className="text-sm text-muted-foreground">Loading organization panel...</div>
@@ -235,240 +202,192 @@ function OrganizationPanelControls(props: {
   readonly stopTurn: (turnId: OrganizationPanelTurnId) => void;
   readonly rollback: (version: OrganizationPanelVersion) => void;
 }) {
-  return (
-    <section className="grid gap-4 rounded-lg border border-border bg-card/35 p-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-      <div className="min-w-0">
-        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{props.snapshot.organization.name}</span>
-          <span className="truncate">{props.snapshot.panel.panelFilePath}</span>
-        </div>
-        <Textarea
-          value={props.prompt}
-          rows={3}
-          placeholder="Add monthly revenue, active users, and open tickets."
-          className="min-h-20 resize-y"
-          onChange={(event) => props.setPrompt(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              props.startTurn();
-            }
-          }}
-        />
-      </div>
-      <div className="flex flex-wrap items-end gap-2 lg:flex-col lg:justify-end">
-        <Button size="sm" disabled={!props.canSubmit} onClick={props.startTurn}>
-          <SendIcon className="size-4" />
-          {props.startPending ? "Sending" : "Send"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!props.activeTurnId || props.stopPending}
-          onClick={() => props.activeTurnId && props.stopTurn(props.activeTurnId)}
-        >
-          <SquareIcon className="size-4" />
-          Stop
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!props.latestVersion || props.rollbackPending}
-          onClick={() => props.latestVersion && props.rollback(props.latestVersion)}
-        >
-          <RotateCcwIcon className="size-4" />
-          Rollback
-        </Button>
-      </div>
-    </section>
-  );
-}
+  const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const [composerCursor, setComposerCursor] = useState(0);
+  const submitDisabled = !props.canSubmit;
+  const isRunning = props.activeTurnId !== null;
 
-function PanelActivitySurface({ activity }: { readonly activity: ActivityState }) {
+  const submitPrompt = useCallback(
+    (event?: FormEvent<HTMLFormElement>) => {
+      event?.preventDefault();
+      if (submitDisabled) {
+        return;
+      }
+      props.startTurn();
+    },
+    [props, submitDisabled],
+  );
+
   return (
-    <section className="min-h-0 rounded-lg border border-border bg-card/35">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <h2 className="text-sm font-semibold">Activity</h2>
-        <div className="flex gap-1">
-          <StatusBadge label="Validation" status={activity.validationStatus} />
-          <StatusBadge label="Compile" status={activity.compileStatus} />
-        </div>
-      </div>
-      <div className="max-h-80 overflow-auto p-3">
-        {activity.events.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No panel activity yet.</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {activity.events.map((event, index) => (
-              <div key={eventKey(event, index)} className="rounded-md border border-border/70 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium">{eventLabel(event)}</span>
-                  <Badge size="sm" variant={eventTone(event)}>
-                    {event.type}
-                  </Badge>
-                </div>
-                {event.type === "file.patch" && event.diff ? (
-                  <pre className="mt-2 max-h-44 overflow-auto rounded-md bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
-                    {event.diff}
-                  </pre>
-                ) : null}
-                {"errors" in event && event.errors.length > 0 ? (
-                  <ul className="mt-2 space-y-1 text-xs text-destructive">
-                    {event.errors.map((error) => (
-                      <li key={error}>{error}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ))}
+    <form onSubmit={submitPrompt} className="mx-auto w-full min-w-0 max-w-208">
+      <div className="group rounded-[22px] p-px transition-colors duration-200">
+        <div className="rounded-[20px] border border-border bg-card transition-colors duration-200 has-focus-visible:border-ring/45">
+          <div className="relative px-3 pb-2 pt-3.5 sm:px-4 sm:pt-4">
+            <ComposerPromptEditor
+              editorRef={editorRef}
+              value={props.prompt}
+              cursor={composerCursor}
+              terminalContexts={[]}
+              skills={[]}
+              disabled={props.startPending}
+              placeholder="Describe what this organization panel should show."
+              onRemoveTerminalContext={() => {}}
+              onPaste={() => {}}
+              onChange={(nextPrompt, nextCursor) => {
+                props.setPrompt(nextPrompt);
+                setComposerCursor(nextCursor);
+              }}
+              onCommandKeyDown={(key, event) => {
+                if (key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  submitPrompt();
+                  return true;
+                }
+                return false;
+              }}
+            />
           </div>
-        )}
-      </div>
-    </section>
-  );
-}
 
-function PanelHistorySurface(props: {
-  readonly versions: readonly OrganizationPanelVersion[];
-  readonly rollbackPending: boolean;
-  readonly rollback: (version: OrganizationPanelVersion) => void;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card/35">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <HistoryIcon className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-semibold">History</h2>
-      </div>
-      <div className="max-h-80 overflow-auto p-3">
-        {props.versions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No saved versions yet.</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {props.versions.map((version) => (
-              <div key={version.id} className="rounded-md border border-border/70 p-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium">{version.prompt}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {new Date(version.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    aria-label={`Rollback version from ${new Date(version.createdAt).toLocaleString()}`}
-                    disabled={props.rollbackPending}
-                    onClick={() => props.rollback(version)}
-                  >
-                    <RotateCcwIcon className="size-3.5" />
-                  </Button>
-                </div>
-              </div>
-            ))}
+          <div className="flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-2.5 pb-2.5 sm:px-3 sm:pb-3">
+            <div className="-m-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <span className="min-w-0 truncate rounded-full border border-border/60 bg-background/55 px-2.5 py-1 text-xs font-medium text-foreground">
+                {props.snapshot.organization.name}
+              </span>
+              <Separator orientation="vertical" className="hidden h-4 sm:block" />
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
+                {props.snapshot.panel.panelFilePath}
+              </span>
+            </div>
+
+            <div className="flex shrink-0 flex-nowrap items-center justify-end gap-2">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="inline-flex">
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        className="rounded-full text-muted-foreground hover:text-foreground"
+                        disabled={!props.latestVersion || props.rollbackPending}
+                        aria-label="Rollback latest organization panel version"
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                        }}
+                        onClick={() => props.latestVersion && props.rollback(props.latestVersion)}
+                      >
+                        <RotateCcwIcon className="size-4" />
+                      </Button>
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top" align="end">
+                  Rollback latest version
+                </TooltipPopup>
+              </Tooltip>
+
+              {isRunning ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex">
+                        <button
+                          type="button"
+                          className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:scale-105 hover:bg-rose-500 disabled:pointer-events-none disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                          disabled={props.stopPending}
+                          aria-label="Stop panel generation"
+                          onPointerDown={(event) => {
+                            event.preventDefault();
+                          }}
+                          onClick={() => props.activeTurnId && props.stopTurn(props.activeTurnId)}
+                        >
+                          <SquareIcon className="size-3.5 fill-current" />
+                        </button>
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top" align="end">
+                    Stop generation
+                  </TooltipPopup>
+                </Tooltip>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex">
+                        <button
+                          type="submit"
+                          className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 enabled:cursor-pointer hover:scale-105 hover:bg-primary disabled:pointer-events-none disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                          disabled={submitDisabled}
+                          aria-label={props.startPending ? "Sending" : "Send message"}
+                          onPointerDown={(event) => {
+                            event.preventDefault();
+                          }}
+                        >
+                          {props.startPending ? (
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 14 14"
+                              fill="none"
+                              className="animate-spin"
+                              aria-hidden="true"
+                            >
+                              <circle
+                                cx="7"
+                                cy="7"
+                                r="5.5"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeDasharray="20 12"
+                              />
+                            </svg>
+                          ) : (
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 14 14"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          )}
+                        </button>
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top" align="end">
+                    Send
+                  </TooltipPopup>
+                </Tooltip>
+              )}
+            </div>
           </div>
-        )}
+        </div>
       </div>
-    </section>
+    </form>
   );
 }
 
-function StatusBadge(props: {
-  readonly label: string;
-  readonly status: ActivityState["validationStatus"];
-}) {
-  if (props.status === "idle") {
-    return (
-      <Badge size="sm" variant="outline">
-        {props.label}
-      </Badge>
-    );
-  }
-  return (
-    <Badge size="sm" variant={props.status === "passed" ? "success" : "error"}>
-      {props.label}
-    </Badge>
-  );
-}
-
-function applyActivityEvent(state: ActivityState, event: OrganizationPanelEvent): ActivityState {
-  const events = [...state.events, event].slice(-40);
+function applyActiveTurnEvent(
+  activeTurnId: OrganizationPanelTurnId | null,
+  event: OrganizationPanelEvent,
+): OrganizationPanelTurnId | null {
   switch (event.type) {
     case "turn.started":
-      return {
-        ...state,
-        events,
-        activeTurnId: event.turnId,
-        validationStatus: "idle",
-        compileStatus: "idle",
-      };
-    case "validation.result":
-      return { ...state, events, validationStatus: event.status };
-    case "compile.result":
-      return { ...state, events, compileStatus: event.status };
+      return event.turnId;
     case "turn.completed":
     case "turn.failed":
-      return { ...state, events, activeTurnId: null };
+      return null;
     default:
-      return { ...state, events };
-  }
-}
-
-function eventLabel(event: OrganizationPanelEvent): string {
-  switch (event.type) {
-    case "turn.started":
-      return event.prompt;
-    case "turn.delta":
-      return event.message;
-    case "file.patch":
-      return event.filePath;
-    case "validation.result":
-    case "compile.result":
-      return event.errors.length > 0 ? event.errors.join(", ") : event.status;
-    case "turn.completed":
-      return event.versionId;
-    case "turn.failed":
-      return event.reason;
-    case "panel.snapshot":
-      return event.panelFilePath;
-  }
-}
-
-function eventTone(event: OrganizationPanelEvent): "outline" | "success" | "error" | "info" {
-  if (event.type === "turn.failed") {
-    return "error";
-  }
-  if (
-    (event.type === "validation.result" || event.type === "compile.result") &&
-    event.status === "failed"
-  ) {
-    return "error";
-  }
-  if (event.type === "turn.completed") {
-    return "success";
-  }
-  if (event.type === "turn.delta" || event.type === "file.patch") {
-    return "info";
-  }
-  return "outline";
-}
-
-function eventKey(event: OrganizationPanelEvent, index: number): string {
-  switch (event.type) {
-    case "panel.snapshot":
-      return `${index}:${event.type}:${event.organizationId}:${event.versionId}`;
-    case "turn.started":
-      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.prompt}`;
-    case "turn.delta":
-      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.message}`;
-    case "file.patch":
-      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.filePath}:${event.diff.length}`;
-    case "validation.result":
-    case "compile.result":
-      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.status}:${event.errors.join("|")}`;
-    case "turn.completed":
-      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.versionId}`;
-    case "turn.failed":
-      return `${index}:${event.type}:${event.organizationId}:${event.turnId}:${event.reason}`;
+      return activeTurnId;
   }
 }
 

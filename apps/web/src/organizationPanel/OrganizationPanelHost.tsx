@@ -1,142 +1,77 @@
-import type { OrganizationPanelSnapshot } from "@t3tools/contracts";
-import { Component, useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import type { OrganizationPanelMetricTone, OrganizationPanelSnapshot } from "@t3tools/contracts";
 
-import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
-import { Button } from "../components/ui/button";
-import type { OrganizationPanelProps } from "../organization-panels/_shared/types";
-
-type PanelModule = {
-  readonly default: ComponentType<OrganizationPanelProps>;
-};
-
-const panelModules = import.meta.glob("../organization-panels/*/Panel.tsx") as Record<
-  string,
-  () => Promise<PanelModule>
->;
+import { Badge } from "../components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 
 interface OrganizationPanelHostProps {
   readonly snapshot: OrganizationPanelSnapshot;
 }
 
-interface OrganizationPanelErrorBoundaryProps {
-  readonly resetKey: string;
-  readonly children: ReactNode;
-}
-
-interface OrganizationPanelErrorBoundaryState {
-  readonly error: Error | null;
-  readonly resetKey: string;
-}
-
-class OrganizationPanelErrorBoundary extends Component<
-  OrganizationPanelErrorBoundaryProps,
-  OrganizationPanelErrorBoundaryState
-> {
-  override state: OrganizationPanelErrorBoundaryState = {
-    error: null,
-    resetKey: this.props.resetKey,
-  };
-
-  static getDerivedStateFromError(error: Error): Partial<OrganizationPanelErrorBoundaryState> {
-    return { error };
-  }
-
-  static getDerivedStateFromProps(
-    props: OrganizationPanelErrorBoundaryProps,
-    state: OrganizationPanelErrorBoundaryState,
-  ): Partial<OrganizationPanelErrorBoundaryState> | null {
-    if (props.resetKey === state.resetKey) {
-      return null;
-    }
-    return { error: null, resetKey: props.resetKey };
-  }
-
-  override render() {
-    if (this.state.error) {
-      return (
-        <Alert variant="error" className="m-6 rounded-lg">
-          <AlertTitle>Panel render failed</AlertTitle>
-          <AlertDescription>{this.state.error.message}</AlertDescription>
-          <div className="mt-3">
-            <Button size="xs" variant="outline" onClick={() => this.setState({ error: null })}>
-              Retry render
-            </Button>
-          </div>
-        </Alert>
-      );
-    }
-
-    return this.props.children;
-  }
-}
+const toneLabel: Record<OrganizationPanelMetricTone, string> = {
+  success: "On track",
+  info: "Monitor",
+  warning: "Review",
+};
 
 export function OrganizationPanelHost({ snapshot }: OrganizationPanelHostProps) {
-  const [panel, setPanel] = useState<ComponentType<OrganizationPanelProps> | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const panelImportPath = snapshot.panel.panelImportPath;
-  const versionId = snapshot.panel.versionId;
-  const panelProps = useMemo<OrganizationPanelProps>(
-    () => ({
-      organization: {
-        id: snapshot.organization.id,
-        slug: snapshot.organization.slug,
-        name: snapshot.organization.name,
-      },
-      viewer: snapshot.viewer,
-      runtime: {
-        now: new Date(snapshot.runtime.now),
-        environment: snapshot.runtime.environment,
-      },
-    }),
-    [snapshot],
-  );
+  const document = snapshot.panel.document;
+  const asOf = new Date(snapshot.runtime.now).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    const loader = panelModules[panelImportPath];
-    setPanel(null);
-    setLoadError(null);
-
-    if (!loader) {
-      setLoadError(`Panel module ${panelImportPath} is not registered by Vite.`);
-      return;
-    }
-
-    void loader().then(
-      (module) => {
-        if (!cancelled) {
-          setPanel(() => module.default);
-        }
-      },
-      (error) => {
-        if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : "Panel module failed to load.");
-        }
-      },
-    );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [panelImportPath, versionId]);
-
-  if (loadError) {
-    return (
-      <Alert variant="error" className="m-6 rounded-lg">
-        <AlertTitle>Panel module unavailable</AlertTitle>
-        <AlertDescription>{loadError}</AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (!panel) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading panel...</div>;
-  }
-
-  const Panel = panel;
   return (
-    <OrganizationPanelErrorBoundary resetKey={`${panelImportPath}:${versionId}`}>
-      <Panel {...panelProps} />
-    </OrganizationPanelErrorBoundary>
+    <section className="flex min-w-0 flex-col gap-5 p-6">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium uppercase text-muted-foreground">
+            {snapshot.organization.name}
+          </p>
+          <h1 className="truncate text-2xl font-semibold">{document.title}</h1>
+          {document.description ? (
+            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{document.description}</p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="outline">{snapshot.viewer.role}</Badge>
+          <span>{asOf}</span>
+        </div>
+      </header>
+
+      {document.metrics.length > 0 ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          {document.metrics.map((metric) => (
+            <Card key={metric.label} className="rounded-lg">
+              <CardHeader className="p-4 pb-2">
+                <CardTitle className="truncate text-sm text-muted-foreground">
+                  {metric.label}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex items-end justify-between gap-3 p-4 pt-0">
+                <span className="min-w-0 truncate text-2xl font-semibold">{metric.value}</span>
+                <Badge variant={metric.tone}>{toneLabel[metric.tone]}</Badge>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : null}
+
+      {document.focusItems.length > 0 ? (
+        <section className="rounded-lg border border-border bg-card/45 p-4">
+          <h2 className="text-sm font-semibold">Current focus</h2>
+          <div className="mt-3 grid gap-2">
+            {document.focusItems.map((item) => (
+              <div
+                key={item}
+                className="flex min-h-10 items-center rounded-md border border-border/70 bg-background px-3 text-sm"
+              >
+                <span className="min-w-0 truncate">{item}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </section>
   );
 }

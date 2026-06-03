@@ -51,6 +51,24 @@ export const OrganizationPanelRuntime = Schema.Struct({
 });
 export type OrganizationPanelRuntime = typeof OrganizationPanelRuntime.Type;
 
+export const OrganizationPanelMetricTone = Schema.Literals(["success", "info", "warning"]);
+export type OrganizationPanelMetricTone = typeof OrganizationPanelMetricTone.Type;
+
+export const OrganizationPanelMetric = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  value: TrimmedNonEmptyString,
+  tone: OrganizationPanelMetricTone,
+});
+export type OrganizationPanelMetric = typeof OrganizationPanelMetric.Type;
+
+export const OrganizationPanelDocument = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  description: Schema.NullOr(TrimmedNonEmptyString),
+  metrics: Schema.Array(OrganizationPanelMetric),
+  focusItems: Schema.Array(TrimmedNonEmptyString),
+});
+export type OrganizationPanelDocument = typeof OrganizationPanelDocument.Type;
+
 export const OrganizationPanelMetadata = Schema.Struct({
   organizationId: OrganizationId,
   panelSlug: OrganizationPanelSlug,
@@ -58,8 +76,8 @@ export const OrganizationPanelMetadata = Schema.Struct({
   panelImportPath: TrimmedNonEmptyString,
   versionId: OrganizationPanelVersionId,
   contentsHash: TrimmedNonEmptyString,
+  document: OrganizationPanelDocument,
   editable: Schema.Boolean,
-  allowedImports: Schema.Array(TrimmedNonEmptyString),
 });
 export type OrganizationPanelMetadata = typeof OrganizationPanelMetadata.Type;
 

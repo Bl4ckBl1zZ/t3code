@@ -1,27 +1,38 @@
 import {
+  type ModelSelection,
   OrganizationId,
+  OrganizationPanelDocument as OrganizationPanelDocumentSchema,
   OrganizationPanelError,
   OrganizationPanelSlug,
   OrganizationPanelTurnId,
   OrganizationPanelVersion as OrganizationPanelVersionSchema,
   OrganizationPanelVersionId,
+  type ProviderRuntimeEvent,
+  ThreadId,
+  type TurnId,
   type OrganizationPanelEvent,
   type OrganizationPanelGetResult,
   type OrganizationPanelHistoryListResult,
+  type OrganizationPanelDocument,
   type OrganizationPanelOrganization,
   type OrganizationPanelRollbackResult,
   type OrganizationPanelSnapshot,
   type OrganizationPanelTurnStartResult,
   type OrganizationPanelVersion,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import type { ServerConfigShape } from "./config.ts";
+import type { ProviderServiceShape } from "./provider/Services/ProviderService.ts";
 
 export interface OrganizationPanelPath {
   readonly organizationId: OrganizationId;
@@ -33,36 +44,70 @@ export interface OrganizationPanelPath {
 }
 
 const PANEL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-const PANEL_SOURCE_ROOT = "apps/web/src/organization-panels";
-const PANEL_FILE_NAME = "Panel.tsx";
+const PANEL_STORAGE_ROOT = "organization-panels";
+const PANEL_FILE_NAME = "panel.json";
 const PANEL_HISTORY_FILE_NAME = "organization-panel-versions.ndjson";
 
-const ALLOWED_PANEL_IMPORTS = ["react", "../_shared/types", "../_shared/imports"] as const;
-const DISALLOWED_IMPORT_FRAGMENTS = [
-  "apps/server",
-  "@t3tools/server",
-  "node:",
-  "child_process",
-  "fs",
-  "path",
-  "crypto",
-  "process",
-] as const;
+type OrganizationPanelSettings = Pick<ServerSettings, "sidebarProjectFolders">;
 
-const ORGANIZATIONS: ReadonlyArray<OrganizationPanelOrganization> = [
-  {
-    id: OrganizationId.make("acme"),
-    slug: "acme",
-    name: "Acme",
-    panelSlug: OrganizationPanelSlug.make("acme"),
-  },
-  {
-    id: OrganizationId.make("ping"),
-    slug: "ping",
-    name: "Ping",
-    panelSlug: OrganizationPanelSlug.make("ping"),
-  },
-];
+interface OrganizationPanelAgentRuntime {
+  readonly providerService: Pick<
+    ProviderServiceShape,
+    "startSession" | "sendTurn" | "interruptTurn" | "stopSession" | "streamEvents"
+  >;
+  readonly modelSelection: ModelSelection;
+}
+
+interface ActiveOrganizationPanelTurn {
+  readonly turnId: OrganizationPanelTurnId;
+  providerThreadId: ThreadId | null;
+  providerTurnId: TurnId | null;
+  stopRequested: boolean;
+  failurePublished: boolean;
+}
+
+function hashOrganizationId(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function toOrganizationPanelSlug(value: string): OrganizationPanelSlug {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .replace(/-{2,}/gu, "-");
+  const safeBase = normalized.length > 0 ? normalized : "organization";
+  const slug = PANEL_SLUG_PATTERN.test(value)
+    ? value
+    : `${safeBase.slice(0, 48).replace(/-+$/u, "")}-${hashOrganizationId(value)}`;
+  return OrganizationPanelSlug.make(slug);
+}
+
+export function resolveOrganizationPanelOrganization(input: {
+  readonly organizationId: OrganizationId;
+  readonly settings?: OrganizationPanelSettings | undefined;
+}): OrganizationPanelOrganization | null {
+  const folder = input.settings?.sidebarProjectFolders.find(
+    (candidate) => candidate.id === input.organizationId,
+  );
+  if (!folder) {
+    return null;
+  }
+
+  const panelSlug = toOrganizationPanelSlug(folder.id);
+  return {
+    id: input.organizationId,
+    slug: String(panelSlug),
+    name: folder.name,
+    panelSlug,
+  };
+}
 
 const StoredOrganizationPanelVersionSchema = Schema.Struct({
   ...OrganizationPanelVersionSchema.fields,
@@ -79,9 +124,12 @@ const decodeStoredOrganizationPanelVersion = Schema.decodeUnknownEffect(
 const encodeStoredOrganizationPanelVersion = Schema.encodeEffect(
   StoredOrganizationPanelVersionJson,
 );
+const OrganizationPanelDocumentJson = Schema.fromJsonString(OrganizationPanelDocumentSchema);
+const decodeOrganizationPanelDocument = Schema.decodeUnknownEffect(OrganizationPanelDocumentJson);
+const encodeOrganizationPanelDocument = Schema.encodeEffect(OrganizationPanelDocumentJson);
 
 const eventSubscribers = new Set<(event: OrganizationPanelEvent) => void>();
-const activeTurnsByOrganization = new Map<OrganizationId, OrganizationPanelTurnId>();
+const activeTurnsByOrganization = new Map<OrganizationId, ActiveOrganizationPanelTurn>();
 const organizationLocks = new Map<OrganizationId, Semaphore.Semaphore>();
 
 export function isValidOrganizationPanelSlug(slug: string): boolean {
@@ -97,38 +145,8 @@ export function subscribeOrganizationPanelEvents(
   };
 }
 
-export function validateOrganizationPanelSource(source: string): readonly string[] {
-  const errors: string[] = [];
-  const importSpecifiers = collectImportSpecifiers(source);
-
-  for (const specifier of importSpecifiers) {
-    if (!ALLOWED_PANEL_IMPORTS.includes(specifier as (typeof ALLOWED_PANEL_IMPORTS)[number])) {
-      errors.push(`Import "${specifier}" is not allowed.`);
-      continue;
-    }
-
-    if (DISALLOWED_IMPORT_FRAGMENTS.some((fragment) => specifier.includes(fragment))) {
-      errors.push(`Import "${specifier}" references a server-only or unsafe module.`);
-    }
-  }
-
-  if (/\bimport\s*\(/u.test(source)) {
-    errors.push("Dynamic imports are not allowed in organization panels.");
-  }
-
-  if (/\bprocess\b|\bimport\.meta\.env\b|\bdocument\.cookie\b|\blocalStorage\b/u.test(source)) {
-    errors.push("Generated panels cannot access process, env, cookies, or local storage.");
-  }
-
-  if (!/\bexport\s+default\b/u.test(source)) {
-    errors.push("Panel.tsx must default-export a React component.");
-  }
-
-  return errors;
-}
-
 export const resolveOrganizationPanelPath = (input: {
-  readonly repositoryRoot: string;
+  readonly storageRoot: string;
   readonly organizationId: OrganizationId;
   readonly panelSlug: OrganizationPanelSlug;
 }) =>
@@ -143,7 +161,7 @@ export const resolveOrganizationPanelPath = (input: {
       );
     }
 
-    const panelsRoot = path.resolve(input.repositoryRoot, PANEL_SOURCE_ROOT);
+    const panelsRoot = path.resolve(input.storageRoot, PANEL_STORAGE_ROOT);
     const folderAbsolutePath = path.resolve(panelsRoot, panelSlug);
     const panelFileAbsolutePath = path.resolve(folderAbsolutePath, PANEL_FILE_NAME);
     const expectedFolderPath = path.join(panelsRoot, panelSlug);
@@ -164,14 +182,15 @@ export const resolveOrganizationPanelPath = (input: {
       panelSlug: input.panelSlug,
       folderAbsolutePath,
       panelFileAbsolutePath,
-      panelImportPath: `../organization-panels/${panelSlug}/Panel.tsx`,
-      panelFileRelativePath: `${PANEL_SOURCE_ROOT}/${panelSlug}/${PANEL_FILE_NAME}`,
+      panelImportPath: `runtime:${panelSlug}`,
+      panelFileRelativePath: `${PANEL_STORAGE_ROOT}/${panelSlug}/${PANEL_FILE_NAME}`,
     } satisfies OrganizationPanelPath;
   });
 
 export const getOrganizationPanel = (input: {
   readonly config: ServerConfigShape;
   readonly organizationId: OrganizationId;
+  readonly settings?: OrganizationPanelSettings | undefined;
   readonly now: string;
 }): Effect.Effect<
   OrganizationPanelGetResult,
@@ -191,6 +210,7 @@ export const getOrganizationPanel = (input: {
 export const listOrganizationPanelHistory = (input: {
   readonly config: ServerConfigShape;
   readonly organizationId: OrganizationId;
+  readonly settings?: OrganizationPanelSettings | undefined;
   readonly limit?: number | undefined;
 }): Effect.Effect<
   OrganizationPanelHistoryListResult,
@@ -198,7 +218,7 @@ export const listOrganizationPanelHistory = (input: {
   FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    yield* resolveOrganization(input.organizationId);
+    yield* resolveOrganization(input.organizationId, input.settings);
     const versions = yield* readStoredVersions(input.config);
     const limit = input.limit ?? 50;
     return {
@@ -213,6 +233,8 @@ export const listOrganizationPanelHistory = (input: {
 export const startOrganizationPanelTurn = (input: {
   readonly config: ServerConfigShape;
   readonly organizationId: OrganizationId;
+  readonly settings?: OrganizationPanelSettings | undefined;
+  readonly agent: OrganizationPanelAgentRuntime;
   readonly prompt: string;
   readonly turnId: OrganizationPanelTurnId;
   readonly versionId: OrganizationPanelVersionId;
@@ -233,15 +255,17 @@ export const startOrganizationPanelTurn = (input: {
           );
         }
 
-        activeTurnsByOrganization.set(input.organizationId, input.turnId);
+        const activeTurn: ActiveOrganizationPanelTurn = {
+          turnId: input.turnId,
+          providerThreadId: null,
+          providerTurnId: null,
+          stopRequested: false,
+          failurePublished: false,
+        };
+        activeTurnsByOrganization.set(input.organizationId, activeTurn);
         const runTurn = Effect.gen(function* () {
           const context = yield* loadPanelContext(input);
           const beforeContents = yield* readPanelFile(context.path);
-          const afterContents = renderPanelSourceFromPrompt({
-            organization: context.organization,
-            prompt: input.prompt,
-          });
-          const validationErrors = validateOrganizationPanelSource(afterContents);
 
           publishPanelEvent({
             type: "turn.started",
@@ -253,8 +277,22 @@ export const startOrganizationPanelTurn = (input: {
             type: "turn.delta",
             organizationId: input.organizationId,
             turnId: input.turnId,
-            message: "Generated a bounded Panel.tsx update.",
+            message: "Starting organization panel agent.",
           });
+
+          const agentResult = yield* runOrganizationPanelAgent({
+            activeTurn,
+            agent: input.agent,
+            organizationId: input.organizationId,
+            organization: context.organization,
+            panelPath: context.path,
+            prompt: input.prompt,
+            turnId: input.turnId,
+            beforeContents,
+          });
+          const afterDocument = agentResult.afterDocument;
+          const validationErrors = validateOrganizationPanelDocument(afterDocument);
+          const afterContents = agentResult.afterContents;
 
           if (validationErrors.length > 0) {
             publishPanelEvent({
@@ -328,7 +366,7 @@ export const startOrganizationPanelTurn = (input: {
           });
 
           const snapshot = toSnapshot({
-            context: { ...context, contents: afterContents },
+            context: { ...context, contents: afterContents, document: afterDocument },
             now: input.now,
             latestVersion: version,
           });
@@ -339,7 +377,8 @@ export const startOrganizationPanelTurn = (input: {
         return yield* runTurn.pipe(
           Effect.tapError((error) =>
             Effect.sync(() => {
-              if (error.code !== "validation-failed") {
+              if (error.code !== "validation-failed" && !activeTurn.failurePublished) {
+                activeTurn.failurePublished = true;
                 publishPanelEvent({
                   type: "turn.failed",
                   organizationId: input.organizationId,
@@ -350,7 +389,17 @@ export const startOrganizationPanelTurn = (input: {
             }),
           ),
           Effect.ensuring(
-            Effect.sync(() => activeTurnsByOrganization.delete(input.organizationId)),
+            Effect.gen(function* () {
+              if (activeTurn.providerThreadId !== null) {
+                yield* input.agent.providerService
+                  .stopSession({ threadId: activeTurn.providerThreadId })
+                  .pipe(Effect.ignoreCause({ log: true }));
+              }
+              const current = activeTurnsByOrganization.get(input.organizationId);
+              if (current === activeTurn) {
+                activeTurnsByOrganization.delete(input.organizationId);
+              }
+            }),
           ),
         );
       }),
@@ -360,19 +409,31 @@ export const startOrganizationPanelTurn = (input: {
 export function stopOrganizationPanelTurn(input: {
   readonly organizationId: OrganizationId;
   readonly turnId: OrganizationPanelTurnId;
+  readonly agent?: Pick<OrganizationPanelAgentRuntime, "providerService"> | undefined;
 }): Effect.Effect<{ readonly stopped: boolean }, OrganizationPanelError> {
-  return Effect.sync(() => {
-    const activeTurnId = activeTurnsByOrganization.get(input.organizationId);
-    if (activeTurnId !== input.turnId) {
+  return Effect.gen(function* () {
+    const activeTurn = activeTurnsByOrganization.get(input.organizationId);
+    if (!activeTurn || activeTurn.turnId !== input.turnId) {
       return { stopped: false };
     }
-    activeTurnsByOrganization.delete(input.organizationId);
-    publishPanelEvent({
-      type: "turn.failed",
-      organizationId: input.organizationId,
-      turnId: input.turnId,
-      reason: "Panel turn stopped.",
-    });
+    activeTurn.stopRequested = true;
+    if (!activeTurn.failurePublished) {
+      activeTurn.failurePublished = true;
+      publishPanelEvent({
+        type: "turn.failed",
+        organizationId: input.organizationId,
+        turnId: input.turnId,
+        reason: "Panel turn stopped.",
+      });
+    }
+    if (input.agent && activeTurn.providerThreadId !== null) {
+      yield* input.agent.providerService
+        .interruptTurn({
+          threadId: activeTurn.providerThreadId,
+          ...(activeTurn.providerTurnId !== null ? { turnId: activeTurn.providerTurnId } : {}),
+        })
+        .pipe(Effect.ignoreCause({ log: true }));
+    }
     return { stopped: true };
   });
 }
@@ -380,6 +441,7 @@ export function stopOrganizationPanelTurn(input: {
 export const rollbackOrganizationPanel = (input: {
   readonly config: ServerConfigShape;
   readonly organizationId: OrganizationId;
+  readonly settings?: OrganizationPanelSettings | undefined;
   readonly versionId: OrganizationPanelVersionId;
   readonly turnId: OrganizationPanelTurnId;
   readonly rollbackVersionId: OrganizationPanelVersionId;
@@ -421,11 +483,16 @@ export const rollbackOrganizationPanel = (input: {
           );
         }
 
-        const validationErrors = validateOrganizationPanelSource(target.beforeContents);
+        const rollbackDocument = yield* decodePanelDocument(target.beforeContents).pipe(
+          Effect.mapError((cause) =>
+            panelError("rollback-failed", "Previous organization panel file was invalid.", cause),
+          ),
+        );
+        const validationErrors = validateOrganizationPanelDocument(rollbackDocument);
         if (validationErrors.length > 0) {
           return yield* panelError(
             "rollback-failed",
-            "Previous organization panel source failed validation.",
+            "Previous organization panel document failed validation.",
             validationErrors,
           );
         }
@@ -484,7 +551,7 @@ export const rollbackOrganizationPanel = (input: {
         });
 
         const snapshot = toSnapshot({
-          context: { ...context, contents: afterContents },
+          context: { ...context, contents: afterContents, document: rollbackDocument },
           now: input.now,
           latestVersion: version,
         });
@@ -510,31 +577,11 @@ const getOrganizationLock = (organizationId: OrganizationId) =>
     return lock;
   });
 
-function collectImportSpecifiers(source: string): readonly string[] {
-  const specifiers: string[] = [];
-  const fromPattern = /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?)\s+from\s+["']([^"']+)["']/gu;
-  const sideEffectPattern = /\bimport\s+["']([^"']+)["']/gu;
-  for (const match of source.matchAll(fromPattern)) {
-    const specifier = match[1];
-    if (specifier) {
-      specifiers.push(specifier);
-    }
-  }
-  for (const match of source.matchAll(sideEffectPattern)) {
-    const specifier = match[1];
-    if (specifier) {
-      specifiers.push(specifier);
-    }
-  }
-  return specifiers;
-}
-
 function resolveOrganization(
   organizationId: OrganizationId,
+  settings?: OrganizationPanelSettings | undefined,
 ): Effect.Effect<OrganizationPanelOrganization, OrganizationPanelError> {
-  return Effect.succeed(
-    ORGANIZATIONS.find((organization) => organization.id === organizationId),
-  ).pipe(
+  return Effect.succeed(resolveOrganizationPanelOrganization({ organizationId, settings })).pipe(
     Effect.flatMap((organization) =>
       organization
         ? Effect.succeed(organization)
@@ -548,42 +595,19 @@ function resolveOrganization(
 const loadPanelContext = (input: {
   readonly config: ServerConfigShape;
   readonly organizationId: OrganizationId;
+  readonly settings?: OrganizationPanelSettings | undefined;
 }) =>
   Effect.gen(function* () {
-    const organization = yield* resolveOrganization(input.organizationId);
-    const repositoryRoot = yield* resolveRepositoryRoot(input.config);
+    const organization = yield* resolveOrganization(input.organizationId, input.settings);
     const path = yield* resolveOrganizationPanelPath({
-      repositoryRoot,
+      storageRoot: input.config.stateDir,
       organizationId: input.organizationId,
       panelSlug: organization.panelSlug,
     });
     yield* ensureStarterPanel(path, organization);
     const contents = yield* readPanelFile(path);
-    return { organization, path, contents };
-  });
-
-const resolveRepositoryRoot = (
-  config: ServerConfigShape,
-): Effect.Effect<string, OrganizationPanelError, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const cwdCandidate = path.resolve(config.cwd);
-    const cwdPanelsRoot = path.join(cwdCandidate, PANEL_SOURCE_ROOT);
-    if (yield* fs.exists(cwdPanelsRoot).pipe(Effect.orElseSucceed(() => false))) {
-      return cwdCandidate;
-    }
-
-    const sourceCandidate = path.resolve(import.meta.dirname, "../../..");
-    const sourcePanelsRoot = path.join(sourceCandidate, PANEL_SOURCE_ROOT);
-    if (yield* fs.exists(sourcePanelsRoot).pipe(Effect.orElseSucceed(() => false))) {
-      return sourceCandidate;
-    }
-
-    return yield* panelError(
-      "panel-file-create-failed",
-      "Could not find apps/web organization panel root.",
-    );
+    const document = yield* decodePanelDocument(contents);
+    return { organization, path, contents, document };
   });
 
 const ensureStarterPanel = (
@@ -600,6 +624,13 @@ const ensureStarterPanel = (
         ),
       );
     if (exists) {
+      const existingDocument = yield* readPanelFile(panelPath).pipe(
+        Effect.flatMap(decodePanelDocument),
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      if (existingDocument && isLegacyStarterPanelDocument(existingDocument, organization)) {
+        yield* writeStarterPanelDocument(panelPath);
+      }
       return;
     }
 
@@ -614,9 +645,53 @@ const ensureStarterPanel = (
           ),
         ),
       );
+    yield* writeStarterPanelDocument(panelPath);
+  });
+
+const decodePanelDocument = (
+  contents: string,
+): Effect.Effect<OrganizationPanelDocument, OrganizationPanelError> =>
+  decodeOrganizationPanelDocument(contents).pipe(
+    Effect.mapError((cause) =>
+      panelError(
+        "panel-file-create-failed",
+        "Organization panel file contains invalid JSON.",
+        cause,
+      ),
+    ),
+  );
+
+const encodePanelDocument = (
+  document: OrganizationPanelDocument,
+): Effect.Effect<string, OrganizationPanelError> =>
+  encodeOrganizationPanelDocument(document).pipe(
+    Effect.mapError((cause) =>
+      panelError(
+        "panel-file-create-failed",
+        `Failed to encode organization panel document: ${cause.message}`,
+        cause,
+      ),
+    ),
+  );
+
+function validateOrganizationPanelDocument(document: OrganizationPanelDocument): readonly string[] {
+  const errors: string[] = [];
+  if (document.metrics.length > 6) {
+    errors.push("Organization panels can include at most 6 metrics.");
+  }
+  if (document.focusItems.length > 8) {
+    errors.push("Organization panels can include at most 8 focus items.");
+  }
+  return errors;
+}
+
+const writeStarterPanelDocument = (
+  panelPath: OrganizationPanelPath,
+): Effect.Effect<void, OrganizationPanelError, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
     yield* writeFileStringAtomically({
       filePath: panelPath.panelFileAbsolutePath,
-      contents: renderStarterPanelSource(organization),
+      contents: yield* encodePanelDocument(renderStarterPanelDocument()),
     }).pipe(
       Effect.mapError((cause) =>
         panelError(
@@ -654,6 +729,217 @@ const writePanelFile = (
       panelError("write-failed", "Failed to write organization panel file.", cause),
     ),
   );
+
+const runOrganizationPanelAgent = (input: {
+  readonly activeTurn: ActiveOrganizationPanelTurn;
+  readonly agent: OrganizationPanelAgentRuntime;
+  readonly organizationId: OrganizationId;
+  readonly organization: OrganizationPanelOrganization;
+  readonly panelPath: OrganizationPanelPath;
+  readonly prompt: string;
+  readonly turnId: OrganizationPanelTurnId;
+  readonly beforeContents: string;
+}): Effect.Effect<
+  {
+    readonly afterContents: string;
+    readonly afterDocument: OrganizationPanelDocument;
+  },
+  OrganizationPanelError,
+  FileSystem.FileSystem | Path.Path
+> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerThreadId = ThreadId.make(`organization-panel:${input.turnId}`);
+      input.activeTurn.providerThreadId = providerThreadId;
+      const completion = yield* Deferred.make<ProviderRuntimeEvent, OrganizationPanelError>();
+
+      yield* Stream.runForEach(
+        input.agent.providerService.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === providerThreadId),
+        ),
+        (event) =>
+          observeOrganizationPanelAgentEvent({
+            event,
+            completion,
+            organizationId: input.organizationId,
+            turnId: input.turnId,
+          }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* input.agent.providerService
+        .startSession(providerThreadId, {
+          threadId: providerThreadId,
+          providerInstanceId: input.agent.modelSelection.instanceId,
+          cwd: input.panelPath.folderAbsolutePath,
+          modelSelection: input.agent.modelSelection,
+          runtimeMode: "full-access",
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            panelError("write-failed", "Failed to start organization panel agent.", cause),
+          ),
+        );
+
+      if (input.activeTurn.stopRequested) {
+        return yield* panelError("turn-not-found", "Panel turn stopped.");
+      }
+
+      const providerTurn = yield* input.agent.providerService
+        .sendTurn({
+          threadId: providerThreadId,
+          input: buildOrganizationPanelAgentPrompt({
+            organization: input.organization,
+            panelPath: input.panelPath,
+            prompt: input.prompt,
+            beforeContents: input.beforeContents,
+          }),
+          modelSelection: input.agent.modelSelection,
+          interactionMode: "default",
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            panelError("write-failed", "Failed to send organization panel agent turn.", cause),
+          ),
+        );
+      input.activeTurn.providerTurnId = providerTurn.turnId;
+
+      const completed = yield* Deferred.await(completion).pipe(Effect.timeoutOption("20 minutes"));
+      if (Option.isNone(completed)) {
+        return yield* panelError("write-failed", "Organization panel agent timed out.");
+      }
+      if (input.activeTurn.stopRequested) {
+        return yield* panelError("turn-not-found", "Panel turn stopped.");
+      }
+
+      const afterContents = yield* readPanelFile(input.panelPath);
+      const afterDocument = yield* decodePanelDocument(afterContents).pipe(
+        Effect.mapError((cause) =>
+          panelError("validation-failed", "Agent wrote invalid organization panel JSON.", cause),
+        ),
+      );
+      return { afterContents, afterDocument };
+    }),
+  );
+
+const observeOrganizationPanelAgentEvent = (input: {
+  readonly event: ProviderRuntimeEvent;
+  readonly completion: Deferred.Deferred<ProviderRuntimeEvent, OrganizationPanelError>;
+  readonly organizationId: OrganizationId;
+  readonly turnId: OrganizationPanelTurnId;
+}): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const message = organizationPanelAgentEventMessage(input.event);
+    if (message) {
+      publishPanelEvent({
+        type: "turn.delta",
+        organizationId: input.organizationId,
+        turnId: input.turnId,
+        message,
+      });
+    }
+
+    if (input.event.type === "turn.completed") {
+      if (input.event.payload.state === "completed") {
+        yield* Deferred.succeed(input.completion, input.event);
+        return;
+      }
+      yield* Deferred.fail(
+        input.completion,
+        panelError(
+          "write-failed",
+          input.event.payload.errorMessage ??
+            input.event.payload.stopReason ??
+            `Organization panel agent finished with state "${input.event.payload.state}".`,
+        ),
+      );
+      return;
+    }
+
+    if (input.event.type === "turn.aborted") {
+      yield* Deferred.fail(
+        input.completion,
+        panelError(
+          "write-failed",
+          `Organization panel agent aborted: ${input.event.payload.reason}`,
+        ),
+      );
+      return;
+    }
+
+    if (input.event.type === "runtime.error") {
+      yield* Deferred.fail(
+        input.completion,
+        panelError(
+          "write-failed",
+          `Organization panel agent error: ${input.event.payload.message}`,
+        ),
+      );
+    }
+  });
+
+function organizationPanelAgentEventMessage(event: ProviderRuntimeEvent): string | null {
+  switch (event.type) {
+    case "session.started":
+      return "Agent session started.";
+    case "turn.started":
+      return event.payload.model ? `Agent started with ${event.payload.model}.` : "Agent started.";
+    case "item.completed":
+      return event.payload.title ?? event.payload.detail ?? null;
+    case "tool.progress":
+      return event.payload.summary ?? event.payload.toolName ?? null;
+    case "tool.summary":
+      return event.payload.summary;
+    case "request.opened":
+      return event.payload.detail ?? "Agent requested approval.";
+    case "runtime.warning":
+      return event.payload.message;
+    case "runtime.error":
+      return event.payload.message;
+    default:
+      return null;
+  }
+}
+
+function buildOrganizationPanelAgentPrompt(input: {
+  readonly organization: OrganizationPanelOrganization;
+  readonly panelPath: OrganizationPanelPath;
+  readonly prompt: string;
+  readonly beforeContents: string;
+}): string {
+  return `You are editing the organization panel for ${input.organization.name}.
+
+Update only ./panel.json in the current working directory. Do not create React, TSX, or source files.
+
+The file must remain valid JSON with exactly this shape:
+{
+  "title": "non-empty string",
+  "description": "string or null",
+  "metrics": [
+    { "label": "non-empty string", "value": "non-empty string", "tone": "success|info|warning" }
+  ],
+  "focusItems": ["non-empty string"]
+}
+
+Constraints:
+- At most 6 metrics.
+- At most 8 focusItems.
+- Use only the tones "success", "info", or "warning".
+- Keep the JSON human-readable.
+- If the request does not ask for metrics or focus items, leave those arrays empty.
+
+Panel file: ${input.panelPath.panelFileRelativePath}
+
+Current panel.json:
+\`\`\`json
+${input.beforeContents}
+\`\`\`
+
+User request:
+${input.prompt}
+
+Edit panel.json now and finish after the file is valid.`;
+}
 
 const readStoredVersions = (
   config: ServerConfigShape,
@@ -754,6 +1040,7 @@ function toSnapshot(input: {
     readonly organization: OrganizationPanelOrganization;
     readonly path: OrganizationPanelPath;
     readonly contents: string;
+    readonly document: OrganizationPanelDocument;
   };
   readonly now: string;
   readonly latestVersion: OrganizationPanelVersion | null;
@@ -779,8 +1066,8 @@ function toSnapshot(input: {
       panelImportPath: input.context.path.panelImportPath,
       versionId,
       contentsHash: hashContents(input.context.contents),
+      document: input.context.document,
       editable: true,
-      allowedImports: [...ALLOWED_PANEL_IMPORTS],
     },
     latestVersion: input.latestVersion,
   };
@@ -811,155 +1098,31 @@ function toPublicVersion(version: StoredOrganizationPanelVersion): OrganizationP
   return publicVersion;
 }
 
-function renderStarterPanelSource(organization: OrganizationPanelOrganization): string {
-  return `import type { OrganizationPanelProps } from "../_shared/types";
+function renderStarterPanelDocument(): OrganizationPanelDocument {
+  return {
+    title: "Organization panel",
+    description: null,
+    metrics: [],
+    focusItems: [],
+  };
+}
 
-export default function Panel({ organization }: OrganizationPanelProps) {
+function isLegacyStarterPanelDocument(
+  document: OrganizationPanelDocument,
+  organization: OrganizationPanelOrganization,
+): boolean {
   return (
-    <section className="flex flex-col gap-3 p-6">
-      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Organization panel
-      </p>
-      <h1 className="text-xl font-semibold">{organization.name}</h1>
-      <p className="max-w-2xl text-sm text-muted-foreground">
-        ${escapeJsString(organization.name)} has a dedicated editable panel file.
-      </p>
-    </section>
+    document.title === "Organization panel" &&
+    document.description === `${organization.name} has a dedicated editable panel.` &&
+    document.metrics.length === 3 &&
+    document.metrics[0]?.label === "Revenue" &&
+    document.metrics[1]?.label === "Active users" &&
+    document.metrics[2]?.label === "Open tickets" &&
+    document.focusItems.length === 3 &&
+    document.focusItems[0] === "Review revenue trend" &&
+    document.focusItems[1] === "Review active users trend" &&
+    document.focusItems[2] === "Review open tickets trend"
   );
-}
-`;
-}
-
-function renderPanelSourceFromPrompt(input: {
-  readonly organization: OrganizationPanelOrganization;
-  readonly prompt: string;
-}): string {
-  const metrics = extractMetricLabels(input.prompt);
-  const metricRows = metrics
-    .map(
-      (metric, index) =>
-        `  { label: ${jsStringLiteral(metric)}, value: ${jsStringLiteral(metricValue(index))}, tone: ${jsStringLiteral(metricTone(index))} },`,
-    )
-    .join("\n");
-  const focusItems = extractFocusItems(input.prompt)
-    .map((item) => `  ${jsStringLiteral(item)},`)
-    .join("\n");
-
-  return `import type { OrganizationPanelProps } from "../_shared/types";
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "../_shared/imports";
-
-const metrics = [
-${metricRows}
-] as const;
-
-const focusItems = [
-${focusItems}
-] as const;
-
-export default function Panel({ organization, viewer, runtime }: OrganizationPanelProps) {
-  const asOf = runtime.now.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-
-  return (
-    <section className="flex min-w-0 flex-col gap-5 p-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            {organization.name}
-          </p>
-          <h1 className="text-2xl font-semibold tracking-tight">Operating panel</h1>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Badge variant="outline">{viewer.role}</Badge>
-          <span>{asOf}</span>
-        </div>
-      </header>
-
-      <div className="grid gap-3 md:grid-cols-3">
-        {metrics.map((metric) => (
-          <Card key={metric.label} className="rounded-lg">
-            <CardHeader className="p-4 pb-2">
-              <CardTitle className="text-sm text-muted-foreground">{metric.label}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex items-end justify-between gap-3 p-4 pt-0">
-              <span className="text-2xl font-semibold tracking-tight">{metric.value}</span>
-              <Badge variant={metric.tone}>{metric.tone}</Badge>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        <section className="rounded-lg border border-border bg-card/45 p-4">
-          <h2 className="text-sm font-semibold">Current focus</h2>
-          <div className="mt-3 grid gap-2">
-            {focusItems.map((item) => (
-              <div
-                key={item}
-                className="flex min-h-10 items-center rounded-md border border-border/70 bg-background px-3 text-sm"
-              >
-                {item}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-lg border border-border bg-card/45 p-4">
-          <h2 className="text-sm font-semibold">Panel scope</h2>
-          <dl className="mt-3 grid gap-3 text-sm">
-            <div>
-              <dt className="text-muted-foreground">Organization</dt>
-              <dd className="font-medium">{organization.slug}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">Runtime</dt>
-              <dd className="font-medium">{runtime.environment}</dd>
-            </div>
-          </dl>
-        </section>
-      </div>
-    </section>
-  );
-}
-`;
-}
-
-function extractMetricLabels(prompt: string): readonly string[] {
-  const normalized = prompt
-    .replace(/[.?!]/gu, " ")
-    .replace(/\band\b/giu, ",")
-    .split(",")
-    .map((part) => titleCase(part.replace(/\b(add|show|include|track|display)\b/giu, "").trim()))
-    .filter((part) => part.length > 0 && part.length <= 40);
-  const deduped = Array.from(new Set(normalized));
-  return (deduped.length > 0 ? deduped : ["Revenue", "Active users", "Open tickets"]).slice(0, 6);
-}
-
-function extractFocusItems(prompt: string): readonly string[] {
-  const metrics = extractMetricLabels(prompt);
-  return metrics.slice(0, 4).map((metric) => `Review ${metric.toLowerCase()} trend`);
-}
-
-function titleCase(value: string): string {
-  return value
-    .replace(/\s+/gu, " ")
-    .split(" ")
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toLocaleUpperCase()}${word.slice(1).toLocaleLowerCase()}`)
-    .join(" ");
-}
-
-function metricValue(index: number): string {
-  const values = ["$128K", "24,812", "37", "91%", "14", "6.2h"];
-  return values[index % values.length] ?? "0";
-}
-
-function metricTone(index: number): "success" | "info" | "warning" {
-  const tones = ["success", "info", "warning"] as const;
-  return tones[index % tones.length] ?? "info";
 }
 
 function createUnifiedDiff(
@@ -988,20 +1151,6 @@ function hashContents(contents: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `fnv1a-${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}
-
-function escapeJsString(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/`/gu, "\\`").replace(/\$/gu, "\\$");
-}
-
-function jsStringLiteral(value: string): string {
-  return `"${value
-    .replace(/\\/gu, "\\\\")
-    .replace(/"/gu, '\\"')
-    .replace(/\r/gu, "\\r")
-    .replace(/\n/gu, "\\n")
-    .replace(/\u2028/gu, "\\u2028")
-    .replace(/\u2029/gu, "\\u2029")}"`;
 }
 
 function panelError(
