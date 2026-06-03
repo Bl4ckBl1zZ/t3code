@@ -105,12 +105,30 @@ const BROWSER_AGENT_AUTO_PAIR_HTML = `<!doctype html>
       }
       h1 { margin: 0 0 8px; font-size: 18px; }
       p { margin: 0; color: rgba(255,255,255,0.7); line-height: 1.5; }
+      .actions { display: flex; margin-top: 18px; }
+      a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 34px;
+        padding: 0 14px;
+        border: 1px solid rgba(255,255,255,0.16);
+        border-radius: 8px;
+        background: rgba(255,255,255,0.08);
+        color: #f7f7f7;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      a:hover { background: rgba(255,255,255,0.12); }
     </style>
   </head>
   <body>
     <main>
       <h1>Pairing T3 Code Browser Agent</h1>
       <p>If this stays open, reload or install the T3 Code Browser Agent extension, then retry Preview.</p>
+      <div class="actions">
+        <a href="${BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH}" download>Download extension</a>
+      </div>
     </main>
   </body>
 </html>`;
