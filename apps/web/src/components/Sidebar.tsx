@@ -2892,9 +2892,6 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
         >
           <PanelTopIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
           <span className="min-w-0 flex-1 truncate text-xs font-medium">Panel</span>
-          <span className="shrink-0 text-[10px] text-muted-foreground/60">
-            {folderEntry.projects.length} projects
-          </span>
         </SidebarMenuButton>
       </div>
 
