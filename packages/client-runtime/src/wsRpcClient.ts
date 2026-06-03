@@ -145,6 +145,10 @@ export interface WsRpcClient {
     readonly stopTurn: RpcUnaryMethod<typeof WS_METHODS.organizationPanelTurnStop>;
     readonly listHistory: RpcUnaryMethod<typeof WS_METHODS.organizationPanelHistoryList>;
     readonly rollback: RpcUnaryMethod<typeof WS_METHODS.organizationPanelRollback>;
+    readonly listDynamicMethods: RpcUnaryMethod<typeof WS_METHODS.organizationPanelDynamicRpcList>;
+    readonly invokeDynamicMethod: RpcUnaryMethod<
+      typeof WS_METHODS.organizationPanelDynamicRpcInvoke
+    >;
     readonly subscribe: RpcInputStreamMethod<typeof WS_METHODS.subscribeOrganizationPanelEvents>;
   };
   readonly provider: {
@@ -338,6 +342,10 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.organizationPanelHistoryList](input)),
       rollback: (input) =>
         transport.request((client) => client[WS_METHODS.organizationPanelRollback](input)),
+      listDynamicMethods: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationPanelDynamicRpcList](input)),
+      invokeDynamicMethod: (input) =>
+        transport.request((client) => client[WS_METHODS.organizationPanelDynamicRpcInvoke](input)),
       subscribe: (input, listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeOrganizationPanelEvents](input),

@@ -92,13 +92,10 @@ function describeSlowRpcAckToast(requests: ReadonlyArray<SlowRpcAckRequest>): st
 
 function SlowRpcAckRequestDetails({ requests }: { requests: ReadonlyArray<SlowRpcAckRequest> }) {
   return (
-    <ul className="space-y-2.5 text-xs text-muted-foreground">
+    <ul className="space-y-2 text-xs text-muted-foreground">
       {requests.map((req) => (
-        <li
-          className="min-w-0 border-border/50 border-b pb-2 last:border-b-0 last:pb-0"
-          key={req.requestId}
-        >
-          <div className="wrap-break-word font-medium text-foreground">{req.tag}</div>
+        <li className="min-w-0" key={req.requestId}>
+          <div className="wrap-break-word font-medium text-foreground/90">{req.tag}</div>
           <div className="mt-0.5 font-mono text-[10px] leading-snug opacity-90">
             {req.requestId}
           </div>
@@ -405,6 +402,7 @@ export function SlowRpcAckToastCoordinator() {
         expandableContent: <SlowRpcAckRequestDetails requests={slowRequests} />,
         expandableDescriptionTrigger: true,
         expandableLabels: { collapse: "Hide requests", expand: "Show requests" },
+        surfaceStyle: "floating" as const,
       },
       description: describeSlowRpcAckToast(slowRequests),
       timeout: 0,

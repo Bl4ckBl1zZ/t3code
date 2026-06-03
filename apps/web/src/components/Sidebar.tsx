@@ -2884,14 +2884,14 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
         <SidebarMenuButton
           size="sm"
           isActive={activeOrganizationId === folderEntry.folder.id}
-          className="min-w-0 flex-1 basis-1/2 gap-2 px-2 py-1.5 text-left text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+          className="min-w-0 flex-1 basis-1/2 justify-end gap-2 px-2 py-1.5 text-right text-muted-foreground/70 hover:bg-accent hover:text-foreground"
           aria-label={`Open ${folderEntry.folder.name} organization panel`}
           onPointerDownCapture={handleFolderPointerDownCapture}
           onClick={handleFolderPanelClick}
           onContextMenu={handleFolderContextMenu}
         >
           <PanelTopIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium">Panel</span>
+          <span className="min-w-0 flex-none truncate text-xs font-medium">Panel</span>
         </SidebarMenuButton>
       </div>
 

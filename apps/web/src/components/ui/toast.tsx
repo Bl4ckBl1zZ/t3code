@@ -41,6 +41,7 @@ export type ThreadToastData = {
   threadId?: ThreadId | null;
   leadingIcon?: ReactNode;
   tooltipStyle?: boolean;
+  surfaceStyle?: "default" | "floating";
   onClose?: (() => void) | undefined;
   dismissAfterVisibleMs?: number;
   hideCopyButton?: boolean;
@@ -173,9 +174,14 @@ function ToastDescriptionAndExpandable({
   const expandableContent = toastData?.expandableContent;
   const labels = toastData?.expandableLabels ?? {};
   const descriptionTrigger = toastData?.expandableDescriptionTrigger ?? false;
+  const floatingSurface = toastData?.surfaceStyle === "floating";
   const descriptionClassName = cn(
     "min-w-0 select-text wrap-break-word text-muted-foreground",
     errorDescriptionClampClass(toastType, toastDescription),
+  );
+  const expandablePanelClassName = cn(
+    toastExpandablePanelClassName,
+    floatingSurface && "mt-1.5 border-border/50 border-l pl-3",
   );
   const [open, setOpen] = useState(false);
 
@@ -209,8 +215,9 @@ function ToastDescriptionAndExpandable({
         aria-expanded={open}
         className={cn(
           "group flex min-w-0 w-full cursor-pointer select-none items-start gap-1.5 rounded-sm text-left outline-none ring-offset-background",
-          "transition-colors hover:bg-muted/40",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          floatingSurface
+            ? "transition-colors hover:text-foreground focus-visible:bg-muted/20"
+            : "transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
         )}
         onClick={toggle}
         onKeyDown={onKeyDown}
@@ -242,7 +249,7 @@ function ToastDescriptionAndExpandable({
           />
         )}
       </div>
-      {open ? <div className={toastExpandablePanelClassName}>{expandableContent}</div> : null}
+      {open ? <div className={expandablePanelClassName}>{expandableContent}</div> : null}
     </>
   );
 }
@@ -547,11 +554,14 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
           );
           const bodyDescriptor = deriveToastBodyDescriptor(toast);
           const { stackedActionLayout, inlineContentEndPad } = bodyDescriptor;
+          const floatingSurface = toast.data?.surfaceStyle === "floating";
 
           return (
             <Toast.Root
               className={cn(
                 "absolute z-[calc(9999-var(--toast-index))] w-full overflow-visible select-none rounded-lg border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+                floatingSurface &&
+                  "border-transparent bg-transparent shadow-none before:shadow-none dark:before:shadow-none",
                 // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",
@@ -645,6 +655,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                   stackedActionLayout
                     ? "flex flex-col gap-2 py-2.5 pr-3.5"
                     : cn("py-3", "flex items-center justify-between gap-1.5", inlineContentEndPad),
+                  floatingSurface && "pl-0",
                   hideCollapsedContent &&
                     "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
                 )}

@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ChatAttachment,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  UploadChatAttachment,
+} from "./orchestration.ts";
 
 export const OrganizationId = TrimmedNonEmptyString.pipe(Schema.brand("OrganizationId"));
 export type OrganizationId = typeof OrganizationId.Type;
@@ -57,6 +62,48 @@ export const OrganizationPanelDocument = Schema.Struct({
 });
 export type OrganizationPanelDocument = typeof OrganizationPanelDocument.Type;
 
+export const OrganizationPanelDynamicRpcMethod = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^organizationPanel\.dynamic\.[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/),
+).pipe(Schema.brand("OrganizationPanelDynamicRpcMethod"));
+export type OrganizationPanelDynamicRpcMethod = typeof OrganizationPanelDynamicRpcMethod.Type;
+
+const OrganizationPanelDynamicRpcPayload = Schema.Unknown;
+
+export const OrganizationPanelDynamicRpcMethodSummary = Schema.Struct({
+  method: OrganizationPanelDynamicRpcMethod,
+  label: Schema.optional(TrimmedNonEmptyString),
+  description: Schema.optional(TrimmedNonEmptyString),
+  inputSchema: Schema.optional(OrganizationPanelDynamicRpcPayload),
+});
+export type OrganizationPanelDynamicRpcMethodSummary =
+  typeof OrganizationPanelDynamicRpcMethodSummary.Type;
+
+export const OrganizationPanelDynamicRpcListInput = Schema.Struct({
+  organizationId: OrganizationId,
+});
+export type OrganizationPanelDynamicRpcListInput = typeof OrganizationPanelDynamicRpcListInput.Type;
+
+export const OrganizationPanelDynamicRpcListResult = Schema.Struct({
+  methods: Schema.Array(OrganizationPanelDynamicRpcMethodSummary),
+});
+export type OrganizationPanelDynamicRpcListResult =
+  typeof OrganizationPanelDynamicRpcListResult.Type;
+
+export const OrganizationPanelDynamicRpcInvokeInput = Schema.Struct({
+  organizationId: OrganizationId,
+  method: OrganizationPanelDynamicRpcMethod,
+  payload: OrganizationPanelDynamicRpcPayload,
+});
+export type OrganizationPanelDynamicRpcInvokeInput =
+  typeof OrganizationPanelDynamicRpcInvokeInput.Type;
+
+export const OrganizationPanelDynamicRpcInvokeResult = Schema.Struct({
+  method: OrganizationPanelDynamicRpcMethod,
+  result: OrganizationPanelDynamicRpcPayload,
+});
+export type OrganizationPanelDynamicRpcInvokeResult =
+  typeof OrganizationPanelDynamicRpcInvokeResult.Type;
+
 export const OrganizationPanelMetadata = Schema.Struct({
   organizationId: OrganizationId,
   panelSlug: OrganizationPanelSlug,
@@ -87,12 +134,33 @@ export const OrganizationPanelVersion = Schema.Struct({
 });
 export type OrganizationPanelVersion = typeof OrganizationPanelVersion.Type;
 
+export const OrganizationPanelTurnActivity = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+  tone: Schema.Literals(["default", "success", "warning", "error"]),
+});
+export type OrganizationPanelTurnActivity = typeof OrganizationPanelTurnActivity.Type;
+
+export const OrganizationPanelActiveTurn = Schema.Struct({
+  turnId: OrganizationPanelTurnId,
+  prompt: TrimmedNonEmptyString,
+  status: Schema.Literals(["running", "completed", "failed"]),
+  createdAt: IsoDateTime,
+  filePath: Schema.NullOr(TrimmedNonEmptyString),
+  attachments: Schema.Array(ChatAttachment).check(
+    Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+  ),
+  activities: Schema.Array(OrganizationPanelTurnActivity),
+});
+export type OrganizationPanelActiveTurn = typeof OrganizationPanelActiveTurn.Type;
+
 export const OrganizationPanelSnapshot = Schema.Struct({
   organization: OrganizationPanelOrganization,
   viewer: OrganizationPanelViewer,
   runtime: OrganizationPanelRuntime,
   panel: OrganizationPanelMetadata,
   latestVersion: Schema.NullOr(OrganizationPanelVersion),
+  activeTurn: Schema.NullOr(OrganizationPanelActiveTurn),
 });
 export type OrganizationPanelSnapshot = typeof OrganizationPanelSnapshot.Type;
 
@@ -107,6 +175,11 @@ export type OrganizationPanelGetResult = typeof OrganizationPanelGetResult.Type;
 export const OrganizationPanelTurnStartInput = Schema.Struct({
   organizationId: OrganizationId,
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(4000)),
+  attachments: Schema.optional(
+    Schema.Array(UploadChatAttachment).check(
+      Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+    ),
+  ),
 });
 export type OrganizationPanelTurnStartInput = typeof OrganizationPanelTurnStartInput.Type;
 
@@ -170,6 +243,9 @@ export const OrganizationPanelEvent = Schema.Union([
     organizationId: OrganizationId,
     turnId: OrganizationPanelTurnId,
     prompt: TrimmedNonEmptyString,
+    attachments: Schema.optional(
+      Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("turn.delta"),
@@ -230,6 +306,9 @@ export class OrganizationPanelError extends Schema.TaggedErrorClass<Organization
       "write-failed",
       "rollback-unavailable",
       "rollback-failed",
+      "dynamic-rpc-invalid",
+      "dynamic-rpc-not-found",
+      "dynamic-rpc-failed",
     ]),
     cause: Schema.optional(Schema.Defect),
   },

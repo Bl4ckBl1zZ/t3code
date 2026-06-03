@@ -19,6 +19,10 @@ import {
 } from "./browserAgent.ts";
 import {
   OrganizationPanelError,
+  OrganizationPanelDynamicRpcInvokeInput,
+  OrganizationPanelDynamicRpcInvokeResult,
+  OrganizationPanelDynamicRpcListInput,
+  OrganizationPanelDynamicRpcListResult,
   OrganizationPanelEventsSubscribeInput,
   OrganizationPanelEvent,
   OrganizationPanelGetInput,
@@ -228,6 +232,8 @@ export const WS_METHODS = {
   organizationPanelTurnStop: "organizationPanel.turn.stop",
   organizationPanelHistoryList: "organizationPanel.history.list",
   organizationPanelRollback: "organizationPanel.rollback",
+  organizationPanelDynamicRpcList: "organizationPanel.dynamic.list",
+  organizationPanelDynamicRpcInvoke: "organizationPanel.dynamic.invoke",
   subscribeOrganizationPanelEvents: "organizationPanel.event",
 
   // Streaming subscriptions
@@ -405,6 +411,24 @@ export const WsOrganizationPanelRollbackRpc = Rpc.make(WS_METHODS.organizationPa
   success: OrganizationPanelRollbackResult,
   error: OrganizationPanelError,
 });
+
+export const WsOrganizationPanelDynamicRpcListRpc = Rpc.make(
+  WS_METHODS.organizationPanelDynamicRpcList,
+  {
+    payload: OrganizationPanelDynamicRpcListInput,
+    success: OrganizationPanelDynamicRpcListResult,
+    error: OrganizationPanelError,
+  },
+);
+
+export const WsOrganizationPanelDynamicRpcInvokeRpc = Rpc.make(
+  WS_METHODS.organizationPanelDynamicRpcInvoke,
+  {
+    payload: OrganizationPanelDynamicRpcInvokeInput,
+    success: OrganizationPanelDynamicRpcInvokeResult,
+    error: OrganizationPanelError,
+  },
+);
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
@@ -714,6 +738,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrganizationPanelTurnStopRpc,
   WsOrganizationPanelHistoryListRpc,
   WsOrganizationPanelRollbackRpc,
+  WsOrganizationPanelDynamicRpcListRpc,
+  WsOrganizationPanelDynamicRpcInvokeRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsWriteFileRpc,

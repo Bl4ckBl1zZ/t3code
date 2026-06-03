@@ -1,7 +1,10 @@
 import {
   type ModelSelection,
+  type ChatAttachment,
   OrganizationId,
+  type OrganizationPanelActiveTurn,
   OrganizationPanelError,
+  type OrganizationPanelTurnActivity,
   OrganizationPanelSlug,
   OrganizationPanelTurnId,
   OrganizationPanelVersion as OrganizationPanelVersionSchema,
@@ -18,7 +21,9 @@ import {
   type OrganizationPanelSnapshot,
   type OrganizationPanelTurnStartResult,
   type OrganizationPanelVersion,
+  ProviderInstanceId,
   type ServerSettings,
+  type UploadChatAttachment,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -32,6 +37,7 @@ import * as Stream from "effect/Stream";
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import type { ServerConfigShape } from "./config.ts";
 import type { ProviderServiceShape } from "./provider/Services/ProviderService.ts";
+import { persistUploadChatAttachments } from "./uploadChatAttachments.ts";
 
 export interface OrganizationPanelPath {
   readonly organizationId: OrganizationId;
@@ -48,6 +54,12 @@ const PANEL_FILE_NAME = "panel.html";
 const PANEL_HISTORY_FILE_NAME = "organization-panel-versions.ndjson";
 const PANEL_HTML_MAX_LENGTH = 200_000;
 
+export const ORGANIZATION_PANEL_AGENT_MODEL_SELECTION: ModelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.5",
+  options: [{ id: "reasoningEffort", value: "high" }],
+};
+
 type OrganizationPanelSettings = Pick<ServerSettings, "sidebarProjectFolders">;
 
 interface OrganizationPanelAgentRuntime {
@@ -60,8 +72,14 @@ interface OrganizationPanelAgentRuntime {
 
 interface ActiveOrganizationPanelTurn {
   readonly turnId: OrganizationPanelTurnId;
+  readonly prompt: string;
+  readonly createdAt: string;
   providerThreadId: ThreadId | null;
   providerTurnId: TurnId | null;
+  status: OrganizationPanelActiveTurn["status"];
+  filePath: string | null;
+  attachments: readonly ChatAttachment[];
+  activities: readonly OrganizationPanelTurnActivity[];
   stopRequested: boolean;
   failurePublished: boolean;
 }
@@ -233,6 +251,7 @@ export const startOrganizationPanelTurn = (input: {
   readonly settings?: OrganizationPanelSettings | undefined;
   readonly agent: OrganizationPanelAgentRuntime;
   readonly prompt: string;
+  readonly attachments?: readonly UploadChatAttachment[] | undefined;
   readonly turnId: OrganizationPanelTurnId;
   readonly versionId: OrganizationPanelVersionId;
   readonly now: string;
@@ -254,8 +273,14 @@ export const startOrganizationPanelTurn = (input: {
 
         const activeTurn: ActiveOrganizationPanelTurn = {
           turnId: input.turnId,
+          prompt: input.prompt,
+          createdAt: input.now,
           providerThreadId: null,
           providerTurnId: null,
+          status: "running",
+          filePath: null,
+          attachments: [],
+          activities: [],
           stopRequested: false,
           failurePublished: false,
         };
@@ -263,12 +288,20 @@ export const startOrganizationPanelTurn = (input: {
         const runTurn = Effect.gen(function* () {
           const context = yield* loadPanelContext(input);
           const beforeContents = yield* readPanelFile(context.path);
+          const attachments = yield* persistUploadChatAttachments({
+            attachments: input.attachments ?? [],
+            attachmentsDir: input.config.attachmentsDir,
+            attachmentScopeId: `organization-panel-${input.turnId}`,
+            toError: (message) => panelError("write-failed", message),
+          });
+          activeTurn.attachments = attachments;
 
           publishPanelEvent({
             type: "turn.started",
             organizationId: input.organizationId,
             turnId: input.turnId,
             prompt: input.prompt,
+            ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
           });
           publishPanelEvent({
             type: "turn.delta",
@@ -284,6 +317,7 @@ export const startOrganizationPanelTurn = (input: {
             organization: context.organization,
             panelPath: context.path,
             prompt: input.prompt,
+            attachments,
             turnId: input.turnId,
             beforeContents,
           });
@@ -761,6 +795,7 @@ const runOrganizationPanelAgent = (input: {
   readonly organization: OrganizationPanelOrganization;
   readonly panelPath: OrganizationPanelPath;
   readonly prompt: string;
+  readonly attachments: readonly ChatAttachment[];
   readonly turnId: OrganizationPanelTurnId;
   readonly beforeContents: string;
 }): Effect.Effect<
@@ -816,8 +851,10 @@ const runOrganizationPanelAgent = (input: {
             organization: input.organization,
             panelPath: input.panelPath,
             prompt: input.prompt,
+            attachments: input.attachments,
             beforeContents: input.beforeContents,
           }),
+          ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
           modelSelection: input.agent.modelSelection,
           interactionMode: "default",
         })
@@ -901,54 +938,161 @@ const observeOrganizationPanelAgentEvent = (input: {
 function organizationPanelAgentEventMessage(event: ProviderRuntimeEvent): string | null {
   switch (event.type) {
     case "session.started":
-      return "Agent session started.";
+      return null;
     case "turn.started":
-      return event.payload.model ? `Agent started with ${event.payload.model}.` : "Agent started.";
+      return null;
     case "item.completed":
-      return event.payload.title ?? event.payload.detail ?? null;
+      return normalizeOrganizationPanelAgentEventMessage(
+        event.payload.detail ?? event.payload.title ?? null,
+      );
     case "tool.progress":
-      return event.payload.summary ?? event.payload.toolName ?? null;
+      return normalizeOrganizationPanelAgentEventMessage(event.payload.summary ?? null);
     case "tool.summary":
-      return event.payload.summary;
+      return normalizeOrganizationPanelAgentEventMessage(event.payload.summary);
     case "request.opened":
-      return event.payload.detail ?? "Agent requested approval.";
+      return normalizeOrganizationPanelAgentEventMessage(
+        event.payload.detail ?? "Agent requested approval.",
+      );
     case "runtime.warning":
-      return event.payload.message;
+      return normalizeOrganizationPanelAgentEventMessage(event.payload.message);
     case "runtime.error":
-      return event.payload.message;
+      return normalizeOrganizationPanelAgentEventMessage(event.payload.message);
     default:
       return null;
   }
+}
+
+function normalizeOrganizationPanelAgentEventMessage(message: string | null): string | null {
+  const trimmed = message?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const genericLabels = new Set([
+    "assistant message",
+    "reasoning",
+    "ran command",
+    "ran command complete",
+    "tool call",
+  ]);
+  return genericLabels.has(trimmed.toLowerCase()) ? null : trimmed;
 }
 
 function buildOrganizationPanelAgentPrompt(input: {
   readonly organization: OrganizationPanelOrganization;
   readonly panelPath: OrganizationPanelPath;
   readonly prompt: string;
+  readonly attachments: readonly ChatAttachment[];
   readonly beforeContents: string;
 }): string {
   return `You are editing the organization panel for ${input.organization.name}.
 
-Update only ./panel.html in the current working directory. Do not create React, TSX, JSX, JSON, or source files.
+Update ./panel.html in the current working directory. You may also create or update dynamic RPC manifests under ./rpc/*.json when the panel needs live host capabilities. Do not create React, TSX, JSX, or source files.
 
 The file must be a complete plain HTML document that the browser can render directly. Use only:
 - HTML in the body.
 - Inline CSS inside a <style> tag in the head.
 - Inline browser JavaScript inside a <script> tag at the end of the body.
 
-Strict compatibility and styling rules:
+Non-negotiable implementation order:
+1. Identify the requested primary workflow and the real data source it needs.
+2. Build the information architecture first: header/breadcrumbs, primary controls, main content, optional details/inspector, and clear status/error/empty states.
+3. Implement responsive structure and overflow behavior before visual polish.
+4. Populate the UI only with real data or explicit empty/error states. Never invent fake metrics, rows, names, counts, issue numbers, dates, avatars, labels, or loading placeholders.
+5. Finish with a self-audit against the checklist below and fix any violation before stopping.
+
+Document and runtime rules:
 - Include <!doctype html>, <html>, <head>, <title>, <meta name="viewport" content="width=device-width, initial-scale=1">, <style>, <body>, and <script>.
-- The layout must work at 320px mobile width, tablet width, and desktop width without horizontal scrolling.
-- Use responsive CSS with at least one @media query.
+- The panel can be as tall as needed. Let the document height grow naturally and never hide primary content behind fixed-height containers.
+- Do not make full-page shells with height: 100vh, overflow: hidden, or fixed-height main regions unless the scrollable child is explicit and all primary content remains reachable.
+- Use one page-level <main>, then semantic sections with clear headings. Avoid div-only structure when a header, nav, section, table, list, form, aside, output, or button is more accurate.
 - Set *, *::before, and *::after to box-sizing: border-box.
-- Use semantic HTML, accessible labels, readable focus states, and contrast-safe colors.
-- Keep typography and spacing container-based; do not scale font sizes with viewport width.
-- Use flexible grids, flexbox, minmax(), clamp() for layout sizes, max-width, and wrapping where useful.
-- Do not use fixed pixel-only page widths, negative letter spacing, text that can overlap, or hover-only controls.
 - Do not load external scripts, stylesheets, fonts, iframes, embeds, objects, or base URLs.
 - Do not use inline event attributes such as onclick; attach interactions with addEventListener in the script.
+
+Layout contract:
+- The first viewport must expose the actual working surface: a compact title/breadcrumb row, primary controls/search/filter actions, and the first real rows/cards/content. Do not waste the first viewport on a hero, giant summary area, or decorative intro.
+- Use a single constrained content width such as width: min(100%, 96rem) with small responsive padding. Do not center narrow dashboard cards inside a mostly empty canvas when the task is data browsing.
+- Prefer split work surfaces for browse/inspect tasks: list/table on the left or top, detail/inspector on the right or below. On mobile, stack controls, list, then details.
+- Use CSS grid/flex with minmax(0, 1fr), min-width: 0, gap, and wrapping. Every flex/grid child that can contain text must allow shrinking with min-width: 0.
+- Do not use absolute positioning for normal layout. Only use it for small badges/overlays where it cannot overlap content.
+- Avoid nested cards. A page section can be an unframed band or layout container; cards are only for repeated items, an inspector, alerts, and compact grouped controls.
+- Keep border radius at 8px or less for cards, panels, inputs, and buttons unless a pill is semantically appropriate for a badge/filter chip.
+
+Pre-made panel structures:
+- Pick exactly one primary structure before writing HTML. Reuse the structure names, region names, and class names below so every panel feels consistent. Do not invent a new top-level layout unless the user explicitly asks for something these structures cannot support.
+- Shared shell for every structure:
+  - <main class="panel-shell"> contains all panel content.
+  - <header class="panel-header"> contains breadcrumbs/title on the left and primary actions/status on the right.
+  - <section class="panel-toolbar"> contains search, filters, tabs/segments, refresh, and secondary controls. The toolbar wraps on narrow screens.
+  - <section class="panel-content"> contains the selected structure's main regions.
+  - Use .panel-surface only for framed repeated/inspector/alert surfaces, not as a wrapper around the entire page inside another card.
+- Structure A, browse-inspect: Use for repositories, issues, pull requests, projects, files, records, queues, inventories, and anything the user browses then inspects. Required regions: .panel-list or .panel-table for results, .panel-inspector for selected details, .panel-empty for no selection/data. Desktop: grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 0.9fr). Mobile: one column with inspector below the list.
+- Structure B, data-table: Use for dense comparable rows where columns matter. Required regions: .panel-table-wrap, table, thead, tbody, row actions, empty row. Use sticky table headers only inside .panel-table-wrap. Hide or collapse secondary columns on mobile; keep name/status/action columns visible.
+- Structure C, grouped-board: Use only for workflow states such as todo/in-progress/done, status buckets, or priority lanes. Required regions: .panel-board, .panel-lane, .panel-item. Lanes must scroll vertically with natural page height; they must not force horizontal page scroll. On mobile, lanes stack vertically.
+- Structure D, metric-with-worklist: Use only when real metrics are available and useful. Required regions: compact .metric-strip with 2-4 real metrics, then .panel-list or .panel-table below. Metrics must never replace the primary worklist. If real metrics are unavailable, skip this structure.
+- Structure E, form-settings: Use for configuration, tokens, environment settings, or setup flows. Required regions: .settings-layout, .settings-nav if multiple groups exist, .settings-section, fieldsets, labels, help text, validation/error messages, and a sticky-or-final action row. Do not use fake save buttons.
+- Structure F, activity-log: Use for chronological events, deploys, builds, audits, or command output. Required regions: .log-toolbar, .log-list, timestamp/status/source columns or metadata, and a details expansion. Long output must wrap or live in a scrollable pre with max-width: 100%.
+- Structure G, empty/error/setup: Use only when there is no data source, auth is missing, the RPC failed, or setup is required. Required regions: .state-panel, concise title, concrete reason, next action/retry if possible, and optional technical detail in a collapsed/secondary block. Never surround this with fake dashboard content.
+- Default choice: if unsure, use Structure A browse-inspect. It is the safest general-purpose panel because it makes the primary data visible and keeps details readable.
+- Shared class behavior to include in CSS when relevant:
+  - .panel-shell { width: min(100%, 96rem); margin: 0 auto; padding: 1rem; display: grid; gap: 1rem; }
+  - .panel-header, .panel-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; min-width: 0; }
+  - .panel-content { min-width: 0; display: grid; gap: 1rem; }
+  - .panel-surface, .panel-inspector { border: 1px solid var(--t3-border); border-radius: var(--t3-radius); background: var(--t3-card); min-width: 0; }
+  - .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  - .break-anywhere { overflow-wrap: anywhere; word-break: normal; }
+  - @media (max-width: 640px) must reduce padding/gaps and make every multi-column structure one column.
+
+Readability and alignment rules:
+- Text must be readable at every viewport: base body text 13px-15px, compact metadata 11px-12px, line-height at least 1.35, letter-spacing 0 except tiny uppercase labels where it may be positive.
+- Keep typography and spacing container-based; do not scale font sizes with viewport width.
+- Align related content to a consistent grid. Labels, values, table columns, and actions should line up; avoid random centered blocks next to left-aligned content.
+- Use whitespace to separate groups, not to create large empty regions. If a section has no real content, collapse it into an empty state rather than leaving blank space.
+- Long titles, paths, URLs, issue names, branch names, and IDs must not break layout. Use overflow-wrap: anywhere for prose-like text; use white-space: nowrap + overflow: hidden + text-overflow: ellipsis only for single-line metadata.
+- Buttons and inputs must have stable dimensions. Text inside buttons must not wrap awkwardly or overflow; use icons or shorter labels for narrow layouts.
+- Tables/lists must remain readable: sticky headers are allowed, columns should have minmax widths, secondary columns may hide on mobile, and rows must wrap or truncate deliberately.
+- Never rely on color alone. Pair status colors with text labels, icons, or accessible names.
+- All interactive controls need visible focus states, aria-labels when icon-only, and disabled/loading states when actions are unavailable.
+
+Responsive behavior:
+- The layout must work at 320px mobile width, tablet width, and desktop width without horizontal scrolling.
+- Use responsive CSS with at least one @media query.
+- At <= 640px: stack multi-column layouts, let filters wrap, reduce padding, hide nonessential metadata columns, keep primary actions reachable, and ensure the detail pane appears below the selected item.
+- At wide desktop sizes: use available width for useful data density, not oversized cards or empty margins.
+
+T3 Code visual style:
+- Match T3 Code's app style: quiet dark neutral surfaces, 8px border radii, subtle borders, compact spacing, DM Sans/system sans typography, restrained color accents, and predictable tool/dashboard controls.
+- Do not create marketing-style hero sections, oversized decorative cards, blue/purple gradient themes, orb/blob decorations, or nested cards.
+- Use generated CSS variables named --t3-background, --t3-foreground, --t3-card, --t3-muted-foreground, --t3-border, --t3-input, --t3-primary, and --t3-radius when styling shared surfaces and controls.
+
+JavaScript and state rules:
 - JavaScript must be resilient: guard missing elements, handle fetch failures, and keep the panel usable if an API fails.
+- Render deterministic initial markup that is useful before JavaScript finishes. Then enhance it with data and interactivity.
+- Every async action must expose a clear loading state, success/error state, and a retry path where appropriate.
+- Search/filter/sort controls must update counts and empty states correctly.
+- Do not create controls that do nothing. If an action is not implemented, do not render it.
 - If external data is needed, use fetch only for explicit HTTPS APIs requested by the user.
+- For host CLI/data access, create declarative dynamic RPC manifests in ./rpc/*.json and call them from panel JavaScript with window.t3Panel.rpc(method, payload). Do not attempt to call localhost APIs directly from the iframe.
+- Dynamic RPC method names must start with organizationPanel.dynamic. and use lowercase letters, numbers, underscores, hyphens, and dots after that prefix.
+- Prefer command manifests for bounded CLI calls and custom manifests only for glue code that calls ctx.rpc(...) to compose other dynamic RPC methods.
+
+Product quality rules:
+- Build the actual requested tool, not a generic dashboard. If the user asks for GitHub, repositories, issues, pull requests, projects, or project contents, use a GitHub-like work surface: compact breadcrumbs, tabs or segmented filters, a searchable table/list, status/label/assignee/date columns where available, and a details pane that updates from the selected row.
+- Do not show fake totals, fake loading states, placeholder cards, or empty metric grids when data is unavailable. Instead, show a clear empty/error state and wire a refresh action through dynamic RPC when host data is needed.
+- Prioritize browse/inspect workflows over summary cards. The first viewport should let the user open or inspect real items.
+- Keep chrome compact. Avoid giant headers, wide empty regions, and panels that obscure the primary data.
+- When a request references an existing product UI such as GitHub, match its information architecture and interaction model while still using T3 Code's dark neutral styling.
+
+Edge-case checklist before finishing:
+- 320px width has no horizontal page scroll and no clipped buttons.
+- Long unbroken strings do not overlap adjacent controls.
+- Empty, loading, error, and permission/auth-missing states are explicit and readable.
+- Large result sets can scroll naturally and remain usable.
+- Details/inspector content does not cover the list or composer.
+- Keyboard focus is visible and tab order follows visual order.
+- Data labels are honest: counts match rendered data, filters match current state, and stale data is marked or refreshable.
+- The panel still works if dynamic RPC is unavailable, returns malformed data, returns an empty array, or throws.
+- No decorative element competes with the primary workflow.
 
 Panel file: ${input.panelPath.panelFileRelativePath}
 
@@ -959,6 +1103,19 @@ ${input.beforeContents}
 
 User request:
 ${input.prompt}
+
+${
+  input.attachments.length > 0
+    ? `Attached images:
+${input.attachments
+  .map(
+    (attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`,
+  )
+  .join("\n")}
+
+Use the attached images as primary visual reference for this panel change.`
+    : ""
+}
 
 Edit panel.html now and finish after the file is valid.`;
 }
@@ -1092,6 +1249,7 @@ function toSnapshot(input: {
       editable: true,
     },
     latestVersion: input.latestVersion,
+    activeTurn: activeOrganizationPanelTurnForSnapshot(input.context.organization.id),
   };
 }
 
@@ -1106,9 +1264,112 @@ function publishSnapshotEvent(snapshot: OrganizationPanelSnapshot): void {
 }
 
 function publishPanelEvent(event: OrganizationPanelEvent): void {
+  recordActiveOrganizationPanelEvent(event);
   for (const listener of eventSubscribers) {
     listener(event);
   }
+}
+
+function activeOrganizationPanelTurnForSnapshot(
+  organizationId: OrganizationId,
+): OrganizationPanelActiveTurn | null {
+  const activeTurn = activeTurnsByOrganization.get(organizationId);
+  if (!activeTurn) {
+    return null;
+  }
+  return {
+    turnId: activeTurn.turnId,
+    prompt: activeTurn.prompt,
+    status: activeTurn.status,
+    createdAt: activeTurn.createdAt,
+    filePath: activeTurn.filePath,
+    attachments: [...activeTurn.attachments],
+    activities: [...activeTurn.activities],
+  };
+}
+
+function recordActiveOrganizationPanelEvent(event: OrganizationPanelEvent): void {
+  if (!("turnId" in event)) {
+    return;
+  }
+  const activeTurn = activeTurnsByOrganization.get(event.organizationId);
+  if (!activeTurn || activeTurn.turnId !== event.turnId) {
+    return;
+  }
+
+  switch (event.type) {
+    case "turn.started":
+      activeTurn.attachments = event.attachments ?? [];
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message: "Turn started.",
+        tone: "default",
+      });
+      return;
+    case "turn.delta":
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message: event.message,
+        tone: "default",
+      });
+      return;
+    case "file.patch":
+      activeTurn.filePath = event.filePath;
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message: `Updated ${event.filePath}.`,
+        tone: "success",
+      });
+      return;
+    case "validation.result":
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message:
+          event.status === "passed"
+            ? "Panel validation passed."
+            : `Panel validation failed: ${event.errors.join(" ")}`,
+        tone: event.status === "passed" ? "success" : "error",
+      });
+      return;
+    case "compile.result":
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message:
+          event.status === "passed"
+            ? "Panel runtime checks passed."
+            : `Panel runtime checks failed: ${event.errors.join(" ")}`,
+        tone: event.status === "passed" ? "success" : "error",
+      });
+      return;
+    case "turn.completed":
+      activeTurn.status = "completed";
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message: "Panel updated.",
+        tone: "success",
+      });
+      return;
+    case "turn.failed":
+      activeTurn.status = "failed";
+      activeTurn.activities = appendActiveTurnActivity(activeTurn, {
+        message: event.reason,
+        tone: "error",
+      });
+      return;
+    default:
+      return;
+  }
+}
+
+function appendActiveTurnActivity(
+  activeTurn: ActiveOrganizationPanelTurn,
+  activity: Omit<OrganizationPanelTurnActivity, "id">,
+): readonly OrganizationPanelTurnActivity[] {
+  const previous = activeTurn.activities.at(-1);
+  if (previous?.message === activity.message && previous.tone === activity.tone) {
+    return activeTurn.activities;
+  }
+  return [
+    ...activeTurn.activities,
+    {
+      id: `${activeTurn.turnId}:activity:${activeTurn.activities.length}`,
+      ...activity,
+    },
+  ].slice(-8);
 }
 
 function toPublicVersion(version: StoredOrganizationPanelVersion): OrganizationPanelVersion {
@@ -1134,47 +1395,54 @@ function renderStarterPanelDocument(): string {
 
       :root {
         color-scheme: dark;
+        --t3-background: #111111;
+        --t3-foreground: #f5f5f5;
+        --t3-card: #151515;
+        --t3-muted-foreground: rgba(245, 245, 245, 0.64);
+        --t3-border: rgba(255, 255, 255, 0.08);
+        --t3-input: rgba(255, 255, 255, 0.1);
+        --t3-primary: oklch(0.588 0.217 264);
+        --t3-radius: 8px;
         font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #0b0b0c;
-        color: #f5f5f5;
+          "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: var(--t3-background);
+        color: var(--t3-foreground);
       }
 
       body {
         min-height: 100vh;
         margin: 0;
-        background:
-          radial-gradient(circle at top left, rgba(42, 161, 104, 0.16), transparent 34rem),
-          #0b0b0c;
+        background: var(--t3-background);
       }
 
       main {
         width: min(100%, 72rem);
         margin: 0 auto;
-        padding: 2rem;
+        padding: 1.25rem;
       }
 
       .panel {
         display: grid;
-        gap: 1rem;
+        gap: 0.875rem;
         min-height: 24rem;
         align-content: center;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 8px;
-        padding: clamp(1rem, 4vw, 2rem);
-        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--t3-border);
+        border-radius: var(--t3-radius);
+        padding: clamp(1rem, 4vw, 1.5rem);
+        background: var(--t3-card);
       }
 
       h1 {
         margin: 0;
-        font-size: 1.75rem;
+        font-size: 1.5rem;
         line-height: 1.15;
+        letter-spacing: 0;
       }
 
       p {
         max-width: 42rem;
         margin: 0;
-        color: rgba(245, 245, 245, 0.72);
+        color: var(--t3-muted-foreground);
         line-height: 1.6;
       }
 
@@ -1188,7 +1456,7 @@ function renderStarterPanelDocument(): string {
         }
 
         h1 {
-          font-size: 1.4rem;
+          font-size: 1.25rem;
         }
       }
     </style>

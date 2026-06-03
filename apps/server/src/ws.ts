@@ -109,6 +109,7 @@ import { respondToAuthError } from "./auth/http.ts";
 import { browserAgentRegistry } from "./browserAgents/registry.ts";
 import { makeOpenRouterAudioTranscription } from "./audioTranscription/OpenRouterAudioTranscription.ts";
 import {
+  ORGANIZATION_PANEL_AGENT_MODEL_SELECTION,
   getOrganizationPanel,
   listOrganizationPanelHistory,
   rollbackOrganizationPanel,
@@ -116,6 +117,10 @@ import {
   stopOrganizationPanelTurn,
   subscribeOrganizationPanelEvents,
 } from "./organizationPanels.ts";
+import {
+  invokeOrganizationPanelDynamicRpcMethod,
+  listOrganizationPanelDynamicRpcMethods,
+} from "./organizationPanelDynamicRpc.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
@@ -1056,9 +1061,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                   settings,
                   agent: {
                     providerService,
-                    modelSelection: settings.textGenerationModelSelection,
+                    modelSelection: ORGANIZATION_PANEL_AGENT_MODEL_SELECTION,
                   },
                   prompt: input.prompt,
+                  attachments: input.attachments,
                   turnId,
                   versionId,
                   now,
@@ -1095,6 +1101,36 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                   rollbackVersionId,
                   turnId,
                   now,
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.organizationPanelDynamicRpcList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelDynamicRpcList,
+            organizationPanelSettings.pipe(
+              Effect.flatMap((settings) =>
+                listOrganizationPanelDynamicRpcMethods({
+                  config,
+                  organizationId: input.organizationId,
+                  settings,
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "organization-panel" },
+          ),
+        [WS_METHODS.organizationPanelDynamicRpcInvoke]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.organizationPanelDynamicRpcInvoke,
+            organizationPanelSettings.pipe(
+              Effect.flatMap((settings) =>
+                invokeOrganizationPanelDynamicRpcMethod({
+                  config,
+                  organizationId: input.organizationId,
+                  settings,
+                  method: input.method,
+                  payload: input.payload,
                 }),
               ),
             ),

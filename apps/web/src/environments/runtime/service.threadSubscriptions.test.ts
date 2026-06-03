@@ -149,6 +149,8 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       stopTurn: vi.fn(),
       listHistory: vi.fn(),
       rollback: vi.fn(),
+      listDynamicMethods: vi.fn(),
+      invokeDynamicMethod: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
     },
     provider: {
