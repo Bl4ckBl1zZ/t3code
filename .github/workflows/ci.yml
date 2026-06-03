@@ -67,7 +67,7 @@ jobs:
         run: bun run test
 
       - name: Install browser test runtime
-        run: bun run --cwd apps/web test:browser:install
+        run: bun run --cwd apps/web test:browser:install:ci
 
       - name: Browser test
         run: bun run --cwd apps/web test:browser

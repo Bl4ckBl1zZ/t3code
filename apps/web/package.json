@@ -10,7 +10,8 @@
     "typecheck": "tsgo --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:browser:install": "playwright install --with-deps chromium"
+    "test:browser:install": "playwright install --with-deps chromium",
+    "test:browser:install:ci": "playwright install chromium"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
