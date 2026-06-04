@@ -14,6 +14,7 @@ import {
   type BrowserAgentOpenOrFocusPreviewInput,
   type BrowserAgentOpenOrFocusThreadTabInput,
   type BrowserAgentOutboundMessage,
+  type BrowserAgentRuntimePrimitive,
   type BrowserAgentSnapshot,
   type BrowserAgentStreamEvent,
   type BrowserAgentStartThreadTabCaptureInput,
@@ -325,9 +326,10 @@ export class BrowserAgentRegistry {
     }
   }
 
-  snapshot(): BrowserAgentSnapshot {
+  snapshot(input?: { readonly currentSessionId?: AuthSessionId }): BrowserAgentSnapshot {
     return {
       agents: Array.from(this.agents.values()),
+      currentSessionId: input?.currentSessionId ?? null,
       tabs: Array.from(this.tabs.values()).flat(),
       workspaceLinks: Array.from(this.workspaceLinks.values()),
     };
@@ -365,6 +367,7 @@ export class BrowserAgentRegistry {
         ...(input.preferredAgentId ? { preferredAgentId: input.preferredAgentId } : {}),
         ...(options?.preferredSessionId ? { preferredSessionId: options.preferredSessionId } : {}),
       });
+      yield* registry.requireAgentPrimitive(agent, "threadTab.openOrFocus");
       const link = registry.upsertThreadWorkspaceLink({
         agent,
         environmentId: input.environmentId,
@@ -404,6 +407,7 @@ export class BrowserAgentRegistry {
         ...(input.preferredAgentId ? { preferredAgentId: input.preferredAgentId } : {}),
         ...(options?.preferredSessionId ? { preferredSessionId: options.preferredSessionId } : {}),
       });
+      yield* registry.requireAgentPrimitive(agent, "threadTab.attachActive");
       const link = registry.upsertThreadWorkspaceLink({
         agent,
         environmentId: input.environmentId,
@@ -446,6 +450,7 @@ export class BrowserAgentRegistry {
       registry.emit({ type: "workspace-link-removed", linkId: link.id });
       const agent = registry.agents.get(agentId);
       if (agent?.connected) {
+        yield* registry.requireAgentPrimitive(agent, "threadTab.detach");
         registry.pendingCommands.set(commandId, { commandId, agentId, workspaceLinkId: link.id });
         yield* registry.sendToAgent(agentId, {
           type: "browserAgent.command.detachThreadTab",
@@ -489,6 +494,7 @@ export class BrowserAgentRegistry {
     return Effect.gen(function* () {
       const link = yield* registry.requireThreadLink(input);
       const agent = yield* registry.requireLinkedAgent(link);
+      yield* registry.requireAgentPrimitive(agent, "threadTab.capture.start");
       const updated: BrowserWorkspaceLink = {
         ...link,
         captureState: "requesting-permission",
@@ -537,6 +543,7 @@ export class BrowserAgentRegistry {
     return Effect.gen(function* () {
       const link = yield* registry.requireThreadLink(input);
       const agent = yield* registry.requireLinkedAgent(link);
+      yield* registry.requireAgentPrimitive(agent, "threadTab.capture.stop");
       const updated: BrowserWorkspaceLink = {
         ...link,
         captureState: "off",
@@ -570,7 +577,7 @@ export class BrowserAgentRegistry {
   backThreadTab(
     input: BrowserAgentThreadLinkInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.history", (commandId, link) => ({
       type: "browserAgent.command.history" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -581,7 +588,7 @@ export class BrowserAgentRegistry {
   forwardThreadTab(
     input: BrowserAgentThreadLinkInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.history", (commandId, link) => ({
       type: "browserAgent.command.history" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -592,7 +599,7 @@ export class BrowserAgentRegistry {
   reloadThreadTab(
     input: BrowserAgentThreadLinkInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.history", (commandId, link) => ({
       type: "browserAgent.command.history" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -603,7 +610,7 @@ export class BrowserAgentRegistry {
   navigateThreadTab(
     input: BrowserAgentThreadTabNavigateInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.navigate", (commandId, link) => ({
       type: "browserAgent.command.navigate" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -614,7 +621,7 @@ export class BrowserAgentRegistry {
   inputThreadTab(
     input: BrowserAgentThreadTabInputCommandInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.input", (commandId, link) => ({
       type: "browserAgent.command.input" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -625,7 +632,7 @@ export class BrowserAgentRegistry {
   snapshotThreadTab(
     input: BrowserAgentThreadLinkInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.snapshot", (commandId, link) => ({
       type: "browserAgent.command.snapshot" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -635,7 +642,7 @@ export class BrowserAgentRegistry {
   screenshotThreadTab(
     input: BrowserAgentThreadLinkInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    return this.sendThreadTabCommandAndAwait(input, (commandId, link) => ({
+    return this.sendThreadTabCommandAndAwait(input, "threadTab.screenshot", (commandId, link) => ({
       type: "browserAgent.command.screenshot" as const,
       commandId,
       workspaceLinkId: link.id,
@@ -686,6 +693,7 @@ export class BrowserAgentRegistry {
         ...(input.preferredAgentId ? { preferredAgentId: input.preferredAgentId } : {}),
         ...(options?.preferredSessionId ? { preferredSessionId: options.preferredSessionId } : {}),
       });
+      yield* registry.requireAgentPrimitive(agent, "preview.openOrFocus");
       const timestamp = nowIso();
       const key = workspaceLinkKey(input);
       const existing = registry.workspaceLinks.get(key);
@@ -756,6 +764,7 @@ export class BrowserAgentRegistry {
             ? {}
             : { preferredAgentId: link.agentId }),
       });
+      yield* registry.requireAgentPrimitive(agent, "annotation.activate");
       const commandId = makeCommandId("annotate");
       registry.pendingCommands.set(commandId, {
         commandId,
@@ -847,6 +856,21 @@ export class BrowserAgentRegistry {
     return Effect.succeed(agent);
   }
 
+  private requireAgentPrimitive(
+    agent: BrowserAgent,
+    primitive: BrowserAgentRuntimePrimitive,
+  ): Effect.Effect<void, BrowserAgentCommandError, never> {
+    if (agent.capabilities.runtime.primitives.includes(primitive)) {
+      return Effect.void;
+    }
+    return Effect.fail(
+      toCommandError({
+        code: "command-failed",
+        message: `The paired browser extension does not support '${primitive}'. Reload or update the T3 Code Browser Agent extension.`,
+      }),
+    );
+  }
+
   private awaitCommandResult(
     commandId: BrowserAgentCommandId,
     deferred: Deferred.Deferred<BrowserAgentIncomingCommandResultMessage>,
@@ -875,6 +899,7 @@ export class BrowserAgentRegistry {
 
   private sendThreadTabCommandAndAwait(
     input: BrowserAgentThreadLinkInput,
+    primitive: BrowserAgentRuntimePrimitive,
     buildMessage: (
       commandId: BrowserAgentCommandId,
       link: BrowserWorkspaceLink,
@@ -884,6 +909,7 @@ export class BrowserAgentRegistry {
     return Effect.gen(function* () {
       const link = yield* registry.requireThreadLink(input);
       const agent = yield* registry.requireLinkedAgent(link);
+      yield* registry.requireAgentPrimitive(agent, primitive);
       if (link.tabId === undefined || link.windowId === undefined) {
         return yield* toCommandError({
           code: "tab-not-linked",
@@ -970,14 +996,6 @@ export class BrowserAgentRegistry {
     if (input.preferredAgentId) {
       const preferred = this.agents.get(input.preferredAgentId);
       if (preferred?.connected) {
-        if (input.preferredSessionId && preferred.sessionId !== input.preferredSessionId) {
-          return Effect.fail(
-            toCommandError({
-              code: "no-agent-connected",
-              message: "No paired browser extension is connected for this client.",
-            }),
-          );
-        }
         return Effect.succeed(preferred);
       }
       return Effect.fail(
@@ -1003,13 +1021,6 @@ export class BrowserAgentRegistry {
       if (sameSessionMostRecent) {
         return Effect.succeed(sameSessionMostRecent);
       }
-
-      return Effect.fail(
-        toCommandError({
-          code: "no-agent-connected",
-          message: "No paired browser extension is connected for this client.",
-        }),
-      );
     }
 
     if (existing) {

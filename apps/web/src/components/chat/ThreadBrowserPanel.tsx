@@ -66,7 +66,12 @@ function applyBrowserAgentStreamEvent(
   if (event.type === "snapshot") {
     return event.snapshot;
   }
-  const snapshot = current ?? { agents: [], tabs: [], workspaceLinks: [] };
+  const snapshot = current ?? {
+    agents: [],
+    currentSessionId: null,
+    tabs: [],
+    workspaceLinks: [],
+  };
   switch (event.type) {
     case "agent-upserted":
       return {

@@ -83,6 +83,22 @@
         padding: 10px;
         word-break: break-word;
       }
+      .diagnostics {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        color: #d4d4d8;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 11px;
+        line-height: 1.45;
+        margin: 0;
+        max-height: 220px;
+        overflow: auto;
+        padding: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       .error {
         color: #fca5a5;
       }
@@ -107,6 +123,7 @@
         </div>
       </form>
       <div class="status" id="status">Loading...</div>
+      <pre class="diagnostics" id="diagnostics">Loading diagnostics...</pre>
     </main>
     <script src="popup.js"></script>
   </body>

@@ -26,9 +26,7 @@ const BASE_ENVIRONMENT = {
     arch: "arm64",
   },
   serverVersion: "0.0.0-test",
-  capabilities: {
-    repositoryIdentity: true,
-  },
+  capabilities: { browserAgent: true, repositoryIdentity: true },
 };
 
 function installTestBrowser(url: string) {
@@ -70,9 +68,7 @@ describe("environmentBootstrap", () => {
         arch: "arm64",
       },
       serverVersion: "0.0.0-test",
-      capabilities: {
-        repositoryIdentity: true,
-      },
+      capabilities: { browserAgent: true, repositoryIdentity: true },
     });
 
     expect(getPrimaryKnownEnvironment()).toEqual({

@@ -4,6 +4,22 @@ const ACTIVE_LINK_KEY = "t3code.browserAgent.activeWorkspaceLink";
 const SIDE_PANEL_PATH = "sidepanel.html";
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const RUNTIME_PROTOCOL_VERSION = 1;
+const RUNTIME_PRIMITIVES = [
+  "preview.openOrFocus",
+  "annotation.activate",
+  "threadTab.openOrFocus",
+  "threadTab.attachActive",
+  "threadTab.detach",
+  "threadTab.capture.start",
+  "threadTab.capture.stop",
+  "threadTab.history",
+  "threadTab.navigate",
+  "threadTab.input",
+  "threadTab.snapshot",
+  "threadTab.screenshot",
+  "tabs.snapshot",
+];
 
 let socket = null;
 let socketBaseUrl = null;
@@ -13,6 +29,11 @@ let reconnectDelayMs = RECONNECT_MIN_MS;
 let currentBackend = null;
 let connecting = null;
 let workspaceLinksCache = [];
+let lastConnectionAttemptAt = null;
+let lastConnectionOpenedAt = null;
+let lastConnectionError = null;
+let lastHelloSentAt = null;
+let lastTabsSnapshotSentAt = null;
 
 function normalizeBaseUrl(value) {
   try {
@@ -229,6 +250,89 @@ async function getWsToken(backend) {
   return result.token;
 }
 
+async function assertBrowserAgentBackend(backend) {
+  const descriptor = await fetchJson(backend.baseUrl, "/.well-known/t3/environment");
+  if (descriptor?.capabilities?.browserAgent === false) {
+    throw new Error("The paired T3 Code backend does not support the browser agent.");
+  }
+}
+
+function socketStateLabel() {
+  if (!socket) {
+    return "missing";
+  }
+  switch (socket.readyState) {
+    case WebSocket.CONNECTING:
+      return "connecting";
+    case WebSocket.OPEN:
+      return "open";
+    case WebSocket.CLOSING:
+      return "closing";
+    case WebSocket.CLOSED:
+      return "closed";
+    default:
+      return "unknown";
+  }
+}
+
+async function runDiagnosticStep(name, action) {
+  try {
+    const result = await action();
+    return { name, ok: true, result };
+  } catch (error) {
+    return {
+      name,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function diagnoseBackend(backend) {
+  if (!backend) {
+    return {
+      paired: false,
+      checks: [],
+    };
+  }
+
+  const environment = await runDiagnosticStep("environment", async () => {
+    const descriptor = await fetchJson(backend.baseUrl, "/.well-known/t3/environment");
+    return {
+      environmentId: descriptor?.environmentId ?? null,
+      label: descriptor?.label ?? null,
+      browserAgentCapability: descriptor?.capabilities?.browserAgent ?? null,
+      serverVersion: descriptor?.serverVersion ?? null,
+    };
+  });
+  const authSession = await runDiagnosticStep("auth-session", async () => {
+    const session = await fetchJson(backend.baseUrl, "/api/auth/session", {
+      token: backend.sessionToken,
+    });
+    return {
+      authenticated: session?.authenticated === true,
+      role: session?.auth?.role ?? null,
+      sessionMethod: session?.sessionMethod ?? null,
+    };
+  });
+  const wsToken = await runDiagnosticStep("ws-token", async () => {
+    const result = await fetchJson(backend.baseUrl, "/api/auth/ws-token", {
+      method: "POST",
+      token: backend.sessionToken,
+    });
+    return {
+      receivedToken: typeof result.token === "string" && result.token.length > 0,
+    };
+  });
+
+  return {
+    paired: true,
+    baseUrl: backend.baseUrl,
+    pairedAt: backend.pairedAt ?? null,
+    checks: [environment, authSession, wsToken],
+  };
+}
+
 function closeSocket() {
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
@@ -254,11 +358,21 @@ function scheduleReconnect() {
   reconnectDelayMs = Math.min(RECONNECT_MAX_MS, reconnectDelayMs * 2);
 }
 
+function connectBackendInBackground(reason) {
+  void connectBackend().catch((error) => {
+    lastConnectionError = error instanceof Error ? error.message : String(error);
+    console.warn(`[T3 Code] failed to connect browser agent after ${reason}`, error);
+    scheduleReconnect();
+  });
+}
+
 async function connectBackend(options = {}) {
   if (connecting) {
     return connecting;
   }
   connecting = (async () => {
+    lastConnectionAttemptAt = new Date().toISOString();
+    lastConnectionError = null;
     const backend = currentBackend ?? (await readBackend());
     currentBackend = backend;
     if (!backend) {
@@ -274,6 +388,7 @@ async function connectBackend(options = {}) {
     }
 
     closeSocket();
+    await assertBrowserAgentBackend(backend);
     const token = await getWsToken(backend);
     socketBaseUrl = backend.baseUrl;
     socket = new WebSocket(wsUrlFor(backend.baseUrl, token));
@@ -282,6 +397,7 @@ async function connectBackend(options = {}) {
     socket.addEventListener(
       "open",
       () => {
+        lastConnectionOpenedAt = new Date().toISOString();
         reconnectDelayMs = RECONNECT_MIN_MS;
         sendHello();
         void sendTabsSnapshot();
@@ -310,6 +426,7 @@ async function connectBackend(options = {}) {
     socket.addEventListener(
       "error",
       () => {
+        lastConnectionError = "Browser-agent WebSocket error.";
         socket?.close();
       },
       eventOptions,
@@ -331,6 +448,7 @@ function sendToServer(message) {
 }
 
 function sendHello() {
+  lastHelloSentAt = new Date().toISOString();
   sendToServer({
     type: "browserAgent.hello",
     device: {
@@ -341,6 +459,10 @@ function sendHello() {
     },
     capabilities: {
       version: 1,
+      runtime: {
+        version: RUNTIME_PROTOCOL_VERSION,
+        primitives: RUNTIME_PRIMITIVES,
+      },
       canCaptureVisibleTab: true,
       canInjectScripts: Boolean(chrome.scripting?.executeScript),
       canFocusTabs: true,
@@ -358,6 +480,7 @@ async function sendTabsSnapshot() {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     return;
   }
+  lastTabsSnapshotSentAt = new Date().toISOString();
   const tabs = await chrome.tabs.query({});
   const groupsById = new Map();
   const groupIds = Array.from(
@@ -1402,6 +1525,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             paired: Boolean(backend),
             baseUrl: backend?.baseUrl ?? null,
             connected: socket?.readyState === WebSocket.OPEN,
+            socketState: socketStateLabel(),
+            socketBaseUrl,
+            reconnectDelayMs,
+            lastConnectionAttemptAt,
+            lastConnectionOpenedAt,
+            lastConnectionError,
+            lastHelloSentAt,
+            lastTabsSnapshotSentAt,
+            backendDiagnostics: await diagnoseBackend(backend),
           };
         })(),
       );
@@ -1542,13 +1674,13 @@ chrome.windows.onFocusChanged.addListener(() => {
 
 chrome.runtime.onStartup.addListener(() => {
   void configureSidePanelBehavior();
-  void connectBackend();
+  connectBackendInBackground("startup");
 });
 chrome.runtime.onInstalled.addListener(() => {
   void configureSidePanelBehavior();
-  void connectBackend();
+  connectBackendInBackground("install");
 });
 
 void readLinks().catch(() => undefined);
 void configureSidePanelBehavior();
-void connectBackend();
+connectBackendInBackground("service worker activation");

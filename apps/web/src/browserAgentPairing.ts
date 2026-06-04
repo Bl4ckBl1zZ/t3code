@@ -58,6 +58,28 @@ function randomRequestId(): string {
   return `browser-agent-auto-pair-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function summarizeBrowserAgentSnapshot(snapshot: BrowserAgentListResult): string {
+  const currentSessionId = snapshot.currentSessionId ?? null;
+  const connectedAgents = snapshot.agents.filter((agent) => agent.connected);
+  const currentSessionAgents =
+    currentSessionId === null
+      ? connectedAgents
+      : connectedAgents.filter((agent) => agent.sessionId === currentSessionId);
+  const connectedSessionIds = Array.from(
+    new Set(connectedAgents.map((agent) => agent.sessionId ?? "unknown")),
+  );
+
+  return [
+    `currentSessionId=${currentSessionId ?? "none"}`,
+    `currentSessionAgents=${currentSessionAgents.length}`,
+    `connectedAgents=${connectedAgents.length}`,
+    `agentCount=${snapshot.agents.length}`,
+    connectedSessionIds.length > 0
+      ? `connectedSessionIds=${connectedSessionIds.join(",")}`
+      : "connectedSessionIds=none",
+  ].join(", ");
+}
+
 function normalizeBaseUrl(rawUrl: string): string {
   const url = new URL(rawUrl);
   url.pathname = "/";
@@ -213,10 +235,12 @@ export async function waitForBrowserAgentConnection(
   const pollIntervalMs = options?.pollIntervalMs ?? AUTO_PAIR_POLL_INTERVAL_MS;
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown = null;
+  let lastSnapshot: BrowserAgentListResult | null = null;
 
   do {
     try {
       const snapshot = await client.browserAgents.list();
+      lastSnapshot = snapshot;
       if (snapshot.agents.some((agent) => agent.connected)) {
         return;
       }
@@ -226,11 +250,16 @@ export async function waitForBrowserAgentConnection(
     await sleep(pollIntervalMs);
   } while (Date.now() < deadline);
 
+  const snapshotDetail = lastSnapshot
+    ? ` Last browser-agent snapshot: ${summarizeBrowserAgentSnapshot(lastSnapshot)}.`
+    : "";
   if (lastError instanceof Error) {
-    throw new Error(`Browser extension did not connect after pairing: ${lastError.message}`);
+    throw new Error(
+      `Browser extension did not connect after pairing: ${lastError.message}.${snapshotDetail}`,
+    );
   }
   throw new Error(
-    "Browser extension did not connect after pairing. Reload the T3 Code Browser Agent extension and try again.",
+    `Browser extension did not connect after pairing. Reload the T3 Code Browser Agent extension and try again.${snapshotDetail}`,
   );
 }
 

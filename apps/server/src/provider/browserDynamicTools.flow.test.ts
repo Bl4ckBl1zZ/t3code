@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 import {
   AuthSessionId,
+  BROWSER_AGENT_RUNTIME_PRIMITIVES,
+  BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
   EnvironmentId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -19,6 +21,10 @@ const fixtureUrl = TrimmedNonEmptyString.make("http://localhost:4173/browser-age
 
 const capabilities = {
   version: 1 as const,
+  runtime: {
+    version: BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+    primitives: [...BROWSER_AGENT_RUNTIME_PRIMITIVES],
+  },
   canCaptureVisibleTab: true,
   canInjectScripts: true,
   canFocusTabs: true,

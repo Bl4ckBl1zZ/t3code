@@ -967,7 +967,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         [WS_METHODS.browserAgentsList]: (_input) =>
           observeRpcEffect(
             WS_METHODS.browserAgentsList,
-            Effect.sync(() => browserAgentRegistry.snapshot()),
+            Effect.sync(() => browserAgentRegistry.snapshot({ currentSessionId })),
             { "rpc.aggregate": "browser-agent" },
           ),
         [WS_METHODS.browserAgentsOpenOrFocusPreview]: (input) =>
@@ -1087,7 +1087,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             Stream.concat(
               Stream.make({
                 type: "snapshot" as const,
-                snapshot: browserAgentRegistry.snapshot(),
+                snapshot: browserAgentRegistry.snapshot({ currentSessionId }),
               }),
               Stream.callback<BrowserAgentStreamEvent>((queue) =>
                 Effect.acquireRelease(

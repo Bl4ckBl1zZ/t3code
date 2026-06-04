@@ -30,6 +30,7 @@ function installWindow(url: string, desktopBridge?: unknown) {
 
 function snapshot(connected: boolean): BrowserAgentListResult {
   return {
+    currentSessionId: null,
     agents: connected ? [{ connected }] : [],
     tabs: [],
     workspaceLinks: [],
@@ -228,5 +229,50 @@ describe("browser agent pairing", () => {
       }),
     ).resolves.toBeUndefined();
     expect(client.browserAgents.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a browser agent connected from a different client session", async () => {
+    installWindow("http://localhost/");
+    const client = {
+      browserAgents: {
+        list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
+          currentSessionId: "session-current",
+          agents: [{ connected: true, sessionId: "session-other" }],
+          tabs: [],
+          workspaceLinks: [],
+        } as unknown as BrowserAgentListResult),
+      },
+    };
+
+    await expect(
+      waitForBrowserAgentConnection(client, {
+        timeoutMs: 100,
+        pollIntervalMs: 1,
+      }),
+    ).resolves.toBeUndefined();
+    expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes the last browser-agent snapshot when pairing times out", async () => {
+    installWindow("http://localhost/");
+    const client = {
+      browserAgents: {
+        list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
+          currentSessionId: "session-current",
+          agents: [{ connected: false, sessionId: "session-other" }],
+          tabs: [],
+          workspaceLinks: [],
+        } as unknown as BrowserAgentListResult),
+      },
+    };
+
+    await expect(
+      waitForBrowserAgentConnection(client, {
+        timeoutMs: 1,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow(
+      "currentSessionId=session-current, currentSessionAgents=0, connectedAgents=0",
+    );
   });
 });

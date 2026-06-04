@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 import {
   AuthSessionId,
+  BROWSER_AGENT_RUNTIME_PRIMITIVES,
+  BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
   EnvironmentId,
   ThreadId,
   type BrowserAgentOutboundMessage,
@@ -15,6 +17,10 @@ const threadId = ThreadId.make("thread-1");
 
 const capabilities = {
   version: 1 as const,
+  runtime: {
+    version: BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+    primitives: [...BROWSER_AGENT_RUNTIME_PRIMITIVES],
+  },
   canCaptureVisibleTab: true,
   canInjectScripts: true,
   canFocusTabs: true,
