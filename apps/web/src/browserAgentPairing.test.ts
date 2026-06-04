@@ -47,7 +47,7 @@ describe("browser agent pairing", () => {
     const url = new URL(
       buildBrowserAgentAutoPairUrl({
         baseUrl: "http://100.105.249.96:3773/some/path",
-        sessionToken: "session-token",
+        credential: "pairing-token",
       }),
     );
 
@@ -55,8 +55,9 @@ describe("browser agent pairing", () => {
     expect(url.pathname).toBe(BROWSER_AGENT_AUTO_PAIR_PATH);
     expect(url.searchParams.get("t3BrowserAgentPair")).toBe("1");
     expect(url.searchParams.get("t3BrowserAgentBaseUrl")).toBe("http://100.105.249.96:3773/");
-    expect(new URLSearchParams(url.hash.slice(1)).get("t3BrowserAgentSessionToken")).toBe(
-      "session-token",
+    expect(url.toString()).not.toContain("t3BrowserAgentSessionToken");
+    expect(new URLSearchParams(url.hash.slice(1)).get("t3BrowserAgentCredential")).toBe(
+      "pairing-token",
     );
   });
 

@@ -22,6 +22,7 @@ import {
   RuntimeRequestId,
   ProviderApprovalDecision,
   ThreadId,
+  EnvironmentId,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -146,6 +147,16 @@ function trimText(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
+
+const readServerEnvironmentId = (
+  fileSystem: FileSystem.FileSystem,
+  environmentIdPath: string,
+): Effect.Effect<EnvironmentId | undefined> =>
+  fileSystem.readFileString(environmentIdPath).pipe(
+    Effect.map((raw) => trimText(raw)),
+    Effect.map((raw) => (raw ? EnvironmentId.make(raw) : undefined)),
+    Effect.catch(() => Effect.succeed(undefined)),
+  );
 
 const FATAL_CODEX_STDERR_SNIPPETS = ["failed to connect to websocket"];
 
@@ -1352,6 +1363,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const environmentId = yield* readServerEnvironmentId(fileSystem, serverConfig.environmentIdPath);
   const nativeEventLogger =
     options?.nativeEventLogger ??
     (options?.nativeEventLogPath !== undefined
@@ -1386,6 +1398,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
           ...(options?.environment ? { environment: options.environment } : {}),
+          ...(environmentId ? { environmentId } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }

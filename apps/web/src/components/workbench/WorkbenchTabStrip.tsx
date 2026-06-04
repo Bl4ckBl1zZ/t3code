@@ -1,5 +1,5 @@
 import type { WorkbenchTab } from "@t3tools/client-runtime";
-import { FileTextIcon, MessageSquareIcon, PlusIcon, XIcon } from "lucide-react";
+import { FileTextIcon, GlobeIcon, MessageSquareIcon, PlusIcon, XIcon } from "lucide-react";
 import { memo } from "react";
 
 import { cn } from "../../lib/utils";
@@ -16,6 +16,9 @@ interface WorkbenchTabStripProps {
 }
 
 function TabIcon({ tab, active }: { readonly tab: WorkbenchTab; readonly active: boolean }) {
+  if (tab.kind === "browser") {
+    return <GlobeIcon className="size-3.5" />;
+  }
   if (tab.kind === "file") {
     return tab.dirty ? (
       <span
@@ -51,6 +54,7 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
       >
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
+          const closable = tab.kind !== "browser";
           return (
             <div
               key={tab.id}
@@ -66,7 +70,7 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
                 }
               }}
               onAuxClick={(event) => {
-                if (event.button !== 1) {
+                if (event.button !== 1 || !closable) {
                   return;
                 }
                 event.preventDefault();
@@ -78,31 +82,35 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
                 <span
                   className={cn(
                     "flex size-3.5 items-center justify-center transition-opacity",
-                    active
+                    active && closable
                       ? "opacity-0"
-                      : "opacity-100 group-hover/tab:opacity-0 group-focus-within/tab:opacity-0",
+                      : closable
+                        ? "opacity-100 group-hover/tab:opacity-0 group-focus-within/tab:opacity-0"
+                        : "opacity-100",
                   )}
                 >
                   <TabIcon tab={tab} active={active} />
                 </span>
-                <button
-                  type="button"
-                  className={cn(
-                    "pointer-events-none absolute left-1/2 top-1/2 flex size-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm opacity-0 outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-                    active
-                      ? "pointer-events-auto opacity-100"
-                      : "group-hover/tab:pointer-events-auto group-hover/tab:opacity-100 group-focus-within/tab:pointer-events-auto group-focus-within/tab:opacity-100",
-                  )}
-                  aria-label={`Close ${tab.title}`}
-                  tabIndex={active ? 0 : -1}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onCloseTab(tab);
-                  }}
-                >
-                  <XIcon className="size-3" />
-                </button>
+                {closable ? (
+                  <button
+                    type="button"
+                    className={cn(
+                      "pointer-events-none absolute left-1/2 top-1/2 flex size-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm opacity-0 outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+                      active
+                        ? "pointer-events-auto opacity-100"
+                        : "group-hover/tab:pointer-events-auto group-hover/tab:opacity-100 group-focus-within/tab:pointer-events-auto group-focus-within/tab:opacity-100",
+                    )}
+                    aria-label={`Close ${tab.title}`}
+                    tabIndex={active ? 0 : -1}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onCloseTab(tab);
+                    }}
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                ) : null}
               </span>
               <button
                 type="button"

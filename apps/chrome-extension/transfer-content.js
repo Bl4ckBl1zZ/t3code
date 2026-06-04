@@ -23,6 +23,7 @@ const LOADING_ICON =
   '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"></path></svg>';
 
 let annotationState = null;
+let threadSnapshotRefs = new Map();
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve, reject) => {
@@ -733,7 +734,247 @@ function startAnnotationMode(link) {
   window.addEventListener("message", state.onMessage, true);
 }
 
+function isVisibleForSnapshot(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+  if (isBrowserAgentElement(element)) {
+    return false;
+  }
+  const rect = element.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) {
+    return false;
+  }
+  const style = getComputedStyle(element);
+  return (
+    style.visibility !== "hidden" &&
+    style.display !== "none" &&
+    Number.parseFloat(style.opacity || "1") > 0
+  );
+}
+
+function roleForSnapshot(element) {
+  const explicit = element.getAttribute("role");
+  if (explicit) {
+    return explicit;
+  }
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === "a") return "link";
+  if (tagName === "button") return "button";
+  if (tagName === "input") {
+    const type = element.getAttribute("type") || "text";
+    if (type === "checkbox") return "checkbox";
+    if (type === "radio") return "radio";
+    return "textbox";
+  }
+  if (tagName === "textarea") return "textbox";
+  if (tagName === "select") return "combobox";
+  if (tagName === "summary") return "button";
+  return tagName;
+}
+
+function nameForSnapshot(element) {
+  const ariaLabel = element.getAttribute("aria-label")?.trim();
+  if (ariaLabel) {
+    return ariaLabel;
+  }
+  const labelledBy = element.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const text = labelledBy
+      .split(/\s+/u)
+      .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (text) {
+      return text;
+    }
+  }
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    const labels = Array.from(element.labels ?? [])
+      .map((label) => label.textContent?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
+    if (labels) {
+      return labels;
+    }
+    if (element.placeholder) {
+      return element.placeholder;
+    }
+    if (element.value && element.type !== "password") {
+      return element.value;
+    }
+  }
+  return (element.textContent ?? "").replace(/\s+/gu, " ").trim().slice(0, 160);
+}
+
+function isSnapshotCandidate(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = element.tagName.toLowerCase();
+  return (
+    ["a", "button", "input", "textarea", "select", "summary"].includes(tagName) ||
+    element.hasAttribute("role") ||
+    element.tabIndex >= 0 ||
+    element.hasAttribute("contenteditable")
+  );
+}
+
+function buildThreadTabSnapshot() {
+  const elements = Array.from(
+    document.querySelectorAll(
+      "a,button,input,textarea,select,summary,[role],[tabindex],[contenteditable]",
+    ),
+  )
+    .filter((element) => isSnapshotCandidate(element) && isVisibleForSnapshot(element))
+    .slice(0, 250);
+  threadSnapshotRefs = new Map();
+  const snapshotElements = elements.map((element, index) => {
+    const ref = `e${index + 1}`;
+    threadSnapshotRefs.set(ref, element);
+    const rect = element.getBoundingClientRect();
+    return {
+      ref,
+      role: roleForSnapshot(element),
+      name: nameForSnapshot(element),
+      tagName: element.tagName.toLowerCase(),
+      rect: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+    };
+  });
+
+  return {
+    ok: true,
+    url: location.href,
+    title: document.title,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio || 1,
+    },
+    elements: snapshotElements,
+  };
+}
+
+function resolveThreadInputTarget(input) {
+  if (typeof input?.ref === "string") {
+    const element = threadSnapshotRefs.get(input.ref);
+    if (element instanceof HTMLElement) {
+      return element;
+    }
+  }
+  if (typeof input?.x === "number" && typeof input?.y === "number") {
+    const scale = window.devicePixelRatio || 1;
+    const element = document.elementFromPoint(input.x / scale, input.y / scale);
+    return element instanceof HTMLElement ? element : null;
+  }
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
+function insertTextIntoElement(element, text) {
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    const start = element.selectionStart ?? element.value.length;
+    const end = element.selectionEnd ?? start;
+    element.setRangeText(text, start, end, "end");
+    element.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }),
+    );
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  if (element.isContentEditable) {
+    document.execCommand("insertText", false, text);
+  }
+}
+
+function dispatchMouseSequence(element, input, clickCount = 1) {
+  const rect = element.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const clientX = typeof input.x === "number" ? input.x / scale : rect.left + rect.width / 2;
+  const clientY = typeof input.y === "number" ? input.y / scale : rect.top + rect.height / 2;
+  const button = input.button === "middle" ? 1 : input.button === "right" ? 2 : 0;
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    element.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button,
+        detail: clickCount,
+      }),
+    );
+  }
+  if (clickCount > 1) {
+    element.dispatchEvent(
+      new MouseEvent("dblclick", {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button,
+        detail: clickCount,
+      }),
+    );
+  }
+  element.focus?.();
+}
+
+function handleThreadTabInput(input) {
+  if (input?.type === "scroll") {
+    window.scrollBy({
+      left: input.deltaX,
+      top: input.deltaY,
+      behavior: "auto",
+    });
+    return { ok: true };
+  }
+
+  const target = resolveThreadInputTarget(input);
+  if (!target) {
+    throw new Error("No page element was available for browser input.");
+  }
+
+  if (input.type === "click" || input.type === "double-click") {
+    dispatchMouseSequence(target, input, input.type === "double-click" ? 2 : 1);
+    return { ok: true };
+  }
+
+  if (input.type === "type") {
+    target.focus?.();
+    insertTextIntoElement(target, input.text);
+    return { ok: true };
+  }
+
+  if (input.type === "key") {
+    target.focus?.();
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: input.key }),
+    );
+    target.dispatchEvent(
+      new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: input.key }),
+    );
+    return { ok: true };
+  }
+
+  throw new Error("Unsupported browser input command.");
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const respond = (fn) => {
+    try {
+      sendResponse(fn());
+    } catch (error) {
+      sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  };
+
   switch (message?.type) {
     case "t3code.browserAgent.ping":
       sendResponse({ ok: true });
@@ -757,6 +998,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       cancelAnnotation();
       sendResponse({ ok: true });
       return true;
+    case "t3code.browserAgent.threadTabSnapshot":
+      return respond(buildThreadTabSnapshot);
+    case "t3code.browserAgent.threadTabInput":
+      return respond(() => handleThreadTabInput(message.input));
     default:
       return false;
   }

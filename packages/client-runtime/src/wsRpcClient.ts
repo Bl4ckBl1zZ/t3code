@@ -149,6 +149,29 @@ export interface WsRpcClient {
     readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.browserAgentsList>;
     readonly openOrFocusPreview: RpcUnaryMethod<typeof WS_METHODS.browserAgentsOpenOrFocusPreview>;
     readonly activateAnnotation: RpcUnaryMethod<typeof WS_METHODS.browserAgentsActivateAnnotation>;
+    readonly openOrFocusThreadTab: RpcUnaryMethod<
+      typeof WS_METHODS.browserAgentsOpenOrFocusThreadTab
+    >;
+    readonly attachActiveTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsAttachActiveTab>;
+    readonly detachThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsDetachThreadTab>;
+    readonly setThreadTabControl: RpcUnaryMethod<
+      typeof WS_METHODS.browserAgentsSetThreadTabControl
+    >;
+    readonly startThreadTabCapture: RpcUnaryMethod<
+      typeof WS_METHODS.browserAgentsStartThreadTabCapture
+    >;
+    readonly stopThreadTabCapture: RpcUnaryMethod<
+      typeof WS_METHODS.browserAgentsStopThreadTabCapture
+    >;
+    readonly backThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsBackThreadTab>;
+    readonly forwardThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsForwardThreadTab>;
+    readonly reloadThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsReloadThreadTab>;
+    readonly navigateThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsNavigateThreadTab>;
+    readonly inputThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsInputThreadTab>;
+    readonly snapshotThreadTab: RpcUnaryMethod<typeof WS_METHODS.browserAgentsSnapshotThreadTab>;
+    readonly screenshotThreadTab: RpcUnaryMethod<
+      typeof WS_METHODS.browserAgentsScreenshotThreadTab
+    >;
     readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeBrowserAgents>;
   };
   readonly organizationPanel: {
@@ -359,6 +382,32 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.browserAgentsOpenOrFocusPreview](input)),
       activateAnnotation: (input) =>
         transport.request((client) => client[WS_METHODS.browserAgentsActivateAnnotation](input)),
+      openOrFocusThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsOpenOrFocusThreadTab](input)),
+      attachActiveTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsAttachActiveTab](input)),
+      detachThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsDetachThreadTab](input)),
+      setThreadTabControl: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsSetThreadTabControl](input)),
+      startThreadTabCapture: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsStartThreadTabCapture](input)),
+      stopThreadTabCapture: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsStopThreadTabCapture](input)),
+      backThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsBackThreadTab](input)),
+      forwardThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsForwardThreadTab](input)),
+      reloadThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsReloadThreadTab](input)),
+      navigateThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsNavigateThreadTab](input)),
+      inputThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsInputThreadTab](input)),
+      snapshotThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsSnapshotThreadTab](input)),
+      screenshotThreadTab: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsScreenshotThreadTab](input)),
       subscribe: (listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeBrowserAgents]({}),

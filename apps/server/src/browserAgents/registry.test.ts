@@ -17,6 +17,9 @@ const capabilities = {
   canGroupTabs: true,
   canAnnotate: true,
   canRenderInlineSidebar: true,
+  canAttachActiveTab: true,
+  canThreadTabCommands: true,
+  canCaptureThreadTab: true,
 };
 
 const device = {
@@ -49,6 +52,43 @@ function connectAgent(
     capabilities,
   });
   return sentMessages;
+}
+
+async function openLinkedThreadTab(registry: BrowserAgentRegistry, sessionId: AuthSessionId) {
+  const connectionId = registry.snapshot().agents[0]?.connectionId;
+  if (!connectionId) {
+    throw new Error("Expected connected browser agent.");
+  }
+
+  const opened = await Effect.runPromise(
+    registry.openOrFocusThreadTab(
+      {
+        environmentId: workspaceInput.environmentId,
+        threadId: workspaceInput.threadId,
+        url: "http://localhost:5173/",
+        repoName: "repo",
+        focus: true,
+      },
+      { preferredSessionId: sessionId },
+    ),
+  );
+  registry.handleMessage(connectionId, {
+    type: "browserAgent.command.result",
+    commandId: opened.commandId,
+    ok: true,
+    tabId: 42,
+    windowId: 7,
+    payload: {
+      url: "http://localhost:5173/",
+      title: "Preview",
+    },
+  });
+  const workspaceLink = opened.workspaceLink;
+  if (!workspaceLink) {
+    throw new Error("Expected browser workspace link.");
+  }
+
+  return { connectionId, workspaceLink };
 }
 
 describe("BrowserAgentRegistry", () => {
@@ -100,5 +140,245 @@ describe("BrowserAgentRegistry", () => {
       code: "no-agent-connected",
     });
     expect(hostMessages).toHaveLength(1);
+  });
+
+  it("creates a thread-scoped browser link and sends the open command", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    const messages = connectAgent(registry, sessionId);
+
+    const result = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          url: "http://localhost:5173/",
+          repoName: "repo",
+          focus: true,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+
+    expect(result.workspaceLink?.threadId).toBe(workspaceInput.threadId);
+    expect(result.workspaceLink?.url).toBe("http://localhost:5173/");
+    expect(messages.at(-1)?.type).toBe("browserAgent.command.openOrFocusThreadTab");
+  });
+
+  it("rejects agent browser access when the thread link is paused", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    connectAgent(registry, sessionId);
+
+    await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          url: "http://localhost:5173/",
+          repoName: "repo",
+          focus: true,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    await Effect.runPromise(
+      registry.setThreadTabControl({
+        environmentId: workspaceInput.environmentId,
+        threadId: workspaceInput.threadId,
+        controlState: "paused-by-user",
+      }),
+    );
+
+    await expect(
+      Effect.runPromise(
+        registry.validateAgentBrowserAccess({
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "agent-access-paused",
+    });
+  });
+
+  it("marks a linked tab closed when the extension snapshot no longer includes it", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    connectAgent(registry, sessionId);
+    const { connectionId } = await openLinkedThreadTab(registry, sessionId);
+
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.tabs.snapshot",
+      tabs: [],
+    });
+
+    const link = registry.resolveThreadWorkspaceLink({
+      environmentId: workspaceInput.environmentId,
+      threadId: workspaceInput.threadId,
+    });
+    expect(link?.tabStatus).toBe("closed");
+  });
+
+  it("keeps browser tab authority exclusive to the newest thread link", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    connectAgent(registry, sessionId);
+    const connectionId = registry.snapshot().agents[0]?.connectionId;
+    if (!connectionId) {
+      throw new Error("Expected connected browser agent.");
+    }
+
+    const first = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          url: "http://localhost:5173/",
+          repoName: "repo",
+          focus: true,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: first.commandId,
+      ok: true,
+      tabId: 42,
+      windowId: 7,
+      payload: {
+        url: "http://localhost:5173/",
+        title: "Preview",
+      },
+    });
+
+    const secondThreadId = ThreadId.make("thread-2");
+    const second = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: secondThreadId,
+          url: "http://localhost:5173/",
+          repoName: "repo",
+          focus: true,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: second.commandId,
+      ok: true,
+      tabId: 42,
+      windowId: 7,
+      payload: {
+        url: "http://localhost:5173/",
+        title: "Preview",
+      },
+    });
+
+    const firstLink = registry.resolveThreadWorkspaceLink({
+      environmentId: workspaceInput.environmentId,
+      threadId: workspaceInput.threadId,
+    });
+    const secondLink = registry.resolveThreadWorkspaceLink({
+      environmentId: workspaceInput.environmentId,
+      threadId: secondThreadId,
+    });
+
+    expect(firstLink?.tabStatus).toBe("closed");
+    expect(secondLink?.tabStatus).toBe("complete");
+  });
+
+  it("awaits capture start results and returns the first screenshot payload", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    const messages = connectAgent(registry, sessionId);
+    const { connectionId, workspaceLink } = await openLinkedThreadTab(registry, sessionId);
+
+    const startPromise = Effect.runPromise(
+      registry.startThreadTabCapture({
+        environmentId: workspaceInput.environmentId,
+        threadId: workspaceInput.threadId,
+        quality: {
+          maxWidth: 800,
+          maxHeight: 600,
+          fps: 1,
+        },
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const command = messages.at(-1);
+    if (command?.type !== "browserAgent.command.startTabCapture") {
+      throw new Error("Expected start capture command.");
+    }
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.capture.started",
+      workspaceLinkId: workspaceLink.id,
+      liveViewSessionId: "screenshot-fallback:test",
+      transport: "screenshot-fallback",
+    });
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: command.commandId,
+      ok: true,
+      payload: {
+        dataUrl: "data:image/png;base64,abc",
+        liveViewSessionId: "screenshot-fallback:test",
+        transport: "screenshot-fallback",
+      },
+    });
+
+    const result = await startPromise;
+    expect(result.workspaceLink?.captureState).toBe("screenshot-fallback");
+    expect(result.payload).toMatchObject({
+      dataUrl: "data:image/png;base64,abc",
+      transport: "screenshot-fallback",
+    });
+  });
+
+  it("resets capture state when start capture fails", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    const messages = connectAgent(registry, sessionId);
+    const { connectionId } = await openLinkedThreadTab(registry, sessionId);
+
+    const startPromise = Effect.runPromise(
+      registry.startThreadTabCapture({
+        environmentId: workspaceInput.environmentId,
+        threadId: workspaceInput.threadId,
+        quality: {
+          maxWidth: 800,
+          maxHeight: 600,
+          fps: 1,
+        },
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const command = messages.at(-1);
+    if (command?.type !== "browserAgent.command.startTabCapture") {
+      throw new Error("Expected start capture command.");
+    }
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: command.commandId,
+      ok: false,
+      error: "Permission denied.",
+    });
+
+    await expect(startPromise).rejects.toMatchObject({
+      code: "command-failed",
+    });
+    const link = registry.resolveThreadWorkspaceLink({
+      environmentId: workspaceInput.environmentId,
+      threadId: workspaceInput.threadId,
+    });
+    expect(link?.captureState).toBe("off");
+    expect(link?.liveViewSessionId).toBeNull();
   });
 });
