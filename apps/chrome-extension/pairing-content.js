@@ -11,17 +11,17 @@ function parseAutoPairUrl() {
 
   const baseUrl = url.searchParams.get("t3BrowserAgentBaseUrl") ?? "";
   const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
-  const sessionToken =
-    hashParams.get("t3BrowserAgentSessionToken") ??
-    url.searchParams.get("t3BrowserAgentSessionToken") ??
+  const credential =
+    hashParams.get("t3BrowserAgentCredential") ??
+    url.searchParams.get("t3BrowserAgentCredential") ??
     "";
-  if (!sameOrigin(url.origin, baseUrl) || !sessionToken.trim()) {
+  if (!sameOrigin(url.origin, baseUrl) || !credential.trim()) {
     return null;
   }
 
   return {
     baseUrl,
-    sessionToken,
+    credential,
     closeTabAfterPair: url.searchParams.get("t3BrowserAgentClose") === "1",
   };
 }
@@ -133,7 +133,7 @@ async function pairFromUrl() {
   const response = await sendRuntimeMessage({
     type: PAIR_RUNTIME_MESSAGE_TYPE,
     baseUrl: pairing.baseUrl,
-    sessionToken: pairing.sessionToken,
+    credential: pairing.credential,
     closeTabAfterPair: pairing.closeTabAfterPair,
   });
 
@@ -174,7 +174,7 @@ window.addEventListener("message", (event) => {
   void sendRuntimeMessage({
     type: PAIR_RUNTIME_MESSAGE_TYPE,
     baseUrl: data.baseUrl,
-    sessionToken: data.sessionToken,
+    credential: data.credential,
   })
     .then((response) => {
       window.postMessage(

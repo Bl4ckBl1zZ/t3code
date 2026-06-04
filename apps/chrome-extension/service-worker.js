@@ -51,10 +51,14 @@ function chatUrlForWorkspaceLink(baseUrl, link, sidebarSessionToken) {
 
 async function workspaceLinkForContent(link, tab = null, options = {}) {
   const backend = currentBackend ?? (await readBackend());
+  const tabUrl = typeof tab?.url === "string" && tab.url.length > 0 ? tab.url : null;
   const nextLink = {
     ...link,
+    ...(link.devServerUrl === "about:blank" && tabUrl ? { devServerUrl: tabUrl } : {}),
     ...(tab?.id !== undefined ? { tabId: tab.id } : {}),
     ...(tab?.windowId !== undefined ? { windowId: tab.windowId } : {}),
+    ...(tabUrl ? { url: tabUrl } : {}),
+    ...(typeof tab?.title === "string" ? { title: tab.title } : {}),
   };
   if (!backend?.baseUrl) {
     return nextLink;
@@ -343,6 +347,9 @@ function sendHello() {
       canGroupTabs: Boolean(chrome.tabs?.group),
       canAnnotate: true,
       canRenderInlineSidebar: false,
+      canAttachActiveTab: true,
+      canThreadTabCommands: true,
+      canCaptureThreadTab: true,
     },
   });
 }
@@ -419,6 +426,24 @@ function tabMatchesDevServer(tabUrl, devServerUrl) {
   return tab.pathname === target.pathname || tab.pathname.startsWith(`${targetPath}/`);
 }
 
+function tabMatchesWorkspaceLink(tab, link) {
+  if (!tab) {
+    return false;
+  }
+  if (linkMatchesTabIdentity(link, tab)) {
+    return true;
+  }
+  if (typeof tab.url === "string") {
+    if (typeof link.url === "string" && tab.url === link.url) {
+      return true;
+    }
+    if (typeof link.devServerUrl === "string" && tabMatchesDevServer(tab.url, link.devServerUrl)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function linkTimestamp(link) {
   const value = Date.parse(link.updatedAt ?? link.createdAt ?? "");
   return Number.isFinite(value) ? value : 0;
@@ -445,9 +470,7 @@ function linkMatchesTabIdentity(link, tab) {
 }
 
 function selectWorkspaceLinkForTab(links, tab) {
-  const matchingUrlLinks = links.filter((entry) =>
-    tabMatchesDevServer(tab.url, entry.devServerUrl),
-  );
+  const matchingUrlLinks = links.filter((entry) => tabMatchesWorkspaceLink(tab, entry));
   if (matchingUrlLinks.length === 0) {
     return null;
   }
@@ -470,7 +493,7 @@ async function findPreviewTab(link) {
   if (link.tabId !== undefined) {
     try {
       const tab = await chrome.tabs.get(Number(link.tabId));
-      if (tabMatchesDevServer(tab.url, link.devServerUrl)) {
+      if (tabMatchesWorkspaceLink(tab, link)) {
         return tab;
       }
     } catch {
@@ -478,7 +501,7 @@ async function findPreviewTab(link) {
     }
   }
   const tabs = await chrome.tabs.query({});
-  return tabs.find((tab) => tabMatchesDevServer(tab.url, link.devServerUrl)) ?? null;
+  return tabs.find((tab) => tabMatchesWorkspaceLink(tab, link)) ?? null;
 }
 
 async function ensureGrouped(tabId, repoName) {
@@ -539,6 +562,13 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
 }
 
+function ensureOkResponse(response) {
+  if (response?.ok === false) {
+    throw new Error(response.error ?? response.reason ?? "Browser tab command failed.");
+  }
+  return response;
+}
+
 async function sendExistingTabMessage(tabId, message) {
   try {
     await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
@@ -586,10 +616,7 @@ async function setNativeSidePanelForTab(tab, enabled) {
 }
 
 function tabHasNativeSidePanelLink(links, tab) {
-  return links.some(
-    (entry) =>
-      linkMatchesTabIdentity(entry, tab) && tabMatchesDevServer(tab.url, entry.devServerUrl),
-  );
+  return links.some((entry) => tabMatchesWorkspaceLink(tab, entry));
 }
 
 async function syncNativeSidePanelOptionsForTabs(tabs) {
@@ -833,7 +860,7 @@ async function getSidePanelState(input = {}) {
   }
 
   const previewTab =
-    selectedLink && activeTab && tabMatchesDevServer(activeTab.url, selectedLink.devServerUrl)
+    selectedLink && activeTab && tabMatchesWorkspaceLink(activeTab, selectedLink)
       ? activeTab
       : selectedLink
         ? await findPreviewTab(selectedLink)
@@ -857,6 +884,53 @@ async function getSidePanelState(input = {}) {
         }
       : null,
   };
+}
+
+async function findStoredWorkspaceLink(workspaceLinkId) {
+  const links = await readLinks();
+  return links.find((entry) => entry.id === workspaceLinkId) ?? null;
+}
+
+function sendThreadTabUpdated(link, tab, status) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !link?.id) {
+    return;
+  }
+  sendToServer({
+    type: "browserAgent.threadTab.updated",
+    workspaceLinkId: link.id,
+    tabId: tab?.id ?? null,
+    windowId: tab?.windowId ?? link.windowId ?? null,
+    url: tab?.url ?? link.url ?? null,
+    title: tab?.title ?? link.title ?? null,
+    status,
+  });
+}
+
+async function notifyThreadLinksForTab(tab, status) {
+  if (!tab?.id) {
+    return;
+  }
+  const links = await readLinks();
+  for (const link of links) {
+    if (tabMatchesWorkspaceLink(tab, link)) {
+      sendThreadTabUpdated(link, tab, status);
+    }
+  }
+}
+
+async function notifyThreadLinksForRemovedTab(tabId, windowId) {
+  const links = await readLinks();
+  for (const link of links) {
+    if (
+      link.tabId !== undefined &&
+      String(link.tabId) === String(tabId) &&
+      (windowId === undefined ||
+        link.windowId === undefined ||
+        String(link.windowId) === String(windowId))
+    ) {
+      sendThreadTabUpdated(link, null, "closed");
+    }
+  }
 }
 
 async function openOrFocusPreview(command) {
@@ -905,6 +979,249 @@ async function activateAnnotation(command) {
   });
 }
 
+async function openOrFocusThreadTab(command) {
+  const link = command.workspaceLink;
+  let tab = await findPreviewTab(link);
+  if (!tab) {
+    tab = await chrome.tabs.create({ url: command.url, active: command.focus !== false });
+  } else if (command.focus !== false) {
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
+  }
+  const contentLink = await workspaceLinkForContent(link, tab);
+  await upsertLink(linkForStorage(contentLink));
+  await setNativeSidePanelForTab(tab, true).catch((error) => {
+    console.warn("[T3 Code] failed to enable side panel for linked tab", error);
+  });
+  await sendTabsSnapshot();
+  sendThreadTabUpdated(contentLink, tab, "complete");
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: tab.id,
+    windowId: tab.windowId,
+    payload: {
+      url: tab.url ?? command.url,
+      title: tab.title ?? null,
+    },
+  });
+}
+
+async function attachActiveTab(command) {
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!activeTab?.id || activeTab.windowId === undefined) {
+    throw new Error("No active browser tab is available to attach.");
+  }
+  const contentLink = await workspaceLinkForContent(command.workspaceLink, activeTab);
+  await upsertLink(linkForStorage(contentLink));
+  await writeActiveWorkspaceLink(contentLink);
+  await setNativeSidePanelForTab(activeTab, true).catch((error) => {
+    console.warn("[T3 Code] failed to enable side panel for attached tab", error);
+  });
+  await sendTabsSnapshot();
+  sendThreadTabUpdated(
+    contentLink,
+    activeTab,
+    activeTab.status === "loading" ? "loading" : "complete",
+  );
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: activeTab.id,
+    windowId: activeTab.windowId,
+    payload: {
+      url: activeTab.url ?? null,
+      title: activeTab.title ?? null,
+    },
+  });
+}
+
+async function detachThreadTab(command) {
+  const links = await readLinks();
+  const nextLinks = links.filter((entry) => entry.id !== command.workspaceLinkId);
+  workspaceLinksCache = nextLinks;
+  await chrome.storage.local.set({ [LINKS_KEY]: nextLinks });
+  const activeRecord = await readActiveWorkspaceLink();
+  if (activeRecord?.linkId === command.workspaceLinkId) {
+    await chrome.storage.local.remove(ACTIVE_LINK_KEY);
+  }
+  await syncNativeSidePanelOptionsForAllTabs();
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+  });
+}
+
+async function tabForWorkspaceLinkId(workspaceLinkId) {
+  const link = await findStoredWorkspaceLink(workspaceLinkId);
+  if (!link) {
+    throw new Error("The browser extension does not know this thread browser link.");
+  }
+  const tab = await findPreviewTab(link);
+  if (!tab?.id || tab.windowId === undefined) {
+    sendThreadTabUpdated(link, null, "closed");
+    throw new Error("The linked browser tab is closed or unavailable.");
+  }
+  return { link, tab };
+}
+
+async function focusTabForCommand(tab) {
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tab.id, { active: true });
+}
+
+async function navigateThreadTab(command) {
+  const { link, tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
+  await chrome.tabs.update(tab.id, { url: command.url, active: true });
+  const updatedTab = await chrome.tabs.get(tab.id);
+  const contentLink = await workspaceLinkForContent(
+    { ...link, devServerUrl: command.url, url: command.url },
+    updatedTab,
+  );
+  await upsertLink(linkForStorage(contentLink));
+  sendThreadTabUpdated(contentLink, updatedTab, "loading");
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: updatedTab.id,
+    windowId: updatedTab.windowId,
+    payload: {
+      url: updatedTab.url ?? command.url,
+      title: updatedTab.title ?? null,
+    },
+  });
+}
+
+async function historyThreadTab(command) {
+  const { link, tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
+  await focusTabForCommand(tab);
+  if (command.action === "back") {
+    await chrome.tabs.goBack(tab.id);
+  } else if (command.action === "forward") {
+    await chrome.tabs.goForward(tab.id);
+  } else {
+    await chrome.tabs.reload(tab.id);
+  }
+  const updatedTab = await chrome.tabs.get(tab.id);
+  const contentLink = await workspaceLinkForContent(link, updatedTab);
+  await upsertLink(linkForStorage(contentLink));
+  sendThreadTabUpdated(
+    contentLink,
+    updatedTab,
+    command.action === "reload" ? "loading" : "complete",
+  );
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: updatedTab.id,
+    windowId: updatedTab.windowId,
+    payload: {
+      url: updatedTab.url ?? null,
+      title: updatedTab.title ?? null,
+    },
+  });
+}
+
+async function inputThreadTab(command) {
+  const { tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
+  ensureOkResponse(
+    await sendTabMessage(tab.id, {
+      type: "t3code.browserAgent.threadTabInput",
+      input: command.input,
+    }),
+  );
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+  });
+}
+
+async function snapshotThreadTab(command) {
+  const { tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
+  const payload = ensureOkResponse(
+    await sendTabMessage(tab.id, {
+      type: "t3code.browserAgent.threadTabSnapshot",
+    }),
+  );
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: tab.id,
+    windowId: tab.windowId,
+    payload,
+  });
+}
+
+async function captureLinkedTabScreenshot(workspaceLinkId) {
+  const { link, tab } = await tabForWorkspaceLinkId(workspaceLinkId);
+  await focusTabForCommand(tab);
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const updatedTab = await chrome.tabs.get(tab.id).catch(() => tab);
+  const contentLink = await workspaceLinkForContent(link, updatedTab);
+  await upsertLink(linkForStorage(contentLink));
+  sendThreadTabUpdated(
+    contentLink,
+    updatedTab,
+    updatedTab.status === "loading" ? "loading" : "complete",
+  );
+  return {
+    dataUrl,
+    url: updatedTab.url ?? link.url ?? null,
+    title: updatedTab.title ?? link.title ?? null,
+  };
+}
+
+async function screenshotThreadTab(command) {
+  const payload = await captureLinkedTabScreenshot(command.workspaceLinkId);
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    payload,
+  });
+}
+
+async function startTabCapture(command) {
+  const payload = await captureLinkedTabScreenshot(command.workspaceLinkId);
+  const liveViewSessionId = `screenshot-fallback:${command.workspaceLinkId}:${Date.now()}`;
+  sendToServer({
+    type: "browserAgent.capture.started",
+    workspaceLinkId: command.workspaceLinkId,
+    liveViewSessionId,
+    transport: "screenshot-fallback",
+  });
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    payload: {
+      ...payload,
+      liveViewSessionId,
+      transport: "screenshot-fallback",
+    },
+  });
+}
+
+async function stopTabCapture(command) {
+  sendToServer({
+    type: "browserAgent.capture.stopped",
+    workspaceLinkId: command.workspaceLinkId,
+    reason: "user",
+  });
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+  });
+}
+
 async function handleServerMessage(rawData) {
   const command = JSON.parse(rawData);
   try {
@@ -914,6 +1231,36 @@ async function handleServerMessage(rawData) {
         return;
       case "browserAgent.command.activateAnnotation":
         await activateAnnotation(command);
+        return;
+      case "browserAgent.command.openOrFocusThreadTab":
+        await openOrFocusThreadTab(command);
+        return;
+      case "browserAgent.command.attachActiveTab":
+        await attachActiveTab(command);
+        return;
+      case "browserAgent.command.detachThreadTab":
+        await detachThreadTab(command);
+        return;
+      case "browserAgent.command.startTabCapture":
+        await startTabCapture(command);
+        return;
+      case "browserAgent.command.stopTabCapture":
+        await stopTabCapture(command);
+        return;
+      case "browserAgent.command.input":
+        await inputThreadTab(command);
+        return;
+      case "browserAgent.command.history":
+        await historyThreadTab(command);
+        return;
+      case "browserAgent.command.navigate":
+        await navigateThreadTab(command);
+        return;
+      case "browserAgent.command.snapshot":
+        await snapshotThreadTab(command);
+        return;
+      case "browserAgent.command.screenshot":
+        await screenshotThreadTab(command);
         return;
       case "browserAgent.command.requestTabsSnapshot":
         await sendTabsSnapshot();
@@ -1176,10 +1523,14 @@ chrome.tabs.onCreated.addListener((tab) => {
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (changeInfo.url || changeInfo.status === "complete") {
     void syncNativeSidePanelOptionsForTab(tab);
+    void notifyThreadLinksForTab(tab, changeInfo.status === "loading" ? "loading" : "complete");
   }
   void sendTabsSnapshot();
 });
-chrome.tabs.onRemoved.addListener(() => void sendTabsSnapshot());
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  void notifyThreadLinksForRemovedTab(tabId, removeInfo.windowId);
+  void sendTabsSnapshot();
+});
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   void syncNativeSidePanelOptionsForTabId(tabId);
   void sendTabsSnapshot();

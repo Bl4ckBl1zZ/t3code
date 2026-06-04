@@ -335,7 +335,7 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
-export const ThreadTabType = Schema.Literals(["chat"]);
+export const ThreadTabType = Schema.Literals(["chat", "browser"]);
 export type ThreadTabType = typeof ThreadTabType.Type;
 
 export const OrchestrationThreadTab = Schema.Struct({

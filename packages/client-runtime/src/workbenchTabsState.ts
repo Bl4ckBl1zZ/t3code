@@ -9,6 +9,13 @@ export type WorkbenchTab =
       readonly dirty: false;
     }
   | {
+      readonly kind: "browser";
+      readonly id: string;
+      readonly threadRef: ScopedThreadRef;
+      readonly title: string;
+      readonly dirty: false;
+    }
+  | {
       readonly kind: "file";
       readonly id: string;
       readonly environmentId: EnvironmentId;

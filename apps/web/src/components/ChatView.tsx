@@ -173,6 +173,7 @@ import {
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../terminalSessionState";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { ThreadBrowserPanel } from "./chat/ThreadBrowserPanel";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { PullRequestUnreadCommentsSidePanel } from "./PullRequestUnreadCommentsPanel";
@@ -1328,6 +1329,7 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [activeThread, activeThreadRef, sidebarThreadSummaries],
   );
+  const [activeThreadPanel, setActiveThreadPanel] = useState<"chat" | "browser">("chat");
   const fileTabsState = useWorkbenchStore((state) => state.fileTabsState);
   const activateFileTab = useWorkbenchStore((state) => state.activateFileTab);
   const closeFileTab = useWorkbenchStore((state) => state.closeFileTab);
@@ -1348,6 +1350,20 @@ export default function ChatView(props: ChatViewProps) {
   const activeChatWorkbenchTabId = activeThreadRef
     ? `chat:${scopedThreadKey(activeThreadRef)}`
     : null;
+  const browserWorkbenchTab = useMemo<WorkbenchTab | null>(
+    () =>
+      isServerThread && activeThreadRef
+        ? {
+            kind: "browser",
+            id: `browser:${scopedThreadKey(activeThreadRef)}`,
+            threadRef: activeThreadRef,
+            title: "Browser",
+            dirty: false,
+          }
+        : null,
+    [activeThreadRef, isServerThread],
+  );
+  const activeBrowserWorkbenchTabId = browserWorkbenchTab?.id ?? null;
   const activeFileTab = useMemo(
     () =>
       fileTabsState.tabs.find(
@@ -1357,10 +1373,16 @@ export default function ChatView(props: ChatViewProps) {
     [fileTabsState.activeTabId, fileTabsState.tabs],
   );
   const workbenchTabs = useMemo(
-    () => [...chatWorkbenchTabs, ...fileTabsState.tabs],
-    [chatWorkbenchTabs, fileTabsState.tabs],
+    () => [
+      ...chatWorkbenchTabs,
+      ...(browserWorkbenchTab ? [browserWorkbenchTab] : []),
+      ...fileTabsState.tabs,
+    ],
+    [browserWorkbenchTab, chatWorkbenchTabs, fileTabsState.tabs],
   );
-  const activeWorkbenchTabId = activeFileTab?.id ?? activeChatWorkbenchTabId;
+  const activeWorkbenchTabId =
+    activeFileTab?.id ??
+    (activeThreadPanel === "browser" ? activeBrowserWorkbenchTabId : activeChatWorkbenchTabId);
   const [creatingChatTab, setCreatingChatTab] = useState(false);
   const serverProjectScriptTerminalIdsByRunKey = useMemo(() => {
     const next: Record<string, string[]> = {};
@@ -3499,6 +3521,7 @@ export default function ChatView(props: ChatViewProps) {
   const selectWorkbenchTab = useCallback(
     (tab: WorkbenchTab) => {
       if (tab.kind === "chat") {
+        setActiveThreadPanel("chat");
         activateFileTab(null);
         void navigate({
           to: "/$environmentId/$threadId",
@@ -3507,11 +3530,28 @@ export default function ChatView(props: ChatViewProps) {
         });
         return;
       }
+      if (tab.kind === "browser") {
+        activateFileTab(null);
+        setActiveThreadPanel("browser");
+        if (
+          activeThreadRef &&
+          scopedThreadKey(activeThreadRef) === scopedThreadKey(tab.threadRef)
+        ) {
+          return;
+        }
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(tab.threadRef),
+          search: (previous) => previous,
+        });
+        return;
+      }
       if (tab.kind === "file") {
+        setActiveThreadPanel("chat");
         activateFileTab(tab.id);
       }
     },
-    [activateFileTab, navigate],
+    [activateFileTab, activeThreadRef, navigate],
   );
   const closeWorkbenchTab = useCallback(
     (tab: WorkbenchTab) => {
@@ -3522,6 +3562,10 @@ export default function ChatView(props: ChatViewProps) {
         if (threadTab) {
           closeThreadTab(threadTab);
         }
+        return;
+      }
+      if (tab.kind === "browser") {
+        setActiveThreadPanel("chat");
         return;
       }
       if (tab.kind === "file") {
@@ -3600,6 +3644,7 @@ export default function ChatView(props: ChatViewProps) {
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadWorktreeMode(null);
     setPendingServerThreadBranch(undefined);
+    setActiveThreadPanel("chat");
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -5010,6 +5055,15 @@ export default function ChatView(props: ChatViewProps) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {activeFileTab ? (
             <WorkspaceFileEditor tab={activeFileTab} onDirtyChange={setFileTabDirty} />
+          ) : activeThreadPanel === "browser" && isServerThread ? (
+            <ThreadBrowserPanel
+              activeProjectName={activeProject?.name}
+              activeProjectScripts={activeProject?.scripts}
+              activeThreadEnvironmentId={activeThread.environmentId}
+              activeThreadId={activeThread.id}
+              detectedDevServerUrl={detectedProjectScriptDevServerUrl}
+              projectPreviewUrl={activeProject?.browserPreviewUrl}
+            />
           ) : (
             <>
               {/* Messages Wrapper */}

@@ -11,11 +11,18 @@ import {
 import { AuthAccessStreamEvent } from "./auth.ts";
 import {
   BrowserAgentActivateAnnotationInput,
+  BrowserAgentAttachActiveTabInput,
   BrowserAgentCommandError,
   BrowserAgentCommandResult,
   BrowserAgentListResult,
   BrowserAgentOpenOrFocusPreviewInput,
+  BrowserAgentOpenOrFocusThreadTabInput,
+  BrowserAgentSetThreadTabControlInput,
+  BrowserAgentStartThreadTabCaptureInput,
   BrowserAgentStreamEvent,
+  BrowserAgentThreadLinkInput,
+  BrowserAgentThreadTabInputCommandInput,
+  BrowserAgentThreadTabNavigateInput,
 } from "./browserAgent.ts";
 import {
   OrganizationPanelError,
@@ -252,6 +259,19 @@ export const WS_METHODS = {
   browserAgentsList: "browserAgents.list",
   browserAgentsOpenOrFocusPreview: "browserAgents.openOrFocusPreview",
   browserAgentsActivateAnnotation: "browserAgents.activateAnnotation",
+  browserAgentsOpenOrFocusThreadTab: "browserAgents.threadTab.openOrFocus",
+  browserAgentsAttachActiveTab: "browserAgents.threadTab.attachActive",
+  browserAgentsDetachThreadTab: "browserAgents.threadTab.detach",
+  browserAgentsSetThreadTabControl: "browserAgents.threadTab.setControl",
+  browserAgentsStartThreadTabCapture: "browserAgents.threadTab.capture.start",
+  browserAgentsStopThreadTabCapture: "browserAgents.threadTab.capture.stop",
+  browserAgentsBackThreadTab: "browserAgents.threadTab.back",
+  browserAgentsForwardThreadTab: "browserAgents.threadTab.forward",
+  browserAgentsReloadThreadTab: "browserAgents.threadTab.reload",
+  browserAgentsNavigateThreadTab: "browserAgents.threadTab.navigate",
+  browserAgentsInputThreadTab: "browserAgents.threadTab.input",
+  browserAgentsSnapshotThreadTab: "browserAgents.threadTab.snapshot",
+  browserAgentsScreenshotThreadTab: "browserAgents.threadTab.screenshot",
 
   // Organization panel methods
   organizationPanelGet: "organizationPanel.get",
@@ -404,6 +424,108 @@ export const WsBrowserAgentsActivateAnnotationRpc = Rpc.make(
   WS_METHODS.browserAgentsActivateAnnotation,
   {
     payload: BrowserAgentActivateAnnotationInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsOpenOrFocusThreadTabRpc = Rpc.make(
+  WS_METHODS.browserAgentsOpenOrFocusThreadTab,
+  {
+    payload: BrowserAgentOpenOrFocusThreadTabInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsAttachActiveTabRpc = Rpc.make(WS_METHODS.browserAgentsAttachActiveTab, {
+  payload: BrowserAgentAttachActiveTabInput,
+  success: BrowserAgentCommandResult,
+  error: BrowserAgentCommandError,
+});
+
+export const WsBrowserAgentsDetachThreadTabRpc = Rpc.make(WS_METHODS.browserAgentsDetachThreadTab, {
+  payload: BrowserAgentThreadLinkInput,
+  success: BrowserAgentCommandResult,
+  error: BrowserAgentCommandError,
+});
+
+export const WsBrowserAgentsSetThreadTabControlRpc = Rpc.make(
+  WS_METHODS.browserAgentsSetThreadTabControl,
+  {
+    payload: BrowserAgentSetThreadTabControlInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsStartThreadTabCaptureRpc = Rpc.make(
+  WS_METHODS.browserAgentsStartThreadTabCapture,
+  {
+    payload: BrowserAgentStartThreadTabCaptureInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsStopThreadTabCaptureRpc = Rpc.make(
+  WS_METHODS.browserAgentsStopThreadTabCapture,
+  {
+    payload: BrowserAgentThreadLinkInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsBackThreadTabRpc = Rpc.make(WS_METHODS.browserAgentsBackThreadTab, {
+  payload: BrowserAgentThreadLinkInput,
+  success: BrowserAgentCommandResult,
+  error: BrowserAgentCommandError,
+});
+
+export const WsBrowserAgentsForwardThreadTabRpc = Rpc.make(
+  WS_METHODS.browserAgentsForwardThreadTab,
+  {
+    payload: BrowserAgentThreadLinkInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsReloadThreadTabRpc = Rpc.make(WS_METHODS.browserAgentsReloadThreadTab, {
+  payload: BrowserAgentThreadLinkInput,
+  success: BrowserAgentCommandResult,
+  error: BrowserAgentCommandError,
+});
+
+export const WsBrowserAgentsNavigateThreadTabRpc = Rpc.make(
+  WS_METHODS.browserAgentsNavigateThreadTab,
+  {
+    payload: BrowserAgentThreadTabNavigateInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsInputThreadTabRpc = Rpc.make(WS_METHODS.browserAgentsInputThreadTab, {
+  payload: BrowserAgentThreadTabInputCommandInput,
+  success: BrowserAgentCommandResult,
+  error: BrowserAgentCommandError,
+});
+
+export const WsBrowserAgentsSnapshotThreadTabRpc = Rpc.make(
+  WS_METHODS.browserAgentsSnapshotThreadTab,
+  {
+    payload: BrowserAgentThreadLinkInput,
+    success: BrowserAgentCommandResult,
+    error: BrowserAgentCommandError,
+  },
+);
+
+export const WsBrowserAgentsScreenshotThreadTabRpc = Rpc.make(
+  WS_METHODS.browserAgentsScreenshotThreadTab,
+  {
+    payload: BrowserAgentThreadLinkInput,
     success: BrowserAgentCommandResult,
     error: BrowserAgentCommandError,
   },
@@ -815,6 +937,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsBrowserAgentsListRpc,
   WsBrowserAgentsOpenOrFocusPreviewRpc,
   WsBrowserAgentsActivateAnnotationRpc,
+  WsBrowserAgentsOpenOrFocusThreadTabRpc,
+  WsBrowserAgentsAttachActiveTabRpc,
+  WsBrowserAgentsDetachThreadTabRpc,
+  WsBrowserAgentsSetThreadTabControlRpc,
+  WsBrowserAgentsStartThreadTabCaptureRpc,
+  WsBrowserAgentsStopThreadTabCaptureRpc,
+  WsBrowserAgentsBackThreadTabRpc,
+  WsBrowserAgentsForwardThreadTabRpc,
+  WsBrowserAgentsReloadThreadTabRpc,
+  WsBrowserAgentsNavigateThreadTabRpc,
+  WsBrowserAgentsInputThreadTabRpc,
+  WsBrowserAgentsSnapshotThreadTabRpc,
+  WsBrowserAgentsScreenshotThreadTabRpc,
   WsOrganizationPanelGetRpc,
   WsOrganizationPanelTurnStartRpc,
   WsOrganizationPanelTurnStopRpc,

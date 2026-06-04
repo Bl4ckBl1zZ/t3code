@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { Sink } from "effect";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
+import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {

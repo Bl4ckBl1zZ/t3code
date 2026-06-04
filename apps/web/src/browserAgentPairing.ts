@@ -5,7 +5,7 @@ import {
 } from "@t3tools/shared/browserAgent";
 
 import { selectPairingEndpoint } from "./advertisedEndpointSelection";
-import { createServerSessionBearerToken } from "./environments/primary";
+import { createServerPairingCredential } from "./environments/primary";
 import { readPrimaryEnvironmentTarget } from "./environments/primary/target";
 import { ensureLocalApi } from "./localApi";
 import { useUiStateStore } from "./uiStateStore";
@@ -98,14 +98,14 @@ export async function resolveBrowserAgentBackendBaseUrl(): Promise<string> {
 
 export function buildBrowserAgentAutoPairUrl(input: {
   readonly baseUrl: string;
-  readonly sessionToken: string;
+  readonly credential: string;
 }): string {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const url = new URL(BROWSER_AGENT_AUTO_PAIR_PATH, baseUrl);
   url.searchParams.set("t3BrowserAgentPair", "1");
   url.searchParams.set("t3BrowserAgentBaseUrl", baseUrl);
   url.searchParams.set("t3BrowserAgentClose", "1");
-  url.hash = new URLSearchParams([["t3BrowserAgentSessionToken", input.sessionToken]]).toString();
+  url.hash = new URLSearchParams([["t3BrowserAgentCredential", input.credential]]).toString();
   return url.toString();
 }
 
@@ -142,7 +142,7 @@ export function isNoBrowserAgentConnectedError(error: unknown): boolean {
 
 async function requestContentScriptPair(input: {
   readonly baseUrl: string;
-  readonly sessionToken: string;
+  readonly credential: string;
   readonly timeoutMs?: number;
 }): Promise<boolean> {
   if (!sameOriginAsCurrentPage(input.baseUrl)) {
@@ -198,7 +198,7 @@ async function requestContentScriptPair(input: {
         type: AUTO_PAIR_REQUEST_TYPE,
         requestId,
         baseUrl: input.baseUrl,
-        sessionToken: input.sessionToken,
+        credential: input.credential,
       },
       window.location.origin,
     );
@@ -237,10 +237,10 @@ export async function waitForBrowserAgentConnection(
 export async function autoPairBrowserAgent(client: BrowserAgentListClient): Promise<void> {
   const baseUrl = await resolveBrowserAgentBackendBaseUrl();
   const downloadUrl = buildBrowserAgentExtensionDownloadUrl({ baseUrl });
-  const session = await createServerSessionBearerToken();
+  const pairing = await createServerPairingCredential("Browser agent auto-pair");
   const pairedInCurrentPage = await requestContentScriptPair({
     baseUrl,
-    sessionToken: session.sessionToken,
+    credential: pairing.credential,
   });
 
   if (!pairedInCurrentPage) {
@@ -251,7 +251,7 @@ export async function autoPairBrowserAgent(client: BrowserAgentListClient): Prom
     await ensureLocalApi().shell.openExternal(
       buildBrowserAgentAutoPairUrl({
         baseUrl,
-        sessionToken: session.sessionToken,
+        credential: pairing.credential,
       }),
     );
   }

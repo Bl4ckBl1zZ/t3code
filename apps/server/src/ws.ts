@@ -999,6 +999,88 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             }),
             { "rpc.aggregate": "browser-agent" },
           ),
+        [WS_METHODS.browserAgentsOpenOrFocusThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsOpenOrFocusThreadTab,
+            browserAgentRegistry.openOrFocusThreadTab(input, {
+              preferredSessionId: currentSessionId,
+            }),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsAttachActiveTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsAttachActiveTab,
+            browserAgentRegistry.attachActiveTab(input, {
+              preferredSessionId: currentSessionId,
+            }),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsDetachThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsDetachThreadTab,
+            browserAgentRegistry.detachThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsSetThreadTabControl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsSetThreadTabControl,
+            browserAgentRegistry.setThreadTabControl(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsStartThreadTabCapture]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsStartThreadTabCapture,
+            browserAgentRegistry.startThreadTabCapture(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsStopThreadTabCapture]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsStopThreadTabCapture,
+            browserAgentRegistry.stopThreadTabCapture(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsBackThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsBackThreadTab,
+            browserAgentRegistry.backThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsForwardThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsForwardThreadTab,
+            browserAgentRegistry.forwardThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsReloadThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsReloadThreadTab,
+            browserAgentRegistry.reloadThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsNavigateThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsNavigateThreadTab,
+            browserAgentRegistry.navigateThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsInputThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsInputThreadTab,
+            browserAgentRegistry.inputThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsSnapshotThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsSnapshotThreadTab,
+            browserAgentRegistry.snapshotThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsScreenshotThreadTab]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsScreenshotThreadTab,
+            browserAgentRegistry.screenshotThreadTab(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
         [WS_METHODS.subscribeBrowserAgents]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeBrowserAgents,
