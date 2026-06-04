@@ -212,7 +212,7 @@ function createBaseServerConfig(): ServerConfig {
       label: "Local environment",
       platform: { os: "darwin" as const, arch: "arm64" as const },
       serverVersion: "0.0.0-test",
-      capabilities: { repositoryIdentity: true },
+      capabilities: { browserAgent: true, repositoryIdentity: true },
     },
     auth: {
       policy: "loopback-browser",
@@ -389,9 +389,7 @@ const createDesktopBridgeStub = (overrides?: {
         arch: "x64",
       },
       serverVersion: "0.0.0-test",
-      capabilities: {
-        repositoryIdentity: true,
-      },
+      capabilities: { browserAgent: true, repositoryIdentity: true },
     }),
     bootstrapSshBearerSession: vi.fn().mockResolvedValue({
       authenticated: true,

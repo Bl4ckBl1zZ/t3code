@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 import {
   AuthSessionId,
+  BROWSER_AGENT_RUNTIME_PRIMITIVES,
+  BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
   EnvironmentId,
   ThreadId,
   type BrowserAgentOutboundMessage,
@@ -11,6 +13,10 @@ import { BrowserAgentRegistry } from "./registry.ts";
 
 const capabilities = {
   version: 1 as const,
+  runtime: {
+    version: BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+    primitives: [...BROWSER_AGENT_RUNTIME_PRIMITIVES],
+  },
   canCaptureVisibleTab: true,
   canInjectScripts: true,
   canFocusTabs: true,
@@ -37,6 +43,7 @@ const workspaceInput = {
 function connectAgent(
   registry: BrowserAgentRegistry,
   sessionId: AuthSessionId,
+  nextCapabilities = capabilities,
 ): BrowserAgentOutboundMessage[] {
   const sentMessages: BrowserAgentOutboundMessage[] = [];
   const connectionId = registry.connect({
@@ -49,7 +56,7 @@ function connectAgent(
   registry.handleMessage(connectionId, {
     type: "browserAgent.hello",
     device,
-    capabilities,
+    capabilities: nextCapabilities,
   });
   return sentMessages;
 }
@@ -92,6 +99,49 @@ async function openLinkedThreadTab(registry: BrowserAgentRegistry, sessionId: Au
 }
 
 describe("BrowserAgentRegistry", () => {
+  it("includes the requesting session id in browser agent snapshots", () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    connectAgent(registry, sessionId);
+
+    const snapshot = registry.snapshot({ currentSessionId: sessionId });
+
+    expect(snapshot.currentSessionId).toBe(sessionId);
+    expect(snapshot.agents[0]?.sessionId).toBe(sessionId);
+  });
+
+  it("rejects commands unsupported by the extension runtime primitives", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    connectAgent(registry, sessionId, {
+      ...capabilities,
+      runtime: {
+        ...capabilities.runtime,
+        primitives: capabilities.runtime.primitives.filter(
+          (primitive) => primitive !== "threadTab.openOrFocus",
+        ),
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        registry.openOrFocusThreadTab(
+          {
+            environmentId: workspaceInput.environmentId,
+            threadId: workspaceInput.threadId,
+            url: "http://localhost:5173/",
+            repoName: "repo",
+            focus: true,
+          },
+          { preferredSessionId: sessionId },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: "command-failed",
+      message: expect.stringContaining("threadTab.openOrFocus"),
+    });
+  });
+
   it("sends preview commands to the browser agent for the requesting session", async () => {
     const registry = new BrowserAgentRegistry();
     const hostSessionId = AuthSessionId.make("session-host");
@@ -118,28 +168,27 @@ describe("BrowserAgentRegistry", () => {
     expect(hostMessages).toHaveLength(1);
   });
 
-  it("does not reuse a host workspace link when the requesting session has no agent", async () => {
+  it("falls back to a connected browser agent from another session", async () => {
     const registry = new BrowserAgentRegistry();
     const hostSessionId = AuthSessionId.make("session-host");
     const remoteSessionId = AuthSessionId.make("session-remote");
     const hostMessages = connectAgent(registry, hostSessionId);
 
-    await Effect.runPromise(
+    const hostResult = await Effect.runPromise(
       registry.openOrFocusPreview(workspaceInput, {
         preferredSessionId: hostSessionId,
       }),
     );
 
-    await expect(
-      Effect.runPromise(
-        registry.openOrFocusPreview(workspaceInput, {
-          preferredSessionId: remoteSessionId,
-        }),
-      ),
-    ).rejects.toMatchObject({
-      code: "no-agent-connected",
-    });
-    expect(hostMessages).toHaveLength(1);
+    const remoteResult = await Effect.runPromise(
+      registry.openOrFocusPreview(workspaceInput, {
+        preferredSessionId: remoteSessionId,
+      }),
+    );
+
+    expect(hostResult.agentId).toBe("browser-agent:session-host");
+    expect(remoteResult.agentId).toBe("browser-agent:session-host");
+    expect(hostMessages).toHaveLength(2);
   });
 
   it("creates a thread-scoped browser link and sends the open command", async () => {

@@ -68,8 +68,42 @@ const NullableStringWithDefault = Schema.NullOr(Schema.String).pipe(
   Schema.withDecodingDefault(Effect.succeed(null)),
 );
 
+export const BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION = 1 as const;
+export const BROWSER_AGENT_RUNTIME_PRIMITIVES = [
+  "preview.openOrFocus",
+  "annotation.activate",
+  "threadTab.openOrFocus",
+  "threadTab.attachActive",
+  "threadTab.detach",
+  "threadTab.capture.start",
+  "threadTab.capture.stop",
+  "threadTab.history",
+  "threadTab.navigate",
+  "threadTab.input",
+  "threadTab.snapshot",
+  "threadTab.screenshot",
+  "tabs.snapshot",
+] as const;
+
+export const BrowserAgentRuntimePrimitive = Schema.Literals(BROWSER_AGENT_RUNTIME_PRIMITIVES);
+export type BrowserAgentRuntimePrimitive = typeof BrowserAgentRuntimePrimitive.Type;
+
+export const BrowserAgentRuntimeProtocol = Schema.Struct({
+  version: Schema.Literal(BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION),
+  primitives: Schema.Array(BrowserAgentRuntimePrimitive),
+});
+export type BrowserAgentRuntimeProtocol = typeof BrowserAgentRuntimeProtocol.Type;
+
 export const BrowserAgentCapabilities = Schema.Struct({
   version: Schema.Literal(1),
+  runtime: BrowserAgentRuntimeProtocol.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        version: BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+        primitives: [...BROWSER_AGENT_RUNTIME_PRIMITIVES],
+      }),
+    ),
+  ),
   canCaptureVisibleTab: Schema.Boolean,
   canInjectScripts: Schema.Boolean,
   canFocusTabs: Schema.Boolean,
@@ -150,6 +184,9 @@ export type BrowserWorkspaceLink = typeof BrowserWorkspaceLink.Type;
 
 export const BrowserAgentSnapshot = Schema.Struct({
   agents: Schema.Array(BrowserAgent),
+  currentSessionId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   tabs: Schema.Array(BrowserTabSnapshot),
   workspaceLinks: Schema.Array(BrowserWorkspaceLink),
 });

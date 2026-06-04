@@ -14,9 +14,7 @@ const TEST_ENVIRONMENT_DESCRIPTOR: ExecutionEnvironmentDescriptor = {
     arch: "arm64",
   },
   serverVersion: "0.0.0-test",
-  capabilities: {
-    repositoryIdentity: true,
-  },
+  capabilities: { browserAgent: true, repositoryIdentity: true },
 };
 
 export function createAuthenticatedSessionHandlers(getAuthDescriptor: () => ServerAuthDescriptor) {

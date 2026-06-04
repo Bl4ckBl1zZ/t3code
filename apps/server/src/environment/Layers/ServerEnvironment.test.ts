@@ -65,6 +65,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       }).pipe(Effect.provide(makeServerEnvironmentLayer(baseDir)));
 
       expect(first.environmentId).toBe(second.environmentId);
+      expect(second.capabilities.browserAgent).toBe(true);
       expect(second.capabilities.repositoryIdentity).toBe(true);
     }),
   );

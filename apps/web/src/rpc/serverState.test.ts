@@ -66,9 +66,7 @@ const baseEnvironment = {
     arch: "arm64" as const,
   },
   serverVersion: "0.0.0-test",
-  capabilities: {
-    repositoryIdentity: true,
-  },
+  capabilities: { browserAgent: true, repositoryIdentity: true },
 };
 
 const baseServerConfig: ServerConfig = {

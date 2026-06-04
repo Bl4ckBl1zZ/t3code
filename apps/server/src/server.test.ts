@@ -154,6 +154,7 @@ const testEnvironmentDescriptor = {
   },
   serverVersion: "0.0.0-test",
   capabilities: {
+    browserAgent: true,
     repositoryIdentity: true,
   },
 };

@@ -305,7 +305,7 @@ describe("retainThreadDetailSubscription", () => {
             label: "Remote env",
             platform: { os: "darwin", arch: "arm64" },
             serverVersion: "0.0.0-test",
-            capabilities: { repositoryIdentity: true },
+            capabilities: { browserAgent: true, repositoryIdentity: true },
           },
         })),
       },
@@ -324,7 +324,7 @@ describe("retainThreadDetailSubscription", () => {
             label: input.knownEnvironment.label,
             platform: { os: "darwin", arch: "arm64" },
             serverVersion: "0.0.0-test",
-            capabilities: { repositoryIdentity: true },
+            capabilities: { browserAgent: true, repositoryIdentity: true },
           },
         });
       });
@@ -557,7 +557,7 @@ describe("retainThreadDetailSubscription", () => {
             label: input.knownEnvironment.label,
             platform: { os: "darwin", arch: "arm64" },
             serverVersion: "0.0.0-test",
-            capabilities: { repositoryIdentity: true },
+            capabilities: { browserAgent: true, repositoryIdentity: true },
           },
         });
       });
@@ -613,7 +613,7 @@ describe("retainThreadDetailSubscription", () => {
             label: "Remote env",
             platform: { os: "darwin", arch: "arm64" },
             serverVersion: "0.0.0-test",
-            capabilities: { repositoryIdentity: true },
+            capabilities: { browserAgent: true, repositoryIdentity: true },
           },
         })),
       },
