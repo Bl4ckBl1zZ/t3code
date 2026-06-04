@@ -42,6 +42,23 @@ import {
   FilesystemBrowseError,
 } from "./filesystem.ts";
 import {
+  WorkspaceCreateDirectoryInput,
+  WorkspaceCreateFileInput,
+  WorkspaceDeleteInput,
+  WorkspaceFileChangeEvent,
+  WorkspaceFileError,
+  WorkspaceListDirectoryInput,
+  WorkspaceListDirectoryResult,
+  WorkspaceMutationResult,
+  WorkspaceReadFileInput,
+  WorkspaceReadFileResult,
+  WorkspaceRenameInput,
+  WorkspaceRenameResult,
+  WorkspaceWatchInput,
+  WorkspaceWriteFileInput,
+  WorkspaceWriteFileResult,
+} from "./workspaceFiles.ts";
+import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
@@ -166,6 +183,16 @@ export const WS_METHODS = {
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
+
+  // Workspace file manager methods
+  workspaceFilesListDirectory: "workspaceFiles.listDirectory",
+  workspaceFilesReadFile: "workspaceFiles.readFile",
+  workspaceFilesWriteFile: "workspaceFiles.writeFile",
+  workspaceFilesCreateFile: "workspaceFiles.createFile",
+  workspaceFilesCreateDirectory: "workspaceFiles.createDirectory",
+  workspaceFilesRename: "workspaceFiles.rename",
+  workspaceFilesDelete: "workspaceFiles.delete",
+  workspaceFilesSubscribeChanges: "workspaceFiles.subscribeChanges",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -459,6 +486,61 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   error: FilesystemBrowseError,
 });
 
+export const WsWorkspaceFilesListDirectoryRpc = Rpc.make(WS_METHODS.workspaceFilesListDirectory, {
+  payload: WorkspaceListDirectoryInput,
+  success: WorkspaceListDirectoryResult,
+  error: WorkspaceFileError,
+});
+
+export const WsWorkspaceFilesReadFileRpc = Rpc.make(WS_METHODS.workspaceFilesReadFile, {
+  payload: WorkspaceReadFileInput,
+  success: WorkspaceReadFileResult,
+  error: WorkspaceFileError,
+});
+
+export const WsWorkspaceFilesWriteFileRpc = Rpc.make(WS_METHODS.workspaceFilesWriteFile, {
+  payload: WorkspaceWriteFileInput,
+  success: WorkspaceWriteFileResult,
+  error: WorkspaceFileError,
+});
+
+export const WsWorkspaceFilesCreateFileRpc = Rpc.make(WS_METHODS.workspaceFilesCreateFile, {
+  payload: WorkspaceCreateFileInput,
+  success: WorkspaceMutationResult,
+  error: WorkspaceFileError,
+});
+
+export const WsWorkspaceFilesCreateDirectoryRpc = Rpc.make(
+  WS_METHODS.workspaceFilesCreateDirectory,
+  {
+    payload: WorkspaceCreateDirectoryInput,
+    success: WorkspaceMutationResult,
+    error: WorkspaceFileError,
+  },
+);
+
+export const WsWorkspaceFilesRenameRpc = Rpc.make(WS_METHODS.workspaceFilesRename, {
+  payload: WorkspaceRenameInput,
+  success: WorkspaceRenameResult,
+  error: WorkspaceFileError,
+});
+
+export const WsWorkspaceFilesDeleteRpc = Rpc.make(WS_METHODS.workspaceFilesDelete, {
+  payload: WorkspaceDeleteInput,
+  success: WorkspaceMutationResult,
+  error: WorkspaceFileError,
+});
+
+export const WsWorkspaceFilesSubscribeChangesRpc = Rpc.make(
+  WS_METHODS.workspaceFilesSubscribeChanges,
+  {
+    payload: WorkspaceWatchInput,
+    success: WorkspaceFileChangeEvent,
+    error: WorkspaceFileError,
+    stream: true,
+  },
+);
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
@@ -745,6 +827,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
+  WsWorkspaceFilesListDirectoryRpc,
+  WsWorkspaceFilesReadFileRpc,
+  WsWorkspaceFilesWriteFileRpc,
+  WsWorkspaceFilesCreateFileRpc,
+  WsWorkspaceFilesCreateDirectoryRpc,
+  WsWorkspaceFilesRenameRpc,
+  WsWorkspaceFilesDeleteRpc,
+  WsWorkspaceFilesSubscribeChangesRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsSyncBaseRpc,

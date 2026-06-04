@@ -73,8 +73,11 @@ import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
+import { WorkspaceFiles } from "./workspace/Services/WorkspaceFiles.ts";
+import { WorkspaceFileWatcher } from "./workspace/Services/WorkspaceFileWatcher.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
+import { WorkspaceTree } from "./workspace/Services/WorkspaceTree.ts";
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
@@ -214,6 +217,9 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const startup = yield* ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
+      const workspaceTree = yield* WorkspaceTree;
+      const workspaceFiles = yield* WorkspaceFiles;
+      const workspaceFileWatcher = yield* WorkspaceFileWatcher;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
       const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
       const serverEnvironment = yield* ServerEnvironment;
@@ -1354,6 +1360,50 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               ),
             ),
             { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceFilesListDirectory]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceFilesListDirectory,
+            workspaceTree.listDirectory(input),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
+        [WS_METHODS.workspaceFilesReadFile]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceFilesReadFile, workspaceFiles.readFile(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceFilesWriteFile]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceFilesWriteFile, workspaceFiles.writeFile(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceFilesCreateFile]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceFilesCreateFile, workspaceFiles.createFile(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceFilesCreateDirectory]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceFilesCreateDirectory,
+            workspaceFiles.createDirectory(input),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
+        [WS_METHODS.workspaceFilesRename]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceFilesRename, workspaceFiles.rename(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceFilesDelete]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceFilesDelete, workspaceFiles.delete(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceFilesSubscribeChanges]: (input) =>
+          observeRpcStream(
+            WS_METHODS.workspaceFilesSubscribeChanges,
+            workspaceFileWatcher.subscribeChanges(input),
+            {
+              "rpc.aggregate": "workspace",
+            },
           ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(

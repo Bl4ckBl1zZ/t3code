@@ -111,8 +111,11 @@ import {
   type ServerEnvironmentShape,
 } from "./environment/Services/ServerEnvironment.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
+import { WorkspaceFilesLive } from "./workspace/Layers/WorkspaceFiles.ts";
+import { WorkspaceFileWatcherLive } from "./workspace/Layers/WorkspaceFileWatcher.ts";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
+import { WorkspaceTreeLive } from "./workspace/Layers/WorkspaceTree.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriver from "./vcs/VcsDriver.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
@@ -501,6 +504,15 @@ const buildAppUnderTest = (options?: {
     const workspaceAndProjectServicesLayer = Layer.mergeAll(
       WorkspacePathsLive,
       workspaceEntriesLayer,
+      WorkspaceTreeLive.pipe(
+        Layer.provide(WorkspacePathsLive),
+        Layer.provideMerge(vcsDriverRegistryLayer),
+      ),
+      WorkspaceFilesLive.pipe(
+        Layer.provide(WorkspacePathsLive),
+        Layer.provide(workspaceEntriesLayer),
+      ),
+      WorkspaceFileWatcherLive.pipe(Layer.provide(WorkspacePathsLive)),
       WorkspaceFileSystemLive.pipe(
         Layer.provide(WorkspacePathsLive),
         Layer.provide(workspaceEntriesLayer),

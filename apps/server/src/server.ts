@@ -51,8 +51,11 @@ import { ServerSettingsLive } from "./serverSettings.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
+import { WorkspaceFilesLive } from "./workspace/Layers/WorkspaceFiles.ts";
+import { WorkspaceFileWatcherLive } from "./workspace/Layers/WorkspaceFileWatcher.ts";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
+import { WorkspaceTreeLive } from "./workspace/Layers/WorkspaceTree.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
@@ -240,10 +243,27 @@ const WorkspaceFileSystemLayerLive = WorkspaceFileSystemLive.pipe(
   Layer.provide(WorkspaceEntriesLayerLive),
 );
 
+const WorkspaceTreeLayerLive = WorkspaceTreeLive.pipe(
+  Layer.provide(WorkspacePathsLive),
+  Layer.provideMerge(VcsDriverRegistryLayerLive),
+);
+
+const WorkspaceFilesLayerLive = WorkspaceFilesLive.pipe(
+  Layer.provide(WorkspacePathsLive),
+  Layer.provide(WorkspaceEntriesLayerLive),
+);
+
+const WorkspaceFileWatcherLayerLive = WorkspaceFileWatcherLive.pipe(
+  Layer.provide(WorkspacePathsLive),
+);
+
 const WorkspaceLayerLive = Layer.mergeAll(
   WorkspacePathsLive,
   WorkspaceEntriesLayerLive,
   WorkspaceFileSystemLayerLive,
+  WorkspaceTreeLayerLive,
+  WorkspaceFilesLayerLive,
+  WorkspaceFileWatcherLayerLive,
 );
 
 const AuthLayerLive = ServerAuthLive.pipe(

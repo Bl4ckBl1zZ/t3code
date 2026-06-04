@@ -293,7 +293,7 @@ diff --git a/package.json b/package.json
 index 95e3bc4..0ed68b8 100644
 --- a/package.json
 +++ b/package.json
-@@ -27,30 +27,36 @@
+@@ -27,30 +27,39 @@
    ],
    "sideEffects": [],
    "exports": {
@@ -314,7 +314,11 @@ index 95e3bc4..0ed68b8 100644
      "./unstable/httpapi": "./dist/unstable/httpapi/index.js",
      "./unstable/observability": "./dist/unstable/observability/index.js",
      "./unstable/persistence": "./dist/unstable/persistence/index.js",
-     "./unstable/process": "./dist/unstable/process/index.js",
+-    "./unstable/process": "./dist/unstable/process/index.js",
++    "./unstable/process": {
++      "types": "./dist/unstable/process/index.d.ts",
++      "default": "./dist/unstable/process/index.js"
++    },
      "./unstable/reactivity": "./dist/unstable/reactivity/index.js",
      "./unstable/rpc": "./dist/unstable/rpc/index.js",
      "./unstable/schema": "./dist/unstable/schema/index.js",

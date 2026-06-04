@@ -87,6 +87,18 @@ export interface WsRpcClient {
   readonly filesystem: {
     readonly browse: RpcUnaryMethod<typeof WS_METHODS.filesystemBrowse>;
   };
+  readonly workspaceFiles: {
+    readonly listDirectory: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesListDirectory>;
+    readonly readFile: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesReadFile>;
+    readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesWriteFile>;
+    readonly createFile: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesCreateFile>;
+    readonly createDirectory: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesCreateDirectory>;
+    readonly rename: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesRename>;
+    readonly delete: RpcUnaryMethod<typeof WS_METHODS.workspaceFilesDelete>;
+    readonly subscribeChanges: RpcInputStreamMethod<
+      typeof WS_METHODS.workspaceFilesSubscribeChanges
+    >;
+  };
   readonly sourceControl: {
     readonly lookupRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlLookupRepository>;
     readonly cloneRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlCloneRepository>;
@@ -248,6 +260,28 @@ export function createWsRpcClient(
     },
     filesystem: {
       browse: (input) => transport.request((client) => client[WS_METHODS.filesystemBrowse](input)),
+    },
+    workspaceFiles: {
+      listDirectory: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesListDirectory](input)),
+      readFile: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesReadFile](input)),
+      writeFile: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesWriteFile](input)),
+      createFile: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesCreateFile](input)),
+      createDirectory: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesCreateDirectory](input)),
+      rename: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesRename](input)),
+      delete: (input) =>
+        transport.request((client) => client[WS_METHODS.workspaceFilesDelete](input)),
+      subscribeChanges: (input, listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.workspaceFilesSubscribeChanges](input),
+          listener,
+          subscriptionOptions(options, WS_METHODS.workspaceFilesSubscribeChanges),
+        ),
     },
     sourceControl: {
       lookupRepository: (input) =>

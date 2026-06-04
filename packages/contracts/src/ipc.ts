@@ -28,6 +28,22 @@ import type {
 } from "./review.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
+  WorkspaceCreateDirectoryInput,
+  WorkspaceCreateFileInput,
+  WorkspaceDeleteInput,
+  WorkspaceFileChangeEvent,
+  WorkspaceListDirectoryInput,
+  WorkspaceListDirectoryResult,
+  WorkspaceMutationResult,
+  WorkspaceReadFileInput,
+  WorkspaceReadFileResult,
+  WorkspaceRenameInput,
+  WorkspaceRenameResult,
+  WorkspaceWatchInput,
+  WorkspaceWriteFileInput,
+  WorkspaceWriteFileResult,
+} from "./workspaceFiles.ts";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectReadFileInput,
@@ -542,6 +558,22 @@ export interface EnvironmentApi {
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
+  };
+  workspaceFiles: {
+    listDirectory: (input: WorkspaceListDirectoryInput) => Promise<WorkspaceListDirectoryResult>;
+    readFile: (input: WorkspaceReadFileInput) => Promise<WorkspaceReadFileResult>;
+    writeFile: (input: WorkspaceWriteFileInput) => Promise<WorkspaceWriteFileResult>;
+    createFile: (input: WorkspaceCreateFileInput) => Promise<WorkspaceMutationResult>;
+    createDirectory: (input: WorkspaceCreateDirectoryInput) => Promise<WorkspaceMutationResult>;
+    rename: (input: WorkspaceRenameInput) => Promise<WorkspaceRenameResult>;
+    delete: (input: WorkspaceDeleteInput) => Promise<WorkspaceMutationResult>;
+    subscribeChanges: (
+      input: WorkspaceWatchInput,
+      callback: (event: WorkspaceFileChangeEvent) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
   };
   sourceControl: {
     lookupRepository: (

@@ -27,6 +27,17 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     filesystem: {
       browse: rpcClient.filesystem.browse,
     },
+    workspaceFiles: {
+      listDirectory: rpcClient.workspaceFiles.listDirectory,
+      readFile: rpcClient.workspaceFiles.readFile,
+      writeFile: rpcClient.workspaceFiles.writeFile,
+      createFile: rpcClient.workspaceFiles.createFile,
+      createDirectory: rpcClient.workspaceFiles.createDirectory,
+      rename: rpcClient.workspaceFiles.rename,
+      delete: rpcClient.workspaceFiles.delete,
+      subscribeChanges: (input, callback, options) =>
+        rpcClient.workspaceFiles.subscribeChanges(input, callback, options),
+    },
     sourceControl: {
       lookupRepository: rpcClient.sourceControl.lookupRepository,
       cloneRepository: rpcClient.sourceControl.cloneRepository,

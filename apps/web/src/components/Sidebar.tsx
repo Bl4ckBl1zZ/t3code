@@ -4,7 +4,9 @@ import {
   DownloadIcon,
   ChevronRightIcon,
   CloudIcon,
+  FilesIcon,
   FolderPlusIcon,
+  MessageSquareIcon,
   PanelTopIcon,
   SearchIcon,
   SettingsIcon,
@@ -53,6 +55,7 @@ import {
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
+  type WorkbenchTab,
 } from "@t3tools/client-runtime";
 import { Link, useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import {
@@ -213,6 +216,8 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { WorkspaceExplorer } from "./workspace/WorkspaceExplorer";
+import { useWorkbenchStore } from "../workbenchStore";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -3266,6 +3271,49 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   );
 });
 
+type WorkbenchSidebarPanel = "threads" | "explorer";
+
+const WorkbenchSidebarPanelSwitcher = memo(function WorkbenchSidebarPanelSwitcher({
+  activePanel,
+  onPanelChange,
+}: {
+  readonly activePanel: WorkbenchSidebarPanel;
+  readonly onPanelChange: (panel: WorkbenchSidebarPanel) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-1 border-b border-border px-2 pb-2">
+      <button
+        type="button"
+        className={cn(
+          "flex h-8 cursor-pointer items-center justify-center gap-2 rounded-md text-xs outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+          activePanel === "threads"
+            ? "bg-muted text-foreground"
+            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+        )}
+        aria-pressed={activePanel === "threads"}
+        onClick={() => onPanelChange("threads")}
+      >
+        <MessageSquareIcon className="size-3.5" />
+        <span>Threads</span>
+      </button>
+      <button
+        type="button"
+        className={cn(
+          "flex h-8 cursor-pointer items-center justify-center gap-2 rounded-md text-xs outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+          activePanel === "explorer"
+            ? "bg-muted text-foreground"
+            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+        )}
+        aria-pressed={activePanel === "explorer"}
+        onClick={() => onPanelChange("explorer")}
+      >
+        <FilesIcon className="size-3.5" />
+        <span>Explorer</span>
+      </button>
+    </div>
+  );
+});
+
 interface SidebarProjectsContentProps {
   showArm64IntelBuildWarning: boolean;
   arm64IntelBuildWarningDescription: string | null;
@@ -3619,6 +3667,45 @@ export default function Sidebar() {
     select: (params) => resolveThreadRouteRef(params),
   });
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const activeRouteThread = useStore(
+    useMemo(
+      () => (state: import("../store").AppState) => selectThreadByRef(state, routeThreadRef),
+      [routeThreadRef],
+    ),
+  );
+  const activeRouteProjectRef = useMemo(
+    () =>
+      activeRouteThread
+        ? scopeProjectRef(activeRouteThread.environmentId, activeRouteThread.projectId)
+        : null,
+    [activeRouteThread],
+  );
+  const activeRouteProject = useStore(
+    useMemo(
+      () => (state: import("../store").AppState) =>
+        selectProjectByRef(state, activeRouteProjectRef),
+      [activeRouteProjectRef],
+    ),
+  );
+  const activeWorkbenchPanel = useWorkbenchStore((state) => state.activeSidebarPanel);
+  const setActiveWorkbenchPanel = useWorkbenchStore((state) => state.setActiveSidebarPanel);
+  const explorerRevealRequest = useWorkbenchStore((state) => state.explorerRevealRequest);
+  const activeFileTab = useWorkbenchStore((state) =>
+    state.fileTabsState.tabs.find(
+      (tab): tab is Extract<WorkbenchTab, { kind: "file" }> =>
+        tab.id === state.fileTabsState.activeTabId && tab.kind === "file",
+    ),
+  );
+  const explorerTarget =
+    activeRouteThread && activeRouteProject
+      ? {
+          environmentId: activeRouteThread.environmentId,
+          cwd: activeRouteThread.worktreePath ?? activeRouteProject.cwd,
+          label: activeRouteThread.worktreePath
+            ? `${activeRouteProject.name} worktree`
+            : activeRouteProject.name,
+        }
+      : null;
   const keybindings = useServerKeybindings();
   const openAddProjectCommandPalette = useCommandPaletteStore((store) => store.openAddProject);
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
@@ -4345,43 +4432,58 @@ export default function Sidebar() {
         <SettingsSidebarNav pathname={pathname} />
       ) : (
         <>
-          <SidebarProjectsContent
-            showArm64IntelBuildWarning={showArm64IntelBuildWarning}
-            arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
-            desktopUpdateButtonAction={desktopUpdateButtonAction}
-            desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
-            handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
-            projectSortOrder={sidebarProjectSortOrder}
-            threadSortOrder={sidebarThreadSortOrder}
-            projectGroupingMode={sidebarProjectGroupingMode}
-            threadPreviewCount={sidebarThreadPreviewCount}
-            updateSettings={updateSettings}
-            openAddProject={openAddProjectCommandPalette}
-            isManualProjectSorting={isManualProjectSorting}
-            projectDnDSensors={projectDnDSensors}
-            projectCollisionDetection={projectCollisionDetection}
-            handleProjectDragStart={handleProjectDragStart}
-            handleProjectDragEnd={handleProjectDragEnd}
-            handleProjectDragCancel={handleProjectDragCancel}
-            handleNewThread={handleNewThread}
-            archiveThread={archiveThread}
-            deleteThread={deleteThread}
-            sortedProjectEntries={sortedProjectEntries}
-            expandedThreadListsByProject={expandedThreadListsByProject}
-            activeRouteProjectKey={activeRouteProjectKey}
-            routeThreadKey={activeSidebarThreadKey}
-            newThreadShortcutLabel={newThreadShortcutLabel}
-            commandPaletteShortcutLabel={commandPaletteShortcutLabel}
-            threadJumpLabelByKey={visibleThreadJumpLabelByKey}
-            attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-            expandThreadListForProject={expandThreadListForProject}
-            collapseThreadListForProject={collapseThreadListForProject}
-            dragInProgressRef={dragInProgressRef}
-            suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-            suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-            attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
-            projectsLength={projects.length}
+          <WorkbenchSidebarPanelSwitcher
+            activePanel={activeWorkbenchPanel}
+            onPanelChange={setActiveWorkbenchPanel}
           />
+
+          {activeWorkbenchPanel === "threads" ? (
+            <SidebarProjectsContent
+              showArm64IntelBuildWarning={showArm64IntelBuildWarning}
+              arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
+              desktopUpdateButtonAction={desktopUpdateButtonAction}
+              desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
+              handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
+              projectSortOrder={sidebarProjectSortOrder}
+              threadSortOrder={sidebarThreadSortOrder}
+              projectGroupingMode={sidebarProjectGroupingMode}
+              threadPreviewCount={sidebarThreadPreviewCount}
+              updateSettings={updateSettings}
+              openAddProject={openAddProjectCommandPalette}
+              isManualProjectSorting={isManualProjectSorting}
+              projectDnDSensors={projectDnDSensors}
+              projectCollisionDetection={projectCollisionDetection}
+              handleProjectDragStart={handleProjectDragStart}
+              handleProjectDragEnd={handleProjectDragEnd}
+              handleProjectDragCancel={handleProjectDragCancel}
+              handleNewThread={handleNewThread}
+              archiveThread={archiveThread}
+              deleteThread={deleteThread}
+              sortedProjectEntries={sortedProjectEntries}
+              expandedThreadListsByProject={expandedThreadListsByProject}
+              activeRouteProjectKey={activeRouteProjectKey}
+              routeThreadKey={activeSidebarThreadKey}
+              newThreadShortcutLabel={newThreadShortcutLabel}
+              commandPaletteShortcutLabel={commandPaletteShortcutLabel}
+              threadJumpLabelByKey={visibleThreadJumpLabelByKey}
+              attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+              expandThreadListForProject={expandThreadListForProject}
+              collapseThreadListForProject={collapseThreadListForProject}
+              dragInProgressRef={dragInProgressRef}
+              suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+              suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+              attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
+              projectsLength={projects.length}
+            />
+          ) : (
+            <SidebarContent className="gap-0">
+              <WorkspaceExplorer
+                target={explorerTarget}
+                activeRelativePath={activeFileTab?.relativePath ?? null}
+                revealRequest={explorerRevealRequest}
+              />
+            </SidebarContent>
+          )}
 
           <SidebarSeparator />
           <SidebarChromeFooter />
