@@ -94,6 +94,7 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
+  agentWorking?: boolean;
   pullRequestCommentsAction?: GitPullRequestCommentsAction;
   onSubmitPrompt?: (prompt: string) => boolean | Promise<boolean>;
 }
@@ -1055,6 +1056,7 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadRef,
   draftId,
+  agentWorking = false,
   pullRequestCommentsAction,
   onSubmitPrompt,
 }: GitActionsControlProps) {
@@ -1264,13 +1266,21 @@ export default function GitActionsControl({
   const renderedQuickAction: GitQuickAction = isPendingChecksMergeArmed
     ? { ...quickAction, label: "Merge", tone: "success" }
     : quickAction;
+  const gitControlsDisabled = agentWorking || isArchivingMergedThread;
+  const gitControlsDisabledReason = agentWorking
+    ? "Agent is working."
+    : isArchivingMergedThread
+      ? "Archiving thread."
+      : null;
   const quickActionToneClassName = gitQuickActionToneClassName(renderedQuickAction.tone);
   const quickActionClassName =
     quickActionToneClassName ??
     (renderedQuickAction.kind === "run_pull" ? PULL_QUICK_ACTION_CLASS_NAME : undefined);
-  const quickActionDisabledReason = renderedQuickAction.disabled
-    ? (renderedQuickAction.hint ?? "This action is currently unavailable.")
-    : null;
+  const quickActionDisabledReason =
+    gitControlsDisabledReason ??
+    (renderedQuickAction.disabled
+      ? (renderedQuickAction.hint ?? "This action is currently unavailable.")
+      : null);
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
         action: pendingDefaultBranchAction.action,
@@ -1750,6 +1760,8 @@ export default function GitActionsControl({
   };
 
   const runQuickAction = () => {
+    if (gitControlsDisabled) return;
+
     if (isMergedQuickAction) {
       if (!activeThreadRef || !activeThreadKey) {
         toastManager.add({
@@ -1918,6 +1930,7 @@ export default function GitActionsControl({
   };
 
   const openDialogForMenuItem = (item: GitActionMenuItem) => {
+    if (gitControlsDisabled) return;
     if (item.disabled) return;
     if (item.kind === "open_pr" && item.label.startsWith("View ")) {
       void openExistingPr();
@@ -2059,9 +2072,7 @@ export default function GitActionsControl({
               variant="outline"
               size="xs"
               className={cn("min-w-0 max-w-56", quickActionClassName)}
-              disabled={
-                isGitActionRunning || renderedQuickAction.disabled || isArchivingMergedThread
-              }
+              disabled={isGitActionRunning || renderedQuickAction.disabled || gitControlsDisabled}
               onClick={runQuickAction}
             >
               <GitQuickActionIcon
@@ -2087,6 +2098,7 @@ export default function GitActionsControl({
                 <Button
                   aria-label="Git action options"
                   className={quickActionClassName}
+                  disabled={gitControlsDisabled}
                   size="icon-xs"
                   variant="outline"
                 />
@@ -2096,13 +2108,16 @@ export default function GitActionsControl({
             </MenuTrigger>
             <MenuPopup align="end" className="w-full">
               {gitActionMenuItems.map((item) => {
-                const disabledReason = getMenuActionDisabledReason({
-                  item,
-                  gitStatus: gitStatusForActions,
-                  isBusy: isGitActionRunning,
-                  hasPrimaryRemote,
-                });
-                if (item.disabled && disabledReason) {
+                const itemDisabled = item.disabled || gitControlsDisabled;
+                const disabledReason =
+                  gitControlsDisabledReason ??
+                  getMenuActionDisabledReason({
+                    item,
+                    gitStatus: gitStatusForActions,
+                    isBusy: isGitActionRunning,
+                    hasPrimaryRemote,
+                  });
+                if (itemDisabled && disabledReason) {
                   return (
                     <Popover key={`${item.id}-${item.label}`}>
                       <PopoverTrigger
@@ -2128,7 +2143,7 @@ export default function GitActionsControl({
                 return (
                   <MenuItem
                     key={`${item.id}-${item.label}`}
-                    disabled={item.disabled}
+                    disabled={itemDisabled}
                     onClick={() => {
                       openDialogForMenuItem(item);
                     }}
@@ -2147,6 +2162,7 @@ export default function GitActionsControl({
                         ? `PR comments, ${pullRequestCommentsAction.unreadCount} unread`
                         : "PR comments"
                     }
+                    disabled={gitControlsDisabled}
                     onClick={() => {
                       if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
                         promptAi(
@@ -2179,7 +2195,7 @@ export default function GitActionsControl({
               ) : null}
               {canPublishRepository ? (
                 <MenuItem
-                  disabled={isGitActionRunning}
+                  disabled={isGitActionRunning || gitControlsDisabled}
                   onClick={() => {
                     if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
                       promptAi(buildAgentPrompt("publish_repository"));

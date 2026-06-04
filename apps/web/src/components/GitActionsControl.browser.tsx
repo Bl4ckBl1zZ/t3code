@@ -27,6 +27,7 @@ const {
   activeDraftThreadRef,
   composerDraftsByKeyRef,
   hasServerThreadRef,
+  markPullRequestReadyForReviewSpy,
   vcsStatusOverrideRef,
   archiveThreadSpy,
   invalidateSourceControlStateSpy,
@@ -45,6 +46,7 @@ const {
   activeDraftThreadRef: { current: null as unknown },
   composerDraftsByKeyRef: { current: {} as Record<string, { prompt: string }> },
   hasServerThreadRef: { current: true },
+  markPullRequestReadyForReviewSpy: vi.fn(() => Promise.resolve()),
   vcsStatusOverrideRef: { current: null as unknown },
   archiveThreadSpy: vi.fn(() => Promise.resolve()),
   invalidateSourceControlStateSpy: vi.fn(() => Promise.resolve()),
@@ -88,6 +90,12 @@ vi.mock("~/lib/sourceControlActions", () => ({
     isPending: false,
     resetError: vi.fn(),
     run: vi.fn(),
+  })),
+  useMarkPullRequestReadyForReviewAction: vi.fn(() => ({
+    error: null,
+    isPending: false,
+    resetError: vi.fn(),
+    run: markPullRequestReadyForReviewSpy,
   })),
   useVcsInitAction: vi.fn(() => ({
     error: null,
@@ -354,6 +362,40 @@ describe("GitActionsControl thread-scoped actions", () => {
           type: "success",
         }),
       );
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("disables git controls while the agent is working", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const screen = await render(
+      <GitActionsControl
+        gitCwd={GIT_CWD}
+        activeThreadRef={scopeThreadRef(ENVIRONMENT_A, SHARED_THREAD_ID)}
+        agentWorking
+      />,
+      { container: host },
+    );
+
+    try {
+      const quickActionButton = findButtonByText("Push & create PR");
+      expect(quickActionButton, 'Unable to find button containing "Push & create PR"').toBeTruthy();
+      if (!(quickActionButton instanceof HTMLButtonElement)) {
+        throw new Error('Unable to find button containing "Push & create PR"');
+      }
+      expect(quickActionButton.getAttribute("aria-disabled")).toBe("true");
+
+      quickActionButton.click();
+      expect(setComposerDraftPromptSpy).not.toHaveBeenCalled();
+
+      const menuButton = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Git action options"]',
+      );
+      expect(menuButton).toBeTruthy();
+      expect(menuButton?.disabled).toBe(true);
     } finally {
       await screen.unmount();
       host.remove();

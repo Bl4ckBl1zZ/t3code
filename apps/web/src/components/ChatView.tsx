@@ -4955,6 +4955,7 @@ export default function ChatView(props: ChatViewProps) {
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
+          agentWorking={isWorking}
           diffOpen={diffOpen}
           {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}
           onRunProjectScript={runProjectScript}

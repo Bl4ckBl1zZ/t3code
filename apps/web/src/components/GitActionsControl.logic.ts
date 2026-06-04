@@ -157,6 +157,17 @@ function canMarkPrReadyForReview(gitStatus: VcsStatusResult): boolean {
   );
 }
 
+function isDraftPr(pr: NonNullable<VcsStatusResult["pr"]>): boolean {
+  return pr.state === "open" && (pr.isDraft === true || pr.mergeStatus === "draft");
+}
+
+function openPrLabel(
+  pr: NonNullable<VcsStatusResult["pr"]>,
+  terminology: ChangeRequestTerminology,
+): string {
+  return isDraftPr(pr) ? "Review" : `View ${terminology.shortLabel}`;
+}
+
 function formatYesNo(value: boolean): string {
   return value ? "yes" : "no";
 }
@@ -452,7 +463,7 @@ export function buildMenuItems(
     const pr = gitStatus.pr;
     if (!pr) return `Create ${terminology.shortLabel}`;
     if (pr.state === "merged") return "Merged";
-    return `View ${terminology.shortLabel}`;
+    return openPrLabel(pr, terminology);
   })();
 
   const commitItem: GitActionMenuItem = {
@@ -630,7 +641,11 @@ export function resolveQuickAction(
     };
   }
 
-  if (hasOpenPr && pr && pr.checks && pr.checks.pending > 0) {
+  if (hasOpenPr && pr && isDraftPr(pr)) {
+    return { label: openPrLabel(pr, terminology), disabled: false, kind: "open_pr" };
+  }
+
+  if (hasOpenPr && pr?.checks && pr.checks.pending > 0) {
     return {
       label: formatChecksLabel(pr.checks),
       disabled: !isPrWaitingOnChecks(pr),
@@ -663,7 +678,9 @@ export function resolveQuickAction(
         if (pr && isPrMergeable(pr)) {
           return { label: "Merge", disabled: false, kind: "open_pr", tone: "success" };
         }
-        return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
+        return pr
+          ? { label: openPrLabel(pr, terminology), disabled: false, kind: "open_pr" }
+          : { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
       }
       return {
         label: "Publish repository",
@@ -676,7 +693,9 @@ export function resolveQuickAction(
         if (pr && isPrMergeable(pr)) {
           return { label: "Merge", disabled: false, kind: "open_pr", tone: "success" };
         }
-        return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
+        return pr
+          ? { label: openPrLabel(pr, terminology), disabled: false, kind: "open_pr" }
+          : { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
       }
       return {
         label: "Push",
@@ -722,7 +741,9 @@ export function resolveQuickAction(
     if (pr && isPrMergeable(pr)) {
       return { label: "Merge", disabled: false, kind: "open_pr", tone: "success" };
     }
-    return { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
+    return pr
+      ? { label: openPrLabel(pr, terminology), disabled: false, kind: "open_pr" }
+      : { label: `View ${terminology.shortLabel}`, disabled: false, kind: "open_pr" };
   }
 
   if (hasDefaultBranchDelta && !isDefaultRef) {

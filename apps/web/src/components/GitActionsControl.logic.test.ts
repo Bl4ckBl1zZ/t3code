@@ -117,6 +117,49 @@ describe("when: ref is clean and has an open PR", () => {
     assert.deepInclude(quick, { kind: "open_pr", label: "View PR", disabled: false });
   });
 
+  it("resolveQuickAction labels draft PRs for review", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 12,
+          title: "Draft PR",
+          url: "https://example.com/pr/12",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "draft",
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, { kind: "open_pr", label: "Review", disabled: false });
+  });
+
+  it("resolveQuickAction keeps draft PRs labeled for review while checks are pending", () => {
+    const quick = resolveQuickAction(
+      status({
+        pr: {
+          number: 12,
+          title: "Draft PR",
+          url: "https://example.com/pr/12",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "draft",
+          checks: {
+            total: 2,
+            completed: 1,
+            successful: 1,
+            failed: 0,
+            pending: 1,
+          },
+        },
+      }),
+      false,
+    );
+    assert.deepInclude(quick, { kind: "open_pr", label: "Review", disabled: false });
+  });
+
   it("buildMenuItems disables commit/push and enables open PR", () => {
     const items = buildMenuItems(
       status({
@@ -156,6 +199,30 @@ describe("when: ref is clean and has an open PR", () => {
         kind: "open_pr",
       },
     ]);
+  });
+
+  it("buildMenuItems labels draft PRs for review", () => {
+    const items = buildMenuItems(
+      status({
+        pr: {
+          number: 12,
+          title: "Draft PR",
+          url: "https://example.com/pr/12",
+          baseRef: "main",
+          headRef: "feature/test",
+          state: "open",
+          mergeStatus: "draft",
+        },
+      }),
+      false,
+    );
+
+    assert.deepInclude(items[2] ?? {}, {
+      id: "pr",
+      kind: "open_pr",
+      label: "Review",
+      disabled: false,
+    });
   });
 });
 

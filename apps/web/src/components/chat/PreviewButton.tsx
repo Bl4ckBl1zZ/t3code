@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProjectScript, ThreadId } from "@t3tools/contracts";
+import type { AuthSessionRole, EnvironmentId, ProjectScript, ThreadId } from "@t3tools/contracts";
 import { MonitorUpIcon, PuzzleIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
@@ -24,6 +24,7 @@ import {
 } from "../ui/dialog";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { shouldOpenPreviewInNewTab } from "./PreviewButton.logic";
 
 export const PreviewButton = memo(function PreviewButton({
   activeProjectName,
@@ -32,6 +33,7 @@ export const PreviewButton = memo(function PreviewButton({
   activeThreadEnvironmentId,
   activeThreadId,
   detectedDevServerUrl,
+  currentSessionRole,
 }: {
   readonly activeProjectName: string | undefined;
   readonly activeProjectScripts: readonly ProjectScript[] | undefined;
@@ -39,6 +41,7 @@ export const PreviewButton = memo(function PreviewButton({
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly activeThreadId: ThreadId;
   readonly detectedDevServerUrl: string | null;
+  readonly currentSessionRole: AuthSessionRole | null;
 }) {
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
   const [extensionDownloadUrl, setExtensionDownloadUrl] = useState<string | null>(null);
@@ -51,10 +54,47 @@ export const PreviewButton = memo(function PreviewButton({
       }),
     [activeProjectScripts, detectedDevServerUrl, projectPreviewUrl],
   );
+  const openPreviewInNewTab = shouldOpenPreviewInNewTab({ currentSessionRole });
 
   const openPreviewInBrowser = () => {
     if (isOpeningPreview) return;
     if (!activeProjectName) {
+      return;
+    }
+
+    if (openPreviewInNewTab) {
+      const previewWindow =
+        typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
+      setIsOpeningPreview(true);
+      void resolveBrowserAgentReachablePreviewUrl(devServerUrl)
+        .then((reachablePreviewUrl) => {
+          if (!previewWindow) {
+            const fallbackWindow =
+              typeof window !== "undefined" ? window.open(reachablePreviewUrl, "_blank") : null;
+            if (!fallbackWindow) {
+              throw new Error("Browser blocked the preview tab.");
+            }
+            fallbackWindow.opener = null;
+            return;
+          }
+          previewWindow.opener = null;
+          previewWindow.location.href = reachablePreviewUrl;
+        })
+        .catch((error) => {
+          previewWindow?.close();
+          const description =
+            error instanceof Error ? error.message : "Could not open the preview URL.";
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Preview failed",
+              description,
+            }),
+          );
+        })
+        .finally(() => {
+          setIsOpeningPreview(false);
+        });
       return;
     }
 
@@ -140,7 +180,9 @@ export const PreviewButton = memo(function PreviewButton({
           </span>
         </TooltipTrigger>
         <TooltipPopup side="bottom">
-          Open or focus {devServerUrl} in a paired browser extension.
+          {openPreviewInNewTab
+            ? `Open ${devServerUrl} in a new tab.`
+            : `Open or focus ${devServerUrl} in a paired browser extension.`}
         </TooltipPopup>
       </Tooltip>
 

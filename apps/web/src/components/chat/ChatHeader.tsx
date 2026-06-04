@@ -51,6 +51,7 @@ interface ChatHeaderProps {
   terminalToggleShortcutLabel: string | null;
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
+  agentWorking: boolean;
   diffOpen: boolean;
   pullRequestCommentsAction?: GitPullRequestCommentsAction;
   onRunProjectScript: (script: ProjectScript, options?: RunProjectScriptOptions) => void;
@@ -127,6 +128,7 @@ export const ChatHeader = memo(function ChatHeader({
   terminalToggleShortcutLabel,
   diffToggleShortcutLabel,
   gitCwd,
+  agentWorking,
   diffOpen,
   pullRequestCommentsAction,
   onRunProjectScript,
@@ -259,6 +261,7 @@ export const ChatHeader = memo(function ChatHeader({
                 activeThreadEnvironmentId={activeThreadEnvironmentId}
                 activeThreadId={activeThreadId}
                 detectedDevServerUrl={detectedDevServerUrl}
+                currentSessionRole={currentSessionRole}
               />
             )}
             {showTerminalToggle && (
@@ -325,6 +328,7 @@ export const ChatHeader = memo(function ChatHeader({
               <GitActionsControl
                 gitCwd={gitCwd}
                 activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
+                agentWorking={agentWorking}
                 onSubmitPrompt={onSubmitGitPrompt}
                 {...(draftId ? { draftId } : {})}
                 {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://t3.chat/schemas/project.json",
+  "scripts": [
+    {
+      "id": "build",
+      "name": "BUILD",
+      "command": "bun run dist:desktop:applications:restart",
+      "icon": "build",
+      "runOnWorktreeCreate": false,
+      "pinnedToTopBar": true
+    }
+  ]
+}
