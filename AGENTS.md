@@ -39,7 +39,7 @@ Update this section as the product evolves. Keep feature names, descriptions, an
 - **Desktop App**: Electron shell that starts and supervises the backend, manages updates, SSH environments, Tailscale exposure, native menus, and secure local settings.
 - **Mobile App**: Expo/React Native companion app in development for connecting to T3 Code environments, reviewing diffs, using terminals, and managing threads.
 - **Marketing Site**: Astro site for product/download pages and release-facing assets.
-- **Observability & Diagnostics**: Effect tracing, local NDJSON trace files, OTLP export, provider event logs, process diagnostics, and update/release smoke tooling.
+- **Observability & Diagnostics**: Effect tracing, local NDJSON trace files, OTLP export, provider event logs, process diagnostics, and update smoke tooling.
 
 ## Core Priorities
 
@@ -183,9 +183,9 @@ packages/
   effect-acp/          Typed ACP protocol support and generated schema.
   ssh/                 SSH command, auth, and tunnel helpers.
   tailscale/           Tailscale Serve/status helpers.
-scripts/               Dev runner, release/build scripts, static checks, and sync utilities.
+scripts/               Dev runner, desktop build scripts, static checks, and sync utilities.
 .t3code/project.json   Project scripts surfaced in T3 Code, including pinned top-bar actions.
-docs/                  Architecture, provider, observability, release, and feature documentation.
+docs/                  Architecture, provider, observability, operations, and feature documentation.
 oxlint-plugin-t3code/  Local custom oxlint rules.
 ```
 

@@ -25,8 +25,8 @@ export interface ParseCliArgsOptions {
  *   parseCliArgs("--effort=high")
  *     → { flags: { effort: "high" }, positionals: [] }
  *
- *   parseCliArgs(["1.2.3", "--root", "/path", "--github-output"], { booleanFlags: ["github-output"] })
- *     → { flags: { root: "/path", "github-output": null }, positionals: ["1.2.3"] }
+ *   parseCliArgs(["1.2.3", "--root", "/path", "--dry-run"], { booleanFlags: ["dry-run"] })
+ *     → { flags: { root: "/path", "dry-run": null }, positionals: ["1.2.3"] }
  */
 export function parseCliArgs(
   args: string | readonly string[],
