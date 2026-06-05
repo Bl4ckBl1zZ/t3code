@@ -21,6 +21,8 @@ const baseUrlEl = document.getElementById("base-url");
 const credentialEl = document.getElementById("credential");
 const form = document.getElementById("pair-form");
 const forgetButton = document.getElementById("forget");
+const reloadExtensionButton = document.getElementById("reload-extension");
+const openExtensionDetailsButton = document.getElementById("open-extension-details");
 
 function setStatus(message, options = {}) {
   statusEl.textContent = message;
@@ -45,6 +47,7 @@ function formatDiagnosticCheck(check) {
 
 function renderDiagnostics(status) {
   const backendDiagnostics = status.backendDiagnostics;
+  const runtimeDiagnostics = status.runtimeDiagnostics;
   const lines = [
     `socket: ${formatValue(status.socketState)}`,
     `socketBaseUrl: ${formatValue(status.socketBaseUrl)}`,
@@ -53,6 +56,13 @@ function renderDiagnostics(status) {
     `lastHello: ${formatValue(status.lastHelloSentAt)}`,
     `lastTabsSnapshot: ${formatValue(status.lastTabsSnapshotSentAt)}`,
     `lastError: ${formatValue(status.lastConnectionError)}`,
+    "",
+    `runtimeProtocol: ${formatValue(runtimeDiagnostics?.runtime?.protocolVersion)}`,
+    `extensionVersion: ${formatValue(runtimeDiagnostics?.runtime?.extensionVersion)}`,
+    `browser: ${formatValue(runtimeDiagnostics?.runtime?.browser)}`,
+    `workspaces: ${formatValue(runtimeDiagnostics?.workspaces?.length ?? 0)}`,
+    `tabs: ${formatValue(runtimeDiagnostics?.tabs?.length ?? 0)}`,
+    `cdpAttachedTabs: ${formatValue(runtimeDiagnostics?.cdp?.attachedTabIds ?? [])}`,
   ];
 
   if (backendDiagnostics?.paired) {
@@ -63,6 +73,16 @@ function renderDiagnostics(status) {
     );
   } else {
     lines.push("", "backend: not paired");
+  }
+
+  if (runtimeDiagnostics?.logs?.length) {
+    lines.push(
+      "",
+      "logs:",
+      ...runtimeDiagnostics.logs
+        .slice(-12)
+        .map((entry) => `${entry.timestamp} ${entry.level}: ${entry.message}`),
+    );
   }
 
   diagnosticsEl.textContent = lines.join("\n");
@@ -100,6 +120,19 @@ forgetButton.addEventListener("click", () => {
   void send({ type: "t3code.browserAgent.forget" })
     .then(refreshStatus)
     .catch((error) => setStatus(error.message, { error: true }));
+});
+
+reloadExtensionButton.addEventListener("click", () => {
+  setStatus("Reloading extension...");
+  void send({ type: "t3code.browserAgent.reloadExtension" }).catch((error) =>
+    setStatus(error.message, { error: true }),
+  );
+});
+
+openExtensionDetailsButton.addEventListener("click", () => {
+  void send({ type: "t3code.browserAgent.openExtensionDetails" }).catch((error) =>
+    setStatus(error.message, { error: true }),
+  );
 });
 
 void refreshStatus().catch((error) => {

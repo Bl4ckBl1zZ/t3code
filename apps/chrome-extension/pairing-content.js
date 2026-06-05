@@ -1,6 +1,9 @@
 const AUTO_PAIR_REQUEST_TYPE = "t3code.browserAgent.autoPair";
 const AUTO_PAIR_RESULT_TYPE = "t3code.browserAgent.autoPair.result";
+const AUTO_CONNECT_REQUEST_TYPE = "t3code.browserAgent.autoConnect";
+const AUTO_CONNECT_RESULT_TYPE = "t3code.browserAgent.autoConnect.result";
 const PAIR_RUNTIME_MESSAGE_TYPE = "t3code.browserAgent.pair";
+const AUTO_CONNECT_RUNTIME_MESSAGE_TYPE = "t3code.browserAgent.autoConnectNow";
 const AUTO_PAIR_PATH = "/browser-agent/auto-pair";
 
 function parseAutoPairUrl() {
@@ -55,6 +58,23 @@ function isTrustedPairingHostname(hostname) {
     (first === 172 && second >= 16 && second <= 31) ||
     (first === 100 && second >= 64 && second <= 127)
   );
+}
+
+function trustedAutoConnectBaseUrls(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry) => {
+    try {
+      const url = new URL(entry);
+      return (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        isTrustedPairingHostname(url.hostname)
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 function sendRuntimeMessage(message) {
@@ -191,6 +211,72 @@ window.addEventListener("message", (event) => {
       window.postMessage(
         {
           type: AUTO_PAIR_RESULT_TYPE,
+          requestId: data.requestId,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        window.location.origin,
+      );
+    });
+});
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window) {
+    return;
+  }
+
+  const data = event.data;
+  if (data?.type !== AUTO_CONNECT_REQUEST_TYPE) {
+    return;
+  }
+
+  if (!sameOrigin(window.location.origin, data.pageBaseUrl ?? "")) {
+    window.postMessage(
+      {
+        type: AUTO_CONNECT_RESULT_TYPE,
+        requestId: data.requestId,
+        ok: false,
+        error: "Auto-connect requests must come from the current T3 Code origin.",
+      },
+      window.location.origin,
+    );
+    return;
+  }
+
+  const baseUrls = trustedAutoConnectBaseUrls(data.baseUrls);
+  if (baseUrls.length === 0) {
+    window.postMessage(
+      {
+        type: AUTO_CONNECT_RESULT_TYPE,
+        requestId: data.requestId,
+        ok: false,
+        error: "Auto-connect did not receive a trusted T3 Code backend URL.",
+      },
+      window.location.origin,
+    );
+    return;
+  }
+
+  void sendRuntimeMessage({
+    type: AUTO_CONNECT_RUNTIME_MESSAGE_TYPE,
+    pageBaseUrl: data.pageBaseUrl,
+    baseUrls,
+  })
+    .then((response) => {
+      window.postMessage(
+        {
+          type: AUTO_CONNECT_RESULT_TYPE,
+          requestId: data.requestId,
+          ok: response?.ok === true && response.result?.connected === true,
+          ...(response?.error ? { error: response.error } : {}),
+        },
+        window.location.origin,
+      );
+    })
+    .catch((error) => {
+      window.postMessage(
+        {
+          type: AUTO_CONNECT_RESULT_TYPE,
           requestId: data.requestId,
           ok: false,
           error: error instanceof Error ? error.message : String(error),

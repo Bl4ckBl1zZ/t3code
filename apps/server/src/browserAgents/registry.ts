@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 
 import {
   type BrowserAgentAttachActiveTabInput,
+  BrowserAgentContextId,
   BrowserAgentCommandError,
   BrowserAgentCommandId,
   type BrowserAgent,
@@ -15,11 +16,16 @@ import {
   type BrowserAgentOpenOrFocusThreadTabInput,
   type BrowserAgentOutboundMessage,
   type BrowserAgentRuntimePrimitive,
+  type BrowserAgentRuntimeCommandInput,
   type BrowserAgentSnapshot,
   type BrowserAgentStreamEvent,
   type BrowserAgentStartThreadTabCaptureInput,
   type BrowserTabSnapshot,
+  type BrowserControlState,
+  type BrowserWorkspace,
   BrowserWorkspaceLinkId,
+  BrowserWorkspaceTabId,
+  type BrowserWorkspaceTab,
   type BrowserWorkspaceLink,
   type AuthSessionId,
   type BrowserAgentActivateAnnotationInput,
@@ -47,6 +53,7 @@ interface PendingCommand {
   readonly commandId: BrowserAgentCommandId;
   readonly agentId: BrowserAgentId;
   readonly workspaceLinkId?: BrowserWorkspaceLinkId;
+  readonly runtimeCommand?: BrowserAgentRuntimePrimitive;
   readonly deferred?: Deferred.Deferred<BrowserAgentIncomingCommandResultMessage>;
 }
 
@@ -56,6 +63,12 @@ const DEFAULT_BROWSER_CAPTURE_QUALITY = {
   maxHeight: 1080,
   fps: 2,
 } as const;
+const DEFAULT_BROWSER_SCREENSHOT_QUALITY = {
+  maxWidth: 1920,
+  maxHeight: 4096,
+  fps: 2,
+} as const;
+const DEFAULT_BROWSER_CONTEXT_ID = BrowserAgentContextId.make("default");
 let nextEphemeralId = 0;
 
 function nowIso(): string {
@@ -70,8 +83,9 @@ function randomSuffix(): string {
 function workspaceLinkKey(input: {
   readonly environmentId: string;
   readonly threadId: string;
+  readonly browserContextId?: string | undefined;
 }): string {
-  return `${input.environmentId}::${input.threadId}`;
+  return `${input.environmentId}::${input.threadId}::${input.browserContextId ?? DEFAULT_BROWSER_CONTEXT_ID}`;
 }
 
 function makeCommandId(kind: string): BrowserAgentCommandId {
@@ -86,11 +100,35 @@ function makeAgentId(sessionId: AuthSessionId): BrowserAgentId {
   return BrowserAgentId.make(`browser-agent:${sessionId}`);
 }
 
-function makeWorkspaceLinkId(input: {
+function makeWorkspaceId(input: {
   readonly environmentId: string;
   readonly threadId: string;
 }): BrowserWorkspaceLinkId {
   return BrowserWorkspaceLinkId.make(`browser-workspace:${input.environmentId}:${input.threadId}`);
+}
+
+function makeWorkspaceLinkId(input: {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly browserContextId?: string | undefined;
+}): BrowserWorkspaceLinkId {
+  const browserContextId = input.browserContextId ?? DEFAULT_BROWSER_CONTEXT_ID;
+  return browserContextId === DEFAULT_BROWSER_CONTEXT_ID
+    ? makeWorkspaceId(input)
+    : BrowserWorkspaceLinkId.make(
+        `browser-workspace:${input.environmentId}:${input.threadId}:${browserContextId}`,
+      );
+}
+
+function makeWorkspaceTabId(input: {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly browserContextId?: string | undefined;
+  readonly role?: string;
+}): BrowserWorkspaceTabId {
+  return BrowserWorkspaceTabId.make(
+    `browser-workspace-tab:${input.environmentId}:${input.threadId}:${input.browserContextId ?? DEFAULT_BROWSER_CONTEXT_ID}:${input.role ?? "primary"}`,
+  );
 }
 
 function nullable<T>(value: T | undefined): T | null {
@@ -123,6 +161,102 @@ function browserLabel(agent: BrowserAgent): string {
     return `${browser} on ${label}`;
   }
   return label || browser || "Browser";
+}
+
+function browserControlStateFromLegacy(
+  controlState: BrowserWorkspaceLink["controlState"],
+): BrowserControlState {
+  switch (controlState) {
+    case "enabled":
+      return "deep";
+    case "paused-by-user":
+    case "paused-by-policy":
+      return "paused";
+    case "unavailable":
+      return "off";
+  }
+}
+
+function streamStateFromCaptureState(
+  captureState: BrowserWorkspaceLink["captureState"],
+): BrowserWorkspaceTab["streamState"] {
+  switch (captureState) {
+    case "requesting-permission":
+      return "starting";
+    case "live":
+      return "live";
+    case "screenshot-fallback":
+      return "screenshot-fallback";
+    case "blocked":
+    case "error":
+      return "error";
+    case "off":
+      return "off";
+  }
+}
+
+function statusFromThreadTabStatus(
+  status: BrowserWorkspaceLink["tabStatus"],
+): BrowserWorkspaceTab["status"] {
+  switch (status) {
+    case "loading":
+      return "loading";
+    case "complete":
+      return "complete";
+    case "closed":
+      return "closed";
+    case "unknown":
+      return "opening";
+  }
+}
+
+function workspaceFromLink(link: BrowserWorkspaceLink): BrowserWorkspace {
+  return {
+    id: link.workspaceId,
+    environmentId: link.environmentId,
+    threadId: link.threadId,
+    agentId: link.agentId,
+    primaryTabId: makeWorkspaceTabId({
+      environmentId: link.environmentId,
+      threadId: link.threadId,
+      browserContextId: DEFAULT_BROWSER_CONTEXT_ID,
+      role: "primary",
+    }),
+    controlState: link.browserControlState,
+    deepControlEnabled: link.deepControlEnabled,
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt,
+  };
+}
+
+function workspaceTabFromLink(link: BrowserWorkspaceLink): BrowserWorkspaceTab {
+  return {
+    id: makeWorkspaceTabId({
+      environmentId: link.environmentId,
+      threadId: link.threadId,
+      browserContextId: link.browserContextId,
+      role: link.role,
+    }),
+    workspaceId: link.workspaceId,
+    browserContextId: link.browserContextId,
+    agentId: link.agentId,
+    projectedThreadTabId: link.id,
+    browserTabId: link.tabId ?? null,
+    windowId: link.windowId ?? null,
+    role: link.role,
+    title: link.title,
+    url: link.url,
+    purpose: link.purpose,
+    owner: link.owner,
+    lifecycle: link.lifecycle,
+    status: statusFromThreadTabStatus(link.tabStatus),
+    streamState: link.streamState,
+    controlState: link.browserControlState,
+    cdpAttached: link.cdpAttached,
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt,
+    lastSeenAt: link.lastSeenAt,
+  };
 }
 
 function commandResultErrorMessage(error: BrowserAgentIncomingCommandResultMessage["error"]) {
@@ -210,6 +344,7 @@ export class BrowserAgentRegistry {
           connectionId,
           sessionId: connection.sessionId,
           connected: true,
+          ...(message.runtime ? { runtime: message.runtime } : {}),
           device: message.device,
           capabilities: message.capabilities,
           connectedAt: this.agents.get(agentId)?.connectedAt ?? timestamp,
@@ -245,14 +380,17 @@ export class BrowserAgentRegistry {
       case "browserAgent.command.result": {
         const pending = this.pendingCommands.get(message.commandId);
         this.pendingCommands.delete(message.commandId);
-        if (pending?.deferred) {
-          Effect.runFork(Deferred.succeed(pending.deferred, message));
-        }
         if (!pending?.workspaceLinkId || message.ok === false) {
+          if (pending?.deferred) {
+            Effect.runFork(Deferred.succeed(pending.deferred, message));
+          }
           return connection.agentId;
         }
         const link = this.workspaceLinksById.get(pending.workspaceLinkId);
         if (!link) {
+          if (pending.deferred) {
+            Effect.runFork(Deferred.succeed(pending.deferred, message));
+          }
           return connection.agentId;
         }
         const updated: BrowserWorkspaceLink = {
@@ -266,10 +404,16 @@ export class BrowserAgentRegistry {
             ? { title: (message.payload as { title: string }).title }
             : {}),
           tabStatus: "complete",
+          ...(pending.runtimeCommand === "workspace.resumeControl"
+            ? { cdpAttached: true, browserControlState: "deep" as const, deepControlEnabled: true }
+            : {}),
           lastSeenAt: nowIso(),
           updatedAt: nowIso(),
         };
         this.setWorkspaceLink(updated);
+        if (pending.deferred) {
+          Effect.runFork(Deferred.succeed(pending.deferred, message));
+        }
         return connection.agentId;
       }
       case "browserAgent.threadTab.updated": {
@@ -288,6 +432,8 @@ export class BrowserAgentRegistry {
             message.status === "closed" && link.captureState !== "off"
               ? "error"
               : link.captureState,
+          streamState:
+            message.status === "closed" && link.captureState !== "off" ? "error" : link.streamState,
           lastSeenAt: message.status === "closed" ? link.lastSeenAt : nowIso(),
           updatedAt: nowIso(),
         };
@@ -303,6 +449,7 @@ export class BrowserAgentRegistry {
           ...link,
           captureState:
             message.transport === "screenshot-fallback" ? "screenshot-fallback" : "live",
+          streamState: message.transport === "screenshot-fallback" ? "screenshot-fallback" : "live",
           liveViewSessionId: message.liveViewSessionId,
           updatedAt: nowIso(),
         });
@@ -316,8 +463,26 @@ export class BrowserAgentRegistry {
         this.setWorkspaceLink({
           ...link,
           captureState: message.reason === "tab-closed" ? "error" : "off",
+          streamState: message.reason === "tab-closed" ? "error" : "off",
           liveViewSessionId: null,
           updatedAt: nowIso(),
+        });
+        return connection.agentId;
+      }
+      case "browserAgent.capture.frame": {
+        const link = this.workspaceLinksById.get(message.workspaceLinkId);
+        if (!link || link.liveViewSessionId !== message.liveViewSessionId) {
+          return connection.agentId;
+        }
+        this.emit({
+          type: "capture-frame",
+          workspaceLinkId: message.workspaceLinkId,
+          liveViewSessionId: message.liveViewSessionId,
+          dataUrl: message.dataUrl,
+          ...(message.width !== undefined ? { width: message.width } : {}),
+          ...(message.height !== undefined ? { height: message.height } : {}),
+          sequence: message.sequence,
+          timestamp: message.timestamp,
         });
         return connection.agentId;
       }
@@ -327,11 +492,18 @@ export class BrowserAgentRegistry {
   }
 
   snapshot(input?: { readonly currentSessionId?: AuthSessionId }): BrowserAgentSnapshot {
+    const workspaceLinks = Array.from(this.workspaceLinks.values());
+    const workspaces = new Map<BrowserWorkspaceLinkId, BrowserWorkspace>();
+    for (const link of workspaceLinks) {
+      workspaces.set(link.workspaceId, workspaceFromLink(link));
+    }
     return {
       agents: Array.from(this.agents.values()),
       currentSessionId: input?.currentSessionId ?? null,
       tabs: Array.from(this.tabs.values()).flat(),
-      workspaceLinks: Array.from(this.workspaceLinks.values()),
+      workspaceLinks,
+      workspaces: Array.from(workspaces.values()),
+      workspaceTabs: workspaceLinks.map(workspaceTabFromLink),
     };
   }
 
@@ -349,6 +521,7 @@ export class BrowserAgentRegistry {
   resolveThreadWorkspaceLink(input: {
     readonly environmentId: string;
     readonly threadId: string;
+    readonly browserContextId?: string;
   }): BrowserWorkspaceLink | null {
     return this.workspaceLinks.get(workspaceLinkKey(input)) ?? null;
   }
@@ -372,15 +545,22 @@ export class BrowserAgentRegistry {
         agent,
         environmentId: input.environmentId,
         threadId: input.threadId,
+        ...(input.browserContextId ? { browserContextId: input.browserContextId } : {}),
         url: input.url,
         repoName: input.repoName ?? TrimmedNonEmptyString.make("Browser"),
         tabStatus: "loading",
+        role: input.role ?? "primary",
+        purpose: input.purpose ?? null,
+        owner: input.owner ?? { kind: "user" },
+        lifecycle: input.lifecycle ?? "persistent",
       });
       const commandId = makeCommandId("open-thread-tab");
+      const deferred = yield* Deferred.make<BrowserAgentIncomingCommandResultMessage>();
       registry.pendingCommands.set(commandId, {
         commandId,
         agentId: agent.id,
         workspaceLinkId: link.id,
+        deferred,
       });
       yield* registry.sendToAgent(agent.id, {
         type: "browserAgent.command.openOrFocusThreadTab",
@@ -389,7 +569,13 @@ export class BrowserAgentRegistry {
         url: input.url,
         focus: input.focus,
       });
-      return { commandId, agentId: agent.id, workspaceLink: link };
+      const message = yield* registry.awaitCommandResult(commandId, deferred);
+      return {
+        commandId,
+        agentId: agent.id,
+        workspaceLink: registry.workspaceLinksById.get(link.id) ?? link,
+        ...(message.payload !== undefined ? { payload: message.payload } : {}),
+      };
     });
   }
 
@@ -412,6 +598,7 @@ export class BrowserAgentRegistry {
         agent,
         environmentId: input.environmentId,
         threadId: input.threadId,
+        ...(input.browserContextId ? { browserContextId: input.browserContextId } : {}),
         url: "about:blank",
         repoName: input.repoName ?? TrimmedNonEmptyString.make("Browser"),
         tabStatus: "loading",
@@ -465,25 +652,94 @@ export class BrowserAgentRegistry {
   setThreadTabControl(
     input: BrowserAgentSetThreadTabControlInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
-    const link = this.workspaceLinks.get(workspaceLinkKey(input));
-    if (!link) {
-      return Effect.fail(
-        toCommandError({
+    const registry = this;
+    return Effect.gen(function* () {
+      const link = registry.workspaceLinks.get(workspaceLinkKey(input));
+      if (!link) {
+        return yield* toCommandError({
           code: "workspace-link-not-found",
           message: "This thread does not have a linked browser tab.",
-        }),
-      );
-    }
-    const updated: BrowserWorkspaceLink = {
-      ...link,
-      controlState: input.controlState,
-      updatedAt: nowIso(),
-    };
-    this.setWorkspaceLink(updated);
-    return Effect.succeed({
-      commandId: makeCommandId("set-control"),
-      agentId: updated.agentId,
-      workspaceLink: updated,
+        });
+      }
+      const browserControlState =
+        input.browserControlState ?? browserControlStateFromLegacy(input.controlState);
+      const updated: BrowserWorkspaceLink = {
+        ...link,
+        controlState: input.controlState,
+        browserControlState,
+        deepControlEnabled: browserControlState === "deep",
+        updatedAt: nowIso(),
+      };
+      registry.setWorkspaceLink(updated);
+
+      const agent = registry.agents.get(updated.agentId);
+      const runtimeCommand =
+        browserControlState === "paused" ? "workspace.pauseControl" : "workspace.resumeControl";
+      const commandId = makeCommandId("set-control");
+      if (agent?.connected && agent.capabilities.runtime.primitives.includes(runtimeCommand)) {
+        registry.pendingCommands.set(commandId, {
+          commandId,
+          agentId: updated.agentId,
+          workspaceLinkId: updated.id,
+          runtimeCommand,
+        });
+        yield* registry.sendToAgent(updated.agentId, {
+          type: "browserAgent.command.runtime",
+          commandId,
+          workspaceLinkId: updated.id,
+          runtimeCommand,
+          params: { controlState: browserControlState },
+          timeoutMs: 10_000,
+        });
+      }
+
+      return {
+        commandId,
+        agentId: updated.agentId,
+        workspaceLink: registry.workspaceLinksById.get(updated.id) ?? updated,
+      };
+    });
+  }
+
+  sendRuntimeCommand(
+    input: BrowserAgentRuntimeCommandInput,
+  ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
+    const registry = this;
+    return Effect.gen(function* () {
+      const link = yield* registry.requireThreadLink(input);
+      const agent = yield* registry.requireLinkedAgent(link);
+      yield* registry.requireAgentPrimitive(agent, input.type);
+      if (link.controlState !== "enabled" && input.type !== "workspace.resumeControl") {
+        return yield* toCommandError({
+          code: "agent-access-paused",
+          message: "Browser access is paused for this thread.",
+        });
+      }
+      const commandId = makeCommandId("runtime-command");
+      const deferred = yield* Deferred.make<BrowserAgentIncomingCommandResultMessage>();
+      registry.pendingCommands.set(commandId, {
+        commandId,
+        agentId: agent.id,
+        workspaceLinkId: link.id,
+        runtimeCommand: input.type,
+        deferred,
+      });
+      yield* registry.sendToAgent(agent.id, {
+        type: "browserAgent.command.runtime",
+        commandId,
+        workspaceLinkId: link.id,
+        runtimeCommand: input.type,
+        ...(input.tabId ? { tabId: input.tabId } : {}),
+        ...(input.params !== undefined ? { params: input.params } : {}),
+        timeoutMs: input.timeoutMs ?? 10_000,
+      });
+      const message = yield* registry.awaitCommandResult(commandId, deferred);
+      return {
+        commandId,
+        agentId: agent.id,
+        workspaceLink: registry.workspaceLinksById.get(link.id) ?? link,
+        ...(message.payload !== undefined ? { payload: message.payload } : {}),
+      };
     });
   }
 
@@ -498,6 +754,7 @@ export class BrowserAgentRegistry {
       const updated: BrowserWorkspaceLink = {
         ...link,
         captureState: "requesting-permission",
+        streamState: "starting",
         updatedAt: nowIso(),
       };
       registry.setWorkspaceLink(updated);
@@ -521,6 +778,7 @@ export class BrowserAgentRegistry {
           registry.setWorkspaceLink({
             ...current,
             captureState: "off",
+            streamState: "off",
             liveViewSessionId: null,
             updatedAt: nowIso(),
           });
@@ -547,6 +805,7 @@ export class BrowserAgentRegistry {
       const updated: BrowserWorkspaceLink = {
         ...link,
         captureState: "off",
+        streamState: "off",
         liveViewSessionId: null,
         updatedAt: nowIso(),
       };
@@ -646,6 +905,7 @@ export class BrowserAgentRegistry {
       type: "browserAgent.command.screenshot" as const,
       commandId,
       workspaceLinkId: link.id,
+      quality: DEFAULT_BROWSER_SCREENSHOT_QUALITY,
     }));
   }
 
@@ -697,8 +957,11 @@ export class BrowserAgentRegistry {
       const timestamp = nowIso();
       const key = workspaceLinkKey(input);
       const existing = registry.workspaceLinks.get(key);
+      const browserContextId = existing?.browserContextId ?? DEFAULT_BROWSER_CONTEXT_ID;
       const link: BrowserWorkspaceLink = {
         id: existing?.id ?? makeWorkspaceLinkId(input),
+        workspaceId: existing?.workspaceId ?? makeWorkspaceId(input),
+        browserContextId,
         agentId: agent.id,
         environmentId: input.environmentId,
         threadId: input.threadId,
@@ -713,6 +976,15 @@ export class BrowserAgentRegistry {
         tabStatus: existing?.tabStatus ?? "loading",
         captureState: existing?.captureState ?? "off",
         controlState: existing?.controlState ?? "enabled",
+        browserControlState: existing?.browserControlState ?? "deep",
+        deepControlEnabled: existing?.deepControlEnabled ?? true,
+        cdpAttached: existing?.cdpAttached ?? false,
+        role: existing?.role ?? "primary",
+        purpose: existing?.purpose ?? null,
+        owner: existing?.owner ?? { kind: "user" },
+        lifecycle: existing?.lifecycle ?? "persistent",
+        streamState:
+          existing?.streamState ?? streamStateFromCaptureState(existing?.captureState ?? "off"),
         liveViewSessionId: existing?.liveViewSessionId ?? null,
         lastSeenAt: existing?.lastSeenAt ?? null,
         sidebarWidthPx: existing?.sidebarWidthPx ?? DEFAULT_SIDEBAR_WIDTH_PX,
@@ -784,31 +1056,62 @@ export class BrowserAgentRegistry {
     readonly agent: BrowserAgent;
     readonly environmentId: BrowserWorkspaceLink["environmentId"];
     readonly threadId: BrowserWorkspaceLink["threadId"];
+    readonly browserContextId?: BrowserWorkspaceLink["browserContextId"];
     readonly url: string;
     readonly repoName: BrowserWorkspaceLink["repoName"];
     readonly tabStatus: BrowserWorkspaceLink["tabStatus"];
+    readonly role?: BrowserWorkspaceLink["role"];
+    readonly purpose?: BrowserWorkspaceLink["purpose"];
+    readonly owner?: BrowserWorkspaceLink["owner"];
+    readonly lifecycle?: BrowserWorkspaceLink["lifecycle"];
   }): BrowserWorkspaceLink {
     const timestamp = nowIso();
     const key = workspaceLinkKey(input);
     const existing = this.workspaceLinks.get(key);
+    const browserContextId =
+      input.browserContextId ?? existing?.browserContextId ?? DEFAULT_BROWSER_CONTEXT_ID;
+    const shouldDropExistingTabIdentity =
+      existing &&
+      (input.lifecycle === "ephemeral" || input.role === "agent") &&
+      (existing.tabStatus === "closed" ||
+        existing.url !== input.url ||
+        existing.devServerUrl !== input.url);
     const link: BrowserWorkspaceLink = {
-      id: existing?.id ?? makeWorkspaceLinkId(input),
+      id: existing?.id ?? makeWorkspaceLinkId({ ...input, browserContextId }),
+      workspaceId: existing?.workspaceId ?? makeWorkspaceId(input),
+      browserContextId,
       agentId: input.agent.id,
       environmentId: input.environmentId,
       threadId: input.threadId,
       devServerUrl: TrimmedNonEmptyString.make(input.url),
       repoName: input.repoName,
-      ...(existing?.tabId !== undefined ? { tabId: existing.tabId } : {}),
-      ...(existing?.windowId !== undefined ? { windowId: existing.windowId } : {}),
+      ...(!shouldDropExistingTabIdentity && existing?.tabId !== undefined
+        ? { tabId: existing.tabId }
+        : {}),
+      ...(!shouldDropExistingTabIdentity && existing?.windowId !== undefined
+        ? { windowId: existing.windowId }
+        : {}),
       url: input.url,
       expectedOrigin: expectedOrigin(input.url),
-      title: existing?.title ?? null,
+      title: shouldDropExistingTabIdentity ? null : (existing?.title ?? null),
       browserLabel: browserLabel(input.agent),
       tabStatus: input.tabStatus,
-      captureState: existing?.captureState ?? "off",
+      captureState: shouldDropExistingTabIdentity ? "off" : (existing?.captureState ?? "off"),
       controlState: existing?.controlState ?? "enabled",
-      liveViewSessionId: existing?.liveViewSessionId ?? null,
-      lastSeenAt: existing?.lastSeenAt ?? null,
+      browserControlState: existing?.browserControlState ?? "deep",
+      deepControlEnabled: existing?.deepControlEnabled ?? true,
+      cdpAttached: shouldDropExistingTabIdentity ? false : (existing?.cdpAttached ?? false),
+      role: input.role ?? existing?.role ?? "primary",
+      purpose: input.purpose ?? existing?.purpose ?? null,
+      owner: input.owner ?? existing?.owner ?? { kind: "user" },
+      lifecycle: input.lifecycle ?? existing?.lifecycle ?? "persistent",
+      streamState: shouldDropExistingTabIdentity
+        ? "off"
+        : streamStateFromCaptureState(existing?.captureState ?? "off"),
+      liveViewSessionId: shouldDropExistingTabIdentity
+        ? null
+        : (existing?.liveViewSessionId ?? null),
+      lastSeenAt: shouldDropExistingTabIdentity ? null : (existing?.lastSeenAt ?? null),
       sidebarWidthPx: existing?.sidebarWidthPx ?? DEFAULT_SIDEBAR_WIDTH_PX,
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
@@ -866,7 +1169,7 @@ export class BrowserAgentRegistry {
     return Effect.fail(
       toCommandError({
         code: "command-failed",
-        message: `The paired browser extension does not support '${primitive}'. Reload or update the T3 Code Browser Agent extension.`,
+        message: `The browser extension does not support '${primitive}'. Reload or update the T3 Code Browser Agent extension.`,
       }),
     );
   }
@@ -980,6 +1283,7 @@ export class BrowserAgentRegistry {
   private selectAgent(input: {
     readonly environmentId: string;
     readonly threadId: string;
+    readonly browserContextId?: string | undefined;
     readonly preferredAgentId?: BrowserAgentId;
     readonly preferredSessionId?: AuthSessionId;
   }): Effect.Effect<BrowserAgent, BrowserAgentCommandError, never> {
@@ -988,7 +1292,7 @@ export class BrowserAgentRegistry {
       return Effect.fail(
         toCommandError({
           code: "no-agent-connected",
-          message: "No paired browser extension is connected.",
+          message: "No browser extension local-control session is connected.",
         }),
       );
     }
@@ -1037,7 +1341,7 @@ export class BrowserAgentRegistry {
       return Effect.fail(
         toCommandError({
           code: "no-agent-connected",
-          message: "No paired browser extension is connected.",
+          message: "No browser extension local-control session is connected.",
         }),
       );
     }
@@ -1083,6 +1387,11 @@ export class BrowserAgentRegistry {
     this.workspaceLinks.set(workspaceLinkKey(link), link);
     this.workspaceLinksById.set(link.id, link);
     this.emit({ type: "workspace-link-upserted", link });
+    this.emit({
+      type: "workspace-tabs-updated",
+      workspaceId: link.workspaceId,
+      tabs: [workspaceTabFromLink(link)],
+    });
     this.closeConflictingWorkspaceLinks(link);
   }
 
@@ -1108,6 +1417,7 @@ export class BrowserAgentRegistry {
         ...link,
         tabStatus: "closed",
         captureState: link.captureState === "off" ? "off" : "error",
+        streamState: link.captureState === "off" ? "off" : "error",
         liveViewSessionId: null,
         updatedAt: nowIso(),
       });

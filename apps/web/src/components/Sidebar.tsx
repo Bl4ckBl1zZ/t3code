@@ -73,6 +73,7 @@ import { cn, isMacPlatform, newCommandId, randomUUID } from "../lib/utils";
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
+  selectSidebarThreadSummaryByRef,
   selectSidebarThreadsForProjectRefs,
   selectSidebarThreadsAcrossEnvironments,
   selectThreadByRef,
@@ -99,11 +100,7 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 
 import { useThreadActions } from "../hooks/useThreadActions";
-import {
-  buildThreadRouteParams,
-  resolveThreadRouteRef,
-  resolveThreadRouteTarget,
-} from "../threadRoutes";
+import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import { stackedThreadToast, toastManager, type ThreadToastData } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
@@ -177,6 +174,7 @@ import {
   moveSidebarProjectAcrossFolders,
   moveSidebarProjectToFolder,
   resolveProjectStatusIndicator,
+  resolveSidebarExplorerTarget,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -3662,10 +3660,12 @@ export default function Sidebar() {
   const { handleNewThread } = useNewThreadHandler();
   const { archiveThread, deleteThread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
-  const routeThreadRef = useParams({
+  const routeTarget = useParams({
     strict: false,
-    select: (params) => resolveThreadRouteRef(params),
+    select: (params) => resolveThreadRouteTarget(params),
   });
+  const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
+  const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const activeRouteThread = useStore(
     useMemo(
@@ -3673,18 +3673,30 @@ export default function Sidebar() {
       [routeThreadRef],
     ),
   );
-  const activeRouteProjectRef = useMemo(
-    () =>
-      activeRouteThread
-        ? scopeProjectRef(activeRouteThread.environmentId, activeRouteThread.projectId)
-        : null,
-    [activeRouteThread],
-  );
-  const activeRouteProject = useStore(
+  const activeRouteThreadSummary = useStore(
     useMemo(
       () => (state: import("../store").AppState) =>
-        selectProjectByRef(state, activeRouteProjectRef),
-      [activeRouteProjectRef],
+        selectSidebarThreadSummaryByRef(state, routeThreadRef),
+      [routeThreadRef],
+    ),
+  );
+  const activeRouteDraftSession = useComposerDraftStore((store) =>
+    routeDraftId ? store.getDraftSession(routeDraftId) : null,
+  );
+  const activeExplorerThread =
+    activeRouteDraftSession ?? activeRouteThread ?? activeRouteThreadSummary;
+  const activeExplorerProjectRef = useMemo(
+    () =>
+      activeExplorerThread
+        ? scopeProjectRef(activeExplorerThread.environmentId, activeExplorerThread.projectId)
+        : null,
+    [activeExplorerThread],
+  );
+  const activeExplorerProject = useStore(
+    useMemo(
+      () => (state: import("../store").AppState) =>
+        selectProjectByRef(state, activeExplorerProjectRef),
+      [activeExplorerProjectRef],
     ),
   );
   const activeWorkbenchPanel = useWorkbenchStore((state) => state.activeSidebarPanel);
@@ -3696,15 +3708,15 @@ export default function Sidebar() {
         tab.id === state.fileTabsState.activeTabId && tab.kind === "file",
     ),
   );
-  const explorerTarget =
-    activeRouteThread && activeRouteProject
-      ? {
-          environmentId: activeRouteThread.environmentId,
-          cwd: activeRouteThread.worktreePath ?? activeRouteProject.cwd,
-          label: activeRouteThread.worktreePath
-            ? `${activeRouteProject.name} worktree`
-            : activeRouteProject.name,
-        }
+  const explorerTarget = resolveSidebarExplorerTarget({
+    thread: activeExplorerThread,
+    project: activeExplorerProject,
+  });
+  const activeExplorerRelativePath =
+    explorerTarget &&
+    activeFileTab?.environmentId === explorerTarget.environmentId &&
+    activeFileTab.cwd === explorerTarget.cwd
+      ? activeFileTab.relativePath
       : null;
   const keybindings = useServerKeybindings();
   const openAddProjectCommandPalette = useCommandPaletteStore((store) => store.openAddProject);
@@ -4479,7 +4491,7 @@ export default function Sidebar() {
             <SidebarContent className="gap-0">
               <WorkspaceExplorer
                 target={explorerTarget}
-                activeRelativePath={activeFileTab?.relativePath ?? null}
+                activeRelativePath={activeExplorerRelativePath}
                 revealRequest={explorerRevealRequest}
               />
             </SidebarContent>

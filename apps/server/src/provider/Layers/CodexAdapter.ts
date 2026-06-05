@@ -20,6 +20,7 @@ import {
   type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   ProviderApprovalDecision,
   ThreadId,
   EnvironmentId,
@@ -133,6 +134,11 @@ type CodexToolUserInputQuestion =
 
 const ApprovalDecisionPayload = Schema.Struct({
   decision: ProviderApprovalDecision,
+});
+const CodexSubagentProgressPayload = Schema.Struct({
+  taskId: Schema.String,
+  description: Schema.String,
+  summary: Schema.String,
 });
 
 function readPayload<A>(
@@ -895,6 +901,27 @@ function mapToRuntimeEvents(
         type: "turn.proposed.delta",
         payload: {
           delta,
+        },
+      },
+    ];
+  }
+
+  if (event.method === "codex/subagent/progress") {
+    const payload = readPayload(CodexSubagentProgressPayload, event.payload);
+    const summary = trimText(payload?.summary);
+    const description = trimText(payload?.description);
+    const taskId = trimText(payload?.taskId);
+    if (!payload || !summary || !description || !taskId) {
+      return [];
+    }
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "task.progress",
+        payload: {
+          taskId: RuntimeTaskId.make(taskId),
+          description,
+          summary,
         },
       },
     ];

@@ -23,4 +23,24 @@ describe("deriveAuthClientMetadata", () => {
       os: "macOS",
     });
   });
+
+  it("labels Android tablets as tablets", () => {
+    const metadata = deriveAuthClientMetadata({
+      request: {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Linux; Android 14; Pixel Tablet) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        },
+        source: {
+          remoteAddress: "127.0.0.1",
+        },
+      } as never,
+    });
+
+    expect(metadata).toMatchObject({
+      browser: "Chrome",
+      deviceType: "tablet",
+      os: "Android",
+    });
+  });
 });

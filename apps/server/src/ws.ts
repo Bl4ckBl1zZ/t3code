@@ -1081,6 +1081,12 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             browserAgentRegistry.screenshotThreadTab(input),
             { "rpc.aggregate": "browser-agent" },
           ),
+        [WS_METHODS.browserAgentsRuntimeCommand]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsRuntimeCommand,
+            browserAgentRegistry.sendRuntimeCommand(input),
+            { "rpc.aggregate": "browser-agent" },
+          ),
         [WS_METHODS.subscribeBrowserAgents]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeBrowserAgents,

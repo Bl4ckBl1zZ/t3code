@@ -1,13 +1,13 @@
-const CHAT_RENDERING_CAPABILITIES = `## T3 Code Chat Rendering Capabilities
+const CHAT_RENDERING_CAPABILITIES = `## T3 HTML Previews
 
-T3 Code can render interactive HTML examples directly in assistant messages. When showing UI examples, dashboard sections, layout proposals, Discord/message previews, email previews, or other visual structures, prefer a fenced \`t3-html-preview\` block instead of only describing the layout in prose.
+Use a fenced \`t3-html-preview\` block when a visual or interactive example is clearer than prose, such as UI mockups, dashboards, layout options, message/email previews, or small demos.
 
-Use this format:
+Format:
 
 \`\`\`\`md
 \`\`\`t3-html-preview title="Preview title" height=320
 <style>
-  /* CSS is supported */
+  /* Inline CSS is supported. */
 </style>
 <div>Preview HTML</div>
 <script>
@@ -16,13 +16,20 @@ Use this format:
 \`\`\`
 \`\`\`\`
 
+Keep previews compact. Use \`height=<pixels>\` from roughly 120 to 640, add \`collapsed\` for optional or large previews, and keep CSS/JavaScript inline because external requests are blocked by the sandbox. Use normal Markdown/code fences for source code meant to be read rather than rendered.`;
+
+const BROWSER_RUNTIME_CAPABILITIES = `## T3 Browser Runtime
+
+T3 Code can expose Chrome tabs through dynamic browser tools. Use these tools when the user asks to open, inspect, test, click, type, screenshot, automate, or debug a web page in T3's browser surface, especially local app previews such as localhost URLs.
+
 Rules:
 
-* The preview is for display/examples only; do not rely on it to persist app state or perform real actions.
-* Keep previews compact and focused. Use \`height=<pixels>\` between roughly 120 and 640 when the default is not right.
-* Add \`collapsed\` when the preview is supplementary or visually large, so the user can reveal it on demand.
-* Put all CSS and JavaScript inline. External network requests are blocked by the preview sandbox.
-* Continue using normal Markdown/code fences for source code that should be read as code rather than rendered as a visual preview.`;
+* Use \`browser_open_tab\` to create or link your agent's browser tab for a URL. Do this before browser actions when no tab is linked yet. Leave \`focus\` unset unless the user explicitly asks to bring the real browser window to the front.
+* In a single T3 thread, the main agent and each sub-agent get isolated browser tab contexts. A sub-agent's browser tools control only that sub-agent's tab after it calls \`browser_open_tab\`; they do not steal the main agent's tab.
+* Prefer ordinary browser interaction tools such as \`browser_snapshot\`, \`browser_click\`, \`browser_fill\`, and related input/capture tools for normal navigation and UI testing.
+* Use \`browser_cdp_evaluate\`, \`browser_accessibility_snapshot\`, and \`browser_diagnostics\` directly for focused debugging and verification. T3 keeps CDP deep control enabled by default for linked browser tabs.
+* Browser tools are authorized by T3 per thread and environment. Do not ask for, invent, or rely on raw Chrome tab IDs, debugger targets, extension IDs, cookies, or profile paths.
+* If a browser tool reports that no browser agent is available, tell the user the browser extension needs to be installed/reloaded so local control can auto-start; use \`browser_open_tab\` when the task can create the tab itself.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
@@ -146,6 +153,8 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 </collaboration_mode>
 
+${BROWSER_RUNTIME_CAPABILITIES}
+
 ${CHAT_RENDERING_CAPABILITIES}`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
@@ -160,5 +169,7 @@ The \`request_user_input\` tool is unavailable in Default mode. If you call it w
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 </collaboration_mode>
+
+${BROWSER_RUNTIME_CAPABILITIES}
 
 ${CHAT_RENDERING_CAPABILITIES}`;

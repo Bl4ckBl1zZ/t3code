@@ -14,6 +14,14 @@ function asTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function asTrimmedLowerString(value: unknown): string | undefined {
+  return asTrimmedString(value)?.toLowerCase();
+}
+
+function truncateInline(value: string, limit = 96): string {
+  return value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
+}
+
 function normalizeCommandValue(value: unknown): string | undefined {
   const direct = asTrimmedString(value);
   if (direct) {
@@ -75,6 +83,166 @@ function extractToolCommand(data: Record<string, unknown> | undefined, title: st
     return executable;
   }
   return extractCommandFromTitle(title);
+}
+
+function extractNestedRecord(
+  data: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  return asRecord(data?.[key]);
+}
+
+function extractBrowserToolName(
+  data: Record<string, unknown> | undefined,
+  title: string | undefined,
+): string | undefined {
+  const item = extractNestedRecord(data, "item");
+  const itemInput = extractNestedRecord(item, "input");
+  const rawInput = extractNestedRecord(data, "rawInput");
+  const rawInputPayload = extractNestedRecord(rawInput, "payload");
+  const rawInputArguments = extractNestedRecord(rawInput, "arguments");
+  const candidates = [
+    title,
+    data?.tool,
+    data?.toolName,
+    data?.name,
+    item?.tool,
+    item?.toolName,
+    item?.name,
+    itemInput?.tool,
+    itemInput?.toolName,
+    itemInput?.name,
+    rawInput?.tool,
+    rawInput?.toolName,
+    rawInput?.name,
+    rawInputPayload?.tool,
+    rawInputArguments?.tool,
+  ];
+  return candidates
+    .map((candidate) => asTrimmedLowerString(candidate))
+    .find((candidate) => candidate?.startsWith("browser_") || candidate?.startsWith("cdp."));
+}
+
+function browserToolArguments(data: Record<string, unknown> | undefined): Record<string, unknown> {
+  const item = extractNestedRecord(data, "item");
+  const itemInput = extractNestedRecord(item, "input");
+  const itemArguments = extractNestedRecord(item, "arguments");
+  const rawInput = extractNestedRecord(data, "rawInput");
+  const rawInputArguments = extractNestedRecord(rawInput, "arguments");
+  const rawInputPayload = extractNestedRecord(rawInput, "payload");
+  const rawInputPayloadArguments = extractNestedRecord(rawInputPayload, "arguments");
+  return (
+    rawInputPayloadArguments ??
+    rawInputArguments ??
+    itemArguments ??
+    itemInput ??
+    rawInput ??
+    rawInputPayload ??
+    data ??
+    {}
+  );
+}
+
+export type BrowserToolActivityAction =
+  | "open"
+  | "navigate"
+  | "snapshot"
+  | "click"
+  | "fill"
+  | "type"
+  | "key"
+  | "scroll"
+  | "screenshot"
+  | "page"
+  | "runtime-evaluate"
+  | "accessibility"
+  | "diagnostics";
+
+function browserToolDetail(toolName: string, args: Record<string, unknown>): string | undefined {
+  const url = asTrimmedString(args.url);
+  const ref = asTrimmedString(args.ref);
+  const key = asTrimmedString(args.key);
+  const expression = asTrimmedString(args.expression);
+  const text = asTrimmedString(args.text);
+  const x = typeof args.x === "number" && Number.isFinite(args.x) ? args.x : undefined;
+  const y = typeof args.y === "number" && Number.isFinite(args.y) ? args.y : undefined;
+
+  if (url && (toolName.includes("open") || toolName.includes("navigate"))) {
+    return truncateInline(url);
+  }
+  if (ref) {
+    return truncateInline(ref);
+  }
+  if (key) {
+    return truncateInline(key);
+  }
+  if (expression) {
+    return truncateInline(expression);
+  }
+  if (toolName.includes("fill") && text) {
+    return `${text.length.toLocaleString()} character${text.length === 1 ? "" : "s"}`;
+  }
+  if (x !== undefined && y !== undefined) {
+    return `${Math.round(x)}, ${Math.round(y)}`;
+  }
+  return undefined;
+}
+
+function browserToolPresentation(
+  data: Record<string, unknown> | undefined,
+  title: string | undefined,
+): ToolActivityPresentation | undefined {
+  const toolName = extractBrowserToolName(data, title);
+  if (!toolName) {
+    return undefined;
+  }
+  const args = browserToolArguments(data);
+  const detail = browserToolDetail(toolName, args);
+  const output = (
+    summary: string,
+    browserAction: BrowserToolActivityAction,
+  ): ToolActivityPresentation => ({
+    summary,
+    browserAction,
+    ...(detail ? { detail } : {}),
+  });
+
+  switch (toolName) {
+    case "browser_open_tab":
+      return output("Opened browser tab", "open");
+    case "browser_navigate":
+      return output("Navigated browser", "navigate");
+    case "browser_back":
+    case "browser_forward":
+    case "browser_reload":
+      return output("Navigated browser history", "navigate");
+    case "browser_snapshot":
+      return output("Read browser snapshot", "snapshot");
+    case "browser_click":
+      return output("Clicked browser", "click");
+    case "browser_fill":
+      return output("Filled browser field", "fill");
+    case "browser_type":
+      return output("Typed in browser", "type");
+    case "browser_press_key":
+      return output("Pressed browser key", "key");
+    case "browser_scroll":
+      return output("Scrolled browser", "scroll");
+    case "browser_screenshot":
+      return output("Captured browser screenshot", "screenshot");
+    case "browser_current_page":
+      return output("Checked browser page", "page");
+    case "browser_cdp_evaluate":
+    case "cdp.runtime.evaluate":
+      return output("Evaluated browser runtime", "runtime-evaluate");
+    case "browser_accessibility_snapshot":
+    case "cdp.accessibility.snapshot":
+      return output("Read accessibility snapshot", "accessibility");
+    case "browser_diagnostics":
+      return output("Checked browser diagnostics", "diagnostics");
+    default:
+      return output("Used browser tool", "page");
+  }
 }
 
 function maybePathLike(value: string | undefined): string | undefined {
@@ -194,6 +362,7 @@ export interface ToolActivityPresentationInput {
 export interface ToolActivityPresentation {
   readonly summary: string;
   readonly detail?: string | undefined;
+  readonly browserAction?: BrowserToolActivityAction | undefined;
 }
 
 export function deriveToolActivityPresentation(
@@ -203,6 +372,10 @@ export function deriveToolActivityPresentation(
   const detail = stripTrailingExitCode(asTrimmedString(input.detail));
   const fallbackSummary = asTrimmedString(input.fallbackSummary) ?? "Tool";
   const data = asRecord(input.data);
+  const browserPresentation = browserToolPresentation(data, title);
+  if (browserPresentation) {
+    return browserPresentation;
+  }
   const command = extractToolCommand(data, title);
   const primaryPath = extractPrimaryPath(data);
   const action = classifyToolAction({

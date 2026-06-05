@@ -445,6 +445,26 @@ export function WorkspaceExplorer({
   const [includeIgnored, setIncludeIgnored] = useState(false);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const previousTargetKeyRef = useRef<string | null>(null);
+  const targetKey = target ? `${target.environmentId}\n${target.cwd}` : null;
+
+  useEffect(() => {
+    if (previousTargetKeyRef.current === targetKey) {
+      return;
+    }
+    previousTargetKeyRef.current = targetKey;
+    setSelectedPath(activeRelativePath);
+    setExpanded(() => {
+      const next = new Set<string>([""]);
+      if (activeRelativePath) {
+        for (const ancestor of ancestorDirectoryPaths(activeRelativePath)) {
+          next.add(ancestor);
+        }
+      }
+      return next;
+    });
+    setInlineEdit(null);
+  }, [activeRelativePath, targetKey]);
 
   useEffect(() => {
     if (

@@ -2,6 +2,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  BROWSER_AGENT_AUTO_CONNECT_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR,
@@ -43,6 +44,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
@@ -59,6 +61,17 @@ import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vitest";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const BrowserAgentAutoConnectResponseJson = Schema.fromJsonString(
+  Schema.Struct({
+    authenticated: Schema.Boolean,
+    role: Schema.String,
+    sessionMethod: Schema.String,
+    sessionToken: Schema.String,
+  }),
+);
+const decodeBrowserAgentAutoConnectResponse = Schema.decodeUnknownSync(
+  BrowserAgentAutoConnectResponseJson,
+);
 
 import type { ServerConfigShape } from "./config.ts";
 import { deriveServerPaths, ServerConfig } from "./config.ts";
@@ -868,6 +881,59 @@ const withWsRpcClient = <A, E, R>(
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
 ) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
 
+class RawWebSocketError extends Data.TaggedError("RawWebSocketError")<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
+const openRawWebSocket = (url: string) =>
+  Effect.tryPromise({
+    try: () =>
+      new Promise<InstanceType<typeof NodeSocket.NodeWS.WebSocket>>((resolve, reject) => {
+        const socket = new NodeSocket.NodeWS.WebSocket(url);
+        const cleanup = () => socket.removeAllListeners();
+        socket.once("open", () => {
+          cleanup();
+          resolve(socket);
+        });
+        socket.once("error", (error) => {
+          cleanup();
+          reject(error);
+        });
+        socket.once("unexpected-response", (_request, response) => {
+          cleanup();
+          reject(new Error(`Unexpected WebSocket response ${response.statusCode}`));
+        });
+        socket.once("close", () => {
+          cleanup();
+          reject("WebSocket closed before opening.");
+        });
+      }),
+    catch: (cause) =>
+      new RawWebSocketError({
+        message: "Failed to open raw WebSocket.",
+        cause,
+      }),
+  });
+
+const closeRawWebSocket = (socket: InstanceType<typeof NodeSocket.NodeWS.WebSocket>) =>
+  Effect.tryPromise({
+    try: () =>
+      new Promise<void>((resolve) => {
+        if (socket.readyState === 2 || socket.readyState === 3) {
+          resolve();
+          return;
+        }
+        socket.once("close", resolve);
+        socket.close();
+      }),
+    catch: (cause) =>
+      new RawWebSocketError({
+        message: "Failed to close raw WebSocket.",
+        cause,
+      }),
+  });
+
 const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) => {
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
   const next = new URL(url, "http://localhost");
@@ -1082,6 +1148,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         `${BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME}/manifest.json`,
       );
       assert.include(body.toString("utf8"), "extension-package-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("issues local browser agent auto-connect bearer sessions", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          mode: "desktop",
+          devUrl: new URL("http://127.0.0.1:5173"),
+        },
+      });
+
+      const response = yield* HttpClient.post(BROWSER_AGENT_AUTO_CONNECT_PATH);
+      const responseText = yield* response.text;
+      assert.equal(response.status, 200, responseText);
+      const body = decodeBrowserAgentAutoConnectResponse(responseText);
+      assert.equal(body.authenticated, true);
+      assert.equal(body.role, "client");
+      assert.equal(body.sessionMethod, "bearer-session-token");
+      assert.equal(typeof body.sessionToken, "string");
+
+      const session = yield* HttpClient.get("/api/auth/session", {
+        headers: {
+          authorization: `Bearer ${body.sessionToken}`,
+        },
+      });
+      const sessionBody = (yield* session.json) as {
+        readonly authenticated?: unknown;
+        readonly role?: unknown;
+        readonly sessionMethod?: unknown;
+      };
+      assert.equal(session.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(sessionBody.role, "client");
+      assert.equal(sessionBody.sessionMethod, "bearer-session-token");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1674,6 +1775,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isDefined(pairedSessionCookie);
 
       const pairedSessionCookieHeader = pairedSessionCookie ?? "";
+      const pairedSessionStateResponse = yield* HttpClient.get("/api/auth/session", {
+        headers: {
+          cookie: pairedSessionCookieHeader,
+        },
+      });
+      const pairedSessionState = (yield* pairedSessionStateResponse.json) as {
+        readonly authenticated: boolean;
+        readonly client?: {
+          readonly deviceType: string;
+          readonly os?: string;
+          readonly browser?: string;
+        };
+      };
       const listBeforeResponse = yield* HttpClient.get("/api/auth/clients", {
         headers: {
           cookie: ownerCookie,
@@ -1722,6 +1836,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       };
 
       assert.equal(listBeforeResponse.status, 200);
+      assert.equal(pairedSessionStateResponse.status, 200);
+      assert.deepInclude(pairedSessionState.client, {
+        deviceType: "mobile",
+        os: "iOS",
+        browser: "Safari",
+      });
       assert.equal(ownerPairingBody.label, "Julius iPhone");
       assert.lengthOf(clientsBefore, 2);
       assert.isDefined(pairedSessionId);
@@ -1898,6 +2018,34 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
         assert.equal(response.auth.policy, "desktop-managed-local");
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("accepts browser-agent websocket handshake with a dedicated websocket token", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const wsTokenResponse = yield* HttpClient.post("/api/auth/ws-token", {
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+        },
+      });
+      const wsTokenBody = (yield* wsTokenResponse.json) as {
+        readonly token?: string;
+      };
+      assert.equal(wsTokenResponse.status, 200);
+      assert.equal(typeof wsTokenBody.token, "string");
+
+      const wsUrl = `${yield* getWsServerUrl("/browser-agent/ws", {
+        authenticated: false,
+      })}?wsToken=${encodeURIComponent(wsTokenBody.token ?? "")}`;
+      const socket = yield* openRawWebSocket(wsUrl);
+      try {
+        assert.equal(socket.readyState, 1);
+      } finally {
+        yield* closeRawWebSocket(socket);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("serves attachment files from state dir", () =>

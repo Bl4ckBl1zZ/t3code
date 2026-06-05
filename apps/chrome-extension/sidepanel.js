@@ -96,7 +96,7 @@ async function refreshState() {
     currentWorkspaceLink = null;
     currentFrameOrigin = null;
     clearFrame();
-    setupCopyEl.textContent = "Pair this browser with T3 Code, then use Preview.";
+    setupCopyEl.textContent = "Reload the T3 Code Browser Agent extension, then use Preview.";
     setStatus("Not paired.");
     setMode("setup");
     return;

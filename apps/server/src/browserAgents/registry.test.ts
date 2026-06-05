@@ -4,6 +4,7 @@ import {
   AuthSessionId,
   BROWSER_AGENT_RUNTIME_PRIMITIVES,
   BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+  BrowserAgentContextId,
   EnvironmentId,
   ThreadId,
   type BrowserAgentOutboundMessage,
@@ -46,11 +47,34 @@ function connectAgent(
   nextCapabilities = capabilities,
 ): BrowserAgentOutboundMessage[] {
   const sentMessages: BrowserAgentOutboundMessage[] = [];
+  const tabIdByUrl = new Map<string, number>();
+  let nextTabId = 42;
   const connectionId = registry.connect({
     sessionId,
     send: (message) =>
       Effect.sync(() => {
         sentMessages.push(message);
+        if (message.type === "browserAgent.command.openOrFocusThreadTab") {
+          let tabId = tabIdByUrl.get(message.url);
+          if (tabId === undefined) {
+            tabId = nextTabId;
+            nextTabId += 1;
+            tabIdByUrl.set(message.url, tabId);
+          }
+          queueMicrotask(() => {
+            registry.handleMessage(connectionId, {
+              type: "browserAgent.command.result",
+              commandId: message.commandId,
+              ok: true,
+              tabId,
+              windowId: 7,
+              payload: {
+                url: message.url,
+                title: "Preview",
+              },
+            });
+          });
+        }
       }),
   });
   registry.handleMessage(connectionId, {
@@ -212,6 +236,109 @@ describe("BrowserAgentRegistry", () => {
     expect(result.workspaceLink?.threadId).toBe(workspaceInput.threadId);
     expect(result.workspaceLink?.url).toBe("http://localhost:5173/");
     expect(messages.at(-1)?.type).toBe("browserAgent.command.openOrFocusThreadTab");
+  });
+
+  it("keeps separate Chrome tabs for separate browser contexts in one thread", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    const messages = connectAgent(registry, sessionId);
+    const connectionId = registry.snapshot().agents[0]?.connectionId;
+    if (!connectionId) {
+      throw new Error("Expected connected browser agent.");
+    }
+
+    const main = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          url: "http://localhost:5173/main",
+          repoName: "repo",
+          focus: false,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: main.commandId,
+      ok: true,
+      tabId: 42,
+      windowId: 7,
+      payload: { url: "http://localhost:5173/main", title: "Main" },
+    });
+
+    const subagentContextId = BrowserAgentContextId.make("codex:subagent-thread-1");
+    const subagent = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          browserContextId: subagentContextId,
+          url: "http://localhost:5173/subagent",
+          repoName: "repo",
+          focus: false,
+          role: "agent",
+          owner: { kind: "agent", label: "Sub-agent" },
+          lifecycle: "ephemeral",
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: subagent.commandId,
+      ok: true,
+      tabId: 43,
+      windowId: 7,
+      payload: { url: "http://localhost:5173/subagent", title: "Sub-agent" },
+    });
+
+    expect(main.workspaceLink?.id).not.toBe(subagent.workspaceLink?.id);
+    expect(main.workspaceLink?.browserContextId).toBe("default");
+    expect(subagent.workspaceLink?.browserContextId).toBe(subagentContextId);
+    expect(
+      messages.filter((message) => message.type === "browserAgent.command.openOrFocusThreadTab"),
+    ).toHaveLength(2);
+
+    const snapshot = registry.snapshot();
+    expect(snapshot.workspaces).toHaveLength(1);
+    expect(snapshot.workspaceLinks).toHaveLength(2);
+    expect(snapshot.workspaceTabs.map((tab) => tab.browserContextId).toSorted()).toEqual([
+      "codex:subagent-thread-1",
+      "default",
+    ]);
+
+    const reopenedSubagent = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          browserContextId: subagentContextId,
+          url: "http://localhost:5173/subagent-next",
+          repoName: "repo",
+          focus: false,
+          role: "agent",
+          owner: { kind: "agent", label: "Sub-agent" },
+          lifecycle: "ephemeral",
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+
+    expect(reopenedSubagent.workspaceLink?.id).toBe(subagent.workspaceLink?.id);
+    expect(reopenedSubagent.workspaceLink?.tabId).toBeDefined();
+    expect(reopenedSubagent.workspaceLink?.windowId).toBe(7);
+    const reopenCommand = messages.find(
+      (message) =>
+        message.type === "browserAgent.command.openOrFocusThreadTab" &&
+        message.commandId === reopenedSubagent.commandId,
+    );
+    if (!reopenCommand || reopenCommand.type !== "browserAgent.command.openOrFocusThreadTab") {
+      throw new Error("Expected subagent reopen command.");
+    }
+    expect(reopenCommand.workspaceLink.tabId).toBeUndefined();
+    expect(reopenCommand.workspaceLink.windowId).toBeUndefined();
   });
 
   it("rejects agent browser access when the thread link is paused", async () => {

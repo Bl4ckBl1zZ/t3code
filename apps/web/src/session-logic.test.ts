@@ -934,6 +934,48 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("derives file-change stats from unified diffs when numeric counts are missing", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool-with-diff",
+        kind: "tool.completed",
+        summary: "Changed files",
+        payload: {
+          itemType: "file_change",
+          data: {
+            item: {
+              changes: [
+                {
+                  path: "apps/server/src/server.test.ts",
+                  kind: { type: "update" },
+                  diff: [
+                    "--- a/apps/server/src/server.test.ts",
+                    "+++ b/apps/server/src/server.test.ts",
+                    "@@ -1,5 +1,6 @@",
+                    " unchanged",
+                    "-old assertion",
+                    "+new assertion",
+                    "+extra expectation",
+                  ].join("\n"),
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toEqual(["apps/server/src/server.test.ts"]);
+    expect(entry?.changedFileStats).toEqual([
+      {
+        path: "apps/server/src/server.test.ts",
+        additions: 2,
+        deletions: 1,
+      },
+    ]);
+  });
+
   it("drops duplicated tool detail when it only repeats the title", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -951,6 +993,85 @@ describe("deriveWorkLogEntries", () => {
     const [entry] = deriveWorkLogEntries(activities, undefined);
     expect(entry?.toolTitle).toBe("Read File");
     expect(entry?.detail).toBeUndefined();
+  });
+
+  it("carries browser tool activity labels and actions into work log entries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "browser-click",
+        kind: "tool.completed",
+        summary: "Clicked browser",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Clicked browser",
+          browserAction: "click",
+          detail: "button-submit",
+          data: {
+            item: {
+              tool: "browser_click",
+              arguments: {
+                ref: "button-submit",
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      label: "Clicked browser",
+      toolTitle: "Clicked browser",
+      browserAction: "click",
+      detail: "button-submit",
+      itemType: "dynamic_tool_call",
+    });
+  });
+
+  it("carries browser screenshot artifacts into work log entries", () => {
+    const dataUrl = "data:image/jpeg;base64,ZmFrZQ==";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "browser-screenshot",
+        kind: "tool.completed",
+        summary: "Captured browser screenshot",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Captured browser screenshot",
+          browserAction: "screenshot",
+          data: {
+            item: {
+              tool: "browser_screenshot",
+              contentItems: [
+                {
+                  type: "inputText",
+                  text: JSON.stringify({
+                    dataUrl,
+                    width: 1280,
+                    height: 2048,
+                    url: "http://localhost:3000/print/quote",
+                    title: "Quote",
+                  }),
+                },
+                {
+                  type: "inputImage",
+                  imageUrl: dataUrl,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.browserScreenshot).toEqual({
+      dataUrl,
+      width: 1280,
+      height: 2048,
+      url: "http://localhost:3000/print/quote",
+      title: "Quote",
+    });
   });
 
   it("uses grep raw output summaries instead of repeating the generic tool label", () => {

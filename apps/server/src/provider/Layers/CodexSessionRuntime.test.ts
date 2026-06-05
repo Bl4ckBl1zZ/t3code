@@ -59,6 +59,19 @@ describe("buildTurnStartParams", () => {
     }
   });
 
+  it("documents T3 browser runtime tools in Codex modes", () => {
+    for (const instructions of [
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+    ]) {
+      assert.match(instructions, /T3 Browser Runtime/);
+      assert.match(instructions, /browser_open_tab/);
+      assert.match(instructions, /deep control enabled by default/);
+      assert.match(instructions, /browser_cdp_evaluate/);
+      assert.match(instructions, /raw Chrome tab IDs/);
+    }
+  });
+
   it("includes plan collaboration mode when requested", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
@@ -251,6 +264,7 @@ describe("openCodexThread", () => {
       dynamicTools: expect.arrayContaining([
         expect.objectContaining({ name: "browser_snapshot" }),
         expect.objectContaining({ name: "browser_click" }),
+        expect.objectContaining({ name: "browser_fill" }),
       ]),
     });
   });

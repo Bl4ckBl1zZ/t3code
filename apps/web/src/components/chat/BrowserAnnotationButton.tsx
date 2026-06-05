@@ -34,7 +34,7 @@ export const BrowserAnnotationButton = memo(function BrowserAnnotationButton({
           description:
             error instanceof Error
               ? error.message
-              : "Open the preview in a paired browser extension first.",
+              : "Open the preview in the browser extension first.",
         });
       })
       .finally(() => {
@@ -60,7 +60,7 @@ export const BrowserAnnotationButton = memo(function BrowserAnnotationButton({
           </Button>
         }
       />
-      <TooltipPopup side="bottom">Annotate the paired browser preview.</TooltipPopup>
+      <TooltipPopup side="bottom">Annotate the browser preview.</TooltipPopup>
     </Tooltip>
   );
 });

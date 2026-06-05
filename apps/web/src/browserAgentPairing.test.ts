@@ -11,6 +11,7 @@ import {
   buildBrowserAgentExtensionDownloadUrl,
   isBrowserAgentExtensionUnavailableError,
   isNoBrowserAgentConnectedError,
+  resolveBrowserAgentAutoConnectBaseUrls,
   resolveBrowserAgentBackendBaseUrl,
   waitForBrowserAgentConnection,
 } from "./browserAgentPairing";
@@ -194,10 +195,40 @@ describe("browser agent pairing", () => {
     await expect(resolveBrowserAgentBackendBaseUrl()).resolves.toBe("https://desktop.tail.ts.net/");
   });
 
+  it("tries loopback advertised endpoints first for browser agent auto-connect", async () => {
+    installWindow("http://100.105.249.96:3773/", {
+      getAdvertisedEndpoints: () =>
+        Promise.resolve([
+          {
+            httpBaseUrl: "http://100.105.249.96:3773/",
+            reachability: "private-network",
+          },
+          {
+            httpBaseUrl: "http://127.0.0.1:4277/",
+            reachability: "loopback",
+          },
+        ]),
+      getLocalEnvironmentBootstrap: () => ({
+        environmentId: "environment-local",
+        httpBaseUrl: "http://127.0.0.1:4277/",
+        wsBaseUrl: "ws://127.0.0.1:4277/",
+      }),
+    });
+
+    await expect(
+      resolveBrowserAgentAutoConnectBaseUrls("http://100.105.249.96:3773/"),
+    ).resolves.toEqual(["http://127.0.0.1:4277/", "http://100.105.249.96:3773/"]);
+  });
+
   it("detects the no-agent RPC failure", () => {
     expect(isNoBrowserAgentConnectedError({ code: "no-agent-connected" })).toBe(true);
     expect(
       isNoBrowserAgentConnectedError(new Error("No paired browser extension is connected.")),
+    ).toBe(true);
+    expect(
+      isNoBrowserAgentConnectedError(
+        new Error("No browser extension local-control session is connected."),
+      ),
     ).toBe(true);
     expect(isNoBrowserAgentConnectedError(new Error("Different failure"))).toBe(false);
   });

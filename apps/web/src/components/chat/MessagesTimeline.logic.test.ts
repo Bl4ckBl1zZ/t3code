@@ -3,9 +3,12 @@ import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  isSubagentProgressEntryId,
   normalizeCompactToolLabel,
+  resolveAgentActivityColor,
   resolveAssistantMessageCopyState,
   resolveCompactWorkEntryText,
+  resolveWorkEntryPreview,
 } from "./MessagesTimeline.logic";
 
 describe("computeMessageDurationStart", () => {
@@ -151,6 +154,24 @@ describe("normalizeCompactToolLabel", () => {
   });
 });
 
+describe("sub-agent progress presentation", () => {
+  it("detects Codex sub-agent progress rows", () => {
+    expect(isSubagentProgressEntryId("codex-subagent-progress:thread-1:child-1")).toBe(true);
+    expect(isSubagentProgressEntryId("tool:thread-1:child-1")).toBe(false);
+  });
+
+  it("assigns stable deterministic colors per agent key", () => {
+    const first = resolveAgentActivityColor("codex-subagent-progress:thread-1:child-1");
+    const repeat = resolveAgentActivityColor("codex-subagent-progress:thread-1:child-1");
+    const second = resolveAgentActivityColor("codex-subagent-progress:thread-1:child-2");
+
+    expect(repeat).toEqual(first);
+    expect(first.code.length).toBeGreaterThan(0);
+    expect(first.accent).toMatch(/^rgb\(/);
+    expect(second.code.length).toBeGreaterThan(0);
+  });
+});
+
 describe("resolveCompactWorkEntryText", () => {
   it("uses the concrete preview as the visible activity text", () => {
     expect(
@@ -177,6 +198,47 @@ describe("resolveCompactWorkEntryText", () => {
       visibleText: "Read file",
       contextText: "Read file",
       visibleTextIsPreview: false,
+    });
+  });
+});
+
+describe("resolveWorkEntryPreview", () => {
+  it("uses the changed-file preview when detail duplicates the file path", () => {
+    expect(
+      resolveWorkEntryPreview({
+        detail: "/Users/davidfaber/Github/t3code/apps/server/src/server.test.ts",
+        changedFiles: ["apps/server/src/server.test.ts"],
+        workspaceRoot: "/Users/davidfaber/Github/t3code",
+      }),
+    ).toEqual({
+      rawPreview: "t3code/apps/server/src/server.test.ts",
+      showChangedFileChips: false,
+    });
+  });
+
+  it("keeps changed-file chips when detail adds separate context", () => {
+    expect(
+      resolveWorkEntryPreview({
+        detail: "Updated server regression coverage",
+        changedFiles: ["apps/server/src/server.test.ts"],
+        workspaceRoot: "/Users/davidfaber/Github/t3code",
+      }),
+    ).toEqual({
+      rawPreview: "Updated server regression coverage",
+      showChangedFileChips: true,
+    });
+  });
+
+  it("keeps changed-file chips beside command previews", () => {
+    expect(
+      resolveWorkEntryPreview({
+        command: "bun run lint",
+        changedFiles: ["apps/server/src/server.test.ts"],
+        workspaceRoot: "/Users/davidfaber/Github/t3code",
+      }),
+    ).toEqual({
+      rawPreview: "bun run lint",
+      showChangedFileChips: true,
     });
   });
 });

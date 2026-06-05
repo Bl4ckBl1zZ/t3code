@@ -1,13 +1,68 @@
 const BACKEND_KEY = "t3code.browserAgent.backend";
 const LINKS_KEY = "t3code.browserAgent.workspaceLinks";
 const ACTIVE_LINK_KEY = "t3code.browserAgent.activeWorkspaceLink";
+const DIAGNOSTIC_LOG_LIMIT = 300;
 const SIDE_PANEL_PATH = "sidepanel.html";
+const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+const AUTO_CONNECT_PATH = "/browser-agent/auto-connect";
+const LOCAL_CONTROL_WS_PATH = "/browser-agent/local-ws";
+const AUTO_CONNECT_ALARM_NAME = "t3code.browserAgent.autoConnect";
+const AUTO_CONNECT_INTERVAL_MINUTES = 1;
+const AUTO_CONNECT_REQUEST_TIMEOUT_MS = 800;
+const AUTO_CONNECT_PORT_START = 3773;
+const AUTO_CONNECT_PORT_COUNT = 12;
+const WEBSOCKET_OPEN_TIMEOUT_MS = 5_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
-const RUNTIME_PROTOCOL_VERSION = 1;
+const RUNTIME_PROTOCOL_VERSION = 2;
 const RUNTIME_PRIMITIVES = [
   "preview.openOrFocus",
   "annotation.activate",
+  "annotation.cancel",
+  "annotation.captureElement",
+  "workspace.create",
+  "workspace.restore",
+  "workspace.detach",
+  "workspace.pauseControl",
+  "workspace.resumeControl",
+  "workspace.snapshot",
+  "tab.create",
+  "tab.attachActive",
+  "tab.openOrFocusPrimary",
+  "tab.focus",
+  "tab.close",
+  "tab.promoteToPrimary",
+  "tab.rename",
+  "tab.setPurpose",
+  "tab.navigate",
+  "tab.back",
+  "tab.forward",
+  "tab.reload",
+  "tab.input",
+  "tab.snapshot",
+  "tab.screenshot",
+  "tab.stream.start",
+  "tab.stream.stop",
+  "tab.capture.start",
+  "tab.capture.stop",
+  "sidePanel.open",
+  "sidePanel.setThread",
+  "sidePanel.clearThread",
+  "sidePanel.syncActiveTab",
+  "sidePanel.showOpenPrompt",
+  "sidePanel.hideOpenPrompt",
+  "cdp.send",
+  "cdp.runtime.evaluate",
+  "cdp.input.dispatch",
+  "cdp.network.enable",
+  "cdp.network.disable",
+  "cdp.accessibility.snapshot",
+  "cdp.console.read",
+  "diagnostics.snapshot",
+  "diagnostics.logs",
+  "diagnostics.pingBackend",
+  "diagnostics.forceReconnect",
+  "diagnostics.clear",
   "threadTab.openOrFocus",
   "threadTab.attachActive",
   "threadTab.detach",
@@ -23,6 +78,7 @@ const RUNTIME_PRIMITIVES = [
 
 let socket = null;
 let socketBaseUrl = null;
+let localControlBaseUrl = null;
 let socketEventController = null;
 let reconnectTimer = null;
 let reconnectDelayMs = RECONNECT_MIN_MS;
@@ -34,6 +90,47 @@ let lastConnectionOpenedAt = null;
 let lastConnectionError = null;
 let lastHelloSentAt = null;
 let lastTabsSnapshotSentAt = null;
+let autoConnectInFlight = null;
+let diagnosticLogs = [];
+let cdpAttachedTabIds = new Set();
+let liveCaptureWorkspaceLinkIds = new Set();
+let cdpScreencastSessions = new Map();
+let nextCdpScreencastFrameSequence = 0;
+
+function addDiagnosticLog(level, message, details = null) {
+  diagnosticLogs.push({
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    details,
+  });
+  if (diagnosticLogs.length > DIAGNOSTIC_LOG_LIMIT) {
+    diagnosticLogs = diagnosticLogs.slice(-DIAGNOSTIC_LOG_LIMIT);
+  }
+}
+
+function detectBrowser() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("edg/")) return "edge";
+  if (ua.includes("brave")) return "brave";
+  if (ua.includes("chromium")) return "chromium";
+  if (ua.includes("chrome")) return "chrome";
+  return "unknown";
+}
+
+function capabilityGroups() {
+  return {
+    workspace: RUNTIME_PRIMITIVES.filter(
+      (primitive) => primitive.startsWith("workspace.") || primitive.startsWith("tab."),
+    ),
+    sidePanel: RUNTIME_PRIMITIVES.filter((primitive) => primitive.startsWith("sidePanel.")),
+    annotation: RUNTIME_PRIMITIVES.filter((primitive) => primitive.startsWith("annotation.")),
+    cdp: chrome.debugger
+      ? RUNTIME_PRIMITIVES.filter((primitive) => primitive.startsWith("cdp."))
+      : [],
+    diagnostics: RUNTIME_PRIMITIVES.filter((primitive) => primitive.startsWith("diagnostics.")),
+  };
+}
 
 function normalizeBaseUrl(value) {
   try {
@@ -57,6 +154,12 @@ function wsUrlFor(baseUrl, token) {
   return url.toString();
 }
 
+function localControlWsUrlFor(baseUrl) {
+  const url = new URL(LOCAL_CONTROL_WS_PATH, `${baseUrl}/`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 function chatUrlForWorkspaceLink(baseUrl, link, sidebarSessionToken) {
   const url = new URL(
     `/${encodeURIComponent(link.environmentId)}/${encodeURIComponent(link.threadId)}`,
@@ -70,28 +173,81 @@ function chatUrlForWorkspaceLink(baseUrl, link, sidebarSessionToken) {
   return url.toString();
 }
 
+function activeBrowserAgentBaseUrl(backend = currentBackend) {
+  return socketBaseUrl ?? localControlBaseUrl ?? backend?.baseUrl ?? null;
+}
+
+function hasActiveBrowserAgentTransport(backend = currentBackend) {
+  return Boolean(backend) || socket?.readyState === WebSocket.OPEN || Boolean(localControlBaseUrl);
+}
+
 async function workspaceLinkForContent(link, tab = null, options = {}) {
-  const backend = currentBackend ?? (await readBackend());
+  const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
   const tabUrl = typeof tab?.url === "string" && tab.url.length > 0 ? tab.url : null;
+  const workspaceId =
+    typeof link.workspaceId === "string" && link.workspaceId.length > 0
+      ? link.workspaceId
+      : link.id;
+  const browserControlState =
+    link.controlState === "paused-by-user" || link.controlState === "paused-by-policy"
+      ? "paused"
+      : link.controlState === "unavailable"
+        ? "off"
+        : "deep";
   const nextLink = {
     ...link,
+    workspaceId,
+    browserControlState,
+    deepControlEnabled: browserControlState === "deep",
+    cdpAttached:
+      link.cdpAttached === true || (tab?.id !== undefined && cdpAttachedTabIds.has(Number(tab.id))),
+    role: link.role ?? "primary",
+    purpose: link.purpose ?? null,
+    owner: link.owner ?? { kind: "user" },
+    lifecycle: link.lifecycle ?? "persistent",
+    streamState: link.streamState ?? (link.captureState === "off" ? "off" : link.captureState),
     ...(link.devServerUrl === "about:blank" && tabUrl ? { devServerUrl: tabUrl } : {}),
     ...(tab?.id !== undefined ? { tabId: tab.id } : {}),
     ...(tab?.windowId !== undefined ? { windowId: tab.windowId } : {}),
     ...(tabUrl ? { url: tabUrl } : {}),
     ...(typeof tab?.title === "string" ? { title: tab.title } : {}),
   };
-  if (!backend?.baseUrl) {
+  if (!baseUrl) {
     return nextLink;
   }
   const sidebarSessionToken =
     typeof options.sidebarSessionToken === "string" && options.sidebarSessionToken.length > 0
       ? options.sidebarSessionToken
-      : backend.sessionToken;
+      : backend?.sessionToken;
   return {
     ...nextLink,
-    t3Url: chatUrlForWorkspaceLink(backend.baseUrl, nextLink, sidebarSessionToken),
+    t3Url: chatUrlForWorkspaceLink(baseUrl, nextLink, sidebarSessionToken),
   };
+}
+
+async function applyDefaultDeepControl(link, tab) {
+  if (link.browserControlState !== "deep" || tab?.id === undefined) {
+    return link;
+  }
+  try {
+    await attachCdpToTab(tab.id);
+    return {
+      ...link,
+      deepControlEnabled: true,
+      cdpAttached: true,
+    };
+  } catch (error) {
+    addDiagnosticLog("warn", "Default deep control attach failed", {
+      tabId: tab.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ...link,
+      deepControlEnabled: true,
+      cdpAttached: false,
+    };
+  }
 }
 
 async function readBackend() {
@@ -103,15 +259,22 @@ async function readBackend() {
   return backend;
 }
 
+async function readActivePairedBackend() {
+  return localControlBaseUrl ? null : (currentBackend ?? (await readBackend()));
+}
+
 async function writeBackend(backend) {
+  localControlBaseUrl = null;
   currentBackend = backend;
   await chrome.storage.local.set({ [BACKEND_KEY]: backend });
 }
 
 async function clearBackend() {
+  localControlBaseUrl = null;
   currentBackend = null;
   workspaceLinksCache = [];
   closeSocket();
+  await detachAllCdpTargets();
   await chrome.storage.local.remove([BACKEND_KEY, LINKS_KEY, ACTIVE_LINK_KEY]);
   await disableNativeSidePanelForAllTabs();
 }
@@ -139,6 +302,17 @@ async function upsertLink(link) {
   next.push(link);
   workspaceLinksCache = next;
   await chrome.storage.local.set({ [LINKS_KEY]: next });
+}
+
+function tabsHaveSameIdentity(left, right) {
+  return (
+    left?.tabId !== undefined &&
+    left?.windowId !== undefined &&
+    right?.tabId !== undefined &&
+    right?.windowId !== undefined &&
+    String(left.tabId) === String(right.tabId) &&
+    String(left.windowId) === String(right.windowId)
+  );
 }
 
 function linkForStorage(link) {
@@ -180,6 +354,7 @@ async function fetchJson(baseUrl, path, options = {}) {
     method: options.method ?? "GET",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -193,6 +368,260 @@ async function fetchJson(baseUrl, path, options = {}) {
     throw new Error(message || `Request failed with status ${response.status}`);
   }
   return await response.json();
+}
+
+function localAutoConnectBaseUrls() {
+  return Array.from(
+    { length: AUTO_CONNECT_PORT_COUNT },
+    (_value, index) => `http://127.0.0.1:${AUTO_CONNECT_PORT_START + index}`,
+  );
+}
+
+function normalizeAutoConnectBaseUrls(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const normalized = value
+    .map((entry) => normalizeBaseUrl(entry))
+    .filter((entry) => typeof entry === "string" && entry.length > 0);
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function fetchAutoConnectSession(baseUrl) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), AUTO_CONNECT_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetchJson(baseUrl, AUTO_CONNECT_PATH, {
+      method: "POST",
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function shouldSkipAutoConnectProbe() {
+  return (
+    socket?.readyState === WebSocket.OPEN ||
+    socket?.readyState === WebSocket.CONNECTING ||
+    Boolean(connecting)
+  );
+}
+
+function currentTransportConnectionResult() {
+  if (socket?.readyState !== WebSocket.OPEN) {
+    return null;
+  }
+  const baseUrl = socketBaseUrl ?? localControlBaseUrl ?? currentBackend?.baseUrl ?? null;
+  return {
+    connected: true,
+    ...(baseUrl ? { baseUrl } : {}),
+    transport: localControlBaseUrl ? "local-control" : "paired",
+  };
+}
+
+function connectionErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function discardFailedConnectionState(baseUrl, error, message) {
+  const errorMessage = connectionErrorMessage(error);
+  lastConnectionError = errorMessage;
+  addDiagnosticLog("warn", message, { baseUrl, error: errorMessage });
+  closeSocket();
+  if (currentBackend?.baseUrl === baseUrl) {
+    currentBackend = null;
+  }
+  if (localControlBaseUrl === baseUrl) {
+    localControlBaseUrl = null;
+  }
+  reconnectDelayMs = RECONNECT_MIN_MS;
+}
+
+async function connectAutoConnectCandidate(baseUrl, sessionToken) {
+  const backend = {
+    baseUrl,
+    sessionToken,
+    pairedAt: new Date().toISOString(),
+  };
+  currentBackend = backend;
+  try {
+    await connectBackend({ force: true });
+  } catch (error) {
+    discardFailedConnectionState(
+      baseUrl,
+      error,
+      "Auto-connect candidate authenticated but the WebSocket failed.",
+    );
+    throw error;
+  }
+  await writeBackend(backend);
+}
+
+async function autoConnectLocalBackend(options = {}) {
+  const customBaseUrls = normalizeAutoConnectBaseUrls(options.baseUrls);
+  if (autoConnectInFlight && !customBaseUrls) {
+    return autoConnectInFlight;
+  }
+
+  const connect = async () => {
+    if (customBaseUrls && autoConnectInFlight) {
+      await autoConnectInFlight.catch(() => undefined);
+    }
+
+    if (customBaseUrls && connecting) {
+      const result = await connecting.catch(() => null);
+      const activeTransport = currentTransportConnectionResult();
+      if (activeTransport && customBaseUrls.includes(activeTransport.baseUrl)) {
+        return activeTransport;
+      }
+      if (result?.connected === true && customBaseUrls.includes(result.baseUrl)) {
+        return result;
+      }
+    }
+
+    const activeTransport = currentTransportConnectionResult();
+    if (activeTransport && (!customBaseUrls || customBaseUrls.includes(activeTransport.baseUrl))) {
+      return activeTransport;
+    }
+
+    if (customBaseUrls && socket) {
+      closeSocket();
+    }
+    if (customBaseUrls) {
+      currentBackend = null;
+      localControlBaseUrl = null;
+    }
+
+    if (shouldSkipAutoConnectProbe()) {
+      return { connected: false, skipped: true };
+    }
+
+    const candidateBaseUrls = customBaseUrls ?? localAutoConnectBaseUrls();
+    let lastError = null;
+    for (const baseUrl of candidateBaseUrls) {
+      if (shouldSkipAutoConnectProbe()) {
+        return { connected: false, skipped: true };
+      }
+      try {
+        const result = await connectLocalControlBackend(baseUrl);
+        addDiagnosticLog("info", "Connected browser agent through local control socket", {
+          baseUrl,
+        });
+        return { ...result, baseUrl };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    const existingBackend = await readActivePairedBackend();
+    if (existingBackend && !customBaseUrls) {
+      try {
+        return await connectBackend();
+      } catch (error) {
+        discardFailedConnectionState(
+          existingBackend.baseUrl,
+          error,
+          "Saved browser-agent backend failed; probing authenticated local candidates.",
+        );
+      }
+    }
+
+    for (const baseUrl of candidateBaseUrls) {
+      if (shouldSkipAutoConnectProbe()) {
+        return { connected: false, skipped: true };
+      }
+      try {
+        const result = await fetchAutoConnectSession(baseUrl);
+        if (typeof result?.sessionToken !== "string" || result.sessionToken.length === 0) {
+          continue;
+        }
+        await connectAutoConnectCandidate(baseUrl, result.sessionToken);
+        addDiagnosticLog("info", "Auto-connected browser agent to local T3 Code backend", {
+          baseUrl,
+        });
+        return { connected: true, baseUrl };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError) {
+      lastConnectionError = connectionErrorMessage(lastError);
+    }
+    return { connected: false };
+  };
+
+  if (customBaseUrls) {
+    return await connect();
+  }
+
+  autoConnectInFlight = connect();
+
+  try {
+    return await autoConnectInFlight;
+  } finally {
+    autoConnectInFlight = null;
+  }
+}
+
+function autoConnectInBackground(reason) {
+  void autoConnectLocalBackend().catch((error) => {
+    lastConnectionError = connectionErrorMessage(error);
+    console.warn(`[T3 Code] failed to auto-connect browser agent after ${reason}`, error);
+  });
+}
+
+async function ensureBrowserAgentTransport() {
+  if (socket?.readyState === WebSocket.OPEN) {
+    return { connected: true };
+  }
+  const result = await autoConnectLocalBackend();
+  if (result.connected !== true) {
+    throw new Error("T3 Code browser-agent transport is not connected.");
+  }
+  return result;
+}
+
+function isExtensionPageSender(sender) {
+  return typeof sender?.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+
+function isTrustedAutoConnectHostname(hostname) {
+  const normalized = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, "$1");
+  if (normalized === "localhost" || normalized === "::1" || normalized.endsWith(".ts.net")) {
+    return true;
+  }
+  const parts = normalized.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+  const [first, second] = parts;
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 100 && second >= 64 && second <= 127)
+  );
+}
+
+function isTrustedAutoConnectContentSender(sender, message) {
+  if (typeof sender?.url !== "string" || typeof message?.pageBaseUrl !== "string") {
+    return false;
+  }
+  try {
+    const senderUrl = new URL(sender.url);
+    const pageBaseUrl = new URL(message.pageBaseUrl);
+    return (
+      senderUrl.origin === pageBaseUrl.origin && isTrustedAutoConnectHostname(pageBaseUrl.hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function pairBackend(input) {
@@ -311,7 +740,7 @@ async function diagnoseBackend(backend) {
     });
     return {
       authenticated: session?.authenticated === true,
-      role: session?.auth?.role ?? null,
+      role: session?.role ?? null,
       sessionMethod: session?.sessionMethod ?? null,
     };
   });
@@ -348,22 +777,151 @@ function closeSocket() {
 }
 
 function scheduleReconnect() {
-  if (!currentBackend || reconnectTimer !== null) {
+  if ((!currentBackend && !localControlBaseUrl) || reconnectTimer !== null) {
     return;
   }
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    void connectBackend().catch(() => scheduleReconnect());
+    const reconnect = localControlBaseUrl
+      ? connectLocalControlBackend(localControlBaseUrl)
+      : connectBackend();
+    void reconnect.catch(() => scheduleReconnect());
   }, reconnectDelayMs);
   reconnectDelayMs = Math.min(RECONNECT_MAX_MS, reconnectDelayMs * 2);
 }
 
-function connectBackendInBackground(reason) {
-  void connectBackend().catch((error) => {
-    lastConnectionError = error instanceof Error ? error.message : String(error);
-    console.warn(`[T3 Code] failed to connect browser agent after ${reason}`, error);
-    scheduleReconnect();
+function scheduleAutoConnectAlarm() {
+  if (!chrome.alarms?.create) {
+    return;
+  }
+  void chrome.alarms.create(AUTO_CONNECT_ALARM_NAME, {
+    periodInMinutes: AUTO_CONNECT_INTERVAL_MINUTES,
   });
+}
+
+function waitForSocketOpen(nextSocket, eventOptions) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      nextSocket.close();
+      reject(new Error("Timed out waiting for browser-agent WebSocket to open."));
+    }, WEBSOCKET_OPEN_TIMEOUT_MS);
+    const settle = (action, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutId);
+      action(value);
+    };
+    nextSocket.addEventListener("open", () => settle(resolve, undefined), {
+      ...eventOptions,
+      once: true,
+    });
+    nextSocket.addEventListener(
+      "error",
+      () => settle(reject, new Error("Browser-agent WebSocket error.")),
+      { ...eventOptions, once: true },
+    );
+    nextSocket.addEventListener(
+      "close",
+      () => settle(reject, new Error("Browser-agent WebSocket closed before opening.")),
+      { ...eventOptions, once: true },
+    );
+  });
+}
+
+async function openBrowserAgentSocket(input) {
+  closeSocket();
+  socketBaseUrl = input.baseUrl;
+  socket = new WebSocket(input.wsUrl);
+  socketEventController = new AbortController();
+  const eventOptions = { signal: socketEventController.signal };
+  socket.addEventListener(
+    "open",
+    () => {
+      lastConnectionOpenedAt = new Date().toISOString();
+      reconnectDelayMs = RECONNECT_MIN_MS;
+      sendHello();
+      void sendTabsSnapshot();
+    },
+    eventOptions,
+  );
+  socket.addEventListener(
+    "message",
+    (event) => {
+      void handleServerMessage(event.data).catch((error) => {
+        console.warn("[T3 Code] browser-agent command failed", error);
+      });
+    },
+    eventOptions,
+  );
+  socket.addEventListener(
+    "close",
+    () => {
+      socket = null;
+      socketBaseUrl = null;
+      socketEventController = null;
+      scheduleReconnect();
+    },
+    eventOptions,
+  );
+  socket.addEventListener(
+    "error",
+    () => {
+      lastConnectionError = "Browser-agent WebSocket error.";
+      socket?.close();
+    },
+    eventOptions,
+  );
+  await waitForSocketOpen(socket, eventOptions);
+}
+
+async function connectLocalControlBackend(baseUrl) {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  if (!normalizedBaseUrl) {
+    throw new Error("Invalid local browser-control backend URL.");
+  }
+  if (connecting) {
+    return connecting;
+  }
+  connecting = (async () => {
+    lastConnectionAttemptAt = new Date().toISOString();
+    lastConnectionError = null;
+    if (
+      socket &&
+      socket.readyState === WebSocket.OPEN &&
+      socketBaseUrl === normalizedBaseUrl &&
+      localControlBaseUrl === normalizedBaseUrl
+    ) {
+      return { connected: true, transport: "local-control" };
+    }
+    currentBackend = null;
+    localControlBaseUrl = normalizedBaseUrl;
+    try {
+      await openBrowserAgentSocket({
+        baseUrl: normalizedBaseUrl,
+        wsUrl: localControlWsUrlFor(normalizedBaseUrl),
+      });
+    } catch (error) {
+      discardFailedConnectionState(
+        normalizedBaseUrl,
+        error,
+        "Local browser-control socket failed.",
+      );
+      throw error;
+    }
+    return { connected: true, transport: "local-control" };
+  })();
+  try {
+    return await connecting;
+  } finally {
+    connecting = null;
+  }
 }
 
 async function connectBackend(options = {}) {
@@ -373,6 +931,7 @@ async function connectBackend(options = {}) {
   connecting = (async () => {
     lastConnectionAttemptAt = new Date().toISOString();
     lastConnectionError = null;
+    localControlBaseUrl = null;
     const backend = currentBackend ?? (await readBackend());
     currentBackend = backend;
     if (!backend) {
@@ -387,51 +946,13 @@ async function connectBackend(options = {}) {
       return { connected: true };
     }
 
-    closeSocket();
     await assertBrowserAgentBackend(backend);
     const token = await getWsToken(backend);
-    socketBaseUrl = backend.baseUrl;
-    socket = new WebSocket(wsUrlFor(backend.baseUrl, token));
-    socketEventController = new AbortController();
-    const eventOptions = { signal: socketEventController.signal };
-    socket.addEventListener(
-      "open",
-      () => {
-        lastConnectionOpenedAt = new Date().toISOString();
-        reconnectDelayMs = RECONNECT_MIN_MS;
-        sendHello();
-        void sendTabsSnapshot();
-      },
-      eventOptions,
-    );
-    socket.addEventListener(
-      "message",
-      (event) => {
-        void handleServerMessage(event.data).catch((error) => {
-          console.warn("[T3 Code] browser-agent command failed", error);
-        });
-      },
-      eventOptions,
-    );
-    socket.addEventListener(
-      "close",
-      () => {
-        socket = null;
-        socketBaseUrl = null;
-        socketEventController = null;
-        scheduleReconnect();
-      },
-      eventOptions,
-    );
-    socket.addEventListener(
-      "error",
-      () => {
-        lastConnectionError = "Browser-agent WebSocket error.";
-        socket?.close();
-      },
-      eventOptions,
-    );
-    return { connected: true };
+    await openBrowserAgentSocket({
+      baseUrl: backend.baseUrl,
+      wsUrl: wsUrlFor(backend.baseUrl, token),
+    });
+    return { connected: true, transport: "paired" };
   })();
   try {
     return await connecting;
@@ -449,12 +970,20 @@ function sendToServer(message) {
 
 function sendHello() {
   lastHelloSentAt = new Date().toISOString();
+  const groups = capabilityGroups();
+  const extensionVersion = chrome.runtime.getManifest().version;
   sendToServer({
     type: "browserAgent.hello",
+    runtime: {
+      protocolVersion: RUNTIME_PROTOCOL_VERSION,
+      extensionVersion,
+      browser: detectBrowser(),
+      platform: navigator.platform,
+    },
     device: {
-      extensionVersion: chrome.runtime.getManifest().version,
+      extensionVersion,
       userAgent: navigator.userAgent,
-      browser: "Chrome",
+      browser: detectBrowser(),
       platform: navigator.platform,
     },
     capabilities: {
@@ -472,7 +1001,12 @@ function sendHello() {
       canAttachActiveTab: true,
       canThreadTabCommands: true,
       canCaptureThreadTab: true,
+      ...groups,
     },
+  });
+  addDiagnosticLog("info", "Sent browser-agent hello", {
+    protocolVersion: RUNTIME_PROTOCOL_VERSION,
+    capabilities: groups,
   });
 }
 
@@ -556,6 +1090,9 @@ function tabMatchesWorkspaceLink(tab, link) {
   if (linkMatchesTabIdentity(link, tab)) {
     return true;
   }
+  if (!workspaceLinkAllowsUrlDiscovery(link)) {
+    return false;
+  }
   if (typeof tab.url === "string") {
     if (typeof link.url === "string" && tab.url === link.url) {
       return true;
@@ -592,6 +1129,14 @@ function linkMatchesTabIdentity(link, tab) {
   );
 }
 
+function workspaceLinkAllowsUrlDiscovery(link) {
+  return link.role !== "agent" && link.lifecycle !== "ephemeral";
+}
+
+function workspaceLinkRequiresExclusiveTabIdentity(link) {
+  return link.role === "agent" || link.lifecycle === "ephemeral";
+}
+
 function selectWorkspaceLinkForTab(links, tab) {
   const matchingUrlLinks = links.filter((entry) => tabMatchesWorkspaceLink(tab, entry));
   if (matchingUrlLinks.length === 0) {
@@ -617,6 +1162,15 @@ async function findPreviewTab(link) {
     try {
       const tab = await chrome.tabs.get(Number(link.tabId));
       if (tabMatchesWorkspaceLink(tab, link)) {
+        if (workspaceLinkRequiresExclusiveTabIdentity(link)) {
+          const links = await readLinks();
+          const claimedByDifferentLink = links.some(
+            (entry) => entry.id !== link.id && tabsHaveSameIdentity(entry, link),
+          );
+          if (claimedByDifferentLink) {
+            return null;
+          }
+        }
         return tab;
       }
     } catch {
@@ -625,6 +1179,42 @@ async function findPreviewTab(link) {
   }
   const tabs = await chrome.tabs.query({});
   return tabs.find((tab) => tabMatchesWorkspaceLink(tab, link)) ?? null;
+}
+
+function urlsMatchForNavigation(tabUrl, expectedUrl) {
+  if (tabUrl === expectedUrl) {
+    return true;
+  }
+  const tab = normalizeUrlForMatch(tabUrl ?? "");
+  const expected = normalizeUrlForMatch(expectedUrl);
+  return Boolean(tab && expected && tab.href === expected.href);
+}
+
+async function waitForTabUrl(tabId, expectedUrl, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastTab = null;
+  while (Date.now() < deadline) {
+    try {
+      lastTab = await chrome.tabs.get(tabId);
+      if (urlsMatchForNavigation(lastTab.url, expectedUrl)) {
+        return lastTab;
+      }
+    } catch {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return lastTab;
+}
+
+async function navigateTabToUrl(tab, url) {
+  if (!tab?.id) {
+    return tab;
+  }
+  if (!urlsMatchForNavigation(tab.url, url)) {
+    tab = await chrome.tabs.update(tab.id, { url });
+  }
+  return (await waitForTabUrl(tab.id, url)) ?? tab;
 }
 
 async function ensureGrouped(tabId, repoName) {
@@ -831,6 +1421,64 @@ function sidePanelOpenFailure(error) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeCaptureQuality(input = {}) {
+  const maxWidth = Number.isFinite(input.maxWidth) && input.maxWidth > 0 ? input.maxWidth : 1920;
+  const maxHeight =
+    Number.isFinite(input.maxHeight) && input.maxHeight > 0 ? input.maxHeight : 1080;
+  const fps = Number.isFinite(input.fps) && input.fps > 0 ? Math.min(input.fps, 30) : 15;
+  const imageQuality =
+    Number.isFinite(input.imageQuality) && input.imageQuality > 0 && input.imageQuality <= 1
+      ? input.imageQuality
+      : 0.72;
+  return {
+    maxWidth,
+    maxHeight,
+    fps,
+    imageQuality,
+  };
+}
+
+async function ensureOffscreenDocument() {
+  if (!chrome.offscreen?.createDocument) {
+    throw new Error("Chrome offscreen documents are unavailable.");
+  }
+  if (chrome.offscreen.hasDocument && (await chrome.offscreen.hasDocument())) {
+    return;
+  }
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_DOCUMENT_PATH,
+    reasons: ["BLOBS"],
+    justification: "Downscale and encode browser screenshots for T3 Code.",
+  });
+}
+
+async function sendOffscreenMessage(message) {
+  await ensureOffscreenDocument();
+  const response = await chrome.runtime.sendMessage(message);
+  return ensureOkResponse(response).payload;
+}
+
+async function captureVisibleTabWithRetry(windowId, options = {}, attempts = 4) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await chrome.tabs.captureVisibleTab(windowId, options);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND")) {
+        throw error;
+      }
+      await sleep(650 * (attempt + 1));
+    }
+  }
+  throw lastError ?? new Error("Failed to capture visible tab.");
+}
+
 function openNativeSidePanel(tab) {
   if (!chrome.sidePanel?.open) {
     return Promise.resolve({ opened: false, reason: "Chrome Side Panel API is unavailable." });
@@ -964,7 +1612,8 @@ async function resolveSidePanelActiveTab(input) {
 }
 
 async function getSidePanelState(input = {}) {
-  const backend = currentBackend ?? (await readBackend());
+  const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
   const activeTab = await resolveSidePanelActiveTab(input);
   if (activeTab) {
     void clearSidePanelOpenPrompt(activeTab).catch(() => undefined);
@@ -994,8 +1643,8 @@ async function getSidePanelState(input = {}) {
 
   return {
     ok: true,
-    paired: Boolean(backend),
-    baseUrl: backend?.baseUrl ?? null,
+    paired: hasActiveBrowserAgentTransport(backend),
+    baseUrl,
     connected: socket?.readyState === WebSocket.OPEN,
     workspaceLink,
     activeTab: activeTab
@@ -1065,9 +1714,12 @@ async function openOrFocusPreview(command) {
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
   await ensureGrouped(tab.id, link.repoName);
-  const contentLink = await workspaceLinkForContent(link, tab, {
-    sidebarSessionToken: command.sidebarSessionToken,
-  });
+  const contentLink = await applyDefaultDeepControl(
+    await workspaceLinkForContent(link, tab, {
+      sidebarSessionToken: command.sidebarSessionToken,
+    }),
+    tab,
+  );
   await setActiveNativeSidePanelLink(tab, contentLink, { open: true });
   await sendTabsSnapshot();
   sendToServer({
@@ -1087,7 +1739,7 @@ async function activateAnnotation(command) {
   }
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
-  const contentLink = await workspaceLinkForContent(link, tab);
+  const contentLink = await applyDefaultDeepControl(await workspaceLinkForContent(link, tab), tab);
   await setActiveNativeSidePanelLink(tab, contentLink);
   await sendTabMessage(tab.id, {
     type: "t3code.browserAgent.activateAnnotation",
@@ -1105,13 +1757,37 @@ async function activateAnnotation(command) {
 async function openOrFocusThreadTab(command) {
   const link = command.workspaceLink;
   let tab = await findPreviewTab(link);
+  addDiagnosticLog("info", "Opening thread tab", {
+    commandId: command.commandId,
+    requestedUrl: command.url,
+    foundTabId: tab?.id ?? null,
+    foundTabUrl: tab?.url ?? null,
+    workspaceLinkId: link.id,
+    browserContextId: link.browserContextId ?? null,
+    marker: "wait-for-tab-url-v2",
+  });
   if (!tab) {
     tab = await chrome.tabs.create({ url: command.url, active: command.focus !== false });
   } else if (command.focus !== false) {
     await chrome.windows.update(tab.windowId, { focused: true });
     await chrome.tabs.update(tab.id, { active: true });
   }
-  const contentLink = await workspaceLinkForContent(link, tab);
+  if (command.url) {
+    tab = await navigateTabToUrl(tab, command.url);
+    addDiagnosticLog("info", "Thread tab navigation settled", {
+      commandId: command.commandId,
+      requestedUrl: command.url,
+      tabId: tab?.id ?? null,
+      tabUrl: tab?.url ?? null,
+      tabStatus: tab?.status ?? null,
+      matched: urlsMatchForNavigation(tab?.url, command.url),
+      marker: "wait-for-tab-url-v2",
+    });
+    if (!urlsMatchForNavigation(tab?.url, command.url)) {
+      throw new Error(`The linked browser tab did not navigate to ${command.url}.`);
+    }
+  }
+  const contentLink = await applyDefaultDeepControl(await workspaceLinkForContent(link, tab), tab);
   await upsertLink(linkForStorage(contentLink));
   await setNativeSidePanelForTab(tab, true).catch((error) => {
     console.warn("[T3 Code] failed to enable side panel for linked tab", error);
@@ -1136,7 +1812,10 @@ async function attachActiveTab(command) {
   if (!activeTab?.id || activeTab.windowId === undefined) {
     throw new Error("No active browser tab is available to attach.");
   }
-  const contentLink = await workspaceLinkForContent(command.workspaceLink, activeTab);
+  const contentLink = await applyDefaultDeepControl(
+    await workspaceLinkForContent(command.workspaceLink, activeTab),
+    activeTab,
+  );
   await upsertLink(linkForStorage(contentLink));
   await writeActiveWorkspaceLink(contentLink);
   await setNativeSidePanelForTab(activeTab, true).catch((error) => {
@@ -1191,6 +1870,164 @@ async function tabForWorkspaceLinkId(workspaceLinkId) {
   return { link, tab };
 }
 
+function debuggerTargetForTab(tabId) {
+  return { tabId: Number(tabId) };
+}
+
+async function attachCdpToTab(tabId) {
+  if (!chrome.debugger?.attach) {
+    throw new Error("Chrome debugger API is unavailable in this browser.");
+  }
+  const numericId = Number(tabId);
+  if (!Number.isInteger(numericId) || numericId < 0) {
+    throw new Error("Cannot attach CDP to an invalid tab id.");
+  }
+  if (cdpAttachedTabIds.has(numericId)) {
+    return { attached: true, alreadyAttached: true };
+  }
+  await chrome.debugger.attach(debuggerTargetForTab(numericId), "1.3");
+  cdpAttachedTabIds.add(numericId);
+  addDiagnosticLog("info", "Attached CDP debugger", { tabId: numericId });
+  return { attached: true };
+}
+
+async function detachCdpFromTab(tabId) {
+  if (!chrome.debugger?.detach) {
+    return { detached: false, reason: "Chrome debugger API is unavailable." };
+  }
+  const numericId = Number(tabId);
+  if (!Number.isInteger(numericId) || numericId < 0 || !cdpAttachedTabIds.has(numericId)) {
+    return { detached: true, alreadyDetached: true };
+  }
+  await stopCdpScreencastsForTab(numericId);
+  await chrome.debugger.detach(debuggerTargetForTab(numericId)).catch((error) => {
+    addDiagnosticLog("warn", "Failed to detach CDP debugger", {
+      tabId: numericId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  cdpAttachedTabIds.delete(numericId);
+  addDiagnosticLog("info", "Detached CDP debugger", { tabId: numericId });
+  return { detached: true };
+}
+
+async function detachAllCdpTargets() {
+  await stopAllCdpScreencasts();
+  await Promise.all(Array.from(cdpAttachedTabIds).map((tabId) => detachCdpFromTab(tabId)));
+  cdpAttachedTabIds = new Set();
+}
+
+async function sendCdpCommand(tabId, method, params = {}) {
+  await attachCdpToTab(tabId);
+  if (!chrome.debugger?.sendCommand) {
+    throw new Error("Chrome debugger command API is unavailable.");
+  }
+  return await chrome.debugger.sendCommand(debuggerTargetForTab(tabId), method, params);
+}
+
+async function sendRawCdpCommand(tabId, method, params = {}) {
+  if (!chrome.debugger?.sendCommand) {
+    throw new Error("Chrome debugger command API is unavailable.");
+  }
+  return await chrome.debugger.sendCommand(debuggerTargetForTab(tabId), method, params);
+}
+
+function cdpScreencastFrameDataUrl(data) {
+  return `data:image/jpeg;base64,${data}`;
+}
+
+async function stopCdpScreencast(workspaceLinkId, reason = "user", emitServerEvent = false) {
+  const session = cdpScreencastSessions.get(workspaceLinkId);
+  if (!session) {
+    return { stopped: true, alreadyStopped: true };
+  }
+  cdpScreencastSessions.delete(workspaceLinkId);
+  liveCaptureWorkspaceLinkIds.delete(workspaceLinkId);
+  await sendRawCdpCommand(session.tabId, "Page.stopScreencast").catch((error) => {
+    addDiagnosticLog("warn", "Failed to stop CDP screencast", {
+      tabId: session.tabId,
+      workspaceLinkId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  if (emitServerEvent) {
+    sendToServer({
+      type: "browserAgent.capture.stopped",
+      workspaceLinkId,
+      reason,
+    });
+  }
+  return { stopped: true };
+}
+
+async function stopCdpScreencastsForTab(tabId) {
+  const numericId = Number(tabId);
+  const workspaceLinkIds = Array.from(cdpScreencastSessions.values())
+    .filter((session) => session.tabId === numericId)
+    .map((session) => session.workspaceLinkId);
+  await Promise.all(workspaceLinkIds.map((workspaceLinkId) => stopCdpScreencast(workspaceLinkId)));
+}
+
+async function stopAllCdpScreencasts() {
+  await Promise.all(
+    Array.from(cdpScreencastSessions.keys()).map((workspaceLinkId) =>
+      stopCdpScreencast(workspaceLinkId),
+    ),
+  );
+}
+
+async function runtimeDiagnosticsSnapshot() {
+  const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  const links = await readLinks().catch(() => workspaceLinksCache);
+  return {
+    ok: true,
+    runtime: {
+      protocolVersion: RUNTIME_PROTOCOL_VERSION,
+      extensionVersion: chrome.runtime.getManifest().version,
+      browser: detectBrowser(),
+      platform: navigator.platform,
+      primitives: RUNTIME_PRIMITIVES,
+      capabilities: capabilityGroups(),
+    },
+    transport: {
+      paired: hasActiveBrowserAgentTransport(backend),
+      baseUrl,
+      localControlBaseUrl,
+      transportMode: localControlBaseUrl ? "local-control" : backend ? "paired" : "none",
+      socketState: socketStateLabel(),
+      socketBaseUrl,
+      reconnectDelayMs,
+      lastConnectionAttemptAt,
+      lastConnectionOpenedAt,
+      lastConnectionError,
+      lastHelloSentAt,
+      lastTabsSnapshotSentAt,
+    },
+    workspaces: links,
+    tabs: tabs.map((tab) => ({
+      tabId: tab.id ?? null,
+      windowId: tab.windowId ?? null,
+      url: tab.url ?? null,
+      title: tab.title ?? null,
+      active: tab.active === true,
+      status: tab.status ?? null,
+      linked: links.some((link) => tabMatchesWorkspaceLink(tab, link)),
+      cdpAttached: tab.id !== undefined && cdpAttachedTabIds.has(Number(tab.id)),
+    })),
+    cdp: {
+      attachedTabIds: Array.from(cdpAttachedTabIds),
+    },
+    sidePanel: {
+      nativeAvailable: Boolean(chrome.sidePanel),
+      tabOptionsAvailable: Boolean(chrome.sidePanel?.setOptions),
+      openAvailable: Boolean(chrome.sidePanel?.open),
+    },
+    logs: diagnosticLogs.slice(-50),
+  };
+}
+
 async function focusTabForCommand(tab) {
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
@@ -1198,14 +2035,16 @@ async function focusTabForCommand(tab) {
 
 async function navigateThreadTab(command) {
   const { link, tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
-  await chrome.tabs.update(tab.id, { url: command.url, active: true });
-  const updatedTab = await chrome.tabs.get(tab.id);
+  const updatedTab = await navigateTabToUrl(tab, command.url);
+  if (!urlsMatchForNavigation(updatedTab?.url, command.url)) {
+    throw new Error(`The linked browser tab did not navigate to ${command.url}.`);
+  }
   const contentLink = await workspaceLinkForContent(
     { ...link, devServerUrl: command.url, url: command.url },
     updatedTab,
   );
   await upsertLink(linkForStorage(contentLink));
-  sendThreadTabUpdated(contentLink, updatedTab, "loading");
+  sendThreadTabUpdated(contentLink, updatedTab, "complete");
   sendToServer({
     type: "browserAgent.command.result",
     commandId: command.commandId,
@@ -1221,7 +2060,6 @@ async function navigateThreadTab(command) {
 
 async function historyThreadTab(command) {
   const { link, tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
-  await focusTabForCommand(tab);
   if (command.action === "back") {
     await chrome.tabs.goBack(tab.id);
   } else if (command.action === "forward") {
@@ -1282,10 +2120,24 @@ async function snapshotThreadTab(command) {
   });
 }
 
-async function captureLinkedTabScreenshot(workspaceLinkId) {
+async function captureLinkedTabScreenshot(workspaceLinkId, qualityInput = {}) {
   const { link, tab } = await tabForWorkspaceLinkId(workspaceLinkId);
-  await focusTabForCommand(tab);
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const quality = normalizeCaptureQuality(qualityInput);
+  const screenshot = await sendCdpCommand(tab.id, "Page.captureScreenshot", {
+    format: "jpeg",
+    quality: Math.round(quality.imageQuality * 100),
+    captureBeyondViewport: true,
+    fromSurface: true,
+  });
+  if (!screenshot?.data || typeof screenshot.data !== "string") {
+    throw new Error("Chrome did not return screenshot data.");
+  }
+  const rawDataUrl = `data:image/jpeg;base64,${screenshot.data}`;
+  const optimized = (await sendOffscreenMessage({
+    type: "t3code.browserAgent.screenshot.optimize",
+    dataUrl: rawDataUrl,
+    quality,
+  }).catch(() => null)) ?? { dataUrl: rawDataUrl };
   const updatedTab = await chrome.tabs.get(tab.id).catch(() => tab);
   const contentLink = await workspaceLinkForContent(link, updatedTab);
   await upsertLink(linkForStorage(contentLink));
@@ -1295,14 +2147,16 @@ async function captureLinkedTabScreenshot(workspaceLinkId) {
     updatedTab.status === "loading" ? "loading" : "complete",
   );
   return {
-    dataUrl,
+    dataUrl: optimized.dataUrl,
+    ...(optimized.width ? { width: optimized.width } : {}),
+    ...(optimized.height ? { height: optimized.height } : {}),
     url: updatedTab.url ?? link.url ?? null,
     title: updatedTab.title ?? link.title ?? null,
   };
 }
 
 async function screenshotThreadTab(command) {
-  const payload = await captureLinkedTabScreenshot(command.workspaceLinkId);
+  const payload = await captureLinkedTabScreenshot(command.workspaceLinkId, command.quality);
   sendToServer({
     type: "browserAgent.command.result",
     commandId: command.commandId,
@@ -1311,8 +2165,65 @@ async function screenshotThreadTab(command) {
   });
 }
 
+async function startCdpScreencast(command, params) {
+  const { link, tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
+  const quality = normalizeCaptureQuality(params.quality ?? command.quality);
+  const liveViewSessionId = `cdp-screencast:${command.workspaceLinkId}:${Date.now()}`;
+  await stopCdpScreencast(command.workspaceLinkId);
+  await attachCdpToTab(tab.id);
+  await sendRawCdpCommand(tab.id, "Page.enable").catch(() => undefined);
+  cdpScreencastSessions.set(command.workspaceLinkId, {
+    workspaceLinkId: command.workspaceLinkId,
+    tabId: Number(tab.id),
+    liveViewSessionId,
+    quality,
+    lastFrameSentAt: 0,
+  });
+  const updatedTab = await chrome.tabs.get(tab.id).catch(() => tab);
+  const contentLink = await workspaceLinkForContent(link, updatedTab);
+  await upsertLink(
+    linkForStorage({
+      ...contentLink,
+      captureState: "live",
+      streamState: "live",
+      liveViewSessionId,
+      cdpAttached: true,
+      deepControlEnabled: true,
+      browserControlState: "deep",
+    }),
+  );
+  liveCaptureWorkspaceLinkIds.add(command.workspaceLinkId);
+  sendThreadTabUpdated(
+    contentLink,
+    updatedTab,
+    updatedTab.status === "loading" ? "loading" : "complete",
+  );
+  sendToServer({
+    type: "browserAgent.capture.started",
+    workspaceLinkId: command.workspaceLinkId,
+    liveViewSessionId,
+    transport: "websocket",
+  });
+  try {
+    await sendRawCdpCommand(tab.id, "Page.startScreencast", {
+      format: "jpeg",
+      quality: Math.round(quality.imageQuality * 100),
+      maxWidth: quality.maxWidth,
+      maxHeight: quality.maxHeight,
+      everyNthFrame: Math.max(1, Math.round(60 / quality.fps)),
+    });
+  } catch (error) {
+    await stopCdpScreencast(command.workspaceLinkId, "error", true);
+    throw error;
+  }
+  return {
+    liveViewSessionId,
+    transport: "websocket",
+  };
+}
+
 async function startTabCapture(command) {
-  const payload = await captureLinkedTabScreenshot(command.workspaceLinkId);
+  const payload = await captureLinkedTabScreenshot(command.workspaceLinkId, command.quality);
   const liveViewSessionId = `screenshot-fallback:${command.workspaceLinkId}:${Date.now()}`;
   sendToServer({
     type: "browserAgent.capture.started",
@@ -1333,6 +2244,7 @@ async function startTabCapture(command) {
 }
 
 async function stopTabCapture(command) {
+  await stopCdpScreencast(command.workspaceLinkId);
   sendToServer({
     type: "browserAgent.capture.stopped",
     workspaceLinkId: command.workspaceLinkId,
@@ -1342,6 +2254,142 @@ async function stopTabCapture(command) {
     type: "browserAgent.command.result",
     commandId: command.commandId,
     ok: true,
+  });
+}
+
+async function updateStoredLinkForRuntimeCommand(workspaceLinkId, patch) {
+  const links = await readLinks();
+  const nextLinks = links.map((entry) =>
+    entry.id === workspaceLinkId ? linkForStorage({ ...entry, ...patch }) : entry,
+  );
+  workspaceLinksCache = nextLinks;
+  await chrome.storage.local.set({ [LINKS_KEY]: nextLinks });
+  return nextLinks.find((entry) => entry.id === workspaceLinkId) ?? null;
+}
+
+async function handleRuntimeCommand(command) {
+  const { link, tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
+  const params = command.params && typeof command.params === "object" ? command.params : {};
+  let payload = null;
+
+  switch (command.runtimeCommand) {
+    case "workspace.snapshot":
+      payload = await runtimeDiagnosticsSnapshot();
+      break;
+    case "workspace.pauseControl":
+      await updateStoredLinkForRuntimeCommand(command.workspaceLinkId, {
+        controlState: "paused-by-user",
+        browserControlState: "paused",
+      });
+      payload = { controlState: "paused" };
+      break;
+    case "workspace.resumeControl":
+      await attachCdpToTab(tab.id);
+      await updateStoredLinkForRuntimeCommand(command.workspaceLinkId, {
+        controlState: "enabled",
+        browserControlState: "deep",
+        deepControlEnabled: true,
+        cdpAttached: true,
+      });
+      payload = { controlState: "deep", attached: true };
+      break;
+    case "cdp.send": {
+      const method = typeof params.method === "string" ? params.method : "";
+      if (!method) {
+        throw new Error("cdp.send requires params.method.");
+      }
+      payload = await sendCdpCommand(tab.id, method, params.params ?? {});
+      break;
+    }
+    case "cdp.runtime.evaluate": {
+      const expression = typeof params.expression === "string" ? params.expression : "";
+      if (!expression) {
+        throw new Error("cdp.runtime.evaluate requires params.expression.");
+      }
+      payload = await sendCdpCommand(tab.id, "Runtime.evaluate", {
+        expression,
+        awaitPromise: params.awaitPromise !== false,
+        returnByValue: params.returnByValue !== false,
+      });
+      break;
+    }
+    case "cdp.input.dispatch": {
+      const event = params.event && typeof params.event === "object" ? params.event : params;
+      payload = await sendCdpCommand(tab.id, "Input.dispatchMouseEvent", event);
+      break;
+    }
+    case "cdp.network.enable":
+      payload = await sendCdpCommand(tab.id, "Network.enable", params);
+      break;
+    case "cdp.network.disable":
+      payload = await sendCdpCommand(tab.id, "Network.disable", params);
+      break;
+    case "cdp.accessibility.snapshot":
+      payload = await sendCdpCommand(tab.id, "Accessibility.getFullAXTree", params);
+      break;
+    case "cdp.console.read":
+      payload = await sendCdpCommand(tab.id, "Runtime.evaluate", {
+        expression: "({ url: location.href, title: document.title })",
+        returnByValue: true,
+      });
+      break;
+    case "tab.focus":
+      await focusTabForCommand(tab);
+      payload = { focused: true };
+      break;
+    case "tab.close":
+      await detachCdpFromTab(tab.id);
+      await chrome.tabs.remove(tab.id);
+      sendThreadTabUpdated(link, null, "closed");
+      payload = { closed: true };
+      break;
+    case "tab.screenshot":
+    case "tab.capture.start":
+      payload = await captureLinkedTabScreenshot(command.workspaceLinkId, params.quality);
+      break;
+    case "tab.stream.start":
+      payload = await startCdpScreencast(command, params);
+      break;
+    case "tab.capture.stop":
+    case "tab.stream.stop":
+      await stopCdpScreencast(command.workspaceLinkId, "user", true);
+      payload = { stopped: true };
+      break;
+    case "diagnostics.snapshot":
+      payload = await runtimeDiagnosticsSnapshot();
+      break;
+    case "diagnostics.logs":
+      payload = { logs: diagnosticLogs };
+      break;
+    case "diagnostics.pingBackend": {
+      const backend = await readActivePairedBackend();
+      payload = backend ? await diagnoseBackend(backend) : { paired: false };
+      break;
+    }
+    case "diagnostics.forceReconnect":
+      if (localControlBaseUrl) {
+        await connectLocalControlBackend(localControlBaseUrl);
+      } else {
+        await connectBackend({ force: true });
+      }
+      payload = { socketState: socketStateLabel() };
+      break;
+    case "diagnostics.clear":
+      diagnosticLogs = [];
+      payload = { cleared: true };
+      break;
+    default:
+      throw new Error(`Unsupported browser runtime command '${command.runtimeCommand}'.`);
+  }
+
+  const updatedTab = tab.id ? await chrome.tabs.get(tab.id).catch(() => tab) : tab;
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    tabId: updatedTab.id,
+    windowId: updatedTab.windowId,
+    payload,
   });
 }
 
@@ -1385,6 +2433,9 @@ async function handleServerMessage(rawData) {
       case "browserAgent.command.screenshot":
         await screenshotThreadTab(command);
         return;
+      case "browserAgent.command.runtime":
+        await handleRuntimeCommand(command);
+        return;
       case "browserAgent.command.requestTabsSnapshot":
         await sendTabsSnapshot();
         sendToServer({
@@ -1397,6 +2448,11 @@ async function handleServerMessage(rawData) {
         return;
     }
   } catch (error) {
+    addDiagnosticLog("error", "Browser-agent command failed", {
+      type: command.type,
+      runtimeCommand: command.runtimeCommand ?? null,
+      error: error instanceof Error ? error.message : String(error),
+    });
     if (command.commandId) {
       sendToServer({
         type: "browserAgent.command.result",
@@ -1413,11 +2469,11 @@ async function captureVisibleTab(sender) {
   if (!sender.tab?.windowId) {
     throw new Error("Cannot capture a screenshot outside a tab.");
   }
-  return await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: "png" });
+  return await captureVisibleTabWithRetry(sender.tab.windowId, { format: "png" });
 }
 
 async function transcribeAudio(input) {
-  const backend = currentBackend ?? (await readBackend());
+  const backend = await readActivePairedBackend();
   if (!backend) {
     throw new Error("Pair this browser with T3 Code before recording audio.");
   }
@@ -1465,10 +2521,10 @@ async function completeSidePanelActionClick(tab, openPromise) {
   } else {
     await showSidePanelOpenPrompt(tab, result.reason);
   }
-  const backend = currentBackend ?? (await readBackend());
+  const backend = await readActivePairedBackend();
   if (backend) {
     currentBackend = backend;
-    await connectBackend();
+    await ensureBrowserAgentTransport();
     await activateForCurrentTab(tab).catch(() => undefined);
   }
 }
@@ -1496,7 +2552,7 @@ async function handleNonPreviewActionClick(tab) {
     return;
   }
 
-  const backend = currentBackend ?? (await readBackend());
+  const backend = await readActivePairedBackend();
   if (backend?.baseUrl) {
     await openBackendFromActionClick(tab, backend);
     return;
@@ -1504,6 +2560,72 @@ async function handleNonPreviewActionClick(tab) {
 
   await completeSidePanelActionClick(tab, openNativeSidePanel(tab));
 }
+
+chrome.debugger?.onEvent.addListener((source, method, params) => {
+  if (method !== "Page.screencastFrame" || source.tabId === undefined) {
+    return;
+  }
+  const session = Array.from(cdpScreencastSessions.values()).find(
+    (entry) => entry.tabId === Number(source.tabId),
+  );
+  if (!session || !params || typeof params !== "object") {
+    return;
+  }
+  const screencastSessionId = params.sessionId;
+  if (Number.isFinite(screencastSessionId)) {
+    void sendRawCdpCommand(source.tabId, "Page.screencastFrameAck", {
+      sessionId: screencastSessionId,
+    }).catch((error) => {
+      addDiagnosticLog("warn", "Failed to acknowledge CDP screencast frame", {
+        tabId: source.tabId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+  if (typeof params.data !== "string" || params.data.length === 0) {
+    return;
+  }
+  const now = Date.now();
+  const minFrameIntervalMs = Math.max(0, Math.floor(1000 / session.quality.fps));
+  if (session.lastFrameSentAt > 0 && now - session.lastFrameSentAt < minFrameIntervalMs) {
+    return;
+  }
+  session.lastFrameSentAt = now;
+  nextCdpScreencastFrameSequence += 1;
+  const metadata = params.metadata && typeof params.metadata === "object" ? params.metadata : {};
+  const width = Number.isFinite(metadata.deviceWidth) ? Math.round(metadata.deviceWidth) : null;
+  const height = Number.isFinite(metadata.deviceHeight) ? Math.round(metadata.deviceHeight) : null;
+  sendToServer({
+    type: "browserAgent.capture.frame",
+    workspaceLinkId: session.workspaceLinkId,
+    liveViewSessionId: session.liveViewSessionId,
+    dataUrl: cdpScreencastFrameDataUrl(params.data),
+    ...(width && width > 0 ? { width } : {}),
+    ...(height && height > 0 ? { height } : {}),
+    sequence: nextCdpScreencastFrameSequence,
+    timestamp: new Date(now).toISOString(),
+  });
+});
+
+chrome.debugger?.onDetach.addListener((source, reason) => {
+  if (source.tabId === undefined) {
+    return;
+  }
+  const workspaceLinkIds = Array.from(cdpScreencastSessions.values())
+    .filter((session) => session.tabId === Number(source.tabId))
+    .map((session) => session.workspaceLinkId);
+  for (const workspaceLinkId of workspaceLinkIds) {
+    cdpScreencastSessions.delete(workspaceLinkId);
+    liveCaptureWorkspaceLinkIds.delete(workspaceLinkId);
+    sendToServer({
+      type: "browserAgent.capture.stopped",
+      workspaceLinkId,
+      reason: reason === "target_closed" ? "tab-closed" : "permission-revoked",
+      message: typeof reason === "string" ? reason : undefined,
+    });
+  }
+  cdpAttachedTabIds.delete(Number(source.tabId));
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const respond = (promise) => {
@@ -1519,11 +2641,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "t3code.browserAgent.getStatus":
       return respond(
         (async () => {
-          const backend = currentBackend ?? (await readBackend());
+          const backend = await readActivePairedBackend();
+          const baseUrl = activeBrowserAgentBaseUrl(backend);
           return {
             ok: true,
-            paired: Boolean(backend),
-            baseUrl: backend?.baseUrl ?? null,
+            paired: hasActiveBrowserAgentTransport(backend),
+            baseUrl,
+            localControlBaseUrl,
+            transportMode: localControlBaseUrl ? "local-control" : backend ? "paired" : "none",
             connected: socket?.readyState === WebSocket.OPEN,
             socketState: socketStateLabel(),
             socketBaseUrl,
@@ -1534,11 +2659,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             lastHelloSentAt,
             lastTabsSnapshotSentAt,
             backendDiagnostics: await diagnoseBackend(backend),
+            runtimeDiagnostics: await runtimeDiagnosticsSnapshot(),
           };
         })(),
       );
     case "t3code.browserAgent.getSidePanelState":
       return respond(getSidePanelState(message));
+    case "t3code.browserAgent.autoConnectNow":
+      return respond(
+        (async () => {
+          if (
+            message.baseUrls !== undefined &&
+            !isExtensionPageSender(sender) &&
+            !isTrustedAutoConnectContentSender(sender, message)
+          ) {
+            throw new Error("Custom auto-connect URLs are only available to extension pages.");
+          }
+          const result = await autoConnectLocalBackend({ baseUrls: message.baseUrls });
+          return { ok: true, result };
+        })(),
+      );
     case "t3code.browserAgent.pair":
       return respond(
         (async () => {
@@ -1553,6 +2693,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     case "t3code.browserAgent.forget":
       return respond(clearBackend().then(() => ({ ok: true })));
+    case "t3code.browserAgent.reloadExtension":
+      return respond(
+        Promise.resolve().then(() => {
+          setTimeout(() => chrome.runtime.reload(), 150);
+          return { ok: true };
+        }),
+      );
+    case "t3code.browserAgent.openExtensionDetails":
+      return respond(
+        chrome.tabs
+          .create({ url: `chrome://extensions/?id=${chrome.runtime.id}` })
+          .then(() => ({ ok: true })),
+      );
     case "t3code.browserAgent.captureVisibleTab":
       return respond(captureVisibleTab(sender).then((dataUrl) => ({ ok: true, dataUrl })));
     case "t3code.browserAgent.transcribeAudio":
@@ -1560,7 +2713,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "t3code.browserAgent.annotationSubmitted":
       return respond(
         (async () => {
-          await connectBackend();
+          await ensureBrowserAgentTransport();
           sendToServer({
             type: "browserAgent.annotation.submitted",
             workspaceLinkId: message.workspaceLinkId,
@@ -1599,11 +2752,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             throw new Error(result.reason ?? "Chrome did not open the side panel.");
           }
           await clearSidePanelOpenPrompt(tab);
-          const backend = currentBackend ?? (await readBackend());
-          if (backend) {
-            await connectBackend();
-            await activateForCurrentTab(tab).catch(() => undefined);
-          }
+          await ensureBrowserAgentTransport();
+          await activateForCurrentTab(tab).catch(() => undefined);
           return { ok: true };
         })(),
       );
@@ -1611,7 +2761,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "t3code.browserAgent.activateFromSidebar":
       return respond(
         (async () => {
-          await connectBackend();
+          await ensureBrowserAgentTransport();
           const link = message.workspaceLink;
           sendToServer({
             type: "browserAgent.annotation.submitted",
@@ -1660,6 +2810,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   void sendTabsSnapshot();
 });
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  cdpAttachedTabIds.delete(Number(tabId));
   void notifyThreadLinksForRemovedTab(tabId, removeInfo.windowId);
   void sendTabsSnapshot();
 });
@@ -1672,15 +2823,25 @@ chrome.windows.onFocusChanged.addListener(() => {
   void sendTabsSnapshot();
 });
 
+chrome.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm.name !== AUTO_CONNECT_ALARM_NAME) {
+    return;
+  }
+  autoConnectInBackground("alarm");
+});
+
 chrome.runtime.onStartup.addListener(() => {
   void configureSidePanelBehavior();
-  connectBackendInBackground("startup");
+  scheduleAutoConnectAlarm();
+  autoConnectInBackground("startup");
 });
 chrome.runtime.onInstalled.addListener(() => {
   void configureSidePanelBehavior();
-  connectBackendInBackground("install");
+  scheduleAutoConnectAlarm();
+  autoConnectInBackground("install");
 });
 
 void readLinks().catch(() => undefined);
 void configureSidePanelBehavior();
-connectBackendInBackground("service worker activation");
+scheduleAutoConnectAlarm();
+autoConnectInBackground("service worker activation");

@@ -27,6 +27,16 @@ export const BrowserAgentCommandId = TrimmedNonEmptyString.pipe(
 );
 export type BrowserAgentCommandId = typeof BrowserAgentCommandId.Type;
 
+export const BrowserAgentContextId = TrimmedNonEmptyString.pipe(
+  Schema.brand("BrowserAgentContextId"),
+);
+export type BrowserAgentContextId = typeof BrowserAgentContextId.Type;
+
+export const BrowserWorkspaceTabId = TrimmedNonEmptyString.pipe(
+  Schema.brand("BrowserWorkspaceTabId"),
+);
+export type BrowserWorkspaceTabId = typeof BrowserWorkspaceTabId.Type;
+
 const BrowserTabId = Schema.Union([Schema.Number, Schema.String]);
 const BrowserWindowId = Schema.Union([Schema.Number, Schema.String]);
 
@@ -61,17 +71,97 @@ export const BrowserAgentControlState = Schema.Literals([
 ]);
 export type BrowserAgentControlState = typeof BrowserAgentControlState.Type;
 
+export const BrowserControlState = Schema.Literals(["off", "deep", "paused"]);
+export type BrowserControlState = typeof BrowserControlState.Type;
+
+export const BrowserWorkspaceTabRole = Schema.Literals(["primary", "agent", "scratch", "handoff"]);
+export type BrowserWorkspaceTabRole = typeof BrowserWorkspaceTabRole.Type;
+
+export const BrowserWorkspaceTabLifecycle = Schema.Literals(["persistent", "ephemeral", "handoff"]);
+export type BrowserWorkspaceTabLifecycle = typeof BrowserWorkspaceTabLifecycle.Type;
+
+export const BrowserWorkspaceTabOwner = Schema.Struct({
+  kind: Schema.Literals(["user", "agent", "system"]),
+  providerSessionId: Schema.optional(TrimmedNonEmptyString),
+  runId: Schema.optional(TrimmedNonEmptyString),
+  label: Schema.optional(TrimmedNonEmptyString),
+});
+export type BrowserWorkspaceTabOwner = typeof BrowserWorkspaceTabOwner.Type;
+
 export const BrowserThreadTabStatus = Schema.Literals(["loading", "complete", "closed", "unknown"]);
 export type BrowserThreadTabStatus = typeof BrowserThreadTabStatus.Type;
+
+export const BrowserWorkspaceTabStatus = Schema.Literals([
+  "opening",
+  "loading",
+  "complete",
+  "closed",
+  "error",
+]);
+export type BrowserWorkspaceTabStatus = typeof BrowserWorkspaceTabStatus.Type;
+
+export const BrowserTabStreamState = Schema.Literals([
+  "off",
+  "starting",
+  "live",
+  "screenshot-fallback",
+  "error",
+]);
+export type BrowserTabStreamState = typeof BrowserTabStreamState.Type;
 
 const NullableStringWithDefault = Schema.NullOr(Schema.String).pipe(
   Schema.withDecodingDefault(Effect.succeed(null)),
 );
 
-export const BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION = 1 as const;
+export const BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION = 2 as const;
 export const BROWSER_AGENT_RUNTIME_PRIMITIVES = [
   "preview.openOrFocus",
   "annotation.activate",
+  "annotation.cancel",
+  "annotation.captureElement",
+  "workspace.create",
+  "workspace.restore",
+  "workspace.detach",
+  "workspace.pauseControl",
+  "workspace.resumeControl",
+  "workspace.snapshot",
+  "tab.create",
+  "tab.attachActive",
+  "tab.openOrFocusPrimary",
+  "tab.focus",
+  "tab.close",
+  "tab.promoteToPrimary",
+  "tab.rename",
+  "tab.setPurpose",
+  "tab.navigate",
+  "tab.back",
+  "tab.forward",
+  "tab.reload",
+  "tab.input",
+  "tab.snapshot",
+  "tab.screenshot",
+  "tab.stream.start",
+  "tab.stream.stop",
+  "tab.capture.start",
+  "tab.capture.stop",
+  "sidePanel.open",
+  "sidePanel.setThread",
+  "sidePanel.clearThread",
+  "sidePanel.syncActiveTab",
+  "sidePanel.showOpenPrompt",
+  "sidePanel.hideOpenPrompt",
+  "cdp.send",
+  "cdp.runtime.evaluate",
+  "cdp.input.dispatch",
+  "cdp.network.enable",
+  "cdp.network.disable",
+  "cdp.accessibility.snapshot",
+  "cdp.console.read",
+  "diagnostics.snapshot",
+  "diagnostics.logs",
+  "diagnostics.pingBackend",
+  "diagnostics.forceReconnect",
+  "diagnostics.clear",
   "threadTab.openOrFocus",
   "threadTab.attachActive",
   "threadTab.detach",
@@ -113,8 +203,22 @@ export const BrowserAgentCapabilities = Schema.Struct({
   canAttachActiveTab: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   canThreadTabCommands: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   canCaptureThreadTab: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  workspace: Schema.optional(Schema.Array(Schema.String)),
+  sidePanel: Schema.optional(Schema.Array(Schema.String)),
+  annotation: Schema.optional(Schema.Array(Schema.String)),
+  cdp: Schema.optional(Schema.Array(Schema.String)),
+  diagnostics: Schema.optional(Schema.Array(Schema.String)),
 });
 export type BrowserAgentCapabilities = typeof BrowserAgentCapabilities.Type;
+
+export const BrowserRuntimeHello = Schema.Struct({
+  protocolVersion: NonNegativeInt,
+  extensionVersion: TrimmedNonEmptyString,
+  buildId: Schema.optional(TrimmedNonEmptyString),
+  browser: Schema.Literals(["chrome", "brave", "edge", "chromium", "unknown"]),
+  platform: Schema.String,
+});
+export type BrowserRuntimeHello = typeof BrowserRuntimeHello.Type;
 
 export const BrowserAgentDevice = Schema.Struct({
   extensionVersion: TrimmedNonEmptyString,
@@ -130,6 +234,7 @@ export const BrowserAgent = Schema.Struct({
   connectionId: BrowserAgentConnectionId,
   sessionId: TrimmedNonEmptyString,
   connected: Schema.Boolean,
+  runtime: Schema.optional(BrowserRuntimeHello),
   device: BrowserAgentDevice,
   capabilities: BrowserAgentCapabilities,
   connectedAt: IsoDateTime,
@@ -152,6 +257,14 @@ export type BrowserTabSnapshot = typeof BrowserTabSnapshot.Type;
 
 export const BrowserWorkspaceLink = Schema.Struct({
   id: BrowserWorkspaceLinkId,
+  workspaceId: BrowserWorkspaceLinkId.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(BrowserWorkspaceLinkId.make("browser-workspace:unknown")),
+    ),
+  ),
+  browserContextId: BrowserAgentContextId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(BrowserAgentContextId.make("default"))),
+  ),
   agentId: BrowserAgentId,
   environmentId: EnvironmentId,
   threadId: ThreadId,
@@ -172,6 +285,24 @@ export const BrowserWorkspaceLink = Schema.Struct({
   controlState: BrowserAgentControlState.pipe(
     Schema.withDecodingDefault(Effect.succeed("enabled" as const)),
   ),
+  browserControlState: BrowserControlState.pipe(
+    Schema.withDecodingDefault(Effect.succeed("deep" as const)),
+  ),
+  deepControlEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  cdpAttached: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  role: BrowserWorkspaceTabRole.pipe(
+    Schema.withDecodingDefault(Effect.succeed("primary" as const)),
+  ),
+  purpose: NullableStringWithDefault,
+  owner: BrowserWorkspaceTabOwner.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ kind: "user" as const })),
+  ),
+  lifecycle: BrowserWorkspaceTabLifecycle.pipe(
+    Schema.withDecodingDefault(Effect.succeed("persistent" as const)),
+  ),
+  streamState: BrowserTabStreamState.pipe(
+    Schema.withDecodingDefault(Effect.succeed("off" as const)),
+  ),
   liveViewSessionId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -182,6 +313,43 @@ export const BrowserWorkspaceLink = Schema.Struct({
 });
 export type BrowserWorkspaceLink = typeof BrowserWorkspaceLink.Type;
 
+export const BrowserWorkspace = Schema.Struct({
+  id: BrowserWorkspaceLinkId,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  agentId: BrowserAgentId,
+  primaryTabId: Schema.NullOr(BrowserWorkspaceTabId),
+  controlState: BrowserControlState,
+  deepControlEnabled: Schema.Boolean,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type BrowserWorkspace = typeof BrowserWorkspace.Type;
+
+export const BrowserWorkspaceTab = Schema.Struct({
+  id: BrowserWorkspaceTabId,
+  workspaceId: BrowserWorkspaceLinkId,
+  browserContextId: BrowserAgentContextId,
+  agentId: BrowserAgentId,
+  projectedThreadTabId: Schema.NullOr(TrimmedNonEmptyString),
+  browserTabId: Schema.NullOr(BrowserTabId),
+  windowId: Schema.NullOr(BrowserWindowId),
+  role: BrowserWorkspaceTabRole,
+  title: NullableStringWithDefault,
+  url: NullableStringWithDefault,
+  purpose: NullableStringWithDefault,
+  owner: BrowserWorkspaceTabOwner,
+  lifecycle: BrowserWorkspaceTabLifecycle,
+  status: BrowserWorkspaceTabStatus,
+  streamState: BrowserTabStreamState,
+  controlState: BrowserControlState,
+  cdpAttached: Schema.Boolean,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  lastSeenAt: Schema.NullOr(IsoDateTime),
+});
+export type BrowserWorkspaceTab = typeof BrowserWorkspaceTab.Type;
+
 export const BrowserAgentSnapshot = Schema.Struct({
   agents: Schema.Array(BrowserAgent),
   currentSessionId: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -189,6 +357,10 @@ export const BrowserAgentSnapshot = Schema.Struct({
   ),
   tabs: Schema.Array(BrowserTabSnapshot),
   workspaceLinks: Schema.Array(BrowserWorkspaceLink),
+  workspaces: Schema.Array(BrowserWorkspace).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  workspaceTabs: Schema.Array(BrowserWorkspaceTab).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type BrowserAgentSnapshot = typeof BrowserAgentSnapshot.Type;
 
@@ -219,6 +391,21 @@ export const BrowserAgentStreamEvent = Schema.Union([
     type: Schema.Literal("workspace-link-removed"),
     linkId: BrowserWorkspaceLinkId,
   }),
+  Schema.Struct({
+    type: Schema.Literal("workspace-tabs-updated"),
+    workspaceId: BrowserWorkspaceLinkId,
+    tabs: Schema.Array(BrowserWorkspaceTab),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("capture-frame"),
+    workspaceLinkId: BrowserWorkspaceLinkId,
+    liveViewSessionId: TrimmedNonEmptyString,
+    dataUrl: TrimmedNonEmptyString,
+    width: Schema.optional(NonNegativeInt),
+    height: Schema.optional(NonNegativeInt),
+    sequence: NonNegativeInt,
+    timestamp: IsoDateTime,
+  }),
 ]);
 export type BrowserAgentStreamEvent = typeof BrowserAgentStreamEvent.Type;
 
@@ -237,10 +424,15 @@ export type BrowserAgentOpenOrFocusPreviewInput = typeof BrowserAgentOpenOrFocus
 export const BrowserAgentOpenOrFocusThreadTabInput = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  browserContextId: Schema.optional(BrowserAgentContextId),
   url: TrimmedNonEmptyString,
   repoName: Schema.optional(TrimmedNonEmptyString),
   preferredAgentId: Schema.optional(BrowserAgentId),
   focus: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  role: Schema.optional(BrowserWorkspaceTabRole),
+  purpose: Schema.optional(TrimmedNonEmptyString),
+  owner: Schema.optional(BrowserWorkspaceTabOwner),
+  lifecycle: Schema.optional(BrowserWorkspaceTabLifecycle),
 });
 export type BrowserAgentOpenOrFocusThreadTabInput =
   typeof BrowserAgentOpenOrFocusThreadTabInput.Type;
@@ -248,6 +440,7 @@ export type BrowserAgentOpenOrFocusThreadTabInput =
 export const BrowserAgentAttachActiveTabInput = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  browserContextId: Schema.optional(BrowserAgentContextId),
   repoName: Schema.optional(TrimmedNonEmptyString),
   preferredAgentId: Schema.optional(BrowserAgentId),
 });
@@ -256,15 +449,29 @@ export type BrowserAgentAttachActiveTabInput = typeof BrowserAgentAttachActiveTa
 export const BrowserAgentThreadLinkInput = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  browserContextId: Schema.optional(BrowserAgentContextId),
 });
 export type BrowserAgentThreadLinkInput = typeof BrowserAgentThreadLinkInput.Type;
 
 export const BrowserAgentSetThreadTabControlInput = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  browserContextId: Schema.optional(BrowserAgentContextId),
   controlState: BrowserAgentControlState,
+  browserControlState: Schema.optional(BrowserControlState),
 });
 export type BrowserAgentSetThreadTabControlInput = typeof BrowserAgentSetThreadTabControlInput.Type;
+
+export const BrowserAgentRuntimeCommandInput = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  browserContextId: Schema.optional(BrowserAgentContextId),
+  type: BrowserAgentRuntimePrimitive,
+  tabId: Schema.optional(BrowserWorkspaceTabId),
+  params: Schema.optional(Schema.Unknown),
+  timeoutMs: Schema.optional(NonNegativeInt),
+});
+export type BrowserAgentRuntimeCommandInput = typeof BrowserAgentRuntimeCommandInput.Type;
 
 export const BrowserAgentThreadTabCaptureQuality = Schema.Struct({
   maxWidth: NonNegativeInt,
@@ -276,6 +483,7 @@ export type BrowserAgentThreadTabCaptureQuality = typeof BrowserAgentThreadTabCa
 export const BrowserAgentStartThreadTabCaptureInput = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  browserContextId: Schema.optional(BrowserAgentContextId),
   quality: BrowserAgentThreadTabCaptureQuality.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -307,6 +515,11 @@ export const BrowserAgentThreadTabInputEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("type"),
     text: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("fill"),
+    text: Schema.String,
+    ref: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("key"),
@@ -377,6 +590,7 @@ export class BrowserAgentCommandError extends Schema.TaggedErrorClass<BrowserAge
 export const BrowserAgentHelloMessage = Schema.Struct({
   type: Schema.Literal("browserAgent.hello"),
   agentId: Schema.optional(BrowserAgentId),
+  runtime: Schema.optional(BrowserRuntimeHello),
   device: BrowserAgentDevice,
   capabilities: BrowserAgentCapabilities,
 });
@@ -433,7 +647,7 @@ export const BrowserAgentCaptureStartedMessage = Schema.Struct({
   type: Schema.Literal("browserAgent.capture.started"),
   workspaceLinkId: BrowserWorkspaceLinkId,
   liveViewSessionId: TrimmedNonEmptyString,
-  transport: Schema.Literals(["webrtc", "websocket", "screenshot-fallback"]),
+  transport: Schema.Literals(["websocket", "screenshot-fallback"]),
 });
 export type BrowserAgentCaptureStartedMessage = typeof BrowserAgentCaptureStartedMessage.Type;
 
@@ -444,6 +658,18 @@ export const BrowserAgentCaptureStoppedMessage = Schema.Struct({
   message: Schema.optional(Schema.String),
 });
 export type BrowserAgentCaptureStoppedMessage = typeof BrowserAgentCaptureStoppedMessage.Type;
+
+export const BrowserAgentCaptureFrameMessage = Schema.Struct({
+  type: Schema.Literal("browserAgent.capture.frame"),
+  workspaceLinkId: BrowserWorkspaceLinkId,
+  liveViewSessionId: TrimmedNonEmptyString,
+  dataUrl: TrimmedNonEmptyString,
+  width: Schema.optional(NonNegativeInt),
+  height: Schema.optional(NonNegativeInt),
+  sequence: NonNegativeInt,
+  timestamp: IsoDateTime,
+});
+export type BrowserAgentCaptureFrameMessage = typeof BrowserAgentCaptureFrameMessage.Type;
 
 export const BrowserAgentAnnotationSubmittedMessage = Schema.Struct({
   type: Schema.Literal("browserAgent.annotation.submitted"),
@@ -474,6 +700,7 @@ export const BrowserAgentInboundMessage = Schema.Union([
   BrowserAgentThreadTabUpdatedMessage,
   BrowserAgentCaptureStartedMessage,
   BrowserAgentCaptureStoppedMessage,
+  BrowserAgentCaptureFrameMessage,
   BrowserAgentAnnotationSubmittedMessage,
 ]);
 export type BrowserAgentInboundMessage = typeof BrowserAgentInboundMessage.Type;
@@ -545,10 +772,20 @@ export const BrowserAgentOutboundMessage = Schema.Union([
     type: Schema.Literal("browserAgent.command.screenshot"),
     commandId: BrowserAgentCommandId,
     workspaceLinkId: BrowserWorkspaceLinkId,
+    quality: Schema.optional(BrowserAgentThreadTabCaptureQuality),
   }),
   Schema.Struct({
     type: Schema.Literal("browserAgent.command.requestTabsSnapshot"),
     commandId: BrowserAgentCommandId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("browserAgent.command.runtime"),
+    commandId: BrowserAgentCommandId,
+    workspaceLinkId: BrowserWorkspaceLinkId,
+    runtimeCommand: BrowserAgentRuntimePrimitive,
+    tabId: Schema.optional(BrowserWorkspaceTabId),
+    params: Schema.optional(Schema.Unknown),
+    timeoutMs: Schema.optional(NonNegativeInt),
   }),
 ]);
 export type BrowserAgentOutboundMessage = typeof BrowserAgentOutboundMessage.Type;

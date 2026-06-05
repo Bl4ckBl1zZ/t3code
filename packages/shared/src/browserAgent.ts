@@ -1,4 +1,6 @@
 export const BROWSER_AGENT_AUTO_PAIR_PATH = "/browser-agent/auto-pair";
+export const BROWSER_AGENT_AUTO_CONNECT_PATH = "/browser-agent/auto-connect";
+export const BROWSER_AGENT_LOCAL_CONTROL_WS_PATH = "/browser-agent/local-ws";
 export const BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME = "chrome-extension";
 export const BROWSER_AGENT_EXTENSION_REPO_SOURCE_RELATIVE_PATH = `apps/${BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME}`;
 export const BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR = "downloads";

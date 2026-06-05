@@ -247,6 +247,13 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+interface CollabReceiverState {
+  readonly parentTurnId: TurnId;
+  readonly parentItemId: ProviderItemId | undefined;
+  readonly prompt: string | undefined;
+  readonly lastAssistantText: string;
+}
+
 type CodexServerNotification = {
   readonly [M in CodexRpc.ServerNotificationMethod]: {
     readonly method: M;
@@ -273,6 +280,11 @@ function normalizeCodexModelSlug(
     return preferredId;
   }
   return normalized;
+}
+
+function trimText(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 function readResumeCursorThreadId(
@@ -710,7 +722,7 @@ function readRouteFields(notification: CodexServerNotification): {
 }
 
 function rememberCollabReceiverTurns(
-  collabReceiverTurns: Map<string, TurnId>,
+  collabReceiverTurns: Map<string, CollabReceiverState>,
   notification: CodexServerNotification,
   parentTurnId: TurnId | undefined,
 ): void {
@@ -727,7 +739,13 @@ function rememberCollabReceiverTurns(
   }
 
   for (const receiverThreadId of notification.params.item.receiverThreadIds) {
-    collabReceiverTurns.set(receiverThreadId, parentTurnId);
+    const existing = collabReceiverTurns.get(receiverThreadId);
+    collabReceiverTurns.set(receiverThreadId, {
+      parentTurnId,
+      parentItemId: ProviderItemId.make(notification.params.item.id),
+      prompt: trimText(notification.params.item.prompt),
+      lastAssistantText: existing?.lastAssistantText ?? "",
+    });
   }
 }
 
@@ -746,8 +764,56 @@ function shouldSuppressChildConversationNotification(
     method === "turn/started" ||
     method === "turn/completed" ||
     method === "turn/plan/updated" ||
-    method === "item/plan/delta"
+    method === "item/plan/delta" ||
+    method === "item/started" ||
+    method === "item/completed" ||
+    method === "rawResponseItem/completed" ||
+    method === "item/commandExecution/outputDelta" ||
+    method === "item/commandExecution/terminalInteraction" ||
+    method === "item/fileChange/outputDelta" ||
+    method === "item/fileChange/patchUpdated" ||
+    method === "item/mcpToolCall/progress" ||
+    method === "item/reasoning/summaryTextDelta" ||
+    method === "item/reasoning/summaryPartAdded" ||
+    method === "item/reasoning/textDelta"
   );
+}
+
+const SUBAGENT_PROGRESS_EVENT_PREFIX = "codex-subagent-progress:";
+const MAX_SUBAGENT_PREVIEW_TEXT_LENGTH = 4_000;
+const MAX_SUBAGENT_PREVIEW_LINES = 3;
+const MAX_SUBAGENT_PREVIEW_CHARS = 700;
+
+function appendSubagentAssistantText(previous: string, delta: string): string {
+  const combined = `${previous}${delta}`;
+  return combined.length > MAX_SUBAGENT_PREVIEW_TEXT_LENGTH
+    ? combined.slice(-MAX_SUBAGENT_PREVIEW_TEXT_LENGTH)
+    : combined;
+}
+
+function compactSubagentAssistantPreview(text: string): string | undefined {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const preview = lines.slice(-MAX_SUBAGENT_PREVIEW_LINES).join("\n");
+  if (preview.length <= MAX_SUBAGENT_PREVIEW_CHARS) {
+    return preview;
+  }
+  return `...${preview.slice(-MAX_SUBAGENT_PREVIEW_CHARS)}`;
+}
+
+function subagentProgressEventId(threadId: ThreadId, providerThreadId: string): EventId {
+  return EventId.make(`${SUBAGENT_PROGRESS_EVENT_PREFIX}${threadId}:${providerThreadId}`);
+}
+
+function subagentProgressTaskId(providerThreadId: string): string {
+  return `${SUBAGENT_PROGRESS_EVENT_PREFIX}${providerThreadId}`;
 }
 
 function toCodexUserInputAnswer(
@@ -841,7 +907,7 @@ export const makeCodexSessionRuntime = (
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
-    const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
+    const collabReceiverTurnsRef = yield* Ref.make(new Map<string, CollabReceiverState>());
     const closedRef = yield* Ref.make(false);
 
     // `~` is not shell-expanded when env vars are set via
@@ -907,15 +973,20 @@ export const makeCodexSessionRuntime = (
     const sessionRef = yield* Ref.make<ProviderSession>(initialSession);
     const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
-    const emitEvent = (event: Omit<ProviderEvent, "id" | "provider" | "createdAt">) =>
+    const emitEvent = (
+      event: Omit<ProviderEvent, "id" | "provider" | "createdAt"> & {
+        readonly id?: EventId;
+      },
+    ) =>
       Effect.gen(function* () {
-        const id = yield* randomUUIDv4;
+        const id = event.id ?? EventId.make(yield* randomUUIDv4);
+        const { id: _id, ...rest } = event;
         return yield* offerEvent({
-          id: EventId.make(id),
+          id,
           provider: PROVIDER,
           ...(options.providerInstanceId ? { providerInstanceId: options.providerInstanceId } : {}),
           createdAt: yield* nowIso,
-          ...event,
+          ...rest,
         });
       });
     const emitSessionEvent = (method: string, message: string) =>
@@ -955,22 +1026,63 @@ export const makeCodexSessionRuntime = (
         const payload = notification.params;
         const route = readRouteFields(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
-        const childParentTurnId = (() => {
+        const childReceiverState = (() => {
           const providerConversationId = readNotificationThreadId(notification);
           return providerConversationId
             ? collabReceiverTurns.get(providerConversationId)
             : undefined;
         })();
 
-        rememberCollabReceiverTurns(collabReceiverTurns, notification, route.turnId);
-        if (childParentTurnId && shouldSuppressChildConversationNotification(notification.method)) {
+        rememberCollabReceiverTurns(
+          collabReceiverTurns,
+          notification,
+          childReceiverState?.parentTurnId ?? route.turnId,
+        );
+
+        if (childReceiverState && notification.method === "item/agentMessage/delta") {
+          const providerConversationId = notification.params.threadId;
+          const latestAssistantText = appendSubagentAssistantText(
+            childReceiverState.lastAssistantText,
+            notification.params.delta,
+          );
+          const preview = compactSubagentAssistantPreview(latestAssistantText);
+          collabReceiverTurns.set(providerConversationId, {
+            ...childReceiverState,
+            lastAssistantText: latestAssistantText,
+          });
+          yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
+          if (preview) {
+            yield* emitEvent({
+              id: subagentProgressEventId(options.threadId, providerConversationId),
+              kind: "notification",
+              threadId: options.threadId,
+              method: "codex/subagent/progress",
+              turnId: childReceiverState.parentTurnId,
+              ...(childReceiverState.parentItemId
+                ? { itemId: childReceiverState.parentItemId }
+                : {}),
+              payload: {
+                taskId: subagentProgressTaskId(providerConversationId),
+                description: childReceiverState.prompt ?? "Sub-agent update",
+                summary: preview,
+                providerThreadId: providerConversationId,
+              },
+            });
+          }
+          return;
+        }
+
+        if (
+          childReceiverState &&
+          shouldSuppressChildConversationNotification(notification.method)
+        ) {
           yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
           return;
         }
 
         let requestId: ApprovalRequestId | undefined;
         let requestKind: ProviderRequestKind | undefined;
-        let turnId = childParentTurnId ?? route.turnId;
+        let turnId = childReceiverState?.parentTurnId ?? route.turnId;
         let itemId = route.itemId;
 
         if (notification.method === "serverRequest/resolved") {
@@ -1015,27 +1127,10 @@ export const makeCodexSessionRuntime = (
     yield* client.handleServerRequest("item/tool/call", (payload) =>
       currentSessionProviderThreadId.pipe(
         Effect.flatMap((providerThreadId) => {
-          if (providerThreadId && payload.threadId !== providerThreadId) {
-            return Effect.succeed({
-              success: false,
-              contentItems: [
-                {
-                  type: "inputText" as const,
-                  text: JSON.stringify(
-                    {
-                      ok: false,
-                      error: "Browser tool request does not belong to this provider session.",
-                    },
-                    null,
-                    2,
-                  ),
-                },
-              ],
-            });
-          }
           return handleCodexBrowserDynamicToolCall({
             threadId: options.threadId,
             payload,
+            ...(providerThreadId ? { rootProviderThreadId: providerThreadId } : {}),
             ...(options.environmentId ? { environmentId: options.environmentId } : {}),
           });
         }),

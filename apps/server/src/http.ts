@@ -1,5 +1,6 @@
 import Mime from "@effect/platform-node/Mime";
 import {
+  BROWSER_AGENT_AUTO_CONNECT_PATH,
   BROWSER_AGENT_AUTO_PAIR_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
@@ -50,6 +51,7 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import { makeOpenRouterAudioTranscription } from "./audioTranscription/OpenRouterAudioTranscription.ts";
 import { createBrowserAgentExtensionZip } from "./browserAgentExtensionZip.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
@@ -148,6 +150,70 @@ export const browserAgentAutoPairRouteLayer = HttpRouter.add(
       contentType: "text/html; charset=utf-8",
     }),
   ),
+);
+
+function normalizeRequestAddress(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+}
+
+function remoteAddressFromRequestSource(source: unknown): string | null {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const candidate = source as {
+    readonly remoteAddress?: string | null;
+    readonly socket?: {
+      readonly remoteAddress?: string | null;
+    };
+  };
+  return normalizeRequestAddress(candidate.socket?.remoteAddress ?? candidate.remoteAddress);
+}
+
+function isLoopbackRemoteAddress(address: string | null): boolean {
+  return (
+    address === "localhost" ||
+    address === "::1" ||
+    address === "0:0:0:0:0:0:0:1" ||
+    address === "127.0.0.1" ||
+    Boolean(address?.startsWith("127."))
+  );
+}
+
+export const browserAgentAutoConnectRouteLayer = HttpRouter.add(
+  "POST",
+  BROWSER_AGENT_AUTO_CONNECT_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const config = yield* ServerConfig;
+    const serverAuth = yield* ServerAuth;
+
+    if (config.mode !== "desktop") {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Browser agent auto-connect is only available in desktop mode." },
+        { status: 404, headers: browserApiCorsHeaders },
+      );
+    }
+
+    if (!isLoopbackRemoteAddress(remoteAddressFromRequestSource(request.source))) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Browser agent auto-connect is only available from this computer." },
+        { status: 403, headers: browserApiCorsHeaders },
+      );
+    }
+
+    const result = yield* serverAuth.issueLocalBrowserAgentBearerSession(
+      deriveAuthClientMetadata({ request, label: "Browser agent auto-connect" }),
+    );
+
+    return HttpServerResponse.jsonUnsafe(result, { status: 200, headers: browserApiCorsHeaders });
+  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
 );
 
 const resolveBrowserAgentExtensionSourceDir = Effect.fn(function* () {
