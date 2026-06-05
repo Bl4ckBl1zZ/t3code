@@ -30,6 +30,7 @@ dist-electron/
 .electron-runtime/
 node_modules/
 .alchemy/
+.depot/
 *.log
 .env*
 !.env.example

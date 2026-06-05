@@ -1,5 +1,4 @@
 name: Release
-
 on:
   push:
     tags:
@@ -21,16 +20,14 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: false
         type: string
-
 permissions:
   contents: read
   id-token: none
-
 jobs:
   check_changes:
     name: Check for changes since last nightly
     if: github.event_name == 'schedule'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
@@ -38,7 +35,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - id: check
         name: Compare HEAD to last nightly tag
         run: |
@@ -59,14 +55,13 @@ jobs:
             echo "Changes detected on main since $last_nightly_tag ($last_nightly_sha → $head_sha). Proceeding."
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
-
   preflight:
     name: Preflight
     needs: [check_changes]
     if: |
       !failure() && !cancelled() &&
       (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     outputs:
       release_channel: ${{ steps.release_meta.outputs.release_channel }}
@@ -84,17 +79,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
           cache: true
           run-install: true
-
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
-
       - id: release_meta
         name: Resolve release version
         shell: bash
@@ -148,16 +140,12 @@ jobs:
               echo "make_latest=false" >> "$GITHUB_OUTPUT"
             fi
           fi
-
       - name: Check
         run: vp check
-
       - name: Typecheck
         run: vp run typecheck
-
       - name: Test
         run: vp run test
-
       - id: previous_tag
         name: Resolve previous release tag
         run: |
@@ -165,12 +153,11 @@ jobs:
             --channel "${{ steps.release_meta.outputs.release_channel }}" \
             --current-tag "${{ steps.release_meta.outputs.tag }}" \
             --github-output
-
   relay_public_config:
     name: Resolve T3 Cloud public config
     needs: preflight
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 5
     environment:
       name: production
@@ -217,7 +204,6 @@ jobs:
           echo "clerk_jwt_template=$CLERK_JWT_TEMPLATE" >> "$GITHUB_OUTPUT"
           echo "clerk_cli_oauth_client_id=$CLERK_CLI_OAUTH_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "relay_url=https://$relay_domain" >> "$GITHUB_OUTPUT"
-
   build:
     name: Build ${{ matrix.label }}
     needs: [preflight, relay_public_config]
@@ -234,47 +220,44 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
-            runner: blacksmith-12vcpu-macos-26
+            runner: depot-macos-latest
             platform: mac
             target: dmg
             arch: arm64
           - label: macOS x64
-            runner: blacksmith-12vcpu-macos-26
+            runner: depot-macos-latest
             platform: mac
             target: dmg
             arch: x64
           - label: Linux x64
-            runner: blacksmith-32vcpu-ubuntu-2404
+            runner: depot-ubuntu-24.04-32
             platform: linux
             target: AppImage
             arch: x64
           - label: Windows x64
-            runner: blacksmith-32vcpu-windows-2025
+            runner: depot-windows-2025-32
             platform: win
             target: nsis
             arch: x64
-          # - label: Windows arm64
-          #   runner: windows-11-arm
-          #   platform: win
-          #   target: nsis
-          #   arch: arm64
+            # - label: Windows arm64
+            #   runner: windows-11-arm
+            #   platform: win
+            #   target: nsis
+            #   arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
           cache: true
           run-install: true
-
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
-
       - name: Install Spectre-mitigated MSVC libs
         if: matrix.platform == 'win'
         shell: pwsh
@@ -291,7 +274,6 @@ jobs:
             Write-Error "Visual Studio Installer failed with exit code $code"
             exit $code
           }
-
       - name: Install ImageMagick
         if: matrix.platform == 'linux'
         shell: bash
@@ -306,7 +288,6 @@ jobs:
           else
               convert -version
           fi
-
       - name: Prepare Azure Trusted Signing
         if: matrix.platform == 'win'
         shell: pwsh
@@ -368,7 +349,6 @@ jobs:
             Where-Object { $_ -and (Test-Path $_) } |
             Select-Object -Unique
           "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
-
       - name: Build desktop artifact
         shell: bash
         env:
@@ -431,7 +411,6 @@ jobs:
           fi
 
           vp run dist:desktop:artifact "${args[@]}"
-
       - name: Collect release assets
         shell: bash
         run: |
@@ -469,19 +448,17 @@ jobs:
           #     mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
           #   done
           # fi
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
           path: release-publish/*
           if-no-files-found: error
-
   publish_cli:
     name: Publish CLI to npm
     needs: [preflight, relay_public_config, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
-    runs-on: ubuntu-24.04 # blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -496,7 +473,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -507,24 +483,19 @@ jobs:
               - --filter=t3...
               - --filter=@t3tools/web...
               - --filter=@t3tools/scripts...
-
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
-
       - name: Build web package
         run: vp run --filter @t3tools/web build
-
       - name: Build CLI package
         run: vp run --filter t3 build
-
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
-
   release:
     name: Publish GitHub Release
     needs: [preflight, build, publish_cli]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     steps:
       - id: app_token
@@ -534,12 +505,10 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -548,14 +517,12 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/scripts...
-
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: desktop-*
           merge-multiple: true
           path: release-assets
-
       - name: Merge macOS updater manifests
         run: |
           shopt -s nullglob
@@ -566,7 +533,6 @@ jobs:
               rm -f "$x64_manifest"
             fi
           done
-
       # - name: Merge Windows updater manifests
       #   run: |
       #     shopt -s nullglob
@@ -595,7 +561,6 @@ jobs:
       #       echo "No Windows updater manifests found to merge." >&2
       #       exit 1
       #     fi
-
       - name: Publish release
         if: needs.preflight.outputs.previous_tag != ''
         uses: softprops/action-gh-release@v2
@@ -616,7 +581,6 @@ jobs:
             release-assets/*.yml
           fail_on_unmatched_files: true
           token: ${{ steps.app_token.outputs.token }}
-
       - name: Publish first release
         if: needs.preflight.outputs.previous_tag == ''
         uses: softprops/action-gh-release@v2
@@ -636,12 +600,11 @@ jobs:
             release-assets/*.yml
           fail_on_unmatched_files: true
           token: ${{ steps.app_token.outputs.token }}
-
   deploy_web:
     name: Deploy hosted web app
     needs: [preflight, relay_public_config, release]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     env:
       T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
@@ -659,7 +622,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -669,13 +631,10 @@ jobs:
             args:
               - --filter=@t3tools/scripts...
               - --filter=@t3tools/web...
-
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
-
       - name: Refresh release lockfile
         run: vp install --lockfile-only --ignore-scripts
-
       - name: Deploy and alias channel
         shell: bash
         run: |
@@ -731,12 +690,11 @@ jobs:
               --token "$VERCEL_TOKEN" \
               "${vercel_scope_args[@]}"
           fi
-
   finalize:
     name: Finalize release
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
     needs: [preflight, release]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     steps:
       - id: app_token
@@ -746,7 +704,6 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -754,7 +711,6 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app_token.outputs.token }}
           persist-credentials: true
-
       - id: app_bot
         name: Resolve GitHub App bot identity
         env:
@@ -764,7 +720,6 @@ jobs:
           user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
           echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
           echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -774,21 +729,17 @@ jobs:
             args:
               - --filter=@t3tools/scripts...
               - --filter=@t3tools/oxlint-plugin-t3code...
-
       - id: update_versions
         name: Update version strings
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION" --github-output
-
       - name: Format package.json files
         if: steps.update_versions.outputs.changed == 'true'
         run: vp fmt apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json
-
       - name: Refresh lockfile
         if: steps.update_versions.outputs.changed == 'true'
         run: vp install --lockfile-only --ignore-scripts
-
       - name: Commit and push version bump
         if: steps.update_versions.outputs.changed == 'true'
         shell: bash
@@ -806,7 +757,6 @@ jobs:
           git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml
           git commit -m "chore(release): prepare $RELEASE_TAG"
           git push origin HEAD:main
-
   announce_discord:
     name: Announce release on Discord
     if: |
@@ -817,14 +767,13 @@ jobs:
       needs.deploy_web.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -833,7 +782,6 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/scripts...
-
       - name: Announce prerelease on Discord
         if: needs.preflight.outputs.is_prerelease == 'true'
         continue-on-error: true
@@ -847,7 +795,6 @@ jobs:
             --release-version "${{ needs.preflight.outputs.version }}" \
             --tag "${{ needs.preflight.outputs.tag }}" \
             --release-url "https://github.com/${{ github.repository }}/releases/tag/${{ needs.preflight.outputs.tag }}"
-
       - name: Announce latest release on Discord
         if: needs.preflight.outputs.make_latest == 'true'
         continue-on-error: true

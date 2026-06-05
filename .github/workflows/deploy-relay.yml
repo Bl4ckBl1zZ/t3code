@@ -1,23 +1,19 @@
 name: Deploy T3 Cloud relay
-
 on:
   push:
     branches:
       - main
-
 permissions:
   contents: read
   id-token: none
   statuses: write
-
 concurrency:
   group: relay-production
   cancel-in-progress: false
-
 jobs:
   deploy_relay:
     name: Deploy production relay
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 15
     environment:
       name: production
@@ -38,14 +34,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
           cache: true
           run-install: true
-
       - name: Deploy production relay stage
         id: deploy
         run: vp run --filter t3code-relay deploy --stage prod --yes --github-output
@@ -56,7 +50,6 @@ jobs:
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
-
       - name: Publish relay deploy commit status
         uses: actions/github-script@v8
         with:

@@ -1,5 +1,4 @@
 name: Issue Labels
-
 on:
   push:
     branches:
@@ -8,14 +7,12 @@ on:
       - .github/ISSUE_TEMPLATE/**
       - .github/workflows/issue-labels.yml
   workflow_dispatch:
-
 permissions:
   issues: write
-
 jobs:
   sync:
     name: Sync issue labels
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Ensure managed issue labels exist
         uses: actions/github-script@v7

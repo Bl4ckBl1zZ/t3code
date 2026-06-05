@@ -1,12 +1,10 @@
 name: Mobile EAS Preview
-
 on:
   pull_request:
-
 jobs:
   preview:
     name: EAS Preview
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -26,13 +24,11 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "EXPO_TOKEN is not available; skipping EAS preview."
           fi
-
       - name: Checkout
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
         uses: voidzero-dev/setup-vp@v1
@@ -40,7 +36,6 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: true
-
       - name: Expose pnpm
         if: steps.expo-token.outputs.present == 'true'
         run: |
@@ -48,7 +43,6 @@ jobs:
           vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
           echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
           "$vp_pnpm_bin/pnpm" --version
-
       - name: Setup EAS
         if: steps.expo-token.outputs.present == 'true'
         uses: expo/expo-github-action@v8
@@ -56,14 +50,12 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
           packager: pnpm
-
       - name: Pull preview environment variables
         if: steps.expo-token.outputs.present == 'true'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull preview --non-interactive
-
       - name: Deploy with fingerprint check
         if: steps.expo-token.outputs.present == 'true'
         uses: expo/expo-github-action/continuous-deploy-fingerprint@main
