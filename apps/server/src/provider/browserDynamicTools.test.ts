@@ -39,18 +39,54 @@ const device = {
 
 function connectAgent(registry: BrowserAgentRegistry) {
   const sentMessages: BrowserAgentOutboundMessage[] = [];
+  const tabIdByUrl = new Map<string, number>();
+  let nextTabId = 42;
   let connectionId: ReturnType<BrowserAgentRegistry["connect"]>;
   connectionId = registry.connect({
     sessionId: AuthSessionId.make("session-host"),
     send: (message) =>
       Effect.sync(() => {
         sentMessages.push(message);
+        if (message.type === "browserAgent.command.openOrFocusThreadTab") {
+          let tabId = tabIdByUrl.get(message.url);
+          if (tabId === undefined) {
+            tabId = nextTabId;
+            nextTabId += 1;
+            tabIdByUrl.set(message.url, tabId);
+          }
+          queueMicrotask(() => {
+            registry.handleMessage(connectionId, {
+              type: "browserAgent.command.result",
+              commandId: message.commandId,
+              ok: true,
+              tabId,
+              windowId: 7,
+              payload: {
+                url: message.url,
+                title: "Preview",
+              },
+            });
+          });
+        }
         if (message.type === "browserAgent.command.input") {
           queueMicrotask(() => {
             registry.handleMessage(connectionId, {
               type: "browserAgent.command.result",
               commandId: message.commandId,
               ok: true,
+            });
+          });
+        }
+        if (message.type === "browserAgent.command.runtime") {
+          queueMicrotask(() => {
+            registry.handleMessage(connectionId, {
+              type: "browserAgent.command.result",
+              commandId: message.commandId,
+              ok: true,
+              payload: {
+                ok: true,
+                runtimeCommand: message.runtimeCommand,
+              },
             });
           });
         }
@@ -91,6 +127,103 @@ async function openLinkedTab(
 }
 
 describe("Codex browser dynamic tools", () => {
+  it("lets agents open a thread-scoped browser tab through the extension bridge", async () => {
+    const registry = new BrowserAgentRegistry();
+    const { sentMessages } = connectAgent(registry);
+
+    const response = await Effect.runPromise(
+      handleCodexBrowserDynamicToolCall({
+        environmentId,
+        threadId,
+        registry,
+        payload: {
+          tool: "browser_open_tab",
+          arguments: { url: "http://localhost:5173/", purpose: "Frontend QA" },
+          callId: "call-1",
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+        },
+      }),
+    );
+
+    expect(response.success).toBe(true);
+    expect(sentMessages.at(-1)).toMatchObject({
+      type: "browserAgent.command.openOrFocusThreadTab",
+      url: "http://localhost:5173/",
+      focus: false,
+      workspaceLink: {
+        role: "agent",
+        purpose: "Frontend QA",
+        owner: {
+          kind: "agent",
+          label: "Agent",
+        },
+        lifecycle: "ephemeral",
+      },
+    });
+  });
+
+  it("routes sub-agent browser tools to a separate tab context", async () => {
+    const registry = new BrowserAgentRegistry();
+    const { sentMessages } = connectAgent(registry);
+
+    const mainResponse = await Effect.runPromise(
+      handleCodexBrowserDynamicToolCall({
+        environmentId,
+        threadId,
+        registry,
+        rootProviderThreadId: "provider-thread-main",
+        payload: {
+          tool: "browser_open_tab",
+          arguments: { url: "http://localhost:5173/main" },
+          callId: "call-main",
+          threadId: "provider-thread-main",
+          turnId: "turn-1",
+        },
+      }),
+    );
+    const subagentResponse = await Effect.runPromise(
+      handleCodexBrowserDynamicToolCall({
+        environmentId,
+        threadId,
+        registry,
+        rootProviderThreadId: "provider-thread-main",
+        payload: {
+          tool: "browser_open_tab",
+          arguments: { url: "http://localhost:5173/subagent" },
+          callId: "call-subagent",
+          threadId: "provider-thread-subagent",
+          turnId: "turn-1",
+        },
+      }),
+    );
+
+    expect(mainResponse.success).toBe(true);
+    expect(subagentResponse.success).toBe(true);
+    const openMessages = sentMessages.filter(
+      (message) => message.type === "browserAgent.command.openOrFocusThreadTab",
+    );
+    expect(openMessages).toHaveLength(2);
+    expect(openMessages[0]).toMatchObject({
+      workspaceLink: {
+        browserContextId: "default",
+        owner: { kind: "agent", label: "Agent" },
+      },
+    });
+    expect(openMessages[1]).toMatchObject({
+      workspaceLink: {
+        browserContextId: "codex:provider-thread-subagent",
+        owner: { kind: "agent", label: "Sub-agent", runId: "provider-thread-subagent" },
+      },
+    });
+
+    const snapshot = registry.snapshot();
+    expect(snapshot.workspaceLinks.map((link) => link.browserContextId).toSorted()).toEqual([
+      "codex:provider-thread-subagent",
+      "default",
+    ]);
+  });
+
   it("returns a failed tool result when browser access is paused", async () => {
     const registry = new BrowserAgentRegistry();
     const { connectionId } = connectAgent(registry);
@@ -157,5 +290,69 @@ describe("Codex browser dynamic tools", () => {
         button: "left",
       },
     });
+  });
+
+  it("routes ref-based fills to the linked browser tab", async () => {
+    const registry = new BrowserAgentRegistry();
+    const { connectionId, sentMessages } = connectAgent(registry);
+    await openLinkedTab(registry, connectionId);
+
+    const response = await Effect.runPromise(
+      handleCodexBrowserDynamicToolCall({
+        environmentId,
+        threadId,
+        registry,
+        payload: {
+          tool: "browser_fill",
+          arguments: { ref: "e2", text: "replacement value" },
+          callId: "call-1",
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+        },
+      }),
+    );
+
+    const inputCommand = sentMessages.find(
+      (message) => message.type === "browserAgent.command.input",
+    );
+    expect(response.success).toBe(true);
+    expect(inputCommand).toMatchObject({
+      type: "browserAgent.command.input",
+      input: {
+        type: "fill",
+        ref: "e2",
+        text: "replacement value",
+      },
+    });
+  });
+
+  it("routes CDP evaluation through the runtime command bridge", async () => {
+    const registry = new BrowserAgentRegistry();
+    const { connectionId, sentMessages } = connectAgent(registry);
+    await openLinkedTab(registry, connectionId);
+
+    const evaluated = await Effect.runPromise(
+      handleCodexBrowserDynamicToolCall({
+        environmentId,
+        threadId,
+        registry,
+        payload: {
+          tool: "browser_cdp_evaluate",
+          arguments: { expression: "document.title" },
+          callId: "call-1",
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+        },
+      }),
+    );
+
+    expect(evaluated.success).toBe(true);
+    expect(
+      sentMessages.some(
+        (message) =>
+          message.type === "browserAgent.command.runtime" &&
+          message.runtimeCommand === "cdp.runtime.evaluate",
+      ),
+    ).toBe(true);
   });
 });

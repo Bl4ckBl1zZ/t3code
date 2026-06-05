@@ -199,6 +199,11 @@ describe("browser agent pairing", () => {
     expect(
       isNoBrowserAgentConnectedError(new Error("No paired browser extension is connected.")),
     ).toBe(true);
+    expect(
+      isNoBrowserAgentConnectedError(
+        new Error("No browser extension local-control session is connected."),
+      ),
+    ).toBe(true);
     expect(isNoBrowserAgentConnectedError(new Error("Different failure"))).toBe(false);
   });
 

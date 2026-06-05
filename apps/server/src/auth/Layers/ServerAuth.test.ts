@@ -89,10 +89,16 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
       const verified = yield* serverAuth.authenticateHttpRequest(
         makeCookieRequest(exchanged.sessionToken),
       );
+      const sessionState = yield* serverAuth.getSessionState(
+        makeCookieRequest(exchanged.sessionToken),
+      );
 
       expect(verified.sessionId.length).toBeGreaterThan(0);
       expect(verified.role).toBe("client");
       expect(verified.subject).toBe("one-time-token");
+      expect(verified.client.deviceType).toBe("desktop");
+      expect(sessionState.authenticated).toBe(true);
+      expect(sessionState.client?.deviceType).toBe("desktop");
     }).pipe(Effect.provide(makeServerAuthLayer())),
   );
 

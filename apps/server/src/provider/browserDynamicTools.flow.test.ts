@@ -233,6 +233,11 @@ class FakeThreadBrowserAgent {
         this.sendResult(message, { payload: { ok: true } });
         break;
 
+      case "browserAgent.command.runtime":
+        this.requireLinkedWorkspace(message.workspaceLinkId);
+        this.applyRuntimeCommand(message);
+        break;
+
       case "browserAgent.command.detachThreadTab":
         this.workspaceLinkId = null;
         this.sendResult(message, { payload: { ok: true } });
@@ -242,6 +247,63 @@ class FakeThreadBrowserAgent {
       case "browserAgent.command.activateAnnotation":
       case "browserAgent.command.requestTabsSnapshot":
         this.sendResult(message, { payload: { ok: true } });
+        break;
+    }
+  }
+
+  private applyRuntimeCommand(
+    message: Extract<BrowserAgentOutboundMessage, { type: "browserAgent.command.runtime" }>,
+  ) {
+    switch (message.runtimeCommand) {
+      case "cdp.runtime.evaluate":
+        this.sendResult(message, {
+          payload: {
+            result: {
+              type: "string",
+              value: this.title,
+            },
+          },
+        });
+        break;
+      case "cdp.accessibility.snapshot":
+        this.sendResult(message, {
+          payload: {
+            nodes: [
+              {
+                role: { value: "RootWebArea" },
+                name: { value: this.title },
+              },
+              {
+                role: { value: "button" },
+                name: { value: "Increment" },
+              },
+            ],
+          },
+        });
+        break;
+      case "diagnostics.snapshot":
+        this.sendResult(message, {
+          payload: {
+            runtime: {
+              protocolVersion: BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+            },
+            tabs: [
+              {
+                tabId: this.tabId,
+                url: this.url,
+                cdpAttached: true,
+              },
+            ],
+          },
+        });
+        break;
+      default:
+        this.registry.handleMessage(this.requireConnection(), {
+          type: "browserAgent.command.result",
+          commandId: message.commandId,
+          ok: false,
+          error: `Unsupported runtime command ${message.runtimeCommand}.`,
+        });
         break;
     }
   }
@@ -262,6 +324,12 @@ class FakeThreadBrowserAgent {
       case "type":
         if (this.focusedRef === "note") {
           this.note += input.text;
+        }
+        break;
+      case "fill":
+        if (input.ref === "note" || this.focusedRef === "note") {
+          this.focusedRef = "note";
+          this.note = input.text;
         }
         break;
       case "key":
@@ -487,6 +555,11 @@ describe("Codex browser dynamic tools full thread flow", () => {
     });
     await callBrowserTool({
       registry,
+      tool: "browser_fill",
+      arguments: { ref: "note", text: "replacement note" },
+    });
+    await callBrowserTool({
+      registry,
       tool: "browser_press_key",
       arguments: { key: "Enter" },
     });
@@ -516,7 +589,7 @@ describe("Codex browser dynamic tools full thread flow", () => {
     );
     expect(completedSnapshot.state).toMatchObject({
       counter: 2,
-      note: "thread scoped browser works\ndone",
+      note: "replacement note\ndone",
       scrollY: 640,
     });
 
@@ -531,6 +604,51 @@ describe("Codex browser dynamic tools full thread flow", () => {
       ok: true,
       url: "http://localhost:4173/browser-agent-fixture/second",
       title: "Second Fixture Page",
+    });
+
+    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toMatchObject({
+      browserControlState: "deep",
+      deepControlEnabled: true,
+    });
+
+    const evaluated = expectSuccessful(
+      await callBrowserTool({
+        registry,
+        tool: "browser_cdp_evaluate",
+        arguments: { expression: "document.title" },
+      }),
+    );
+    expect(evaluated).toMatchObject({
+      result: {
+        value: "Second Fixture Page",
+      },
+    });
+
+    const accessibility = expectSuccessful(
+      await callBrowserTool({
+        registry,
+        tool: "browser_accessibility_snapshot",
+      }),
+    );
+    expect(accessibility.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: { value: "button" },
+          name: { value: "Increment" },
+        }),
+      ]),
+    );
+
+    const diagnostics = expectSuccessful(
+      await callBrowserTool({
+        registry,
+        tool: "browser_diagnostics",
+      }),
+    );
+    expect(diagnostics).toMatchObject({
+      runtime: {
+        protocolVersion: BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+      },
     });
 
     await Effect.runPromise(registry.backThreadTab({ environmentId, threadId }));
@@ -601,6 +719,7 @@ describe("Codex browser dynamic tools full thread flow", () => {
         "browserAgent.command.screenshot",
         "browserAgent.command.navigate",
         "browserAgent.command.history",
+        "browserAgent.command.runtime",
       ]),
     );
   });

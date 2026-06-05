@@ -1,9 +1,9 @@
 import type { WorkbenchTab } from "@t3tools/client-runtime";
-import { FileTextIcon, GlobeIcon, MessageSquareIcon, PlusIcon, XIcon } from "lucide-react";
+import { FileTextIcon, MessageSquareIcon, PlusIcon, XIcon } from "lucide-react";
 import { memo } from "react";
 
 import { cn } from "../../lib/utils";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
 interface WorkbenchTabStripProps {
   readonly tabs: ReadonlyArray<WorkbenchTab>;
@@ -16,9 +16,6 @@ interface WorkbenchTabStripProps {
 }
 
 function TabIcon({ tab, active }: { readonly tab: WorkbenchTab; readonly active: boolean }) {
-  if (tab.kind === "browser") {
-    return <GlobeIcon className="size-3.5" />;
-  }
   if (tab.kind === "file") {
     return tab.dirty ? (
       <span
@@ -54,7 +51,7 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
       >
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
-          const closable = tab.kind !== "browser";
+          const closable = tab.kind === "chat" || tab.kind === "file";
           return (
             <div
               key={tab.id}
@@ -125,24 +122,22 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
           );
         })}
       </div>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="New chat tab"
-              disabled={!canCreateChatTab || creatingChatTab}
-              onClick={onCreateChatTab}
-            />
-          }
+      <Menu>
+        <MenuTrigger
+          type="button"
+          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="New tab"
+          disabled={!canCreateChatTab}
         >
           <PlusIcon className="size-3.5" />
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">
-          {canCreateChatTab ? "New chat tab" : "Start this draft before adding tabs"}
-        </TooltipPopup>
-      </Tooltip>
+        </MenuTrigger>
+        <MenuPopup align="end" side="bottom" className="min-w-36">
+          <MenuItem disabled={!canCreateChatTab || creatingChatTab} onClick={onCreateChatTab}>
+            <MessageSquareIcon className="size-4" />
+            Chat
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
     </div>
   );
 });

@@ -159,7 +159,9 @@ export function isNoBrowserAgentConnectedError(error: unknown): boolean {
       : typeof error === "string"
         ? error
         : String(error ?? "");
-  return /no paired browser extension is connected/i.test(message);
+  return /no (paired browser extension|browser extension local-control session) is connected/i.test(
+    message,
+  );
 }
 
 async function requestContentScriptPair(input: {

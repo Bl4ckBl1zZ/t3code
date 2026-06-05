@@ -83,6 +83,7 @@ export const makeServerAuth = Effect.gen(function* () {
         subject: session.subject,
         method: session.method,
         role: session.role,
+        client: session.client,
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
       })),
       Effect.mapError(
@@ -119,6 +120,7 @@ export const makeServerAuth = Effect.gen(function* () {
             auth: descriptor,
             role: session.role,
             sessionMethod: session.method,
+            client: session.client,
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
           }) satisfies AuthSessionState,
       ),
@@ -207,6 +209,38 @@ export const makeServerAuth = Effect.gen(function* () {
             }) satisfies AuthBearerBootstrapResult,
         ),
       );
+
+  const issueLocalBrowserAgentBearerSession: ServerAuthShape["issueLocalBrowserAgentBearerSession"] =
+    (requestMetadata) =>
+      sessions
+        .issue({
+          method: "bearer-session-token",
+          subject: "browser-agent-auto-connect",
+          role: "client",
+          client: {
+            ...requestMetadata,
+            label: requestMetadata.label ?? "Browser agent auto-connect",
+          },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new AuthError({
+                message: "Failed to issue browser agent session.",
+                cause,
+              }),
+          ),
+          Effect.map(
+            (session) =>
+              ({
+                authenticated: true,
+                role: session.role,
+                sessionMethod: "bearer-session-token",
+                expiresAt: DateTime.toUtc(session.expiresAt),
+                sessionToken: session.token,
+              }) satisfies AuthBearerBootstrapResult,
+          ),
+        );
 
   const issuePairingCredential: ServerAuthShape["issuePairingCredential"] = (input) =>
     authControlPlane
@@ -356,6 +390,7 @@ export const makeServerAuth = Effect.gen(function* () {
               subject: session.subject,
               method: session.method,
               role: session.role,
+              client: session.client,
               ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
             })),
             Effect.mapError(
@@ -388,6 +423,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authenticateWebSocketUpgrade,
     issueWebSocketToken,
     issueStartupPairingUrl,
+    issueLocalBrowserAgentBearerSession,
   } satisfies ServerAuthShape;
 });
 

@@ -35,7 +35,7 @@ This is not full browser-session isolation. It is tab-scoped control over a shar
 - Do not mount an existing Brave native tab view inside Electron. Existing Brave tabs can be mirrored,
   but their native view remains owned by Brave.
 - Do not make iframe embedding the primary rendering strategy. Many real apps block iframe embedding.
-- Do not expose stock Playwright MCP directly to Codex without a T3 authorization layer.
+- Do not expose unrestricted browser automation MCP directly to Codex without a T3 authorization layer.
 - Do not support arbitrary browser automation across the user's whole profile in the MVP.
 
 ## Definitions
@@ -439,7 +439,7 @@ T3-owned browser mode, but not for "use my existing Brave" mode.
 ### T3-Owned MCP Bridge
 
 The Codex session should receive MCP tools from a T3-owned bridge, not direct unrestricted
-Playwright MCP access.
+browser automation access.
 
 Every browser MCP request should include or derive:
 
@@ -490,7 +490,7 @@ Avoid `browser_run_code_unsafe` in the first version.
 
 Use accessibility snapshots where possible because they are compact and useful for agents. The
 extension/content script can compute an accessibility-like DOM snapshot for the current tab, or T3
-can use Playwright/CDP behind the bridge if CDP mode is enabled.
+can use CDP behind the bridge if CDP mode is enabled.
 
 Snapshots should include stable refs scoped to the current page version. Refs expire after
 navigation, reload, or significant DOM invalidation.
@@ -814,11 +814,5 @@ Required checks for implementation branches:
   https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-startScreencast
 - Electron web embeds and `WebContentsView`:
   https://www.electronjs.org/docs/latest/tutorial/web-embeds
-- Playwright MCP:
-  https://playwright.dev/docs/getting-started-mcp
-- Playwright MCP browser/profile modes:
-  https://playwright.dev/mcp/configuration/user-profile
-- Playwright MCP browser connection modes:
-  https://playwright.dev/mcp/configuration/browser-extension
 - Brave Chrome extension support:
   https://brave.com/learn/using-chrome-extensions-in-brave/

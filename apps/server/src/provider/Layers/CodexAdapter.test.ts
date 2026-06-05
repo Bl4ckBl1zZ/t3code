@@ -666,6 +666,47 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps compact sub-agent progress previews to task progress events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("codex-subagent-progress:thread-1:child-thread-1"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "codex/subagent/progress",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("collab-1"),
+        payload: {
+          taskId: "codex-subagent-progress:child-thread-1",
+          description: "Review the auth flow",
+          summary: "Found the stale session cleanup path.",
+          providerThreadId: "child-thread-1",
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "task.progress");
+      if (firstEvent.value.type !== "task.progress") {
+        return;
+      }
+      assert.equal(firstEvent.value.eventId, "codex-subagent-progress:thread-1:child-thread-1");
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.itemId, "collab-1");
+      assert.equal(firstEvent.value.payload.taskId, "codex-subagent-progress:child-thread-1");
+      assert.equal(firstEvent.value.payload.description, "Review the auth flow");
+      assert.equal(firstEvent.value.payload.summary, "Found the stale session cleanup path.");
+    }),
+  );
+
   it.effect("maps session/closed lifecycle events to canonical session.exited runtime events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -536,17 +537,26 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const presentation = deriveToolActivityPresentation({
+        itemType: event.payload.itemType,
+        title: event.payload.title,
+        detail: event.payload.detail,
+        data: event.payload.data,
+        fallbackSummary: event.payload.title ?? "Tool updated",
+      });
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.updated",
-          summary: event.payload.title ?? "Tool updated",
+          summary: presentation.summary,
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            title: presentation.summary,
+            ...(presentation.detail ? { detail: truncateDetail(presentation.detail) } : {}),
+            ...(presentation.browserAction ? { browserAction: presentation.browserAction } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -559,16 +569,25 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const presentation = deriveToolActivityPresentation({
+        itemType: event.payload.itemType,
+        title: event.payload.title,
+        detail: event.payload.detail,
+        data: event.payload.data,
+        fallbackSummary: event.payload.title ?? "Tool",
+      });
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.completed",
-          summary: event.payload.title ?? "Tool",
+          summary: presentation.summary,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            title: presentation.summary,
+            ...(presentation.detail ? { detail: truncateDetail(presentation.detail) } : {}),
+            ...(presentation.browserAction ? { browserAction: presentation.browserAction } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -581,16 +600,26 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const presentation = deriveToolActivityPresentation({
+        itemType: event.payload.itemType,
+        title: event.payload.title,
+        detail: event.payload.detail,
+        data: event.payload.data,
+        fallbackSummary: event.payload.title ?? "Tool",
+      });
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.started",
-          summary: `${event.payload.title ?? "Tool"} started`,
+          summary: `${presentation.summary} started`,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            title: presentation.summary,
+            ...(presentation.detail ? { detail: truncateDetail(presentation.detail) } : {}),
+            ...(presentation.browserAction ? { browserAction: presentation.browserAction } : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

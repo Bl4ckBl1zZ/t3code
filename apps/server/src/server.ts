@@ -6,6 +6,7 @@ import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
   audioTranscriptionRouteLayer,
+  browserAgentAutoConnectRouteLayer,
   browserAgentAutoPairRouteLayer,
   browserAgentExtensionDownloadRouteLayer,
   otlpTracesProxyRouteLayer,
@@ -348,10 +349,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentRouteLayer,
+  browserAgentAutoConnectRouteLayer,
   browserAgentAutoPairRouteLayer,
   browserAgentExtensionDownloadRouteLayer,
-  staticAndDevRouteLayer,
   browserAgentRouteLayer,
+  staticAndDevRouteLayer,
   websocketRpcRouteLayer,
 ).pipe(Layer.provide(browserApiCorsLayer));
 

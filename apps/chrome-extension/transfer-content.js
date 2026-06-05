@@ -892,6 +892,31 @@ function insertTextIntoElement(element, text) {
   }
 }
 
+function fillTextIntoElement(element, text) {
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    element.value = text;
+    element.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: text, inputType: "insertReplacementText" }),
+    );
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  if (element.isContentEditable) {
+    element.focus?.();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.execCommand("insertText", false, text);
+    element.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: text, inputType: "insertReplacementText" }),
+    );
+    return;
+  }
+  throw new Error("The selected element is not editable.");
+}
+
 function dispatchMouseSequence(element, input, clickCount = 1) {
   const rect = element.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
@@ -948,6 +973,12 @@ function handleThreadTabInput(input) {
   if (input.type === "type") {
     target.focus?.();
     insertTextIntoElement(target, input.text);
+    return { ok: true };
+  }
+
+  if (input.type === "fill") {
+    target.focus?.();
+    fillTextIntoElement(target, input.text);
     return { ok: true };
   }
 

@@ -46,6 +46,20 @@ export type SidebarProjectFolderEntry<TProject extends SidebarFolderableProject>
       projects: readonly TProject[];
     };
 type SidebarThreadIdentity = Pick<SidebarThreadSummary, "id" | "tabGroupId">;
+type SidebarExplorerThread = Pick<
+  SidebarThreadSummary,
+  "environmentId" | "projectId" | "worktreePath"
+>;
+type SidebarExplorerProject = {
+  readonly cwd: string;
+  readonly name: string;
+};
+
+export interface SidebarExplorerTarget {
+  readonly environmentId: SidebarExplorerThread["environmentId"];
+  readonly cwd: string;
+  readonly label: string;
+}
 
 export type ThreadTraversalDirection = "previous" | "next";
 
@@ -239,6 +253,24 @@ export function resolveSidebarNewThreadSeedContext(input: {
 
   return {
     envMode: input.defaultEnvMode,
+  };
+}
+
+export function resolveSidebarExplorerTarget(input: {
+  readonly thread: SidebarExplorerThread | null | undefined;
+  readonly project: SidebarExplorerProject | null | undefined;
+}): SidebarExplorerTarget | null {
+  const { project, thread } = input;
+  if (!thread || !project) {
+    return null;
+  }
+
+  const worktreePath =
+    thread.worktreePath && thread.worktreePath.length > 0 ? thread.worktreePath : null;
+  return {
+    environmentId: thread.environmentId,
+    cwd: worktreePath ?? project.cwd,
+    label: worktreePath ? `${project.name} worktree` : project.name,
   };
 }
 

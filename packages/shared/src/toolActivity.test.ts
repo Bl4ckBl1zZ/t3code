@@ -54,4 +54,98 @@ describe("toolActivity", () => {
       summary: "Read file",
     });
   });
+
+  it("labels browser click tools with a browser action", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "Tool call",
+        data: {
+          rawInput: {
+            payload: {
+              tool: "browser_click",
+              arguments: {
+                ref: "button-submit",
+              },
+            },
+          },
+        },
+        fallbackSummary: "Tool call",
+      }),
+    ).toEqual({
+      summary: "Clicked browser",
+      detail: "button-submit",
+      browserAction: "click",
+    });
+  });
+
+  it("labels browser scroll and screenshot tools", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "browser_scroll",
+        data: {
+          rawInput: {
+            deltaY: 800,
+          },
+        },
+      }),
+    ).toEqual({
+      summary: "Scrolled browser",
+      browserAction: "scroll",
+    });
+
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "browser_screenshot",
+      }),
+    ).toEqual({
+      summary: "Captured browser screenshot",
+      browserAction: "screenshot",
+    });
+  });
+
+  it("labels deep browser runtime inspection tools", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "Tool call",
+        data: {
+          rawInput: {
+            tool: "browser_cdp_evaluate",
+            arguments: {
+              expression: "window.__APP_STATE__",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      summary: "Evaluated browser runtime",
+      detail: "window.__APP_STATE__",
+      browserAction: "runtime-evaluate",
+    });
+  });
+
+  it("labels Codex dynamic browser items from nested item data", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "Tool call",
+        data: {
+          item: {
+            type: "dynamicToolCall",
+            tool: "browser_open_tab",
+            arguments: {
+              url: "http://localhost:5173/",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      summary: "Opened browser tab",
+      detail: "http://localhost:5173/",
+      browserAction: "open",
+    });
+  });
 });

@@ -164,6 +164,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       inputThreadTab: vi.fn(),
       snapshotThreadTab: vi.fn(),
       screenshotThreadTab: vi.fn(),
+      runtimeCommand: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
     },
     organizationPanel: {

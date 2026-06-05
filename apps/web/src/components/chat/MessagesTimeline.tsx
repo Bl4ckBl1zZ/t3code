@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -28,12 +29,18 @@ import {
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
+  CameraIcon,
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
   GlobeIcon,
   HammerIcon,
+  KeyboardIcon,
   type LucideIcon,
+  MousePointer2Icon,
+  NavigationIcon,
+  ScanSearchIcon,
+  ScrollTextIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -51,7 +58,10 @@ import {
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  isSubagentProgressEntryId,
+  resolveAgentActivityColor,
   resolveCompactWorkEntryText,
+  resolveWorkEntryPreview,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -1120,21 +1130,6 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
   return "text-muted-foreground/40";
 }
 
-function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,
-  workspaceRoot: string | undefined,
-) {
-  if (workEntry.command) return workEntry.command;
-  if (workEntry.detail) return workEntry.detail;
-  if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
-  const [firstPath] = workEntry.changedFiles ?? [];
-  if (!firstPath) return null;
-  const displayPath = formatWorkspaceRelativePath(firstPath, workspaceRoot);
-  return workEntry.changedFiles!.length === 1
-    ? displayPath
-    : `${displayPath} +${workEntry.changedFiles!.length - 1} more`;
-}
-
 type WorkEntryDiffStat = Pick<WorkLogFileStat, "additions" | "deletions">;
 
 function summarizeWorkEntryFileStats(
@@ -1245,6 +1240,28 @@ function workEntryRawCommand(
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  switch (workEntry.browserAction) {
+    case "click":
+    case "fill":
+      return MousePointer2Icon;
+    case "type":
+    case "key":
+      return KeyboardIcon;
+    case "scroll":
+      return ScrollTextIcon;
+    case "screenshot":
+      return CameraIcon;
+    case "snapshot":
+    case "accessibility":
+      return ScanSearchIcon;
+    case "open":
+    case "navigate":
+    case "page":
+    case "runtime-evaluate":
+    case "diagnostics":
+      return NavigationIcon;
+  }
+
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
@@ -1293,26 +1310,77 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry, workspaceRoot);
+  const entryPreview = resolveWorkEntryPreview({
+    command: workEntry.command,
+    detail: workEntry.detail,
+    changedFiles: workEntry.changedFiles,
+    workspaceRoot,
+  });
+  const rawPreview = entryPreview.rawPreview;
+  const isSubagentProgressPreview = isSubagentProgressEntryId(workEntry.id);
   const compactText = resolveCompactWorkEntryText({ heading, rawPreview });
-  const { preview, visibleText, visibleTextIsPreview } = compactText;
+  const { preview } = compactText;
+  const visibleText = isSubagentProgressPreview
+    ? (preview ?? "Sub-agent active")
+    : compactText.visibleText;
+  const visibleTextIsPreview = isSubagentProgressPreview ? true : compactText.visibleTextIsPreview;
   const rawCommand = workEntryRawCommand(workEntry);
-  const displayText = compactText.contextText;
-  const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
-  const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const displayText =
+    isSubagentProgressPreview && preview ? `${preview} - ${heading}` : compactText.contextText;
+  const agentColor = isSubagentProgressPreview ? resolveAgentActivityColor(workEntry.id) : null;
+  const agentStyle = agentColor
+    ? ({
+        "--agent-accent": agentColor.accent,
+        "--agent-border": agentColor.border,
+        "--agent-text": agentColor.text,
+      } as CSSProperties)
+    : undefined;
+  const screenshot = workEntry.browserScreenshot;
+  const [screenshotExpanded, setScreenshotExpanded] = useState(false);
   const diffStat = resolveWorkEntryDiffStat({
     workEntry,
     workspaceRoot,
     turnDiffSummaryByTurnId,
   });
+  const toggleScreenshot = useCallback(() => {
+    if (screenshot) {
+      setScreenshotExpanded((current) => !current);
+    }
+  }, [screenshot]);
 
   return (
-    <div className="rounded-lg px-1 py-1">
-      <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
+    <div
+      className={cn(
+        "rounded-md px-1 py-1",
+        isSubagentProgressPreview
+          ? "border border-border/55 bg-muted/20 px-2 transition-colors hover:border-border hover:bg-muted/35"
+          : "",
+        screenshot
+          ? "cursor-pointer hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/55"
+          : "",
+      )}
+      style={agentStyle}
+      onClick={screenshot ? toggleScreenshot : undefined}
+      aria-expanded={screenshot ? screenshotExpanded : undefined}
+    >
+      <div
+        className={cn(
+          "flex items-center gap-2",
+          isSubagentProgressPreview ? "" : "transition-[opacity,translate] duration-200",
+        )}
+      >
         <span
-          className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}
+          className={cn(
+            "flex size-5 shrink-0 items-center justify-center",
+            isSubagentProgressPreview
+              ? "relative rounded-md border bg-background/70 text-muted-foreground [border-color:var(--agent-border)]"
+              : iconConfig.className,
+          )}
         >
           <EntryIcon className="size-3" />
+          {isSubagentProgressPreview ? (
+            <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full [background:var(--agent-accent)]" />
+          ) : null}
         </span>
         <div className="min-w-0 flex-1 overflow-hidden">
           {rawCommand ? (
@@ -1361,7 +1429,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               >
                 <p
                   className={cn(
-                    "truncate text-[11px] leading-5",
+                    isSubagentProgressPreview
+                      ? "overflow-hidden whitespace-pre-wrap text-[11px] leading-5 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3]"
+                      : "truncate text-[11px] leading-5",
                     workToneClass(workEntry.tone),
                     preview ? "text-muted-foreground/70" : "",
                   )}
@@ -1385,8 +1455,44 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           )}
         </div>
         {diffStat && <WorkEntryDiffStatBadge stat={diffStat} />}
+        {screenshot && (
+          <button
+            type="button"
+            className="shrink-0 rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground/75 hover:text-foreground"
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleScreenshot();
+            }}
+            aria-expanded={screenshotExpanded}
+          >
+            {screenshotExpanded ? "Hide" : "View"}
+          </button>
+        )}
       </div>
-      {hasChangedFiles && !previewIsChangedFiles && (
+      {screenshot && screenshotExpanded && (
+        <div className="mt-2 ml-7 overflow-hidden rounded-md border border-border/65 bg-background">
+          <img
+            alt={screenshot.title ? `Screenshot of ${screenshot.title}` : "Browser screenshot"}
+            className="max-h-[min(70vh,720px)] w-full bg-muted/25 object-contain"
+            src={screenshot.dataUrl}
+          />
+          {(screenshot.url || screenshot.width || screenshot.height) && (
+            <div className="flex items-center gap-2 border-t border-border/55 px-2 py-1 text-[10px] leading-4 text-muted-foreground/70">
+              {screenshot.width && screenshot.height && (
+                <span className="shrink-0">
+                  {screenshot.width}x{screenshot.height}
+                </span>
+              )}
+              {screenshot.url && (
+                <span className="min-w-0 truncate" title={screenshot.url}>
+                  {screenshot.url}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {entryPreview.showChangedFileChips && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">
           {workEntry.changedFiles?.slice(0, 4).map((filePath) => {
             const displayPath = formatWorkspaceRelativePath(filePath, workspaceRoot);
@@ -1422,8 +1528,7 @@ const WorkEntryDiffStatBadge = memo(function WorkEntryDiffStatBadge({
       title={`${stat.additions} additions, ${stat.deletions} deletions`}
       aria-label={`${stat.additions} additions, ${stat.deletions} deletions`}
     >
-      {stat.additions > 0 && <span className="text-emerald-500">+{stat.additions}</span>}
-      {stat.deletions > 0 && <span className="text-rose-500">-{stat.deletions}</span>}
+      <DiffStatLabel additions={stat.additions} deletions={stat.deletions} />
     </span>
   );
 });

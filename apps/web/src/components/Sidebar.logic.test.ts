@@ -21,6 +21,7 @@ import {
   orderItemsByPreferredIds,
   removeSidebarProjectFromFolders,
   reorderSidebarFolderProjectKeys,
+  resolveSidebarExplorerTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
@@ -496,6 +497,63 @@ describe("resolveSidebarNewThreadSeedContext", () => {
     ).toEqual({
       envMode: "worktree",
     });
+  });
+});
+
+describe("resolveSidebarExplorerTarget", () => {
+  const project = {
+    name: "T3 Code",
+    cwd: "/Users/davidfaber/Github/t3code",
+  };
+  const thread = {
+    environmentId: localEnvironmentId,
+    projectId: ProjectId.make("project-1"),
+    worktreePath: null,
+  };
+
+  it("uses the project cwd for local checkout threads", () => {
+    expect(resolveSidebarExplorerTarget({ thread, project })).toEqual({
+      environmentId: localEnvironmentId,
+      cwd: "/Users/davidfaber/Github/t3code",
+      label: "T3 Code",
+    });
+  });
+
+  it("uses the thread worktree path when the active thread is in a worktree", () => {
+    expect(
+      resolveSidebarExplorerTarget({
+        thread: {
+          ...thread,
+          worktreePath: "/Users/davidfaber/.t3code/worktrees/t3code-feature",
+        },
+        project,
+      }),
+    ).toEqual({
+      environmentId: localEnvironmentId,
+      cwd: "/Users/davidfaber/.t3code/worktrees/t3code-feature",
+      label: "T3 Code worktree",
+    });
+  });
+
+  it("falls back to the project cwd when a thread has an empty worktree path", () => {
+    expect(
+      resolveSidebarExplorerTarget({
+        thread: {
+          ...thread,
+          worktreePath: "",
+        },
+        project,
+      }),
+    ).toEqual({
+      environmentId: localEnvironmentId,
+      cwd: "/Users/davidfaber/Github/t3code",
+      label: "T3 Code",
+    });
+  });
+
+  it("returns null until both thread and project context are available", () => {
+    expect(resolveSidebarExplorerTarget({ thread: null, project })).toBe(null);
+    expect(resolveSidebarExplorerTarget({ thread, project: null })).toBe(null);
   });
 });
 

@@ -17,6 +17,7 @@ import {
   BrowserAgentListResult,
   BrowserAgentOpenOrFocusPreviewInput,
   BrowserAgentOpenOrFocusThreadTabInput,
+  BrowserAgentRuntimeCommandInput,
   BrowserAgentSetThreadTabControlInput,
   BrowserAgentStartThreadTabCaptureInput,
   BrowserAgentStreamEvent,
@@ -272,6 +273,7 @@ export const WS_METHODS = {
   browserAgentsInputThreadTab: "browserAgents.threadTab.input",
   browserAgentsSnapshotThreadTab: "browserAgents.threadTab.snapshot",
   browserAgentsScreenshotThreadTab: "browserAgents.threadTab.screenshot",
+  browserAgentsRuntimeCommand: "browserAgents.runtime.command",
 
   // Organization panel methods
   organizationPanelGet: "organizationPanel.get",
@@ -530,6 +532,12 @@ export const WsBrowserAgentsScreenshotThreadTabRpc = Rpc.make(
     error: BrowserAgentCommandError,
   },
 );
+
+export const WsBrowserAgentsRuntimeCommandRpc = Rpc.make(WS_METHODS.browserAgentsRuntimeCommand, {
+  payload: BrowserAgentRuntimeCommandInput,
+  success: BrowserAgentCommandResult,
+  error: BrowserAgentCommandError,
+});
 
 export const WsOrganizationPanelGetRpc = Rpc.make(WS_METHODS.organizationPanelGet, {
   payload: OrganizationPanelGetInput,
@@ -950,6 +958,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsBrowserAgentsInputThreadTabRpc,
   WsBrowserAgentsSnapshotThreadTabRpc,
   WsBrowserAgentsScreenshotThreadTabRpc,
+  WsBrowserAgentsRuntimeCommandRpc,
   WsOrganizationPanelGetRpc,
   WsOrganizationPanelTurnStartRpc,
   WsOrganizationPanelTurnStopRpc,

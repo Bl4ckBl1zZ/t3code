@@ -1,9 +1,11 @@
 import {
+  type AuthClientMetadataDeviceType,
   type AuthSessionRole,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
+  type ServerAuthPolicy,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
@@ -23,6 +25,7 @@ import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { PreviewButton } from "./PreviewButton";
 import { BrowserAnnotationButton } from "./BrowserAnnotationButton";
+import { detectBrowserDeviceType, resolvePreviewDeviceType } from "./PreviewButton.logic";
 import {
   fetchSessionState,
   isBrowserAgentSidebarMode,
@@ -144,9 +147,16 @@ export const ChatHeader = memo(function ChatHeader({
   const [currentSessionRole, setCurrentSessionRole] = useState<AuthSessionRole | null>(() =>
     typeof window !== "undefined" && window.desktopBridge ? "owner" : null,
   );
+  const [currentAuthPolicy, setCurrentAuthPolicy] = useState<ServerAuthPolicy | null>(null);
+  const [currentDeviceType, setCurrentDeviceType] = useState<AuthClientMetadataDeviceType | null>(
+    () =>
+      typeof window !== "undefined" && window.desktopBridge ? "desktop" : detectBrowserDeviceType(),
+  );
   useEffect(() => {
     if (typeof window !== "undefined" && window.desktopBridge) {
       setCurrentSessionRole("owner");
+      setCurrentAuthPolicy(null);
+      setCurrentDeviceType("desktop");
       return;
     }
 
@@ -155,10 +165,19 @@ export const ChatHeader = memo(function ChatHeader({
       .then((session) => {
         if (cancelled) return;
         setCurrentSessionRole(session.authenticated ? (session.role ?? null) : null);
+        setCurrentAuthPolicy(session.auth.policy);
+        setCurrentDeviceType(
+          resolvePreviewDeviceType({
+            detectedDeviceType: detectBrowserDeviceType(),
+            sessionDeviceType: session.authenticated ? session.client?.deviceType : null,
+          }),
+        );
       })
       .catch(() => {
         if (cancelled) return;
         setCurrentSessionRole(null);
+        setCurrentAuthPolicy(null);
+        setCurrentDeviceType(detectBrowserDeviceType());
       });
 
     return () => {
@@ -262,6 +281,8 @@ export const ChatHeader = memo(function ChatHeader({
                 activeThreadId={activeThreadId}
                 detectedDevServerUrl={detectedDevServerUrl}
                 currentSessionRole={currentSessionRole}
+                currentAuthPolicy={currentAuthPolicy}
+                currentDeviceType={currentDeviceType}
               />
             )}
             {showTerminalToggle && (

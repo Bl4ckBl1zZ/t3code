@@ -172,6 +172,7 @@ export interface WsRpcClient {
     readonly screenshotThreadTab: RpcUnaryMethod<
       typeof WS_METHODS.browserAgentsScreenshotThreadTab
     >;
+    readonly runtimeCommand: RpcUnaryMethod<typeof WS_METHODS.browserAgentsRuntimeCommand>;
     readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeBrowserAgents>;
   };
   readonly organizationPanel: {
@@ -408,6 +409,8 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.browserAgentsSnapshotThreadTab](input)),
       screenshotThreadTab: (input) =>
         transport.request((client) => client[WS_METHODS.browserAgentsScreenshotThreadTab](input)),
+      runtimeCommand: (input) =>
+        transport.request((client) => client[WS_METHODS.browserAgentsRuntimeCommand](input)),
       subscribe: (listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeBrowserAgents]({}),

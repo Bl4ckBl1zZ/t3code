@@ -1,9 +1,69 @@
 import * as Equal from "effect/Equal";
+import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+const SUBAGENT_PROGRESS_ENTRY_PREFIX = "codex-subagent-progress:";
+
+const AGENT_COLOR_PALETTE = [
+  {
+    code: "blue",
+    accent: "rgb(37 99 235)",
+    border: "rgb(37 99 235 / 0.38)",
+    text: "rgb(96 165 250)",
+  },
+  {
+    code: "emerald",
+    accent: "rgb(5 150 105)",
+    border: "rgb(5 150 105 / 0.38)",
+    text: "rgb(52 211 153)",
+  },
+  {
+    code: "amber",
+    accent: "rgb(217 119 6)",
+    border: "rgb(217 119 6 / 0.38)",
+    text: "rgb(251 191 36)",
+  },
+  {
+    code: "rose",
+    accent: "rgb(225 29 72)",
+    border: "rgb(225 29 72 / 0.38)",
+    text: "rgb(251 113 133)",
+  },
+  {
+    code: "cyan",
+    accent: "rgb(8 145 178)",
+    border: "rgb(8 145 178 / 0.38)",
+    text: "rgb(34 211 238)",
+  },
+  {
+    code: "violet",
+    accent: "rgb(124 58 237)",
+    border: "rgb(124 58 237 / 0.38)",
+    text: "rgb(167 139 250)",
+  },
+  {
+    code: "lime",
+    accent: "rgb(101 163 13)",
+    border: "rgb(101 163 13 / 0.38)",
+    text: "rgb(163 230 53)",
+  },
+  {
+    code: "fuchsia",
+    accent: "rgb(192 38 211)",
+    border: "rgb(192 38 211 / 0.38)",
+    text: "rgb(232 121 249)",
+  },
+] as const;
+
+export interface AgentActivityColor {
+  code: string;
+  accent: string;
+  border: string;
+  text: string;
+}
 
 export interface TimelineDurationMessage {
   id: string;
@@ -68,6 +128,26 @@ export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
+export function isSubagentProgressEntryId(value: string): boolean {
+  return value.startsWith(SUBAGENT_PROGRESS_ENTRY_PREFIX);
+}
+
+function hashString(value: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
+export function resolveAgentActivityColor(agentKey: string): AgentActivityColor {
+  return (
+    AGENT_COLOR_PALETTE[hashString(agentKey) % AGENT_COLOR_PALETTE.length] ??
+    AGENT_COLOR_PALETTE[0]!
+  );
+}
+
 export function resolveCompactWorkEntryText(input: {
   readonly heading: string;
   readonly rawPreview: string | null;
@@ -99,6 +179,75 @@ export function resolveCompactWorkEntryText(input: {
     visibleText: preview,
     contextText: `${input.heading} - ${preview}`,
     visibleTextIsPreview: true,
+  };
+}
+
+function normalizePreviewPath(value: string, workspaceRoot: string | undefined): string {
+  return formatWorkspaceRelativePath(value, workspaceRoot)
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/u, "")
+    .toLowerCase();
+}
+
+function formatChangedFilesPreview(
+  changedFiles: ReadonlyArray<string> | undefined,
+  workspaceRoot: string | undefined,
+): string | null {
+  const [firstPath] = changedFiles ?? [];
+  if (!firstPath) return null;
+  const displayPath = formatWorkspaceRelativePath(firstPath, workspaceRoot);
+  const changedFileCount = changedFiles?.length ?? 0;
+  return changedFileCount === 1 ? displayPath : `${displayPath} +${changedFileCount - 1} more`;
+}
+
+function detailMatchesChangedFile(input: {
+  readonly detail: string;
+  readonly changedFiles: ReadonlyArray<string>;
+  readonly workspaceRoot: string | undefined;
+}): boolean {
+  const normalizedDetail = normalizePreviewPath(input.detail, input.workspaceRoot);
+  return input.changedFiles.some(
+    (filePath) => normalizePreviewPath(filePath, input.workspaceRoot) === normalizedDetail,
+  );
+}
+
+export function resolveWorkEntryPreview(input: {
+  readonly command?: string | undefined;
+  readonly detail?: string | undefined;
+  readonly changedFiles?: ReadonlyArray<string> | undefined;
+  readonly workspaceRoot?: string | undefined;
+}): {
+  readonly rawPreview: string | null;
+  readonly showChangedFileChips: boolean;
+} {
+  const hasChangedFiles = (input.changedFiles?.length ?? 0) > 0;
+  if (input.command) {
+    return {
+      rawPreview: input.command,
+      showChangedFileChips: hasChangedFiles,
+    };
+  }
+
+  const changedFilesPreview = formatChangedFilesPreview(input.changedFiles, input.workspaceRoot);
+  const detail = input.detail?.trim();
+  if (
+    detail &&
+    (!input.changedFiles ||
+      !detailMatchesChangedFile({
+        detail,
+        changedFiles: input.changedFiles,
+        workspaceRoot: input.workspaceRoot,
+      }))
+  ) {
+    return {
+      rawPreview: detail,
+      showChangedFileChips: hasChangedFiles,
+    };
+  }
+
+  return {
+    rawPreview: changedFilesPreview,
+    showChangedFileChips: false,
   };
 }
 

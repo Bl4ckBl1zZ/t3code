@@ -6,6 +6,11 @@ browser-agent WebSocket.
 Load it from `chrome://extensions` with Developer Mode enabled, choosing this
 `apps/chrome-extension` directory.
 
+After pulling a newer T3 Code build, click the extension icon and choose **Reload extension**.
+For the manual Chrome path, open `chrome://extensions`, find **T3 Code Browser Agent**, and click
+the reload button. Reloading keeps the saved pairing credentials and reconnects the browser-agent
+WebSocket.
+
 The normal pairing path is automatic: click **Preview** in T3 Code. If no browser agent
 is connected yet, T3 Code creates a bearer alias for the current session, opens the backend's
 `/browser-agent/auto-pair` URL in the default browser, and this extension consumes that session

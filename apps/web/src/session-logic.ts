@@ -12,6 +12,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import type { BrowserToolActivityAction } from "@t3tools/shared/toolActivity";
 
 import type {
   ChatMessage,
@@ -28,6 +29,14 @@ export interface WorkLogFileStat {
   path: string;
   additions: number;
   deletions: number;
+}
+
+export interface WorkLogScreenshotArtifact {
+  dataUrl: string;
+  width?: number;
+  height?: number;
+  url?: string;
+  title?: string;
 }
 
 export const PROVIDER_OPTIONS: Array<{
@@ -65,6 +74,8 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
+  browserAction?: BrowserToolActivityAction;
+  browserScreenshot?: WorkLogScreenshotArtifact;
   requestKind?: PendingApproval["requestKind"];
   turnId?: TurnId;
 }
@@ -564,6 +575,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activityKind: activity.kind,
   };
   const itemType = extractWorkLogItemType(payload);
+  const browserAction = extractBrowserAction(payload);
+  const browserScreenshot = extractBrowserScreenshotArtifact(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   if (detail) {
     entry.detail = detail;
@@ -588,6 +601,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (itemType) {
     entry.itemType = itemType;
+  }
+  if (browserAction) {
+    entry.browserAction = browserAction;
+  }
+  if (browserScreenshot) {
+    entry.browserScreenshot = browserScreenshot;
   }
   if (requestKind) {
     entry.requestKind = requestKind;
@@ -653,6 +672,8 @@ function mergeDerivedWorkLogEntries(
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const toolTitle = next.toolTitle ?? previous.toolTitle;
   const itemType = next.itemType ?? previous.itemType;
+  const browserAction = next.browserAction ?? previous.browserAction;
+  const browserScreenshot = next.browserScreenshot ?? previous.browserScreenshot;
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
@@ -666,6 +687,8 @@ function mergeDerivedWorkLogEntries(
     ...(changedFileStats.length > 0 ? { changedFileStats } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(itemType ? { itemType } : {}),
+    ...(browserAction ? { browserAction } : {}),
+    ...(browserScreenshot ? { browserScreenshot } : {}),
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolCallId ? { toolCallId } : {}),
@@ -743,6 +766,15 @@ function asTrimmedString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asPositiveInteger(value: unknown): number | null {
+  const number = asNumber(value);
+  return number !== null && number > 0 ? Math.round(number) : null;
+}
+
+function isImageDataUrl(value: string): boolean {
+  return /^data:image\/(?:jpeg|jpg|png|webp);base64,/iu.test(value);
 }
 
 function trimMatchingOuterQuotes(value: string): string {
@@ -1070,6 +1102,156 @@ function extractWorkLogItemType(
   return undefined;
 }
 
+function extractBrowserAction(
+  payload: Record<string, unknown> | null,
+): WorkLogEntry["browserAction"] | undefined {
+  switch (payload?.browserAction) {
+    case "open":
+    case "navigate":
+    case "snapshot":
+    case "click":
+    case "fill":
+    case "type":
+    case "key":
+    case "scroll":
+    case "screenshot":
+    case "page":
+    case "runtime-evaluate":
+    case "accessibility":
+    case "diagnostics":
+      return payload.browserAction;
+    default:
+      return undefined;
+  }
+}
+
+function extractBrowserScreenshotArtifact(
+  payload: Record<string, unknown> | null,
+): WorkLogScreenshotArtifact | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const normalizedTitle = normalizeCompactToolLabel(
+    asTrimmedString(payload.title) ?? "",
+  ).toLowerCase();
+  const isScreenshotActivity =
+    extractBrowserAction(payload) === "screenshot" ||
+    normalizedTitle === "captured screenshot" ||
+    normalizedTitle === "captured browser screenshot" ||
+    normalizedTitle === "browser screenshot";
+  if (!isScreenshotActivity) {
+    return undefined;
+  }
+
+  const data = asRecord(payload.data);
+  const metadata = findScreenshotMetadataRecord(data) ?? findScreenshotMetadataRecord(payload);
+  const dataUrl =
+    findInputImageDataUrl(data) ??
+    findInputImageDataUrl(payload) ??
+    asTrimmedString(metadata?.dataUrl);
+  if (!dataUrl || !isImageDataUrl(dataUrl)) {
+    return undefined;
+  }
+
+  const width = asPositiveInteger(metadata?.width);
+  const height = asPositiveInteger(metadata?.height);
+  const url = asTrimmedString(metadata?.url);
+  const title = asTrimmedString(metadata?.title);
+  return {
+    dataUrl,
+    ...(width !== null ? { width } : {}),
+    ...(height !== null ? { height } : {}),
+    ...(url ? { url } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
+function findInputImageDataUrl(value: unknown, depth = 0): string | null {
+  if (depth > 6) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const dataUrl = findInputImageDataUrl(item, depth + 1);
+      if (dataUrl) {
+        return dataUrl;
+      }
+    }
+    return null;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  if (record.type === "inputImage") {
+    const imageUrl = asTrimmedString(record.imageUrl);
+    if (imageUrl && isImageDataUrl(imageUrl)) {
+      return imageUrl;
+    }
+  }
+
+  for (const key of ["contentItems", "item", "payload", "result", "rawOutput", "data"] as const) {
+    const dataUrl = findInputImageDataUrl(record[key], depth + 1);
+    if (dataUrl) {
+      return dataUrl;
+    }
+  }
+
+  return null;
+}
+
+function findScreenshotMetadataRecord(value: unknown, depth = 0): Record<string, unknown> | null {
+  if (depth > 6) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const record = findScreenshotMetadataRecord(item, depth + 1);
+      if (record) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const dataUrl = asTrimmedString(record.dataUrl);
+  if (dataUrl && isImageDataUrl(dataUrl)) {
+    return record;
+  }
+
+  if (record.type === "inputText") {
+    const text = asTrimmedString(record.text);
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        const parsedRecord = asRecord(parsed);
+        const parsedDataUrl = asTrimmedString(parsedRecord?.dataUrl);
+        if (parsedRecord && parsedDataUrl && isImageDataUrl(parsedDataUrl)) {
+          return parsedRecord;
+        }
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  for (const key of ["contentItems", "item", "payload", "result", "rawOutput", "data"] as const) {
+    const nestedRecord = findScreenshotMetadataRecord(record[key], depth + 1);
+    if (nestedRecord) {
+      return nestedRecord;
+    }
+  }
+
+  return null;
+}
+
 function extractWorkLogRequestKind(
   payload: Record<string, unknown> | null,
 ): WorkLogEntry["requestKind"] | undefined {
@@ -1126,14 +1308,36 @@ function readChangedFileStat(record: Record<string, unknown>): WorkLogFileStat |
     readNonNegativeStat(record.deleted) ??
     readNonNegativeStat(record.removed) ??
     readNonNegativeStat(record.linesDeleted);
-  if (additions === null && deletions === null) {
+  const diffStat =
+    additions === null || deletions === null ? countUnifiedDiffLines(record.diff) : null;
+  if (additions === null && deletions === null && diffStat === null) {
     return null;
   }
   return {
     path,
-    additions: additions ?? 0,
-    deletions: deletions ?? 0,
+    additions: additions ?? diffStat?.additions ?? 0,
+    deletions: deletions ?? diffStat?.deletions ?? 0,
   };
+}
+
+function countUnifiedDiffLines(value: unknown): { additions: number; deletions: number } | null {
+  const diff = asTrimmedString(value);
+  if (!diff) {
+    return null;
+  }
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split(/\r?\n/u)) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions += 1;
+    } else if (line.startsWith("-")) {
+      deletions += 1;
+    }
+  }
+  return additions > 0 || deletions > 0 ? { additions, deletions } : null;
 }
 
 function collectChangedFiles(value: unknown, target: string[], seen: Set<string>, depth: number) {

@@ -62,7 +62,10 @@ function inferDeviceType(userAgent: string | undefined): AuthClientMetadataDevic
   if (/bot|crawler|spider|slurp|curl|wget/.test(normalized)) {
     return "bot";
   }
-  if (/ipad|tablet/.test(normalized)) {
+  if (
+    /ipad|tablet/.test(normalized) ||
+    (/android/.test(normalized) && !/mobile/.test(normalized))
+  ) {
     return "tablet";
   }
   if (/iphone|android.+mobile|mobile/.test(normalized)) {

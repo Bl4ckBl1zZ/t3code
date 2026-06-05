@@ -24,6 +24,7 @@ export interface AuthenticatedSession {
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly role: SessionRole;
+  readonly client: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
 }
 
@@ -50,6 +51,9 @@ export interface ServerAuthShape {
   >;
   readonly exchangeBootstrapCredentialForBearerSession: (
     credential: string,
+    requestMetadata: AuthClientMetadata,
+  ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
+  readonly issueLocalBrowserAgentBearerSession: (
     requestMetadata: AuthClientMetadata,
   ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
   readonly issuePairingCredential: (

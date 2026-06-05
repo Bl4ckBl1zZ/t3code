@@ -1,4 +1,11 @@
-import type { AuthSessionRole, EnvironmentId, ProjectScript, ThreadId } from "@t3tools/contracts";
+import type {
+  AuthClientMetadataDeviceType,
+  AuthSessionRole,
+  EnvironmentId,
+  ProjectScript,
+  ServerAuthPolicy,
+  ThreadId,
+} from "@t3tools/contracts";
 import { MonitorUpIcon, PuzzleIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
@@ -34,6 +41,8 @@ export const PreviewButton = memo(function PreviewButton({
   activeThreadId,
   detectedDevServerUrl,
   currentSessionRole,
+  currentAuthPolicy,
+  currentDeviceType,
 }: {
   readonly activeProjectName: string | undefined;
   readonly activeProjectScripts: readonly ProjectScript[] | undefined;
@@ -42,6 +51,8 @@ export const PreviewButton = memo(function PreviewButton({
   readonly activeThreadId: ThreadId;
   readonly detectedDevServerUrl: string | null;
   readonly currentSessionRole: AuthSessionRole | null;
+  readonly currentAuthPolicy: ServerAuthPolicy | null;
+  readonly currentDeviceType: AuthClientMetadataDeviceType | null;
 }) {
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
   const [extensionDownloadUrl, setExtensionDownloadUrl] = useState<string | null>(null);
@@ -54,7 +65,11 @@ export const PreviewButton = memo(function PreviewButton({
       }),
     [activeProjectScripts, detectedDevServerUrl, projectPreviewUrl],
   );
-  const openPreviewInNewTab = shouldOpenPreviewInNewTab({ currentSessionRole });
+  const openPreviewInNewTab = shouldOpenPreviewInNewTab({
+    currentAuthPolicy,
+    currentDeviceType,
+    currentSessionRole,
+  });
 
   const openPreviewInBrowser = () => {
     if (isOpeningPreview) return;
@@ -182,7 +197,7 @@ export const PreviewButton = memo(function PreviewButton({
         <TooltipPopup side="bottom">
           {openPreviewInNewTab
             ? `Open ${devServerUrl} in a new tab.`
-            : `Open or focus ${devServerUrl} in a paired browser extension.`}
+            : `Open or focus ${devServerUrl} in the browser extension.`}
         </TooltipPopup>
       </Tooltip>
 
@@ -196,14 +211,16 @@ export const PreviewButton = memo(function PreviewButton({
       >
         <DialogPopup className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Chrome extension not installed</DialogTitle>
+            <DialogTitle>Chrome extension needed</DialogTitle>
             <DialogDescription>
-              Preview needs the T3 Code Browser Agent extension installed in this browser.
+              Preview needs the T3 Code Browser Agent extension installed and up to date in this
+              browser.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
             <p className="text-muted-foreground text-sm leading-6">
-              Install the extension, keep it enabled, then retry Preview.
+              Install the extension, or open the extension popup and click Reload extension after
+              pulling a newer T3 Code build. Then retry Preview.
             </p>
           </DialogPanel>
           <DialogFooter>

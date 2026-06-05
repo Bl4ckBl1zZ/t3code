@@ -262,5 +262,6 @@ export const AuthSessionState = Schema.Struct({
   role: Schema.optionalKey(AuthSessionRole),
   sessionMethod: Schema.optionalKey(ServerAuthSessionMethod),
   expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  client: Schema.optionalKey(AuthClientMetadata),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
