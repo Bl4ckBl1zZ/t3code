@@ -32,6 +32,14 @@ const TEST_ENVIRONMENT_DESCRIPTOR: ExecutionEnvironmentDescriptor = {
   serverVersion: "0.0.0-test",
   capabilities: { browserAgent: true, repositoryIdentity: true },
 };
+const TEST_SESSION_SCOPES: ReadonlyArray<AuthEnvironmentScope> = [
+  "orchestration:read",
+  "orchestration:operate",
+  "terminal:operate",
+  "review:write",
+  "relay:read",
+  "access:write",
+];
 
 const unexpectedEndpoint = (endpoint: string) =>
   Effect.die(new Error(`Unexpected browser environment HTTP endpoint: ${endpoint}`));
@@ -57,6 +65,7 @@ export function createAuthenticatedSessionHandlers(getAuthDescriptor: () => Serv
         Effect.succeed({
           authenticated: true,
           auth: getAuthDescriptor(),
+          scopes: TEST_SESSION_SCOPES,
           sessionMethod: "browser-session-cookie",
           expiresAt: TEST_SESSION_EXPIRES_AT,
         }),
@@ -64,13 +73,7 @@ export function createAuthenticatedSessionHandlers(getAuthDescriptor: () => Serv
       .handle("browserSession", () =>
         Effect.succeed({
           authenticated: true,
-          scopes: [
-            "orchestration:read",
-            "orchestration:operate",
-            "terminal:operate",
-            "review:write",
-            "relay:read",
-          ],
+          scopes: TEST_SESSION_SCOPES,
           sessionMethod: "browser-session-cookie",
           expiresAt: TEST_SESSION_EXPIRES_AT,
         }),
