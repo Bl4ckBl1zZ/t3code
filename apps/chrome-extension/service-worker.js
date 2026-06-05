@@ -173,8 +173,17 @@ function chatUrlForWorkspaceLink(baseUrl, link, sidebarSessionToken) {
   return url.toString();
 }
 
+function activeBrowserAgentBaseUrl(backend = currentBackend) {
+  return socketBaseUrl ?? localControlBaseUrl ?? backend?.baseUrl ?? null;
+}
+
+function hasActiveBrowserAgentTransport(backend = currentBackend) {
+  return Boolean(backend) || socket?.readyState === WebSocket.OPEN || Boolean(localControlBaseUrl);
+}
+
 async function workspaceLinkForContent(link, tab = null, options = {}) {
   const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
   const tabUrl = typeof tab?.url === "string" && tab.url.length > 0 ? tab.url : null;
   const workspaceId =
     typeof link.workspaceId === "string" && link.workspaceId.length > 0
@@ -204,16 +213,16 @@ async function workspaceLinkForContent(link, tab = null, options = {}) {
     ...(tabUrl ? { url: tabUrl } : {}),
     ...(typeof tab?.title === "string" ? { title: tab.title } : {}),
   };
-  if (!backend?.baseUrl) {
+  if (!baseUrl) {
     return nextLink;
   }
   const sidebarSessionToken =
     typeof options.sidebarSessionToken === "string" && options.sidebarSessionToken.length > 0
       ? options.sidebarSessionToken
-      : backend.sessionToken;
+      : backend?.sessionToken;
   return {
     ...nextLink,
-    t3Url: chatUrlForWorkspaceLink(backend.baseUrl, nextLink, sidebarSessionToken),
+    t3Url: chatUrlForWorkspaceLink(baseUrl, nextLink, sidebarSessionToken),
   };
 }
 
@@ -576,6 +585,43 @@ async function ensureBrowserAgentTransport() {
 
 function isExtensionPageSender(sender) {
   return typeof sender?.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+
+function isTrustedAutoConnectHostname(hostname) {
+  const normalized = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, "$1");
+  if (normalized === "localhost" || normalized === "::1" || normalized.endsWith(".ts.net")) {
+    return true;
+  }
+  const parts = normalized.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+  const [first, second] = parts;
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 100 && second >= 64 && second <= 127)
+  );
+}
+
+function isTrustedAutoConnectContentSender(sender, message) {
+  if (typeof sender?.url !== "string" || typeof message?.pageBaseUrl !== "string") {
+    return false;
+  }
+  try {
+    const senderUrl = new URL(sender.url);
+    const pageBaseUrl = new URL(message.pageBaseUrl);
+    return (
+      senderUrl.origin === pageBaseUrl.origin && isTrustedAutoConnectHostname(pageBaseUrl.hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function pairBackend(input) {
@@ -1567,6 +1613,7 @@ async function resolveSidePanelActiveTab(input) {
 
 async function getSidePanelState(input = {}) {
   const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
   const activeTab = await resolveSidePanelActiveTab(input);
   if (activeTab) {
     void clearSidePanelOpenPrompt(activeTab).catch(() => undefined);
@@ -1596,8 +1643,8 @@ async function getSidePanelState(input = {}) {
 
   return {
     ok: true,
-    paired: Boolean(backend),
-    baseUrl: backend?.baseUrl ?? null,
+    paired: hasActiveBrowserAgentTransport(backend),
+    baseUrl,
     connected: socket?.readyState === WebSocket.OPEN,
     workspaceLink,
     activeTab: activeTab
@@ -1931,6 +1978,7 @@ async function stopAllCdpScreencasts() {
 
 async function runtimeDiagnosticsSnapshot() {
   const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
   const tabs = await chrome.tabs.query({}).catch(() => []);
   const links = await readLinks().catch(() => workspaceLinksCache);
   return {
@@ -1944,8 +1992,8 @@ async function runtimeDiagnosticsSnapshot() {
       capabilities: capabilityGroups(),
     },
     transport: {
-      paired: Boolean(backend),
-      baseUrl: backend?.baseUrl ?? null,
+      paired: hasActiveBrowserAgentTransport(backend),
+      baseUrl,
       localControlBaseUrl,
       transportMode: localControlBaseUrl ? "local-control" : backend ? "paired" : "none",
       socketState: socketStateLabel(),
@@ -2594,10 +2642,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return respond(
         (async () => {
           const backend = await readActivePairedBackend();
+          const baseUrl = activeBrowserAgentBaseUrl(backend);
           return {
             ok: true,
-            paired: Boolean(backend),
-            baseUrl: backend?.baseUrl ?? null,
+            paired: hasActiveBrowserAgentTransport(backend),
+            baseUrl,
             localControlBaseUrl,
             transportMode: localControlBaseUrl ? "local-control" : backend ? "paired" : "none",
             connected: socket?.readyState === WebSocket.OPEN,
@@ -2619,7 +2668,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "t3code.browserAgent.autoConnectNow":
       return respond(
         (async () => {
-          if (message.baseUrls !== undefined && !isExtensionPageSender(sender)) {
+          if (
+            message.baseUrls !== undefined &&
+            !isExtensionPageSender(sender) &&
+            !isTrustedAutoConnectContentSender(sender, message)
+          ) {
             throw new Error("Custom auto-connect URLs are only available to extension pages.");
           }
           const result = await autoConnectLocalBackend({ baseUrls: message.baseUrls });

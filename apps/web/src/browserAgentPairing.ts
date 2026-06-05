@@ -13,6 +13,8 @@ import { useUiStateStore } from "./uiStateStore";
 export { BROWSER_AGENT_AUTO_PAIR_PATH, BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH };
 const AUTO_PAIR_REQUEST_TYPE = "t3code.browserAgent.autoPair";
 const AUTO_PAIR_RESULT_TYPE = "t3code.browserAgent.autoPair.result";
+const AUTO_CONNECT_REQUEST_TYPE = "t3code.browserAgent.autoConnect";
+const AUTO_CONNECT_RESULT_TYPE = "t3code.browserAgent.autoConnect.result";
 const AUTO_PAIR_CONNECT_TIMEOUT_MS = 12_000;
 const AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS = 1_500;
 const AUTO_PAIR_POLL_INTERVAL_MS = 250;
@@ -29,6 +31,11 @@ interface WaitForBrowserAgentConnectionOptions {
 }
 
 interface AutoPairContentScriptResult {
+  readonly ok: boolean;
+  readonly error?: string;
+}
+
+interface AutoConnectContentScriptResult {
   readonly ok: boolean;
   readonly error?: string;
 }
@@ -96,6 +103,20 @@ function sameOriginAsCurrentPage(rawUrl: string): boolean {
   }
 }
 
+function uniqueBaseUrls(baseUrls: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const baseUrl of baseUrls) {
+    const normalized = normalizeBaseUrl(baseUrl);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    unique.push(normalized);
+  }
+  return unique;
+}
+
 export async function resolveBrowserAgentBackendBaseUrl(): Promise<string> {
   const getAdvertisedEndpoints = window.desktopBridge?.getAdvertisedEndpoints;
   const advertisedEndpoints = getAdvertisedEndpoints
@@ -116,6 +137,24 @@ export async function resolveBrowserAgentBackendBaseUrl(): Promise<string> {
     throw new Error("Unable to resolve the primary environment URL for browser pairing.");
   }
   return normalizeBaseUrl(target.target.httpBaseUrl);
+}
+
+export async function resolveBrowserAgentAutoConnectBaseUrls(
+  pairingBaseUrl: string,
+): Promise<readonly string[]> {
+  const getAdvertisedEndpoints = window.desktopBridge?.getAdvertisedEndpoints;
+  const advertisedEndpoints = getAdvertisedEndpoints
+    ? await getAdvertisedEndpoints().catch(() => [])
+    : [];
+  const loopbackEndpoints = advertisedEndpoints
+    .filter((endpoint) => endpoint.reachability === "loopback")
+    .map((endpoint) => endpoint.httpBaseUrl);
+  const target = readPrimaryEnvironmentTarget();
+  return uniqueBaseUrls([
+    ...loopbackEndpoints,
+    ...(target ? [target.target.httpBaseUrl] : []),
+    pairingBaseUrl,
+  ]);
 }
 
 export function buildBrowserAgentAutoPairUrl(input: {
@@ -229,6 +268,63 @@ async function requestContentScriptPair(input: {
   });
 }
 
+async function requestContentScriptAutoConnect(input: {
+  readonly pageBaseUrl: string;
+  readonly baseUrls: readonly string[];
+  readonly timeoutMs?: number;
+}): Promise<boolean> {
+  if (!sameOriginAsCurrentPage(input.pageBaseUrl)) {
+    return false;
+  }
+
+  const requestId = randomRequestId();
+  const timeoutMs = input.timeoutMs ?? AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS;
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("message", onMessage);
+    };
+    const finish = (result: AutoConnectContentScriptResult | null) => {
+      if (settled) return;
+      cleanup();
+      resolve(result?.ok === true);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      const data = event.data as
+        | {
+            readonly type?: unknown;
+            readonly requestId?: unknown;
+            readonly ok?: unknown;
+            readonly error?: unknown;
+          }
+        | undefined;
+      if (data?.type !== AUTO_CONNECT_RESULT_TYPE || data.requestId !== requestId) {
+        return;
+      }
+      finish({
+        ok: data.ok === true,
+        ...(typeof data.error === "string" ? { error: data.error } : {}),
+      });
+    };
+    const timeoutId = window.setTimeout(() => finish(null), timeoutMs);
+
+    window.addEventListener("message", onMessage);
+    window.postMessage(
+      {
+        type: AUTO_CONNECT_REQUEST_TYPE,
+        requestId,
+        pageBaseUrl: input.pageBaseUrl,
+        baseUrls: input.baseUrls,
+      },
+      window.location.origin,
+    );
+  });
+}
+
 export async function waitForBrowserAgentConnection(
   client: BrowserAgentListClient,
   options?: WaitForBrowserAgentConnectionOptions,
@@ -268,6 +364,15 @@ export async function waitForBrowserAgentConnection(
 export async function autoPairBrowserAgent(client: BrowserAgentListClient): Promise<void> {
   const baseUrl = await resolveBrowserAgentBackendBaseUrl();
   const downloadUrl = buildBrowserAgentExtensionDownloadUrl({ baseUrl });
+  const autoConnected = await requestContentScriptAutoConnect({
+    pageBaseUrl: baseUrl,
+    baseUrls: await resolveBrowserAgentAutoConnectBaseUrls(baseUrl),
+  });
+  if (autoConnected) {
+    await waitForBrowserAgentConnection(client);
+    return;
+  }
+
   const pairing = await createServerPairingCredential("Browser agent auto-pair");
   const pairedInCurrentPage = await requestContentScriptPair({
     baseUrl,
