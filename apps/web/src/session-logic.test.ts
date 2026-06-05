@@ -593,6 +593,74 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("marks read-file updates as in progress with the file path detail", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "read-file-updated",
+          kind: "tool.updated",
+          summary: "Read file",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read file",
+            detail: "apps/web/src/components/ChatView.tsx",
+            requestKind: "file-read",
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries[0]).toMatchObject({
+      id: "read-file-updated",
+      label: "Read file",
+      detail: "apps/web/src/components/ChatView.tsx",
+      requestKind: "file-read",
+      inProgress: true,
+    });
+  });
+
+  it("clears in-progress state after a read-file tool completes", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "read-file-updated",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.updated",
+          summary: "Read file",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read file",
+            detail: "apps/web/src/components/ChatView.tsx",
+            requestKind: "file-read",
+            data: { toolCallId: "tool-read-1" },
+          },
+        }),
+        makeActivity({
+          id: "read-file-completed",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.completed",
+          summary: "Read file",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read file",
+            detail: "apps/web/src/components/ChatView.tsx",
+            requestKind: "file-read",
+            data: { toolCallId: "tool-read-1" },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "read-file-completed",
+      detail: "apps/web/src/components/ChatView.tsx",
+      inProgress: false,
+    });
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

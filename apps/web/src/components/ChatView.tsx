@@ -4967,6 +4967,11 @@ export default function ChatView(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  const showWorkbenchTabStrip =
+    workbenchTabs.length > 1 || isServerThread || fileTabsState.tabs.length > 0;
+  const titleBarControlInsetClassName = reserveTitleBarControlInset
+    ? "wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]"
+    : undefined;
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -4975,16 +4980,37 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+      {showWorkbenchTabStrip && (
+        <div
+          className={cn(
+            "border-b border-border",
+            isElectron
+              ? cn("drag-region px-3 py-1.5 sm:px-5", titleBarControlInsetClassName)
+              : "px-[calc(env(safe-area-inset-left)+0.75rem)] py-1.5 pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:px-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]",
+          )}
+        >
+          <WorkbenchTabStrip
+            tabs={workbenchTabs}
+            activeTabId={activeWorkbenchTabId}
+            canCreateChatTab={isServerThread}
+            creatingChatTab={creatingChatTab}
+            onSelectTab={selectWorkbenchTab}
+            onCloseTab={closeWorkbenchTab}
+            onCreateChatTab={createChatTab}
+          />
+        </div>
+      )}
       {/* Top bar */}
       <header
         className={cn(
           "border-b border-border",
           isElectron
-            ? cn(
-                "drag-region flex h-[52px] items-center px-3 sm:px-5 wco:h-[env(titlebar-area-height)]",
-                reserveTitleBarControlInset &&
-                  "wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]",
-              )
+            ? showWorkbenchTabStrip
+              ? "flex h-12 items-center px-3 sm:px-5"
+              : cn(
+                  "drag-region flex h-[52px] items-center px-3 sm:px-5 wco:h-[env(titlebar-area-height)]",
+                  titleBarControlInsetClassName,
+                )
             : "pb-2 pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-2 sm:pb-3 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-3",
         )}
       >
@@ -5025,19 +5051,6 @@ export default function ChatView(props: ChatViewProps) {
           onSubmitGitPrompt={onSubmitGitPrompt}
         />
       </header>
-      {(workbenchTabs.length > 1 || isServerThread || fileTabsState.tabs.length > 0) && (
-        <div className="border-b border-border px-[calc(env(safe-area-inset-left)+0.75rem)] py-1.5 pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:px-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]">
-          <WorkbenchTabStrip
-            tabs={workbenchTabs}
-            activeTabId={activeWorkbenchTabId}
-            canCreateChatTab={isServerThread}
-            creatingChatTab={creatingChatTab}
-            onSelectTab={selectWorkbenchTab}
-            onCloseTab={closeWorkbenchTab}
-            onCreateChatTab={createChatTab}
-          />
-        </div>
-      )}
 
       {/* Error banner */}
       <ProviderStatusBanner status={activeProviderStatus} />

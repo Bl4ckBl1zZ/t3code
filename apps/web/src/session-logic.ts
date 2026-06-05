@@ -78,6 +78,7 @@ export interface WorkLogEntry {
   browserScreenshot?: WorkLogScreenshotArtifact;
   requestKind?: PendingApproval["requestKind"];
   turnId?: TurnId;
+  inProgress?: boolean;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -574,6 +575,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
           : activity.tone,
     activityKind: activity.kind,
   };
+  if (activity.kind === "tool.updated" || activity.kind === "task.progress") {
+    entry.inProgress = true;
+  }
   const itemType = extractWorkLogItemType(payload);
   const browserAction = extractBrowserAction(payload);
   const browserScreenshot = extractBrowserScreenshotArtifact(payload);
@@ -677,6 +681,7 @@ function mergeDerivedWorkLogEntries(
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
+  const inProgress = next.inProgress ?? false;
   return {
     ...previous,
     ...next,
@@ -692,6 +697,7 @@ function mergeDerivedWorkLogEntries(
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    inProgress,
   };
 }
 

@@ -62,6 +62,8 @@ import {
   resolveAgentActivityColor,
   resolveCompactWorkEntryText,
   resolveWorkEntryPreview,
+  resolveWorkEntryPreviewCommand,
+  isActiveFileReadWorkEntry,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -1310,13 +1312,23 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
-  const entryPreview = resolveWorkEntryPreview({
+  const previewCommand = resolveWorkEntryPreviewCommand({
     command: workEntry.command,
+    requestKind: workEntry.requestKind,
+    heading,
+  });
+  const entryPreview = resolveWorkEntryPreview({
+    command: previewCommand,
     detail: workEntry.detail,
     changedFiles: workEntry.changedFiles,
     workspaceRoot,
   });
   const rawPreview = entryPreview.rawPreview;
+  const activeFileRead = isActiveFileReadWorkEntry({
+    inProgress: workEntry.inProgress,
+    requestKind: workEntry.requestKind,
+    heading,
+  });
   const isSubagentProgressPreview = isSubagentProgressEntryId(workEntry.id);
   const compactText = resolveCompactWorkEntryText({ heading, rawPreview });
   const { preview } = compactText;
@@ -1404,6 +1416,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     className={cn(
                       workToneClass(workEntry.tone),
                       visibleTextIsPreview ? "text-muted-foreground/70" : "text-foreground/80",
+                      activeFileRead && "shimmer-tool-text",
                     )}
                   >
                     {visibleText}
@@ -1440,6 +1453,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     className={cn(
                       workToneClass(workEntry.tone),
                       visibleTextIsPreview ? "text-muted-foreground/70" : "text-foreground/80",
+                      activeFileRead && "shimmer-tool-text",
                     )}
                   >
                     {visibleText}

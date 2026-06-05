@@ -7,6 +7,7 @@ import {
   RotateCcwIcon,
   SaveIcon,
 } from "lucide-react";
+import type * as Monaco from "monaco-editor";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "monaco-editor/min/vs/editor/editor.main.css";
@@ -23,7 +24,7 @@ import { cn } from "../../lib/utils";
 import { useWorkbenchStore } from "../../workbenchStore";
 import { Button } from "../ui/button";
 
-type MonacoModule = typeof import("monaco-editor/esm/vs/editor/editor.api.js");
+type MonacoModule = typeof Monaco;
 type MonacoEditor = ReturnType<MonacoModule["editor"]["create"]>;
 type MonacoViewState = ReturnType<MonacoEditor["saveViewState"]>;
 
@@ -148,7 +149,8 @@ export function WorkspaceFileEditor({ tab, onDirtyChange }: WorkspaceFileEditorP
     const initialContents = initialDocumentState.draftContents;
 
     void import("monaco-editor/esm/vs/editor/editor.api.js")
-      .then((monaco) => {
+      .then((monacoModule) => {
+        const monaco = monacoModule as unknown as MonacoModule;
         if (disposed || !containerRef.current) return;
         monacoRef.current = monaco;
         const model = monaco.editor.createModel(

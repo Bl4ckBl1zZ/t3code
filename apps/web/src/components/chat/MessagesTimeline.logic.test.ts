@@ -3,12 +3,14 @@ import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  isActiveFileReadWorkEntry,
   isSubagentProgressEntryId,
   normalizeCompactToolLabel,
   resolveAgentActivityColor,
   resolveAssistantMessageCopyState,
   resolveCompactWorkEntryText,
   resolveWorkEntryPreview,
+  resolveWorkEntryPreviewCommand,
 } from "./MessagesTimeline.logic";
 
 describe("computeMessageDurationStart", () => {
@@ -199,6 +201,42 @@ describe("resolveCompactWorkEntryText", () => {
       contextText: "Read file",
       visibleTextIsPreview: false,
     });
+  });
+});
+
+describe("file-read work entry presentation", () => {
+  it("detects active read-file rows for shimmer treatment", () => {
+    expect(
+      isActiveFileReadWorkEntry({
+        inProgress: true,
+        requestKind: "file-read",
+        heading: "Read file",
+      }),
+    ).toBe(true);
+    expect(
+      isActiveFileReadWorkEntry({
+        inProgress: false,
+        requestKind: "file-read",
+        heading: "Read file",
+      }),
+    ).toBe(false);
+    expect(
+      isActiveFileReadWorkEntry({
+        inProgress: true,
+        requestKind: "command",
+        heading: "Ran command",
+      }),
+    ).toBe(false);
+  });
+
+  it("prefers read-file detail over command-like previews", () => {
+    expect(
+      resolveWorkEntryPreviewCommand({
+        command: "sed -n '1,80p' apps/web/src/components/ChatView.tsx",
+        requestKind: "file-read",
+        heading: "Read file",
+      }),
+    ).toBeUndefined();
   });
 });
 

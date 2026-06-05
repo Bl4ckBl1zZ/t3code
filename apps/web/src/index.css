@@ -6,6 +6,7 @@
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
+  --animate-tool-text-shimmer: tool-text-shimmer 1.35s linear infinite;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
@@ -43,6 +44,14 @@
       background-position: -200% 0;
     }
   }
+  @keyframes tool-text-shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
 }
 
 @layer base {
@@ -72,6 +81,28 @@
 }
 @utility pr-safe {
   padding-right: max(env(safe-area-inset-right), 0px);
+}
+
+@utility shimmer-tool-text {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--muted-foreground) 72%, transparent) 0%,
+    var(--foreground) 48%,
+    color-mix(in srgb, var(--muted-foreground) 72%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  animation: var(--animate-tool-text-shimmer);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    color: var(--foreground);
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
 }
 
 /* Suppress all transitions during theme changes */

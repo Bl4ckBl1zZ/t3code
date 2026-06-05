@@ -288,7 +288,19 @@ function collectPaths(value: unknown, paths: string[], seen: Set<string>, depth:
       return;
     }
   }
-  for (const nestedKey of ["locations", "item", "input", "result", "rawInput", "data", "changes"]) {
+  for (const nestedKey of [
+    "locations",
+    "item",
+    "input",
+    "result",
+    "rawInput",
+    "data",
+    "changes",
+    "arguments",
+    "args",
+    "payload",
+    "files",
+  ]) {
     if (!(nestedKey in record)) {
       continue;
     }
@@ -303,6 +315,22 @@ function extractPrimaryPath(data: Record<string, unknown> | undefined): string |
   const paths: string[] = [];
   collectPaths(data, paths, new Set<string>(), 0);
   return paths[0];
+}
+
+function extractToolName(data: Record<string, unknown> | undefined): string | undefined {
+  const rawInput = asRecord(data?.rawInput);
+  const rawInputPayload = asRecord(rawInput?.payload);
+  const rawInputArguments = asRecord(rawInput?.arguments);
+  return asTrimmedLowerString(
+    data?.tool ??
+      data?.toolName ??
+      data?.name ??
+      rawInput?.tool ??
+      rawInput?.toolName ??
+      rawInput?.name ??
+      rawInputPayload?.tool ??
+      rawInputArguments?.tool,
+  );
 }
 
 function normalizeEquivalentValue(value: string | undefined): string | undefined {
@@ -330,10 +358,15 @@ function classifyToolAction(input: {
   const itemType = input.itemType ?? undefined;
   const kind = asTrimmedString(input.data?.kind)?.toLowerCase();
   const title = asTrimmedString(input.title)?.toLowerCase();
+  const toolName = extractToolName(input.data);
   if (itemType === "command_execution" || kind === "execute" || title === "terminal") {
     return "command";
   }
-  if (kind === "read" || title === "read file") {
+  if (
+    kind === "read" ||
+    title === "read file" ||
+    (toolName !== undefined && /(?:^|[_-])read(?:[_-].*)?file|file(?:[_-].*)?read/u.test(toolName))
+  ) {
     return "read";
   }
   if (
