@@ -1,3 +1,8 @@
+# Depot CI Migration
+# Source: .github/workflows/deploy-relay.yml
+#
+# No changes were necessary.
+
 name: Deploy T3 Cloud relay
 on:
   push:

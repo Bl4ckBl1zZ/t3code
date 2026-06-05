@@ -1,3 +1,9 @@
+# Depot CI Migration
+# Source: .github/workflows/issue-labels.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+
 name: Issue Labels
 on:
   push:
@@ -5,7 +11,7 @@ on:
       - main
     paths:
       - .github/ISSUE_TEMPLATE/**
-      - .github/workflows/issue-labels.yml
+      - .depot/workflows/issue-labels.yml
   workflow_dispatch:
 permissions:
   issues: write

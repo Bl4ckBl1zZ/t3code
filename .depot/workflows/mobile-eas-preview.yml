@@ -1,3 +1,8 @@
+# Depot CI Migration
+# Source: .github/workflows/mobile-eas-preview.yml
+#
+# No changes were necessary.
+
 name: Mobile EAS Preview
 on:
   pull_request:
