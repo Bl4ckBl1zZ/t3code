@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Data from "effect/Data";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -20,7 +21,6 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Context from "effect/Context";
 import * as Console from "effect/Console";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 
 import { ServerConfig } from "./config.ts";
@@ -34,7 +34,7 @@ import { ServerSettingsService } from "./serverSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { makeProjectConfigResolverFunction } from "./project/Layers/ProjectConfigResolver.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
 import {
   formatHeadlessServeOutput,
@@ -319,7 +319,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
 
 const resolveStartupBrowserTarget = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
-  const serverAuth = yield* ServerAuth;
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
   const localUrl = `http://localhost:${serverConfig.port}`;
   const bindUrl =
     serverConfig.host && !isWildcardHost(serverConfig.host)
@@ -364,6 +364,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment;
+  const crypto = yield* Crypto.Crypto;
 
   const commandGate = yield* makeCommandGate;
   const httpListening = yield* Deferred.make<void>();
@@ -436,7 +437,9 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         runStartupPhase(
           "welcome.autobootstrap",
           Effect.gen(function* () {
-            const bootstrapTargets = yield* resolveAutoBootstrapWelcomeTargets;
+            const bootstrapTargets = yield* resolveAutoBootstrapWelcomeTargets.pipe(
+              Effect.provideService(Crypto.Crypto, crypto),
+            );
             if (!bootstrapTargets.bootstrapProjectId && !bootstrapTargets.bootstrapThreadId) {
               return;
             }

@@ -1,8 +1,4 @@
-import type {
-  AuthClientMetadataDeviceType,
-  AuthSessionRole,
-  ServerAuthPolicy,
-} from "@t3tools/contracts";
+import type { AuthClientMetadataDeviceType, ServerAuthPolicy } from "@t3tools/contracts";
 
 interface NavigatorWithUserAgentData extends Navigator {
   readonly userAgentData?: {
@@ -55,7 +51,7 @@ export function detectBrowserDeviceType(): AuthClientMetadataDeviceType | null {
 }
 
 export function shouldOpenPreviewInNewTab(input: {
-  readonly currentSessionRole: AuthSessionRole | null;
+  readonly currentSessionCanManageAccess: boolean;
   readonly currentAuthPolicy: ServerAuthPolicy | null;
   readonly currentDeviceType: AuthClientMetadataDeviceType | null;
 }): boolean {
@@ -63,5 +59,5 @@ export function shouldOpenPreviewInNewTab(input: {
     return true;
   }
 
-  return input.currentSessionRole === "client" && input.currentAuthPolicy === "loopback-browser";
+  return !input.currentSessionCanManageAccess && input.currentAuthPolicy === "loopback-browser";
 }

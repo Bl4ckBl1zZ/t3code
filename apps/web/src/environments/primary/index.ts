@@ -16,7 +16,6 @@ export {
 
 export {
   createServerPairingCredential,
-  createServerSessionBearerToken,
   fetchSessionState,
   isBrowserAgentSidebarMode,
   listServerClientSessions,
@@ -35,4 +34,10 @@ export {
   __resetServerAuthBootstrapForTests,
 } from "./auth";
 
-export { resolvePrimaryEnvironmentHttpUrl, isLoopbackHostname } from "./target";
+export { refreshPrimarySessionState, usePrimarySessionState } from "./sessionState";
+
+export {
+  readPrimaryEnvironmentTarget,
+  resolvePrimaryEnvironmentHttpUrl,
+  isLoopbackHostname,
+} from "./target";

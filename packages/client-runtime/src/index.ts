@@ -29,3 +29,5 @@ export * from "./composerPathSearchState.ts";
 export * from "./archivedThreadsState.ts";
 export * from "./checkpointDiffState.ts";
 export * from "./remote.ts";
+export * from "./managedRelay.ts";
+export * from "./managedRelayState.ts";

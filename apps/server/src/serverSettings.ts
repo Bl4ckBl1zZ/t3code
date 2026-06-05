@@ -47,8 +47,7 @@ import { ServerConfig } from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
-import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
-import { ServerSecretStore } from "./auth/Services/ServerSecretStore.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 
 const encodeServerSettings = Schema.encodeEffect(ServerSettings);
 const encodeServerSettingsJson = Schema.encodeUnknownEffect(fromJsonStringPretty(ServerSettings));
@@ -279,7 +278,7 @@ const makeServerSettings = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
-  const secretStore = yield* ServerSecretStore;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const writeSemaphore = yield* Semaphore.make(1);
   const cacheKey = "settings" as const;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
@@ -682,5 +681,5 @@ const makeServerSettings = Effect.gen(function* () {
 });
 
 export const ServerSettingsLive = Layer.effect(ServerSettingsService, makeServerSettings).pipe(
-  Layer.provide(ServerSecretStoreLive),
+  Layer.provide(ServerSecretStore.layer),
 );

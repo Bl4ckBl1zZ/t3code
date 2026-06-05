@@ -81,7 +81,7 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   "TerminalSubprocessCheckError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
     terminalPid: Schema.Number,
     command: Schema.Literals(["powershell", "pgrep", "ps"]),
   },
@@ -91,7 +91,7 @@ class TerminalProcessSignalError extends Schema.TaggedErrorClass<TerminalProcess
   "TerminalProcessSignalError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
     signal: Schema.Literals(["SIGTERM", "SIGKILL"]),
   },
 ) {}
@@ -552,7 +552,6 @@ function windowsInspectSubprocess(
       timeout: "1500 millis",
       maxOutputBytes: 32_768,
       outputMode: "truncate",
-      shell: process.platform === "win32",
       timeoutBehavior: "timedOutResult",
     });
   }).pipe(
@@ -1401,7 +1400,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       const threadPrefix = `${toSafeThreadId(threadId)}_`;
       const entries = yield* fileSystem
         .readDirectory(logsDir, { recursive: false })
-        .pipe(Effect.catch(() => Effect.succeed([] as Array<string>)));
+        .pipe(Effect.orElseSucceed(() => [] as Array<string>));
       yield* Effect.forEach(
         entries.filter(
           (name) =>

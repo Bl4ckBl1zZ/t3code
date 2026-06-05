@@ -16,7 +16,7 @@ describe("shouldOpenPreviewInNewTab", () => {
       shouldOpenPreviewInNewTab({
         currentAuthPolicy: "loopback-browser",
         currentDeviceType: "desktop",
-        currentSessionRole: "client",
+        currentSessionCanManageAccess: false,
       }),
     ).toBe(true);
   });
@@ -26,7 +26,7 @@ describe("shouldOpenPreviewInNewTab", () => {
       shouldOpenPreviewInNewTab({
         currentAuthPolicy: "remote-reachable",
         currentDeviceType: "desktop",
-        currentSessionRole: "client",
+        currentSessionCanManageAccess: false,
       }),
     ).toBe(false);
   });
@@ -36,31 +36,31 @@ describe("shouldOpenPreviewInNewTab", () => {
       shouldOpenPreviewInNewTab({
         currentAuthPolicy: "remote-reachable",
         currentDeviceType: "mobile",
-        currentSessionRole: "client",
+        currentSessionCanManageAccess: false,
       }),
     ).toBe(true);
     expect(
       shouldOpenPreviewInNewTab({
         currentAuthPolicy: "remote-reachable",
         currentDeviceType: "tablet",
-        currentSessionRole: "client",
+        currentSessionCanManageAccess: false,
       }),
     ).toBe(true);
   });
 
-  it("keeps owner and unknown sessions on the browser-agent flow", () => {
+  it("keeps access-managing and unknown sessions on the browser-agent flow", () => {
     expect(
       shouldOpenPreviewInNewTab({
         currentAuthPolicy: "desktop-managed-local",
         currentDeviceType: "desktop",
-        currentSessionRole: "owner",
+        currentSessionCanManageAccess: true,
       }),
     ).toBe(false);
     expect(
       shouldOpenPreviewInNewTab({
         currentAuthPolicy: null,
         currentDeviceType: null,
-        currentSessionRole: null,
+        currentSessionCanManageAccess: false,
       }),
     ).toBe(false);
   });

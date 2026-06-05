@@ -186,6 +186,6 @@ export class WorkspaceFileError extends Schema.TaggedErrorClass<WorkspaceFileErr
     message: TrimmedNonEmptyString,
     cwd: Schema.optional(Schema.String),
     relativePath: Schema.optional(Schema.String),
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

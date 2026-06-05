@@ -1,6 +1,5 @@
 import type {
   AuthClientMetadataDeviceType,
-  AuthSessionRole,
   EnvironmentId,
   ProjectScript,
   ServerAuthPolicy,
@@ -40,7 +39,7 @@ export const PreviewButton = memo(function PreviewButton({
   activeThreadEnvironmentId,
   activeThreadId,
   detectedDevServerUrl,
-  currentSessionRole,
+  currentSessionCanManageAccess,
   currentAuthPolicy,
   currentDeviceType,
 }: {
@@ -50,7 +49,7 @@ export const PreviewButton = memo(function PreviewButton({
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly activeThreadId: ThreadId;
   readonly detectedDevServerUrl: string | null;
-  readonly currentSessionRole: AuthSessionRole | null;
+  readonly currentSessionCanManageAccess: boolean;
   readonly currentAuthPolicy: ServerAuthPolicy | null;
   readonly currentDeviceType: AuthClientMetadataDeviceType | null;
 }) {
@@ -68,7 +67,7 @@ export const PreviewButton = memo(function PreviewButton({
   const openPreviewInNewTab = shouldOpenPreviewInNewTab({
     currentAuthPolicy,
     currentDeviceType,
-    currentSessionRole,
+    currentSessionCanManageAccess,
   });
 
   const openPreviewInBrowser = () => {

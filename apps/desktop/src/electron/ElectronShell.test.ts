@@ -1,10 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
+import { Sink } from "effect";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Sink } from "effect";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { beforeEach, vi } from "vitest";
+import { beforeEach, vi } from "vite-plus/test";
 
 const { openExternalMock, writeTextMock } = vi.hoisted(() => ({
   openExternalMock: vi.fn(),

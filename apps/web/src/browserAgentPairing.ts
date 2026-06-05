@@ -373,7 +373,7 @@ export async function autoPairBrowserAgent(client: BrowserAgentListClient): Prom
     return;
   }
 
-  const pairing = await createServerPairingCredential("Browser agent auto-pair");
+  const pairing = await createServerPairingCredential({ label: "Browser agent auto-pair" });
   const pairedInCurrentPage = await requestContentScriptPair({
     baseUrl,
     credential: pairing.credential,

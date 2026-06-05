@@ -1,5 +1,14 @@
 import Mime from "@effect/platform-node/Mime";
 import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  AuthStandardClientScopes,
+  AudioTranscriptionError,
+  AudioTranscriptionInput,
+  EnvironmentHttpApi,
+  type AudioTranscriptionResult,
+} from "@t3tools/contracts";
+import {
   BROWSER_AGENT_AUTO_CONNECT_PATH,
   BROWSER_AGENT_AUTO_PAIR_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_FILENAME,
@@ -7,16 +16,12 @@ import {
   BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR,
   BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME,
 } from "@t3tools/shared/browserAgent";
-import {
-  AudioTranscriptionError,
-  AudioTranscriptionInput,
-  type AudioTranscriptionResult,
-} from "@t3tools/contracts";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { cast } from "effect/Function";
@@ -27,7 +32,9 @@ import {
   HttpRouter,
   HttpServerResponse,
   HttpServerRequest,
+  HttpServerRespondable,
 } from "effect/unstable/http";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { OtlpTracer } from "effect/unstable/observability";
 
 import {
@@ -49,13 +56,18 @@ import {
 } from "./project/githubProjectImage.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
-import { respondToAuthError } from "./auth/http.ts";
-import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import { makeOpenRouterAudioTranscription } from "./audioTranscription/OpenRouterAudioTranscription.ts";
 import { createBrowserAgentExtensionZip } from "./browserAgentExtensionZip.ts";
-import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as DateTime from "effect/DateTime";
+import {
+  annotateEnvironmentRequest,
+  failEnvironmentScopeRequired,
+  failEnvironmentAuthInvalid,
+  failEnvironmentInternal,
+} from "./auth/http.ts";
+import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
@@ -135,11 +147,18 @@ const BROWSER_AGENT_AUTO_PAIR_HTML = `<!doctype html>
   </body>
 </html>`;
 
-export const browserApiCorsLayer = HttpRouter.cors({
-  allowedMethods: [...browserApiCorsAllowedMethods],
-  allowedHeaders: [...browserApiCorsAllowedHeaders],
-  maxAge: 600,
-});
+export const browserApiCorsLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    const devOrigin = config.devUrl?.origin;
+    return HttpRouter.cors({
+      ...(devOrigin ? { allowedOrigins: [devOrigin], credentials: true } : {}),
+      allowedMethods: browserApiCorsAllowedMethods,
+      allowedHeaders: browserApiCorsAllowedHeaders,
+      maxAge: 600,
+    });
+  }),
+);
 
 export const browserAgentAutoPairRouteLayer = HttpRouter.add(
   "GET",
@@ -192,7 +211,7 @@ export const browserAgentAutoConnectRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const config = yield* ServerConfig;
-    const serverAuth = yield* ServerAuth;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
 
     if (config.mode !== "desktop") {
       return HttpServerResponse.jsonUnsafe(
@@ -208,12 +227,33 @@ export const browserAgentAutoConnectRouteLayer = HttpRouter.add(
       );
     }
 
-    const result = yield* serverAuth.issueLocalBrowserAgentBearerSession(
-      deriveAuthClientMetadata({ request, label: "Browser agent auto-connect" }),
-    );
+    const issued = yield* serverAuth
+      .issueSession({
+        subject: "browser-agent-auto-connect",
+        scopes: AuthStandardClientScopes,
+        label: "Browser agent auto-connect",
+      })
+      .pipe(
+        Effect.catchTag("ServerAuthInternalError", (error) =>
+          failEnvironmentInternal("access_token_issuance_failed", error),
+        ),
+      );
 
-    return HttpServerResponse.jsonUnsafe(result, { status: 200, headers: browserApiCorsHeaders });
-  }).pipe(Effect.catchTag("AuthError", (error) => respondToAuthError(error))),
+    return HttpServerResponse.jsonUnsafe(
+      {
+        authenticated: true,
+        scopes: issued.scopes,
+        sessionMethod: issued.method,
+        expiresAt: DateTime.toUtc(issued.expiresAt),
+        sessionToken: issued.token,
+      },
+      { status: 200, headers: browserApiCorsHeaders },
+    );
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 const resolveBrowserAgentExtensionSourceDir = Effect.fn(function* () {
@@ -296,11 +336,22 @@ export function resolveDevRedirectUrl(devUrl: URL, requestUrl: URL): string {
   return redirectUrl.toString();
 }
 
-const requireAuthenticatedRequest = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const serverAuth = yield* ServerAuth;
-  yield* serverAuth.authenticateHttpRequest(request);
-});
+const authenticateRawRouteWithScope = (
+  scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
+) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchTags({
+        ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
+        ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
+      }),
+    );
+    if (!session.scopes.includes(scope)) {
+      return yield* failEnvironmentScopeRequired(scope);
+    }
+  });
 
 const respondToAudioTranscriptionError = (error: AudioTranscriptionError) =>
   Effect.gen(function* () {
@@ -320,7 +371,7 @@ export const audioTranscriptionRouteLayer = HttpRouter.add(
   "POST",
   "/api/audio-transcription",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
     const serverSettings = yield* ServerSettingsService;
     const input = yield* HttpServerRequest.schemaBodyJson(AudioTranscriptionInput).pipe(
       Effect.mapError(
@@ -340,7 +391,9 @@ export const audioTranscriptionRouteLayer = HttpRouter.add(
     });
   }).pipe(
     Effect.catchTags({
-      AuthError: respondToAuthError,
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
       AudioTranscriptionError: respondToAudioTranscriptionError,
     }),
   ),
@@ -467,17 +520,18 @@ const resolveGitHubProjectFavicon = (projectCwd: string) =>
     return null;
   });
 
-export const serverEnvironmentRouteLayer = HttpRouter.add(
-  "GET",
-  "/.well-known/t3/environment",
-  Effect.gen(function* () {
-    const descriptor = yield* Effect.service(ServerEnvironment).pipe(
-      Effect.flatMap((serverEnvironment) => serverEnvironment.getDescriptor),
+export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "metadata",
+  Effect.fnUntraced(function* (handlers) {
+    const serverEnvironment = yield* ServerEnvironment;
+    return handlers.handle(
+      "descriptor",
+      Effect.fn("environment.metadata.descriptor")(function* (args) {
+        yield* annotateEnvironmentRequest(args.endpoint.name);
+        return yield* serverEnvironment.getDescriptor;
+      }),
     );
-    return HttpServerResponse.jsonUnsafe(descriptor, {
-      status: 200,
-      headers: browserApiCorsHeaders,
-    });
   }),
 );
 
@@ -490,7 +544,7 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
   "POST",
   OTLP_TRACES_PROXY_PATH,
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const config = yield* ServerConfig;
     const otlpTracesUrl = config.otlpTracesUrl;
@@ -528,18 +582,24 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
             otlpTracesUrl,
           }),
         ),
-        Effect.catch(() =>
-          Effect.succeed(HttpServerResponse.text("Trace export failed.", { status: 502 })),
+        Effect.orElseSucceed(() =>
+          HttpServerResponse.text("Trace export failed.", { status: 502 }),
         ),
       );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const attachmentsRouteLayer = HttpRouter.add(
   "GET",
   `${ATTACHMENTS_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (Option.isNone(url)) {
@@ -571,9 +631,7 @@ export const attachmentsRouteLayer = HttpRouter.add(
     }
 
     const fileSystem = yield* FileSystem.FileSystem;
-    const fileInfo = yield* fileSystem
-      .stat(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
     if (!fileInfo || fileInfo.type !== "File") {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
@@ -584,18 +642,22 @@ export const attachmentsRouteLayer = HttpRouter.add(
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
+      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const projectFaviconRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (Option.isNone(url)) {
@@ -636,11 +698,15 @@ export const projectFaviconRouteLayer = HttpRouter.add(
         "Cache-Control": PROJECT_FAVICON_CACHE_CONTROL,
       },
     }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
+      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const staticAndDevRouteLayer = HttpRouter.add(
@@ -702,14 +768,12 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       }
     }
 
-    const fileInfo = yield* fileSystem
-      .stat(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
     if (!fileInfo || fileInfo.type !== "File") {
       const indexPath = path.resolve(staticRoot, "index.html");
       const indexData = yield* fileSystem
         .readFile(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (!indexData) {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
@@ -720,9 +784,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     }
 
     const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-    const data = yield* fileSystem
-      .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const data = yield* fileSystem.readFile(filePath).pipe(Effect.orElseSucceed(() => null));
     if (!data) {
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
     }

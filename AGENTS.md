@@ -10,9 +10,9 @@
 
 ## Task Completion Requirements
 
-- All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
-  - If changing native mobile code, `bun lint:mobile` must also pass.
-- NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- `vp check` and `vp run typecheck` must pass before considering tasks completed.
+  - If changing native mobile code, `vp run lint:mobile` must also pass.
+- Use `vp test` for the built-in Vite+ test command and `vp run test` when you specifically need the `test` package script.
 
 ## GitHub Pull Requests
 
@@ -121,9 +121,9 @@ const maxRetries = 5;
 
 ## Tech Stack
 
-- **Monorepo / Package Manager**: Bun `1.3.14` workspaces with Turbo `^2.3.3`; do not migrate this repo to pnpm or Next.js without an explicit architecture decision.
-- **Language**: TypeScript `~6.0.3` with `@typescript/native-preview` `7.0.0-dev.20260527.2` and `@effect/tsgo` `0.11.4`.
-- **Effect Runtime**: Effect `4.0.0-beta.73`, `@effect/platform-bun`, `@effect/platform-node`, and `@effect/sql-sqlite-bun` for typed services, config, HTTP, persistence, and tests.
+- **Monorepo / Package Manager**: pnpm `10.24.0` workspaces with Vite+ `0.1.24`; use `vp` for format/lint/test/build orchestration.
+- **Language**: TypeScript `~6.0.3` with `@typescript/native-preview` `7.0.0-dev.20260604.1` and `@effect/tsgo` `0.13.2`.
+- **Effect Runtime**: Effect `4.0.0-beta.78`, `@effect/platform-bun`, `@effect/platform-node`, `@effect/sql-sqlite-bun`, and `@effect/sql-pg` for typed services, config, HTTP, persistence, and tests.
 - **Web App**: React `19.2.6`, React DOM `19.2.6`, Vite `^8.0.0`, `@vitejs/plugin-react` `^6.0.0`, TanStack Router `^1.160.2`, TanStack Query `^5.90.0`, Zustand `^5.0.11`.
 - **Web Styling / UI**: Tailwind CSS `^4.0.0`, `@tailwindcss/vite` `^4.0.0`, Base UI `^1.4.1`, lucide-react `^0.564.0`, class-variance-authority `^0.7.1`, tailwind-merge `^3.4.0`.
 - **Editors / Rich UI**: Lexical `^0.41.0`, Monaco Editor `^0.55.1`, xterm `^6.0.0`, `@pierre/diffs` `1.1.20`, Shiki `3.23.0` on mobile.
@@ -139,7 +139,7 @@ const maxRetries = 5;
 
 ```txt
 apps/
-  server/              Node/Bun-compatible T3 CLI and backend server.
+  server/              Node-compatible T3 CLI and backend server.
     src/auth/          Pairing, bearer sessions, WebSocket tokens, secret storage.
     src/browserAgents/ Browser-agent registry, WebSocket routing, workspace links, and thread-tab command routing.
     src/cli/           CLI flags, environment config, and startup resolution.
@@ -406,4 +406,16 @@ How to use it: When you discover something reusable, such as a utility, a patter
 - Organization panels are generated-code surfaces. Keep generated edits within the organization panel boundary, validate panel slugs/imports, preserve rollback history, and expose data/actions through approved dynamic RPC methods.
 - Project scripts are configured through `.t3code/project.json`; pinned scripts can appear in the T3 Code top bar.
 - Desktop backend launch should use bootstrap envelopes and clear conflicting inherited backend env vars as done in `DesktopBackendConfiguration`.
-- Mobile native code changes require `bun lint:mobile` in addition to the standard completion checks.
+- Mobile native code changes require `vp run lint:mobile` in addition to the standard completion checks.
+
+## Vendored Repositories
+
+This project vendors external repositories under `.repos/` as read-only reference material for coding agents.
+
+- Prefer examples and patterns from the vendored source code over generated guesses or web search results.
+- Do not edit files under `.repos/` unless explicitly asked.
+- Do not import from `.repos/`; application code must continue importing from normal package dependencies.
+- Manage vendored subtrees with `vp run sync:repos`; use `vp run sync:repos --repo <id>` to sync one configured repository.
+- When updating a dependency with a configured vendored subtree, sync that subtree in the same change so `.repos/` matches the installed dependency version.
+- When writing Effect code, read `.repos/effect-smol/LLMS.md` first and inspect `.repos/effect-smol/` for idiomatic usage, tests, module structure, and API design.
+- When writing relay infrastructure code with Alchemy, inspect `.repos/alchemy-effect/` for idiomatic usage, tests, module structure, and API design.
