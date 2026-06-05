@@ -1,6 +1,5 @@
 import {
   type AuthClientMetadataDeviceType,
-  type AuthSessionRole,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
@@ -71,11 +70,11 @@ export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly currentSessionRole: AuthSessionRole | null;
+  readonly currentSessionCanManageAccess: boolean;
 }): boolean {
   return (
     Boolean(input.activeProjectName) &&
-    input.currentSessionRole === "owner" &&
+    input.currentSessionCanManageAccess &&
     input.primaryEnvironmentId !== null &&
     input.activeThreadEnvironmentId === input.primaryEnvironmentId
   );
@@ -144,8 +143,8 @@ export const ChatHeader = memo(function ChatHeader({
   onSubmitGitPrompt,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const [currentSessionRole, setCurrentSessionRole] = useState<AuthSessionRole | null>(() =>
-    typeof window !== "undefined" && window.desktopBridge ? "owner" : null,
+  const [currentSessionCanManageAccess, setCurrentSessionCanManageAccess] = useState(() =>
+    Boolean(typeof window !== "undefined" && window.desktopBridge),
   );
   const [currentAuthPolicy, setCurrentAuthPolicy] = useState<ServerAuthPolicy | null>(null);
   const [currentDeviceType, setCurrentDeviceType] = useState<AuthClientMetadataDeviceType | null>(
@@ -154,7 +153,7 @@ export const ChatHeader = memo(function ChatHeader({
   );
   useEffect(() => {
     if (typeof window !== "undefined" && window.desktopBridge) {
-      setCurrentSessionRole("owner");
+      setCurrentSessionCanManageAccess(true);
       setCurrentAuthPolicy(null);
       setCurrentDeviceType("desktop");
       return;
@@ -164,7 +163,9 @@ export const ChatHeader = memo(function ChatHeader({
     void fetchSessionState()
       .then((session) => {
         if (cancelled) return;
-        setCurrentSessionRole(session.authenticated ? (session.role ?? null) : null);
+        setCurrentSessionCanManageAccess(
+          session.authenticated ? (session.scopes?.includes("access:write") ?? false) : false,
+        );
         setCurrentAuthPolicy(session.auth.policy);
         setCurrentDeviceType(
           resolvePreviewDeviceType({
@@ -175,7 +176,7 @@ export const ChatHeader = memo(function ChatHeader({
       })
       .catch(() => {
         if (cancelled) return;
-        setCurrentSessionRole(null);
+        setCurrentSessionCanManageAccess(false);
         setCurrentAuthPolicy(null);
         setCurrentDeviceType(detectBrowserDeviceType());
       });
@@ -198,7 +199,7 @@ export const ChatHeader = memo(function ChatHeader({
       activeProjectName,
       activeThreadEnvironmentId,
       primaryEnvironmentId,
-      currentSessionRole,
+      currentSessionCanManageAccess,
     });
   const showPreviewButton = shouldShowPreviewButton({
     activeProjectName,
@@ -280,7 +281,7 @@ export const ChatHeader = memo(function ChatHeader({
                 activeThreadEnvironmentId={activeThreadEnvironmentId}
                 activeThreadId={activeThreadId}
                 detectedDevServerUrl={detectedDevServerUrl}
-                currentSessionRole={currentSessionRole}
+                currentSessionCanManageAccess={currentSessionCanManageAccess}
                 currentAuthPolicy={currentAuthPolicy}
                 currentDeviceType={currentDeviceType}
               />

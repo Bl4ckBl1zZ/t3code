@@ -3,7 +3,12 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import {
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+  HttpServerRespondable,
+} from "effect/unstable/http";
 
 import {
   AuthSessionId,
@@ -19,9 +24,9 @@ import {
 } from "@t3tools/contracts";
 import { BROWSER_AGENT_LOCAL_CONTROL_WS_PATH } from "@t3tools/shared/browserAgent";
 
-import { respondToAuthError } from "../auth/http.ts";
-import { ServerAuth } from "../auth/Services/ServerAuth.ts";
-import { SessionCredentialService } from "../auth/Services/SessionCredentialService.ts";
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
+import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "../auth/http.ts";
 import { ServerConfig } from "../config.ts";
 import { normalizeDispatchCommand } from "../orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -105,7 +110,7 @@ const handleBrowserAgentSocket = (input: {
 }) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const sessions = yield* SessionCredentialService;
+    const sessions = yield* SessionStore.SessionStore;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const startup = yield* ServerRuntimeStartup;
     const crypto = yield* Crypto.Crypto;
@@ -239,13 +244,23 @@ const authenticatedBrowserAgentRouteLayer = HttpRouter.add(
   "/browser-agent/ws",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const serverAuth = yield* ServerAuth;
-    const session = yield* serverAuth.authenticateWebSocketUpgrade(request);
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+      Effect.catchTags({
+        ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
+        ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
+      }),
+    );
     return yield* handleBrowserAgentSocket({
       sessionId: session.sessionId,
       markSessionConnected: true,
     });
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 const localBrowserAgentRouteLayer = HttpRouter.add(

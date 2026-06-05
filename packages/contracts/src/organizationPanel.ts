@@ -310,6 +310,6 @@ export class OrganizationPanelError extends Schema.TaggedErrorClass<Organization
       "dynamic-rpc-not-found",
       "dynamic-rpc-failed",
     ]),
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

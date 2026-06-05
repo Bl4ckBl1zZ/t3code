@@ -1,3 +1,4 @@
+// @effect-diagnostics anyUnknownInErrorContext:off - Effect CLI handlers expose broad channels at the command boundary.
 import * as Effect from "effect/Effect";
 import { Command, GlobalFlag } from "effect/unstable/cli";
 

@@ -185,9 +185,7 @@ export const make = Effect.fn("makeReviewService")(function* () {
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
 
   const canonicalizePath = (value: string) =>
-    fileSystem
-      .realPath(path.resolve(value))
-      .pipe(Effect.catch(() => Effect.succeed(path.resolve(value))));
+    fileSystem.realPath(path.resolve(value)).pipe(Effect.orElseSucceed(() => path.resolve(value)));
 
   const isWithinRoot = (candidate: string, root: string) => {
     const relative = path.relative(root, candidate);

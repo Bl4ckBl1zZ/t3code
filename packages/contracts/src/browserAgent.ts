@@ -583,7 +583,7 @@ export class BrowserAgentCommandError extends Schema.TaggedErrorClass<BrowserAge
       "command-timeout",
       "command-failed",
     ]),
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

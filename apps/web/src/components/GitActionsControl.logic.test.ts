@@ -1,5 +1,5 @@
 import { EnvironmentId, ThreadId, type VcsStatusResult } from "@t3tools/contracts";
-import { assert, describe, it } from "vitest";
+import { assert, describe, it } from "vite-plus/test";
 import {
   buildGitAgentPrompt,
   buildGitActionProgressStages,

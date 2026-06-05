@@ -28,7 +28,7 @@ import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import { TestClock } from "effect/testing";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
-import { expect } from "vitest";
+import { expect } from "vite-plus/test";
 
 import * as ProcessRunner from "../../processRunner.ts";
 import type { TerminalManagerShape } from "../Services/Manager.ts";

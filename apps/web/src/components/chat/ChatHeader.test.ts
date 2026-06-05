@@ -1,5 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   shouldShowBrowserAnnotationButton,
@@ -17,7 +17,7 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
-        currentSessionRole: "owner",
+        currentSessionCanManageAccess: true,
       }),
     ).toBe(true);
   });
@@ -28,7 +28,7 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId: null,
-        currentSessionRole: "owner",
+        currentSessionCanManageAccess: true,
       }),
     ).toBe(false);
   });
@@ -39,18 +39,18 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId,
-        currentSessionRole: "owner",
+        currentSessionCanManageAccess: true,
       }),
     ).toBe(false);
   });
 
-  it("hides the picker for paired client sessions", () => {
+  it("hides the picker for sessions without access management scope", () => {
     expect(
       shouldShowOpenInPicker({
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
-        currentSessionRole: "client",
+        currentSessionCanManageAccess: false,
       }),
     ).toBe(false);
   });
@@ -61,7 +61,7 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
-        currentSessionRole: "owner",
+        currentSessionCanManageAccess: true,
       }),
     ).toBe(false);
   });
