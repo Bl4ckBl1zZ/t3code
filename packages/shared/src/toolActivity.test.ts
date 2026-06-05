@@ -38,6 +38,27 @@ describe("toolActivity", () => {
     });
   });
 
+  it("uses nested raw tool arguments for read-file paths", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "Tool call",
+        data: {
+          rawInput: {
+            toolName: "read_file",
+            arguments: {
+              relativePath: "apps/web/src/components/ChatView.tsx",
+            },
+          },
+        },
+        fallbackSummary: "Tool call",
+      }),
+    ).toEqual({
+      summary: "Read file",
+      detail: "apps/web/src/components/ChatView.tsx",
+    });
+  });
+
   it("drops duplicated generic read-file detail when no path is available", () => {
     expect(
       deriveToolActivityPresentation({

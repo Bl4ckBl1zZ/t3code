@@ -39,7 +39,7 @@ Update this section as the product evolves. Keep feature names, descriptions, an
 - **Desktop App**: Electron shell that starts and supervises the backend, manages updates, SSH environments, Tailscale exposure, native menus, and secure local settings.
 - **Mobile App**: Expo/React Native companion app in development for connecting to T3 Code environments, reviewing diffs, using terminals, and managing threads.
 - **Marketing Site**: Astro site for product/download pages and release-facing assets.
-- **Observability & Diagnostics**: Effect tracing, local NDJSON trace files, OTLP export, provider event logs, process diagnostics, and update/release smoke tooling.
+- **Observability & Diagnostics**: Effect tracing, local NDJSON trace files, OTLP export, provider event logs, process diagnostics, and update smoke tooling.
 
 ## Core Priorities
 
@@ -183,9 +183,9 @@ packages/
   effect-acp/          Typed ACP protocol support and generated schema.
   ssh/                 SSH command, auth, and tunnel helpers.
   tailscale/           Tailscale Serve/status helpers.
-scripts/               Dev runner, release/build scripts, static checks, and sync utilities.
+scripts/               Dev runner, desktop build scripts, static checks, and sync utilities.
 .t3code/project.json   Project scripts surfaced in T3 Code, including pinned top-bar actions.
-docs/                  Architecture, provider, observability, release, and feature documentation.
+docs/                  Architecture, provider, observability, operations, and feature documentation.
 oxlint-plugin-t3code/  Local custom oxlint rules.
 ```
 
@@ -201,11 +201,12 @@ oxlint-plugin-t3code/  Local custom oxlint rules.
 - Use `cn` from `~/lib/utils` and existing variant patterns for class composition.
 - Keep layout dimensions stable with explicit min/max sizes for sidebars, panels, tabs, toolbars, and virtualized lists.
 - Use small, purposeful transitions. Dialogs/sheets currently use roughly 200ms transitions; respect `.no-transitions` during theme changes.
+- Active work-log read-file rows may use shimmer text to indicate an in-progress file read; completed history should remain static.
 - Desktop/web typography uses DM Sans with system fallbacks; code uses SF Mono / system monospace.
 
 ### Navigation Layout
 
-- Desktop/web uses a left project/thread sidebar (`AppSidebarLayout`), central chat/workbench area, workbench tabs, and right-side sheets/panels for auxiliary workflows.
+- Desktop/web uses a left project/thread sidebar (`AppSidebarLayout`), central chat/workbench area, top workbench tabs above the main action bar, and right-side sheets/panels for auxiliary workflows.
 - Workbench tabs are modeled in `packages/client-runtime/src/workbenchTabsState.ts` and currently support `chat`, `file`, `diff`, and `terminal` tab kinds. Add new tab surfaces through that model instead of inventing route-local tab state. Web workbench tabs use a floating rectangular treatment in `WorkbenchTabStrip`; preserve that shape, spacing, and active-tab elevation when adding tab kinds.
 - Browser-agent tab interaction is provider-driven through browser tools and the extension runtime; do not add a user-facing browser workbench panel unless the architecture changes again.
 - Settings are route-backed panels under `apps/web/src/routes/settings.*.tsx` and feature-specific components under `apps/web/src/components/settings`.

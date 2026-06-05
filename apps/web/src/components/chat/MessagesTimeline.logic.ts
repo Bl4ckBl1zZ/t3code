@@ -182,6 +182,32 @@ export function resolveCompactWorkEntryText(input: {
   };
 }
 
+export function isFileReadWorkEntry(input: {
+  readonly requestKind?: WorkLogEntry["requestKind"] | undefined;
+  readonly heading: string;
+}): boolean {
+  return (
+    input.requestKind === "file-read" ||
+    normalizeCompactToolLabel(input.heading).toLowerCase() === "read file"
+  );
+}
+
+export function isActiveFileReadWorkEntry(input: {
+  readonly inProgress?: boolean | undefined;
+  readonly requestKind?: WorkLogEntry["requestKind"] | undefined;
+  readonly heading: string;
+}): boolean {
+  return input.inProgress === true && isFileReadWorkEntry(input);
+}
+
+export function resolveWorkEntryPreviewCommand(input: {
+  readonly command?: string | undefined;
+  readonly requestKind?: WorkLogEntry["requestKind"] | undefined;
+  readonly heading: string;
+}): string | undefined {
+  return isFileReadWorkEntry(input) ? undefined : input.command;
+}
+
 function normalizePreviewPath(value: string, workspaceRoot: string | undefined): string {
   return formatWorkspaceRelativePath(value, workspaceRoot)
     .replaceAll("\\", "/")

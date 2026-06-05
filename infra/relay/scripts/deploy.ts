@@ -39,7 +39,6 @@ export interface RelayDeployOptions {
   readonly stage: Option.Option<string>;
   readonly yes: boolean;
   readonly adopt: boolean;
-  readonly githubOutput: boolean;
 }
 
 export function reconcileRootEnvRelayUrl(contents: string, relayUrl: string): string {
@@ -69,12 +68,6 @@ export interface RelayDeployOutcome {
   readonly result: RelayDeployResult;
   readonly changed: boolean;
   readonly relayUrl: Option.Option<string>;
-}
-
-export function serializeGithubOutput(entries: Readonly<Record<string, string | boolean>>): string {
-  return Object.entries(entries)
-    .map(([key, value]) => `${key}=${value}\n`)
-    .join("");
 }
 
 const relayRoot = Effect.service(Path.Path).pipe(
@@ -115,22 +108,6 @@ const reconcileRootEnv = Effect.fn("relay.deploy.reconcileRootEnv")(function* (r
 
   yield* fs.writeFileString(rootEnvPath, reconcileRootEnvRelayUrl(contents, relayUrl));
   yield* Console.log(`Updated ${rootEnvPath} with T3CODE_RELAY_URL=${relayUrl}`);
-});
-
-const writeGithubOutput = Effect.fn("relay.deploy.writeGithubOutput")(function* (
-  outcome: RelayDeployOutcome,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const githubOutputPath = yield* Config.nonEmptyString("GITHUB_OUTPUT");
-  yield* fs.writeFileString(
-    githubOutputPath,
-    serializeGithubOutput({
-      changed: outcome.changed,
-      result: outcome.result,
-      ...(Option.isSome(outcome.relayUrl) ? { relay_url: outcome.relayUrl.value } : {}),
-    }),
-    { flag: "a" },
-  );
 });
 
 const deployServices = Layer.mergeAll(
@@ -219,9 +196,6 @@ export const deploy = Effect.fn("relay.deploy")(function* (options: RelayDeployO
   if (Option.isSome(outcome.relayUrl)) {
     yield* reconcileRootEnv(outcome.relayUrl.value);
   }
-  if (options.githubOutput) {
-    yield* writeGithubOutput(outcome);
-  }
 });
 
 export const relayDeployCommand = Command.make(
@@ -251,10 +225,6 @@ export const relayDeployCommand = Command.make(
     ),
     adopt: Flag.boolean("adopt").pipe(
       Flag.withDescription("Adopt pre-existing cloud resources that conflict with this stack."),
-      Flag.withDefault(false),
-    ),
-    githubOutput: Flag.boolean("github-output").pipe(
-      Flag.withDescription("Append relay deployment metadata to GITHUB_OUTPUT."),
       Flag.withDefault(false),
     ),
   },

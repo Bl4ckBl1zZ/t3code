@@ -112,29 +112,21 @@ After a successful deploy, the wrapper updates the repository-root `.env` file w
 URL. That makes subsequent source builds point at the relay that was just deployed without copying
 the URL manually.
 
-### Deployment CI
+### Production Deployment
 
-The relay is versioned separately from client releases. `.github/workflows/deploy-relay.yml` deploys
-the shared Alchemy `prod` stage on every push to `main`. Stable and nightly release builds both
-resolve their static public config from the same
-`production` GitHub environment. Pull requests do not deploy relay stages. Developers can
-deploy personal non-production stages locally with any stage name other than `prod`.
+The relay is versioned separately from client releases. Deploy the shared Alchemy `prod` stage
+manually when production infrastructure should change. Developers can deploy personal
+non-production stages locally with any stage name other than `prod`.
 
-The repository must define these Actions variables shared by relay deployments:
+Production deployments require these environment variables:
 
 - `CLOUDFLARE_ACCOUNT_ID`
 - `PLANETSCALE_ORGANIZATION`
 - `AXIOM_ORG_ID`
-
-The repository must define these Actions secrets shared by relay deployments:
-
 - `CLOUDFLARE_API_TOKEN`
 - `PLANETSCALE_API_TOKEN_ID`
 - `PLANETSCALE_API_TOKEN`
 - `AXIOM_TOKEN`
-
-The `production` GitHub environment must define these Actions variables:
-
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
@@ -145,17 +137,13 @@ The `production` GitHub environment must define these Actions variables:
 - `APNS_TEAM_ID`
 - `APNS_KEY_ID`
 - `APNS_BUNDLE_ID`
-
-The `production` GitHub environment must define these Actions secrets:
-
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
 The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
 are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
-derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
-and hosted web builds.
+so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. Downstream desktop, CLI, and hosted web builds should
+use the production relay's derived public URL and Clerk publishable key.
 
 See:
 

@@ -1461,12 +1461,12 @@ async function expectComposerActionsContained(): Promise<void> {
       expect(actionButtons.length).toBeGreaterThanOrEqual(1);
 
       const buttonRects = actionButtons.map((button) => button.getBoundingClientRect());
-      const firstTop = buttonRects[0]?.top ?? 0;
+      const firstCenterY = buttonRects[0] ? buttonRects[0].top + buttonRects[0].height / 2 : 0;
 
       for (const rect of buttonRects) {
         expect(rect.right).toBeLessThanOrEqual(footerRect.right + 0.5);
         expect(rect.bottom).toBeLessThanOrEqual(footerRect.bottom + 0.5);
-        expect(Math.abs(rect.top - firstTop)).toBeLessThanOrEqual(1.5);
+        expect(Math.abs(rect.top + rect.height / 2 - firstCenterY)).toBeLessThanOrEqual(1.5);
       }
     },
     { timeout: 8_000, interval: 16 },
@@ -2225,7 +2225,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await waitForServerConfigToApply();
       const menuButton = await waitForElement(
-        () => document.querySelector('button[aria-label="Copy options"]'),
+        () => document.querySelector('button[aria-label="Open options"]'),
         "Unable to find Open picker button.",
       );
       (menuButton as HTMLButtonElement).click();
@@ -2274,7 +2274,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await waitForServerConfigToApply();
       const menuButton = await waitForElement(
-        () => document.querySelector('button[aria-label="Copy options"]'),
+        () => document.querySelector('button[aria-label="Open options"]'),
         "Unable to find Open picker button.",
       );
       (menuButton as HTMLButtonElement).click();
@@ -4413,20 +4413,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("shows the confirm archive action after clicking the archive button", async () => {
-    localStorage.setItem(
-      "t3code:client-settings:v1",
-      JSON.stringify({
-        ...DEFAULT_CLIENT_SETTINGS,
-        confirmThreadArchive: true,
-      }),
-    );
-
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-archive-confirm-test" as MessageId,
         targetText: "archive confirm target",
       }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          settings: {
+            ...nextFixture.serverConfig.settings,
+            confirmThreadArchive: true,
+          },
+        };
+      },
     });
 
     try {
@@ -4443,7 +4444,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(confirmButton).toBeInTheDocument();
       await expect.element(confirmButton).toBeVisible();
     } finally {
-      localStorage.removeItem("t3code:client-settings:v1");
       await mounted.cleanup();
     }
   });

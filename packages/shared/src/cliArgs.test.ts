@@ -86,8 +86,8 @@ describe("parseCliArgs", () => {
   });
 
   it("collects positionals mixed with flags (argv array)", () => {
-    expect(parseCliArgs(["1.2.3", "--root", "/path", "--github-output"])).toEqual({
-      flags: { root: "/path", "github-output": null },
+    expect(parseCliArgs(["1.2.3", "--root", "/path", "--dry-run"])).toEqual({
+      flags: { root: "/path", "dry-run": null },
       positionals: ["1.2.3"],
     });
   });
@@ -104,30 +104,26 @@ describe("parseCliArgs", () => {
   });
 
   it("boolean flag does not consume next token as value", () => {
-    expect(parseCliArgs(["--github-output", "1.2.3"], { booleanFlags: ["github-output"] })).toEqual(
-      {
-        flags: { "github-output": null },
-        positionals: ["1.2.3"],
-      },
-    );
+    expect(parseCliArgs(["--dry-run", "1.2.3"], { booleanFlags: ["dry-run"] })).toEqual({
+      flags: { "dry-run": null },
+      positionals: ["1.2.3"],
+    });
   });
 
   it("non-boolean flag still consumes next token", () => {
-    expect(parseCliArgs(["--root", "/path", "1.2.3"], { booleanFlags: ["github-output"] })).toEqual(
-      {
-        flags: { root: "/path" },
-        positionals: ["1.2.3"],
-      },
-    );
+    expect(parseCliArgs(["--root", "/path", "1.2.3"], { booleanFlags: ["dry-run"] })).toEqual({
+      flags: { root: "/path" },
+      positionals: ["1.2.3"],
+    });
   });
 
   it("mixes boolean and value flags with positionals", () => {
     expect(
-      parseCliArgs(["--github-output", "--root", "/path", "1.2.3"], {
-        booleanFlags: ["github-output"],
+      parseCliArgs(["--dry-run", "--root", "/path", "1.2.3"], {
+        booleanFlags: ["dry-run"],
       }),
     ).toEqual({
-      flags: { "github-output": null, root: "/path" },
+      flags: { "dry-run": null, root: "/path" },
       positionals: ["1.2.3"],
     });
   });

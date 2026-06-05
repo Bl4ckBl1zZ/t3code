@@ -248,6 +248,28 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function materializeProjectExpandedById(input: {
+  localProjectExpandedById: Readonly<Record<string, boolean>>;
+  syncedProjectExpandedById: Readonly<Record<string, boolean>>;
+  useSyncedProjectExpandedById: boolean;
+}): Record<string, boolean> {
+  if (!input.useSyncedProjectExpandedById) {
+    return { ...input.localProjectExpandedById };
+  }
+
+  // BACKWARD COMPATIBILITY: Server settings omit expanded rows, while legacy UI
+  // state materializes current project keys so bootstrap/re-key logic can carry
+  // explicit true values across project syncs.
+  const next: Record<string, boolean> = {};
+  for (const key of Object.keys(input.localProjectExpandedById)) {
+    next[key] = input.syncedProjectExpandedById[key] ?? true;
+  }
+  for (const [key, expanded] of Object.entries(input.syncedProjectExpandedById)) {
+    next[key] = expanded;
+  }
+  return next;
+}
+
 function booleanRecordsEqual(
   left: Readonly<Record<string, boolean>>,
   right: Readonly<Record<string, boolean>>,
@@ -3756,12 +3778,16 @@ export default function Sidebar() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
+  const useSyncedProjectExpandedById =
+    serverConfigLoaded || Object.keys(syncedProjectExpandedById).length > 0;
   const projectExpandedById = useMemo(
     () =>
-      serverConfigLoaded || Object.keys(syncedProjectExpandedById).length > 0
-        ? syncedProjectExpandedById
-        : localProjectExpandedById,
-    [localProjectExpandedById, serverConfigLoaded, syncedProjectExpandedById],
+      materializeProjectExpandedById({
+        localProjectExpandedById,
+        syncedProjectExpandedById,
+        useSyncedProjectExpandedById,
+      }),
+    [localProjectExpandedById, syncedProjectExpandedById, useSyncedProjectExpandedById],
   );
   const projectOrder =
     serverConfigLoaded || syncedProjectOrder.length > 0 ? syncedProjectOrder : localProjectOrder;
