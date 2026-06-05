@@ -59,6 +59,16 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+function isThreadDeleteBlockedByActiveSession(
+  thread: OrchestrationReadModel["threads"][number],
+): boolean {
+  const session = thread.session;
+  return (
+    session !== null &&
+    (session.status === "starting" || session.status === "running" || session.activeTurnId !== null)
+  );
+}
+
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
@@ -266,11 +276,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (isThreadDeleteBlockedByActiveSession(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has an active session and cannot be deleted until it is stopped.`,
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({

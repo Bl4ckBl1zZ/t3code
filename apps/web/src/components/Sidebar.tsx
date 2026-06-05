@@ -99,7 +99,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 
-import { useThreadActions } from "../hooks/useThreadActions";
+import { isThreadDeleteBlockedByActiveSession, useThreadActions } from "../hooks/useThreadActions";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import { stackedThreadToast, toastManager, type ThreadToastData } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
@@ -2201,13 +2201,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
       const threadWorkspacePath = thread.worktreePath ?? threadProject?.cwd ?? project.cwd ?? null;
+      const deleteBlockedByActiveSession = isThreadDeleteBlockedByActiveSession(thread.session);
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
-          { id: "delete", label: "Delete", destructive: true },
+          deleteBlockedByActiveSession
+            ? { id: "stop-and-delete", label: "Stop and delete", destructive: true }
+            : { id: "delete", label: "Delete", destructive: true },
         ],
         position,
       );
@@ -2241,19 +2244,35 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         copyThreadIdToClipboard(thread.id, { threadId: thread.id });
         return;
       }
-      if (clicked !== "delete") return;
+      if (clicked !== "delete" && clicked !== "stop-and-delete") return;
       if (appSettingsConfirmThreadDelete) {
+        const isStopAndDelete = clicked === "stop-and-delete";
         const confirmed = await api.dialogs.confirm(
-          [
-            `Delete thread "${thread.title}"?`,
-            "This permanently clears conversation history for this thread.",
-          ].join("\n"),
+          isStopAndDelete
+            ? [
+                `Stop and delete thread "${thread.title}"?`,
+                "This stops the running action and permanently clears conversation history for this thread.",
+              ].join("\n")
+            : [
+                `Delete thread "${thread.title}"?`,
+                "This permanently clears conversation history for this thread.",
+              ].join("\n"),
         );
         if (!confirmed) {
           return;
         }
       }
-      await deleteThread(threadRef);
+      try {
+        await deleteThread(threadRef, { stopRunning: clicked === "stop-and-delete" });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: clicked === "stop-and-delete" ? "Could not stop and delete" : "Could not delete",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
     },
     [
       appSettingsConfirmThreadDelete,

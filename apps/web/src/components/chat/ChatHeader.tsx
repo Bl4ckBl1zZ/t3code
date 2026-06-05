@@ -227,11 +227,11 @@ export const ChatHeader = memo(function ChatHeader({
     showDiffToggle;
 
   return (
-    <div className="@container/header-actions flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden sm:flex-1 sm:flex-nowrap sm:gap-3">
+    <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex min-w-20 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
         <SidebarTrigger className="size-7 shrink-0 md:hidden" />
         <h2
-          className="min-w-0 flex-1 basis-40 truncate text-sm font-medium text-foreground"
+          className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
           title={activeThreadTitle}
         >
           {activeThreadTitle}
@@ -243,14 +243,14 @@ export const ChatHeader = memo(function ChatHeader({
         )}
       </div>
       {showHeaderActions && (
-        <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:flex-1 sm:flex-nowrap @3xl/header-actions:gap-3">
-          {showBrowserAnnotationButton && (
-            <BrowserAnnotationButton
-              activeThreadEnvironmentId={activeThreadEnvironmentId}
-              activeThreadId={activeThreadId}
-            />
-          )}
-          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 sm:flex-nowrap @3xl/header-actions:gap-3">
+        <div className="min-w-0 max-w-[min(72%,40rem)] shrink overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex w-max items-center justify-end gap-1.5 @3xl/header-actions:gap-2">
+            {showBrowserAnnotationButton && (
+              <BrowserAnnotationButton
+                activeThreadEnvironmentId={activeThreadEnvironmentId}
+                activeThreadId={activeThreadId}
+              />
+            )}
             {showProjectScriptsControl && activeProjectScripts !== undefined && (
               <ProjectScriptsControl
                 scripts={activeProjectScripts}

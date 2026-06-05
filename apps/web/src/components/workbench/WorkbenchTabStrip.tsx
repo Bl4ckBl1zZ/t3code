@@ -43,9 +43,9 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-1">
+    <div className="flex min-w-0 items-center gap-1.5">
       <div
-        className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain"
+        className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto overscroll-x-contain"
         role="tablist"
         aria-label="Workbench tabs"
       >
@@ -56,10 +56,10 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
             <div
               key={tab.id}
               className={cn(
-                "group/tab flex h-7 min-w-0 max-w-56 shrink-0 items-center rounded-md border text-xs transition-colors focus-within:ring-1 focus-within:ring-ring",
+                "group/tab flex h-8 min-w-0 max-w-56 shrink-0 items-center rounded-[7px] border text-xs shadow-xs/5 transition-[background-color,border-color,box-shadow,color] focus-within:ring-1 focus-within:ring-ring",
                 active
-                  ? "border-border bg-card text-foreground"
-                  : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "border-border bg-card text-foreground shadow-sm"
+                  : "border-border/60 bg-muted/35 text-muted-foreground hover:bg-muted/65 hover:text-foreground",
               )}
               onMouseDown={(event) => {
                 if (event.button === 1) {
@@ -75,49 +75,32 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
                 onCloseTab(tab);
               }}
             >
-              <span className="relative ml-1.5 flex size-3.5 shrink-0 items-center justify-center">
-                <span
-                  className={cn(
-                    "flex size-3.5 items-center justify-center transition-opacity",
-                    active && closable
-                      ? "opacity-0"
-                      : closable
-                        ? "opacity-100 group-hover/tab:opacity-0 group-focus-within/tab:opacity-0"
-                        : "opacity-100",
-                  )}
-                >
-                  <TabIcon tab={tab} active={active} />
-                </span>
-                {closable ? (
-                  <button
-                    type="button"
-                    className={cn(
-                      "pointer-events-none absolute left-1/2 top-1/2 flex size-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm opacity-0 outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-                      active
-                        ? "pointer-events-auto opacity-100"
-                        : "group-hover/tab:pointer-events-auto group-hover/tab:opacity-100 group-focus-within/tab:pointer-events-auto group-focus-within/tab:opacity-100",
-                    )}
-                    aria-label={`Close ${tab.title}`}
-                    tabIndex={active ? 0 : -1}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onCloseTab(tab);
-                    }}
-                  >
-                    <XIcon className="size-3" />
-                  </button>
-                ) : null}
-              </span>
               <button
                 type="button"
                 role="tab"
                 aria-selected={active}
-                className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1 px-1.5 pr-2 text-left outline-hidden"
+                className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left outline-hidden"
                 onClick={() => onSelectTab(tab)}
               >
+                <span className="flex size-3.5 shrink-0 items-center justify-center">
+                  <TabIcon tab={tab} active={active} />
+                </span>
                 <span className="min-w-0 truncate">{tab.title}</span>
               </button>
+              {closable ? (
+                <button
+                  type="button"
+                  className="mr-1.5 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-[5px] text-muted-foreground outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                  aria-label={`Close ${tab.title}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onCloseTab(tab);
+                  }}
+                >
+                  <XIcon className="size-3" />
+                </button>
+              ) : null}
             </div>
           );
         })}
@@ -125,7 +108,7 @@ export const WorkbenchTabStrip = memo(function WorkbenchTabStrip({
       <Menu>
         <MenuTrigger
           type="button"
-          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[7px] text-muted-foreground outline-hidden transition-colors hover:bg-muted/65 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="New tab"
           disabled={!canCreateChatTab}
         >
