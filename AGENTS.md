@@ -206,7 +206,7 @@ oxlint-plugin-t3code/  Local custom oxlint rules.
 ### Navigation Layout
 
 - Desktop/web uses a left project/thread sidebar (`AppSidebarLayout`), central chat/workbench area, workbench tabs, and right-side sheets/panels for auxiliary workflows.
-- Workbench tabs are modeled in `packages/client-runtime/src/workbenchTabsState.ts` and currently support `chat`, `file`, `diff`, and `terminal` tab kinds. Add new tab surfaces through that model instead of inventing route-local tab state.
+- Workbench tabs are modeled in `packages/client-runtime/src/workbenchTabsState.ts` and currently support `chat`, `file`, `diff`, and `terminal` tab kinds. Add new tab surfaces through that model instead of inventing route-local tab state. Web workbench tabs use a floating rectangular treatment in `WorkbenchTabStrip`; preserve that shape, spacing, and active-tab elevation when adding tab kinds.
 - Browser-agent tab interaction is provider-driven through browser tools and the extension runtime; do not add a user-facing browser workbench panel unless the architecture changes again.
 - Settings are route-backed panels under `apps/web/src/routes/settings.*.tsx` and feature-specific components under `apps/web/src/components/settings`.
 - Mobile uses Expo Router under `apps/mobile/src/app`, with connection, new-project/new-thread, thread, git, review, and terminal screens. Mobile flows should be stack-friendly and avoid desktop-only assumptions.
@@ -229,9 +229,10 @@ oxlint-plugin-t3code/  Local custom oxlint rules.
 - Provider sessions are managed through `apps/server/src/provider`; Codex runs `codex app-server` per provider session through the typed wrapper package.
 - Built-in provider drivers are registered in `apps/server/src/provider/builtInDrivers.ts`; keep driver additions there and make sure the runtime layer satisfies the driver's declared environment.
 - Orchestration projects provider runtime events into domain events consumed by the web/mobile clients.
+- `thread.delete` is permanent destruction and must reject active `starting`/`running` sessions or threads with an active turn. UI flows that intentionally kill work must use an explicit stop-and-delete path (`thread.session.stop` first, then delete after the projected session is no longer active). Closing, hiding, or removing a sub-chat from view should use archive/visibility semantics instead of delete.
 - Workspace file APIs live under `apps/server/src/workspace` and `packages/contracts/src/workspaceFiles.ts`. Clients address files by `(environmentId, cwd, relativePath)`; server code must resolve paths inside the active root and reject escapes, unsafe symlinks, binary/too-large edits, and stale-version writes.
 - Browser-agent state is owned by `apps/server/src/browserAgents/registry.ts`. Provider browser commands route by `(environmentId, threadId, browserContextId)`, where the main agent uses the default context and each sub-agent can own an isolated Chrome tab context in the same T3 thread.
-- Browser-agent host control should not require manual extension pairing. Same-machine desktop control uses unauthenticated `GET /browser-agent/local-ws`, which must stay desktop-mode and loopback-only. Authenticated remote/manual pairing remains on `GET /browser-agent/ws`; token auto-connect via `POST /browser-agent/auto-connect` is fallback behavior and must issue client bearer sessions through `ServerAuth`.
+- Browser-agent host control should not require manual extension pairing. Same-machine desktop control uses unauthenticated `GET /browser-agent/local-ws`, which must stay desktop-mode and loopback-only. Authenticated remote/manual pairing remains on `GET /browser-agent/ws`; token auto-connect via `POST /browser-agent/auto-connect` is fallback behavior and must issue client bearer sessions through `ServerAuth`. Extension side-panel chat URLs use short-lived sidebar bearer tokens; keep tokens out of stored workspace-link URLs and use extension session storage for refresh/reopen reconstruction.
 - Browser-agent screenshots use CDP `Page.captureScreenshot` with full-page capture, then `apps/chrome-extension/offscreen.html` / `offscreen.js` downscale and compress the image. Browser screenshot tool-call output should stay attached to work-log entries so users can inspect the exact captured artifact.
 - Codex browser tools are exposed through `apps/server/src/provider/browserDynamicTools.ts`; do not expose unrestricted browser automation tools directly to providers without T3 thread-link authorization.
 - App-wide Codex instructions include concise `t3-html-preview` guidance for visual examples; the renderer supports inline CSS and inline JavaScript in a sandbox, with external network requests blocked.
@@ -353,7 +354,7 @@ How to use it: When you discover something reusable, such as a utility, a patter
 - `apps/server/src/browserAgents/registry.ts`: In-memory browser agent registry and thread workspace-link authority.
 - `apps/server/src/browserAgents/ws.ts`: Browser-agent WebSocket routes; local desktop control uses loopback-only `/browser-agent/local-ws` without pairing, while `/browser-agent/ws` remains the authenticated remote/manual pairing path.
 - `apps/server/src/provider/browserDynamicTools.ts`: Codex dynamic browser tools authorized through thread browser links, including v2 extension runtime diagnostics and default CDP-backed tools.
-- `apps/chrome-extension/service-worker.js`: Browser-agent runtime, including loopback local-control auto-connect, web-triggered advertised loopback probes, saved-backend reconnect fallback, CDP control, tab commands, diagnostics, and extension-internal test hooks.
+- `apps/chrome-extension/service-worker.js`: Browser-agent runtime, including loopback local-control auto-connect, web-triggered advertised loopback probes, saved-backend reconnect fallback, side-panel sidebar bearer token reconstruction, CDP control, tab commands, diagnostics, and extension-internal test hooks.
 - `apps/chrome-extension/offscreen.js`: Offscreen extension document for screenshot downscale/compression.
 - `apps/desktop/src/app/DesktopBrowserAgentExtension.ts`: Desktop startup sync for the stable unpacked Chrome extension folder under the local app-data directory, such as `~/Library/Application Support/t3code-dev/Chrome Extension` on macOS dev builds.
 - `apps/server/src/provider/CodexDeveloperInstructions.ts`: T3-injected Codex developer instructions, including collaboration mode, chat preview rendering, and browser-runtime tool usage guidance.
@@ -377,7 +378,7 @@ How to use it: When you discover something reusable, such as a utility, a patter
 - `apps/web/src/components/DiffPanel.tsx`: Checkpoint/diff panel.
 - `apps/web/src/components/GitActionsControl.tsx`: Git action controls and PR/review state actions.
 - `apps/web/src/components/ThreadTerminalDrawer.tsx`: Thread terminal drawer.
-- `apps/web/src/components/workbench/WorkbenchTabStrip.tsx`: Workbench tabs.
+- `apps/web/src/components/workbench/WorkbenchTabStrip.tsx`: Workbench tabs with floating rectangular visual treatment.
 - `apps/web/src/components/workspace/WorkspaceExplorer.tsx`: Workspace file explorer.
 - `apps/web/src/components/workspace/WorkspaceFileEditor.tsx`: Workspace file editor.
 - `apps/web/src/organizationPanel/OrganizationPanelHost.tsx`: Stable host/error boundary for generated organization panels.

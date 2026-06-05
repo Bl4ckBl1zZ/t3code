@@ -4,6 +4,7 @@ import {
   EventId,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   ProviderInstanceId,
@@ -19,6 +20,7 @@ const asCommandId = (value: string): CommandId => CommandId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+const asTurnId = (value: string): TurnId => TurnId.make(value);
 
 const seedReadModel = Effect.gen(function* () {
   const now = "2026-01-01T00:00:00.000Z";
@@ -98,6 +100,36 @@ const seedReadModel = Effect.gen(function* () {
       worktreePath: null,
       createdAt: now,
       updatedAt: now,
+    },
+  });
+});
+
+const seedReadModelWithActiveThread = Effect.gen(function* () {
+  const readModel = yield* seedReadModel;
+  const now = "2026-01-01T00:00:01.000Z";
+  return yield* projectEvent(readModel, {
+    sequence: readModel.snapshotSequence + 1,
+    eventId: asEventId("evt-thread-session-running"),
+    aggregateKind: "thread",
+    aggregateId: asThreadId("thread-delete-1"),
+    type: "thread.session-set",
+    occurredAt: now,
+    commandId: asCommandId("cmd-thread-session-running"),
+    causationEventId: null,
+    correlationId: asCommandId("cmd-thread-session-running"),
+    metadata: {},
+    payload: {
+      threadId: asThreadId("thread-delete-1"),
+      session: {
+        threadId: asThreadId("thread-delete-1"),
+        status: "running",
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required",
+        activeTurnId: asTurnId("turn-active"),
+        lastError: null,
+        updatedAt: now,
+      },
     },
   });
 });
@@ -212,6 +244,43 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
       }
 
       expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
+    }),
+  );
+
+  it.effect("rejects deleting a thread with an active session", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModelWithActiveThread;
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.delete",
+            commandId: asCommandId("cmd-thread-delete-active"),
+            threadId: asThreadId("thread-delete-1"),
+          },
+          readModel,
+        }),
+      );
+
+      expect(error.message).toContain("has an active session");
+    }),
+  );
+
+  it.effect("rejects force-deleting a project while any child thread has an active session", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModelWithActiveThread;
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.delete",
+            commandId: asCommandId("cmd-project-delete-force-active"),
+            projectId: asProjectId("project-delete"),
+            force: true,
+          },
+          readModel,
+        }),
+      );
+
+      expect(error.message).toContain("has an active session");
     }),
   );
 });

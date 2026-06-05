@@ -1,6 +1,7 @@
 const BACKEND_KEY = "t3code.browserAgent.backend";
 const LINKS_KEY = "t3code.browserAgent.workspaceLinks";
 const ACTIVE_LINK_KEY = "t3code.browserAgent.activeWorkspaceLink";
+const SIDEBAR_SESSION_TOKENS_KEY = "t3code.browserAgent.sidebarSessionTokens";
 const DIAGNOSTIC_LOG_LIMIT = 300;
 const SIDE_PANEL_PATH = "sidepanel.html";
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
@@ -96,6 +97,7 @@ let cdpAttachedTabIds = new Set();
 let liveCaptureWorkspaceLinkIds = new Set();
 let cdpScreencastSessions = new Map();
 let nextCdpScreencastFrameSequence = 0;
+let sidebarSessionTokensCache = null;
 
 function addDiagnosticLog(level, message, details = null) {
   diagnosticLogs.push({
@@ -216,10 +218,17 @@ async function workspaceLinkForContent(link, tab = null, options = {}) {
   if (!baseUrl) {
     return nextLink;
   }
-  const sidebarSessionToken =
+  const explicitSidebarSessionToken =
     typeof options.sidebarSessionToken === "string" && options.sidebarSessionToken.length > 0
       ? options.sidebarSessionToken
-      : backend?.sessionToken;
+      : null;
+  if (explicitSidebarSessionToken) {
+    await writeSidebarSessionToken(nextLink.id, explicitSidebarSessionToken);
+  }
+  const sidebarSessionToken =
+    explicitSidebarSessionToken ??
+    backend?.sessionToken ??
+    (await readSidebarSessionToken(nextLink.id));
   return {
     ...nextLink,
     t3Url: chatUrlForWorkspaceLink(baseUrl, nextLink, sidebarSessionToken),
@@ -273,9 +282,15 @@ async function clearBackend() {
   localControlBaseUrl = null;
   currentBackend = null;
   workspaceLinksCache = [];
+  sidebarSessionTokensCache = null;
   closeSocket();
   await detachAllCdpTargets();
-  await chrome.storage.local.remove([BACKEND_KEY, LINKS_KEY, ACTIVE_LINK_KEY]);
+  await Promise.all([
+    chrome.storage.local.remove([BACKEND_KEY, LINKS_KEY, ACTIVE_LINK_KEY]),
+    sidebarSessionTokenStorageArea()
+      .remove(SIDEBAR_SESSION_TOKENS_KEY)
+      .catch(() => undefined),
+  ]);
   await disableNativeSidePanelForAllTabs();
 }
 
@@ -326,6 +341,92 @@ function linkForStorage(link) {
   } catch {
     return link;
   }
+}
+
+function sidebarSessionTokenStorageArea() {
+  return chrome.storage.session ?? chrome.storage.local;
+}
+
+function normalizeSidebarSessionTokenEntries(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = {};
+  for (const [linkId, record] of Object.entries(value)) {
+    if (
+      typeof linkId === "string" &&
+      linkId.length > 0 &&
+      record &&
+      typeof record === "object" &&
+      typeof record.token === "string" &&
+      record.token.length > 0
+    ) {
+      entries[linkId] = {
+        token: record.token,
+        updatedAt:
+          typeof record.updatedAt === "string" && record.updatedAt.length > 0
+            ? record.updatedAt
+            : new Date().toISOString(),
+      };
+    }
+  }
+  return entries;
+}
+
+async function readSidebarSessionTokens() {
+  if (sidebarSessionTokensCache) {
+    return sidebarSessionTokensCache;
+  }
+  const stored = await sidebarSessionTokenStorageArea()
+    .get(SIDEBAR_SESSION_TOKENS_KEY)
+    .catch(() => ({}));
+  sidebarSessionTokensCache = normalizeSidebarSessionTokenEntries(
+    stored[SIDEBAR_SESSION_TOKENS_KEY],
+  );
+  return sidebarSessionTokensCache;
+}
+
+async function writeSidebarSessionToken(linkId, token) {
+  if (typeof linkId !== "string" || linkId.length === 0) {
+    return;
+  }
+  if (typeof token !== "string" || token.length === 0) {
+    return;
+  }
+  const tokens = {
+    ...(await readSidebarSessionTokens()),
+    [linkId]: {
+      token,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  sidebarSessionTokensCache = tokens;
+  await sidebarSessionTokenStorageArea()
+    .set({ [SIDEBAR_SESSION_TOKENS_KEY]: tokens })
+    .catch(() => undefined);
+}
+
+async function readSidebarSessionToken(linkId) {
+  if (typeof linkId !== "string" || linkId.length === 0) {
+    return null;
+  }
+  const tokens = await readSidebarSessionTokens();
+  return tokens[linkId]?.token ?? null;
+}
+
+async function removeSidebarSessionToken(linkId) {
+  if (typeof linkId !== "string" || linkId.length === 0) {
+    return;
+  }
+  const current = await readSidebarSessionTokens();
+  if (!current[linkId]) {
+    return;
+  }
+  const { [linkId]: _removed, ...tokens } = current;
+  sidebarSessionTokensCache = tokens;
+  await sidebarSessionTokenStorageArea()
+    .set({ [SIDEBAR_SESSION_TOKENS_KEY]: tokens })
+    .catch(() => undefined);
 }
 
 async function readActiveWorkspaceLink() {
@@ -1844,7 +1945,10 @@ async function detachThreadTab(command) {
   const links = await readLinks();
   const nextLinks = links.filter((entry) => entry.id !== command.workspaceLinkId);
   workspaceLinksCache = nextLinks;
-  await chrome.storage.local.set({ [LINKS_KEY]: nextLinks });
+  await Promise.all([
+    chrome.storage.local.set({ [LINKS_KEY]: nextLinks }),
+    removeSidebarSessionToken(command.workspaceLinkId),
+  ]);
   const activeRecord = await readActiveWorkspaceLink();
   if (activeRecord?.linkId === command.workspaceLinkId) {
     await chrome.storage.local.remove(ACTIVE_LINK_KEY);

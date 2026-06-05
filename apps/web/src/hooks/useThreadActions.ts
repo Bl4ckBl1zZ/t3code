@@ -22,6 +22,57 @@ import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useSettings } from "./useSettings";
+import type { ThreadSession } from "../types";
+
+const THREAD_STOP_BEFORE_DELETE_TIMEOUT_MS = 15_000;
+
+export function isThreadDeleteBlockedByActiveSession(
+  session: ThreadSession | null | undefined,
+): boolean {
+  return (
+    session !== null &&
+    session !== undefined &&
+    (session.orchestrationStatus === "starting" ||
+      session.orchestrationStatus === "running" ||
+      session.activeTurnId !== undefined)
+  );
+}
+
+async function waitForThreadDeleteUnblocked(target: ScopedThreadRef): Promise<boolean> {
+  if (
+    !isThreadDeleteBlockedByActiveSession(selectThreadByRef(useStore.getState(), target)?.session)
+  ) {
+    return true;
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      unsubscribe();
+      resolve(value);
+    };
+    const unsubscribe = useStore.subscribe((state) => {
+      const thread = selectThreadByRef(state, target);
+      if (!isThreadDeleteBlockedByActiveSession(thread?.session)) {
+        finish(true);
+      }
+    });
+    const timeoutId = window.setTimeout(() => finish(false), THREAD_STOP_BEFORE_DELETE_TIMEOUT_MS);
+  });
+}
+
+function notifyDeleteBlockedByActiveSession() {
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title: "Thread is running",
+      description: "Stop the running action before deleting this thread.",
+    }),
+  );
+}
 
 export function useThreadActions() {
   const sidebarThreadSortOrder = useSettings((settings) => settings.sidebarThreadSortOrder);
@@ -99,7 +150,13 @@ export function useThreadActions() {
   }, []);
 
   const deleteThread = useCallback(
-    async (target: ScopedThreadRef, opts: { deletedThreadKeys?: ReadonlySet<string> } = {}) => {
+    async (
+      target: ScopedThreadRef,
+      opts: {
+        deletedThreadKeys?: ReadonlySet<string>;
+        stopRunning?: boolean;
+      } = {},
+    ) => {
       const api = readEnvironmentApi(target.environmentId);
       if (!api) return;
       const resolved = resolveThreadTarget(target);
@@ -114,6 +171,11 @@ export function useThreadActions() {
         return;
       }
       const { thread, threadRef } = resolved;
+      const deleteBlockedByActiveSession = isThreadDeleteBlockedByActiveSession(thread.session);
+      if (deleteBlockedByActiveSession && opts.stopRunning !== true) {
+        notifyDeleteBlockedByActiveSession();
+        return;
+      }
       const state = useStore.getState();
       const threads = selectThreadsForEnvironment(state, threadRef.environmentId);
       const threadProject = selectProjectByRef(state, {
@@ -154,7 +216,7 @@ export function useThreadActions() {
           ].join("\n"),
         ));
 
-      if (thread.session && thread.session.status !== "closed") {
+      if (deleteBlockedByActiveSession && opts.stopRunning === true) {
         await api.orchestration
           .dispatchCommand({
             type: "thread.session.stop",
@@ -163,6 +225,11 @@ export function useThreadActions() {
             createdAt: new Date().toISOString(),
           })
           .catch(() => undefined);
+
+        const stopped = await waitForThreadDeleteUnblocked(threadRef);
+        if (!stopped) {
+          throw new Error("The running action did not stop in time. Try again after it stops.");
+        }
       }
 
       try {
