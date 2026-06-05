@@ -10,7 +10,7 @@ import {
   type BrowserAgentOutboundMessage,
 } from "@t3tools/contracts";
 
-import { BrowserAgentRegistry } from "./registry.ts";
+import { BrowserAgentRegistry, LOCAL_BROWSER_AGENT_SESSION_ID } from "./registry.ts";
 
 const capabilities = {
   version: 1 as const,
@@ -213,6 +213,47 @@ describe("BrowserAgentRegistry", () => {
     expect(hostResult.agentId).toBe("browser-agent:session-host");
     expect(remoteResult.agentId).toBe("browser-agent:session-host");
     expect(hostMessages).toHaveLength(2);
+  });
+
+  it("prefers the local-control browser agent for desktop preview commands", async () => {
+    const registry = new BrowserAgentRegistry();
+    const hostSessionId = AuthSessionId.make("session-host");
+    const remoteSessionId = AuthSessionId.make("session-remote");
+    const hostMessages = connectAgent(registry, hostSessionId);
+    const localControlMessages = connectAgent(registry, LOCAL_BROWSER_AGENT_SESSION_ID);
+
+    const result = await Effect.runPromise(
+      registry.openOrFocusPreview(workspaceInput, {
+        preferredSessionId: remoteSessionId,
+        preferLocalControl: true,
+        allowCrossSessionFallback: false,
+      }),
+    );
+
+    expect(result.agentId).toBe("browser-agent:browser-agent-local-control");
+    expect(localControlMessages).toHaveLength(1);
+    expect(localControlMessages[0]?.type).toBe("browserAgent.command.openOrFocusPreview");
+    expect(hostMessages).toHaveLength(0);
+  });
+
+  it("does not fall back to a host browser agent when desktop local-control is unavailable", async () => {
+    const registry = new BrowserAgentRegistry();
+    const hostSessionId = AuthSessionId.make("session-host");
+    const remoteSessionId = AuthSessionId.make("session-remote");
+    const hostMessages = connectAgent(registry, hostSessionId);
+
+    await expect(
+      Effect.runPromise(
+        registry.openOrFocusPreview(workspaceInput, {
+          preferredSessionId: remoteSessionId,
+          preferLocalControl: true,
+          allowCrossSessionFallback: false,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "no-agent-connected",
+    });
+    expect(hostMessages).toHaveLength(0);
   });
 
   it("creates a thread-scoped browser link and sends the open command", async () => {

@@ -211,6 +211,7 @@ oxlint-plugin-t3code/  Local custom oxlint rules.
 - Settings are route-backed panels under `apps/web/src/routes/settings.*.tsx` and feature-specific components under `apps/web/src/components/settings`.
 - Mobile uses Expo Router under `apps/mobile/src/app`, with connection, new-project/new-thread, thread, git, review, and terminal screens. Mobile flows should be stack-friendly and avoid desktop-only assumptions.
 - Browser-agent preview flows should keep browser state owned by the backend/extension protocol, not by inferred Chrome tab-group UI. Routine thread browser control should not focus or foreground the real browser window; reserve real browser focus for explicit user actions such as "Open in browser" or annotation capture. Desktop startup syncs the unpacked browser-agent extension into the local app-data folder, for example `~/Library/Application Support/t3code-dev/Chrome Extension` on macOS dev builds, by fully replacing that folder from the repo/bundled `chrome-extension` source. Chrome should load that stable unpacked folder for local testing; after startup sync, use the extension popup reload path so Chrome reloads changed service workers/content scripts. The extension should auto-connect to the host desktop backend by preferring the loopback-only local-control WebSocket, including advertised loopback backend URLs from the Preview flow, then falling back to saved/authenticated pairing only when local control is unavailable. App UI should surface protocol/runtime mismatches from the connected agent snapshot.
+- Browser-agent routing policy: provider/agent browser tabs use the host/agent browser context, while user-initiated Preview follows the active environment. For remote desktop environments, Preview must require that environment's local-control browser agent and must not fall back to a host-paired extension; if the remote extension is missing, surface the install/reload prompt instead of opening the host browser.
 
 ### Popups & Modals
 
@@ -322,6 +323,7 @@ Docs:
 
 - Open-source Codex repo: https://github.com/openai/codex
 - Codex-Monitor (Tauri, feature-complete reference implementation): https://github.com/Dimillian/CodexMonitor
+- Paseo: https://github.com/getpaseo/paseo
 
 Use these as implementation references when designing protocol handling, UX flows, and operational safeguards.
 

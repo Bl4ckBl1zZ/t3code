@@ -123,7 +123,14 @@ function preferredAdvertisedEndpoint(
   return selectDefaultAdvertisedEndpoint(endpoints, defaultEndpointKey);
 }
 
-async function resolveReachablePreviewHost(): Promise<string | null> {
+async function resolveReachablePreviewHost(input?: {
+  readonly environmentHttpBaseUrl?: string | null | undefined;
+}): Promise<string | null> {
+  const environmentHost = remoteHttpHost(input?.environmentHttpBaseUrl);
+  if (environmentHost) {
+    return environmentHost;
+  }
+
   const getAdvertisedEndpoints =
     typeof window !== "undefined" ? window.desktopBridge?.getAdvertisedEndpoints : undefined;
   if (getAdvertisedEndpoints) {
@@ -206,13 +213,16 @@ export function resolveBrowserAgentPreviewUrl(input: {
 
 export async function resolveBrowserAgentReachablePreviewUrl(
   devServerUrl: string,
+  options?: {
+    readonly environmentHttpBaseUrl?: string | null | undefined;
+  },
 ): Promise<string> {
   const url = parseUrl(devServerUrl);
   if (!url || !isLocalDevServerHostname(url.hostname)) {
     return devServerUrl;
   }
 
-  const reachableHost = await resolveReachablePreviewHost();
+  const reachableHost = await resolveReachablePreviewHost(options);
   if (!reachableHost) {
     return url.toString();
   }

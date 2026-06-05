@@ -44,6 +44,7 @@ interface ChatHeaderProps {
   activeProjectScripts: ProjectScript[] | undefined;
   projectPreviewUrl: string | null | undefined;
   detectedDevServerUrl: string | null;
+  detectedDevServerUrlsByScriptId: Readonly<Record<string, string>>;
   preferredScriptId: string | null;
   runningProjectScriptIds: ReadonlySet<string>;
   keybindings: ResolvedKeybindingsConfig;
@@ -57,6 +58,7 @@ interface ChatHeaderProps {
   diffOpen: boolean;
   pullRequestCommentsAction?: GitPullRequestCommentsAction;
   onRunProjectScript: (script: ProjectScript, options?: RunProjectScriptOptions) => void;
+  onViewRunningProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
@@ -121,6 +123,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeProjectScripts,
   projectPreviewUrl,
   detectedDevServerUrl,
+  detectedDevServerUrlsByScriptId,
   preferredScriptId,
   runningProjectScriptIds,
   keybindings,
@@ -134,6 +137,7 @@ export const ChatHeader = memo(function ChatHeader({
   diffOpen,
   pullRequestCommentsAction,
   onRunProjectScript,
+  onViewRunningProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
@@ -259,7 +263,9 @@ export const ChatHeader = memo(function ChatHeader({
                 preferredScriptId={preferredScriptId}
                 runningScriptIds={runningProjectScriptIds}
                 previewUrl={projectPreviewUrl}
+                detectedDevServerUrlsByScriptId={detectedDevServerUrlsByScriptId}
                 onRunScript={onRunProjectScript}
+                onViewRunningScript={onViewRunningProjectScript}
                 onAddScript={onAddProjectScript}
                 onUpdateScript={onUpdateProjectScript}
                 onDeleteScript={onDeleteProjectScript}
@@ -279,6 +285,7 @@ export const ChatHeader = memo(function ChatHeader({
                 activeProjectScripts={activeProjectScripts}
                 projectPreviewUrl={projectPreviewUrl}
                 activeThreadEnvironmentId={activeThreadEnvironmentId}
+                primaryEnvironmentId={primaryEnvironmentId}
                 activeThreadId={activeThreadId}
                 detectedDevServerUrl={detectedDevServerUrl}
                 currentSessionCanManageAccess={currentSessionCanManageAccess}

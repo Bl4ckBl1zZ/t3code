@@ -114,6 +114,10 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
       if (!resolved) return;
       const { thread, threadRef } = resolved;
+      if (thread.archivedAt !== null) {
+        refreshArchivedThreadsForEnvironment(threadRef.environmentId);
+        return;
+      }
       if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
         throw new Error("Cannot archive a running thread.");
       }

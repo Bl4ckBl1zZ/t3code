@@ -31,7 +31,7 @@ import { ServerConfig } from "../config.ts";
 import { normalizeDispatchCommand } from "../orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ServerRuntimeStartup } from "../serverRuntimeStartup.ts";
-import { browserAgentRegistry } from "./registry.ts";
+import { browserAgentRegistry, LOCAL_BROWSER_AGENT_SESSION_ID } from "./registry.ts";
 
 function estimateDataUrlByteSize(dataUrl: string): number {
   const commaIndex = dataUrl.indexOf(",");
@@ -67,8 +67,6 @@ const decodeBrowserAgentMessage = Schema.decodeEffect(
 const encodeBrowserAgentMessage = Schema.encodeEffect(
   Schema.fromJsonString(BrowserAgentOutboundMessage),
 );
-
-const LOCAL_BROWSER_AGENT_SESSION_ID = AuthSessionId.make("browser-agent-local-control");
 
 function normalizeRequestAddress(value: string | null | undefined): string | null {
   if (typeof value !== "string" || value.trim().length === 0) {

@@ -5,7 +5,7 @@ import {
 } from "@t3tools/shared/browserAgent";
 
 import { selectPairingEndpoint } from "./advertisedEndpointSelection";
-import { createServerPairingCredential } from "./environments/primary";
+import { createServerPairingCredential } from "./environments/primary/auth";
 import { readPrimaryEnvironmentTarget } from "./environments/primary/target";
 import { ensureLocalApi } from "./localApi";
 import { useUiStateStore } from "./uiStateStore";
@@ -38,6 +38,11 @@ interface AutoPairContentScriptResult {
 interface AutoConnectContentScriptResult {
   readonly ok: boolean;
   readonly error?: string;
+}
+
+interface AutoPairBrowserAgentOptions {
+  readonly baseUrl?: string | null | undefined;
+  readonly allowExternalBrowserLaunch?: boolean;
 }
 
 export class BrowserAgentExtensionUnavailableError extends Error {
@@ -361,8 +366,13 @@ export async function waitForBrowserAgentConnection(
   );
 }
 
-export async function autoPairBrowserAgent(client: BrowserAgentListClient): Promise<void> {
-  const baseUrl = await resolveBrowserAgentBackendBaseUrl();
+export async function autoPairBrowserAgent(
+  client: BrowserAgentListClient,
+  options?: AutoPairBrowserAgentOptions,
+): Promise<void> {
+  const baseUrl = options?.baseUrl
+    ? normalizeBaseUrl(options.baseUrl)
+    : await resolveBrowserAgentBackendBaseUrl();
   const downloadUrl = buildBrowserAgentExtensionDownloadUrl({ baseUrl });
   const autoConnected = await requestContentScriptAutoConnect({
     pageBaseUrl: baseUrl,
@@ -371,6 +381,10 @@ export async function autoPairBrowserAgent(client: BrowserAgentListClient): Prom
   if (autoConnected) {
     await waitForBrowserAgentConnection(client);
     return;
+  }
+
+  if (options?.allowExternalBrowserLaunch === false) {
+    throw new BrowserAgentExtensionUnavailableError({ downloadUrl });
   }
 
   const pairing = await createServerPairingCredential({ label: "Browser agent auto-pair" });

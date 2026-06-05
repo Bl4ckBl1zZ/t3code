@@ -17,7 +17,10 @@ import {
   isBrowserAgentExtensionUnavailableError,
   isNoBrowserAgentConnectedError,
 } from "../../browserAgentPairing";
-import { getPrimaryEnvironmentConnection } from "../../environments/runtime";
+import {
+  getEnvironmentHttpBaseUrl,
+  requireEnvironmentConnection,
+} from "../../environments/runtime";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -37,6 +40,7 @@ export const PreviewButton = memo(function PreviewButton({
   activeProjectScripts,
   projectPreviewUrl,
   activeThreadEnvironmentId,
+  primaryEnvironmentId,
   activeThreadId,
   detectedDevServerUrl,
   currentSessionCanManageAccess,
@@ -47,6 +51,7 @@ export const PreviewButton = memo(function PreviewButton({
   readonly activeProjectScripts: readonly ProjectScript[] | undefined;
   readonly projectPreviewUrl: string | null | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
+  readonly primaryEnvironmentId: EnvironmentId | null;
   readonly activeThreadId: ThreadId;
   readonly detectedDevServerUrl: string | null;
   readonly currentSessionCanManageAccess: boolean;
@@ -64,10 +69,16 @@ export const PreviewButton = memo(function PreviewButton({
       }),
     [activeProjectScripts, detectedDevServerUrl, projectPreviewUrl],
   );
+  const environmentHttpBaseUrl = getEnvironmentHttpBaseUrl(activeThreadEnvironmentId);
+  const remoteEnvironment =
+    primaryEnvironmentId !== null && activeThreadEnvironmentId !== primaryEnvironmentId;
   const openPreviewInNewTab = shouldOpenPreviewInNewTab({
+    activeEnvironmentHttpBaseUrl: environmentHttpBaseUrl,
     currentAuthPolicy,
     currentDeviceType,
     currentSessionCanManageAccess,
+    currentWindowOrigin: typeof window !== "undefined" ? window.location.origin : null,
+    remoteEnvironment,
   });
 
   const openPreviewInBrowser = () => {
@@ -80,7 +91,7 @@ export const PreviewButton = memo(function PreviewButton({
       const previewWindow =
         typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
       setIsOpeningPreview(true);
-      void resolveBrowserAgentReachablePreviewUrl(devServerUrl)
+      void resolveBrowserAgentReachablePreviewUrl(devServerUrl, { environmentHttpBaseUrl })
         .then((reachablePreviewUrl) => {
           if (!previewWindow) {
             const fallbackWindow =
@@ -114,14 +125,17 @@ export const PreviewButton = memo(function PreviewButton({
 
     setIsOpeningPreview(true);
     void (async () => {
-      const connection = getPrimaryEnvironmentConnection();
+      const connection = requireEnvironmentConnection(activeThreadEnvironmentId);
       const openPreview = async () => {
-        const reachablePreviewUrl = await resolveBrowserAgentReachablePreviewUrl(devServerUrl);
+        const reachablePreviewUrl = await resolveBrowserAgentReachablePreviewUrl(devServerUrl, {
+          environmentHttpBaseUrl,
+        });
         return await connection.client.browserAgents.openOrFocusPreview({
           environmentId: activeThreadEnvironmentId,
           threadId: activeThreadId,
           devServerUrl: reachablePreviewUrl,
           repoName: activeProjectName,
+          ...(remoteEnvironment ? { requireLocalControl: true } : {}),
         });
       };
 
@@ -137,7 +151,14 @@ export const PreviewButton = memo(function PreviewButton({
           title: "Pairing browser extension",
         });
         try {
-          await autoPairBrowserAgent(connection.client);
+          await autoPairBrowserAgent(connection.client, {
+            baseUrl: environmentHttpBaseUrl,
+            allowExternalBrowserLaunch:
+              !remoteEnvironment &&
+              (environmentHttpBaseUrl
+                ? new URL(environmentHttpBaseUrl).origin === window.location.origin
+                : true),
+          });
         } catch (pairingError) {
           if (isBrowserAgentExtensionUnavailableError(pairingError)) {
             setExtensionDownloadUrl(pairingError.downloadUrl);
@@ -212,8 +233,8 @@ export const PreviewButton = memo(function PreviewButton({
           <DialogHeader>
             <DialogTitle>Chrome extension needed</DialogTitle>
             <DialogDescription>
-              Preview needs the T3 Code Browser Agent extension installed and up to date in this
-              browser.
+              Preview needs the T3 Code Browser Agent extension installed and connected for this
+              environment.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">

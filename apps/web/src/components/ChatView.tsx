@@ -1515,6 +1515,30 @@ export default function ChatView(props: ChatViewProps) {
     projectScriptDetectedWebServerByRunKey,
     runningTerminalIds,
   ]);
+  const detectedProjectScriptDevServerUrlsByScriptId = useMemo(() => {
+    const detectedUrlsByScriptId: Record<string, string> = {};
+    if (!activeProject || !activeThreadRef) {
+      return detectedUrlsByScriptId;
+    }
+
+    const runningTerminalIdSet = new Set(runningTerminalIds);
+    for (const script of activeProject.scripts) {
+      const detected =
+        projectScriptDetectedWebServerByRunKey[
+          projectScriptRunKey({
+            threadRef: activeThreadRef,
+            projectId: activeProject.id,
+            scriptId: script.id,
+          })
+        ];
+      if (!detected?.server.verified || !runningTerminalIdSet.has(detected.terminalId)) {
+        continue;
+      }
+      detectedUrlsByScriptId[script.id] = detected.server.url;
+    }
+
+    return detectedUrlsByScriptId;
+  }, [activeProject, activeThreadRef, projectScriptDetectedWebServerByRunKey, runningTerminalIds]);
 
   useEffect(() => {
     if (routeKind !== "server") {
@@ -2902,6 +2926,33 @@ export default function ChatView(props: ChatViewProps) {
       queueProjectScriptWebServerDetection,
     ],
   );
+  const viewRunningProjectScript = useCallback(
+    (script: ProjectScript) => {
+      if (!activeProject || !activeThreadRef) return;
+      const runKey = projectScriptRunKey({
+        threadRef: activeThreadRef,
+        projectId: activeProject.id,
+        scriptId: script.id,
+      });
+      const targetTerminalId = runningProjectScriptTerminalIds({
+        scriptTerminalIds: projectScriptTerminalIdsByRunKey[runKey],
+        runningTerminalIds,
+      })[0];
+      if (!targetTerminalId) return;
+
+      storeSetActiveTerminal(activeThreadRef, targetTerminalId);
+      setTerminalOpen(true);
+      setTerminalFocusRequestId((value) => value + 1);
+    },
+    [
+      activeProject,
+      activeThreadRef,
+      projectScriptTerminalIdsByRunKey,
+      runningTerminalIds,
+      setTerminalOpen,
+      storeSetActiveTerminal,
+    ],
+  );
 
   const persistProjectScripts = useCallback(
     async (input: {
@@ -3438,6 +3489,10 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
       const targetThread = selectThreadByRef(useStore.getState(), tab.threadRef);
+      if (targetThread?.archivedAt !== null) {
+        refreshArchivedThreadsForEnvironment(tab.threadRef.environmentId);
+        return;
+      }
       if (
         targetThread?.session?.status === "running" &&
         targetThread.session.activeTurnId != null
@@ -4944,6 +4999,7 @@ export default function ChatView(props: ChatViewProps) {
           activeProjectScripts={activeProject?.scripts}
           projectPreviewUrl={activeProject?.browserPreviewUrl}
           detectedDevServerUrl={detectedProjectScriptDevServerUrl}
+          detectedDevServerUrlsByScriptId={detectedProjectScriptDevServerUrlsByScriptId}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
@@ -4959,6 +5015,7 @@ export default function ChatView(props: ChatViewProps) {
           diffOpen={diffOpen}
           {...(pullRequestCommentsAction ? { pullRequestCommentsAction } : {})}
           onRunProjectScript={runProjectScript}
+          onViewRunningProjectScript={viewRunningProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}

@@ -10,6 +10,14 @@ function isMobileOrTabletDeviceType(deviceType: AuthClientMetadataDeviceType | n
   return deviceType === "mobile" || deviceType === "tablet";
 }
 
+function isSameOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
+
 export function resolvePreviewDeviceType(input: {
   readonly sessionDeviceType: AuthClientMetadataDeviceType | null | undefined;
   readonly detectedDeviceType: AuthClientMetadataDeviceType | null;
@@ -54,9 +62,24 @@ export function shouldOpenPreviewInNewTab(input: {
   readonly currentSessionCanManageAccess: boolean;
   readonly currentAuthPolicy: ServerAuthPolicy | null;
   readonly currentDeviceType: AuthClientMetadataDeviceType | null;
+  readonly remoteEnvironment?: boolean;
+  readonly activeEnvironmentHttpBaseUrl?: string | null;
+  readonly currentWindowOrigin?: string | null;
 }): boolean {
   if (isMobileOrTabletDeviceType(input.currentDeviceType)) {
     return true;
+  }
+
+  if (input.remoteEnvironment === true) {
+    return false;
+  }
+
+  if (
+    input.activeEnvironmentHttpBaseUrl &&
+    input.currentWindowOrigin &&
+    !isSameOrigin(input.activeEnvironmentHttpBaseUrl, input.currentWindowOrigin)
+  ) {
+    return false;
   }
 
   return !input.currentSessionCanManageAccess && input.currentAuthPolicy === "loopback-browser";

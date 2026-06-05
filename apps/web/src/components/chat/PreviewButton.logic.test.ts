@@ -31,9 +31,37 @@ describe("shouldOpenPreviewInNewTab", () => {
     ).toBe(false);
   });
 
+  it("keeps remote environment previews on the browser-agent flow for desktop clients", () => {
+    expect(
+      shouldOpenPreviewInNewTab({
+        remoteEnvironment: true,
+        activeEnvironmentHttpBaseUrl: "http://100.105.249.97:3773/",
+        currentWindowOrigin: "http://localhost:3773",
+        currentAuthPolicy: "loopback-browser",
+        currentDeviceType: "desktop",
+        currentSessionCanManageAccess: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps remote environment previews on the browser-agent flow when the base URL is unknown", () => {
+    expect(
+      shouldOpenPreviewInNewTab({
+        remoteEnvironment: true,
+        activeEnvironmentHttpBaseUrl: null,
+        currentWindowOrigin: "http://localhost:3773",
+        currentAuthPolicy: "loopback-browser",
+        currentDeviceType: "desktop",
+        currentSessionCanManageAccess: false,
+      }),
+    ).toBe(false);
+  });
+
   it("opens mobile and tablet previews directly without the extension", () => {
     expect(
       shouldOpenPreviewInNewTab({
+        activeEnvironmentHttpBaseUrl: "http://100.105.249.97:3773/",
+        currentWindowOrigin: "http://localhost:3773",
         currentAuthPolicy: "remote-reachable",
         currentDeviceType: "mobile",
         currentSessionCanManageAccess: false,
@@ -41,6 +69,8 @@ describe("shouldOpenPreviewInNewTab", () => {
     ).toBe(true);
     expect(
       shouldOpenPreviewInNewTab({
+        activeEnvironmentHttpBaseUrl: "http://100.105.249.97:3773/",
+        currentWindowOrigin: "http://localhost:3773",
         currentAuthPolicy: "remote-reachable",
         currentDeviceType: "tablet",
         currentSessionCanManageAccess: false,

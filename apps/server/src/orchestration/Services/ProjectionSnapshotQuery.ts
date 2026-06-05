@@ -145,10 +145,15 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
 
   /**
-   * Read a single active thread shell row by id.
+   * Read a single active thread shell row by id. Pass `includeArchived` for
+   * command handlers that need to distinguish archived threads from missing
+   * threads without adding archived rows back to normal navigation snapshots.
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
+    options?: {
+      readonly includeArchived?: boolean;
+    },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**

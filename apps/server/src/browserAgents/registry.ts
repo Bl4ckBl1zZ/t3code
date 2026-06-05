@@ -27,7 +27,7 @@ import {
   BrowserWorkspaceTabId,
   type BrowserWorkspaceTab,
   type BrowserWorkspaceLink,
-  type AuthSessionId,
+  AuthSessionId,
   type BrowserAgentActivateAnnotationInput,
   type BrowserAgentCommandResult,
   type BrowserAgentIncomingCommandResultMessage,
@@ -68,6 +68,7 @@ const DEFAULT_BROWSER_SCREENSHOT_QUALITY = {
   maxHeight: 4096,
   fps: 2,
 } as const;
+export const LOCAL_BROWSER_AGENT_SESSION_ID = AuthSessionId.make("browser-agent-local-control");
 const DEFAULT_BROWSER_CONTEXT_ID = BrowserAgentContextId.make("default");
 let nextEphemeralId = 0;
 
@@ -943,6 +944,8 @@ export class BrowserAgentRegistry {
     options?: {
       readonly sidebarSessionToken?: string;
       readonly preferredSessionId?: AuthSessionId;
+      readonly preferLocalControl?: boolean;
+      readonly allowCrossSessionFallback?: boolean;
     },
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
     const registry = this;
@@ -952,6 +955,12 @@ export class BrowserAgentRegistry {
         threadId: input.threadId,
         ...(input.preferredAgentId ? { preferredAgentId: input.preferredAgentId } : {}),
         ...(options?.preferredSessionId ? { preferredSessionId: options.preferredSessionId } : {}),
+        ...(options?.preferLocalControl !== undefined
+          ? { preferLocalControl: options.preferLocalControl }
+          : {}),
+        ...(options?.allowCrossSessionFallback !== undefined
+          ? { allowCrossSessionFallback: options.allowCrossSessionFallback }
+          : {}),
       });
       yield* registry.requireAgentPrimitive(agent, "preview.openOrFocus");
       const timestamp = nowIso();
@@ -1286,6 +1295,8 @@ export class BrowserAgentRegistry {
     readonly browserContextId?: string | undefined;
     readonly preferredAgentId?: BrowserAgentId;
     readonly preferredSessionId?: AuthSessionId;
+    readonly preferLocalControl?: boolean;
+    readonly allowCrossSessionFallback?: boolean;
   }): Effect.Effect<BrowserAgent, BrowserAgentCommandError, never> {
     const connectedAgents = Array.from(this.agents.values()).filter((agent) => agent.connected);
     if (connectedAgents.length === 0) {
@@ -1310,6 +1321,15 @@ export class BrowserAgentRegistry {
       );
     }
 
+    if (input.preferLocalControl === true) {
+      const localControlMostRecent = connectedAgents
+        .filter((agent) => agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID)
+        .toSorted((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+      if (localControlMostRecent) {
+        return Effect.succeed(localControlMostRecent);
+      }
+    }
+
     const existing = this.workspaceLinks.get(workspaceLinkKey(input));
     if (input.preferredSessionId) {
       if (existing) {
@@ -1327,25 +1347,28 @@ export class BrowserAgentRegistry {
       }
     }
 
-    if (existing) {
-      const linkedAgent = this.agents.get(existing.agentId);
-      if (linkedAgent?.connected) {
-        return Effect.succeed(linkedAgent);
+    if (input.allowCrossSessionFallback !== false) {
+      if (existing) {
+        const linkedAgent = this.agents.get(existing.agentId);
+        if (linkedAgent?.connected) {
+          return Effect.succeed(linkedAgent);
+        }
+      }
+
+      const mostRecent = connectedAgents.toSorted((left, right) =>
+        right.lastSeenAt.localeCompare(left.lastSeenAt),
+      )[0];
+      if (mostRecent) {
+        return Effect.succeed(mostRecent);
       }
     }
 
-    const mostRecent = connectedAgents.toSorted((left, right) =>
-      right.lastSeenAt.localeCompare(left.lastSeenAt),
-    )[0];
-    if (!mostRecent) {
-      return Effect.fail(
-        toCommandError({
-          code: "no-agent-connected",
-          message: "No browser extension local-control session is connected.",
-        }),
-      );
-    }
-    return Effect.succeed(mostRecent);
+    return Effect.fail(
+      toCommandError({
+        code: "no-agent-connected",
+        message: "No browser extension local-control session is connected.",
+      }),
+    );
   }
 
   private sendToAgent(

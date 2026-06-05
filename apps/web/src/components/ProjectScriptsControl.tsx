@@ -7,6 +7,7 @@ import {
   BugIcon,
   ChevronDownIcon,
   FlaskConicalIcon,
+  GlobeIcon,
   HammerIcon,
   ListChecksIcon,
   MonitorUpIcon,
@@ -14,6 +15,7 @@ import {
   PlusIcon,
   SettingsIcon,
   SquareIcon,
+  TerminalSquareIcon,
   WrenchIcon,
 } from "lucide-react";
 import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
@@ -69,8 +71,17 @@ const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string }> = [
   { id: "debug", label: "Debug" },
 ];
 const EMPTY_RUNNING_SCRIPT_IDS = new Set<string>() as ReadonlySet<string>;
+const EMPTY_DETECTED_SCRIPT_URLS = Object.freeze({}) as Readonly<Record<string, string>>;
 const RUNNING_SCRIPT_BUTTON_CLASS_NAME =
   "border-emerald-500/45 bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/18 dark:text-emerald-300";
+const LOCAL_PREVIEW_URL_PATTERN =
+  /(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}(?:[/?#][^\s"'`)]*)?/iu;
+const SCRIPT_SERVER_ICON_CLASS_NAMES = [
+  "text-emerald-500",
+  "text-rose-500",
+  "text-sky-500",
+  "text-amber-500",
+] as const;
 
 function ScriptIcon({
   icon,
@@ -85,6 +96,28 @@ function ScriptIcon({
   if (icon === "build") return <HammerIcon className={className} />;
   if (icon === "debug") return <BugIcon className={className} />;
   return <PlayIcon className={className} />;
+}
+
+function scriptServerIconClassName(scriptId: string): string {
+  let hash = 0;
+  for (let index = 0; index < scriptId.length; index += 1) {
+    hash = (hash * 31 + scriptId.charCodeAt(index)) % SCRIPT_SERVER_ICON_CLASS_NAMES.length;
+  }
+  return SCRIPT_SERVER_ICON_CLASS_NAMES[hash] ?? SCRIPT_SERVER_ICON_CLASS_NAMES[0];
+}
+
+function formatPreviewUrlDetail(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl.startsWith("http") ? rawUrl : `http://${rawUrl}`);
+    const pathname = parsed.pathname === "/" ? "" : parsed.pathname;
+    return `${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}${pathname}`;
+  } catch {
+    return rawUrl;
+  }
+}
+
+function extractPreviewUrlFromCommand(command: string): string | null {
+  return LOCAL_PREVIEW_URL_PATTERN.exec(command)?.[0] ?? null;
 }
 
 export interface NewProjectScriptInput {
@@ -103,10 +136,12 @@ export interface RunProjectScriptOptions {
 interface ProjectScriptsControlProps {
   scripts: ProjectScript[];
   previewUrl: string | null | undefined;
+  detectedDevServerUrlsByScriptId?: Readonly<Record<string, string>>;
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
   runningScriptIds?: ReadonlySet<string>;
   onRunScript: (script: ProjectScript, options?: RunProjectScriptOptions) => void;
+  onViewRunningScript: (script: ProjectScript) => void;
   onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
   onUpdateScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void> | void;
   onDeleteScript: (scriptId: string) => Promise<void> | void;
@@ -116,10 +151,12 @@ interface ProjectScriptsControlProps {
 export default function ProjectScriptsControl({
   scripts,
   previewUrl,
+  detectedDevServerUrlsByScriptId = EMPTY_DETECTED_SCRIPT_URLS,
   keybindings,
   preferredScriptId = null,
   runningScriptIds = EMPTY_RUNNING_SCRIPT_IDS,
   onRunScript,
+  onViewRunningScript,
   onAddScript,
   onUpdateScript,
   onDeleteScript,
@@ -154,7 +191,7 @@ export default function ProjectScriptsControl({
     primaryScriptRunning || pinnedScripts.some((script) => runningScriptIds.has(script.id));
   const isEditing = editingScriptId !== null;
   const dropdownItemClassName =
-    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground data-highlighted:hover:bg-accent data-highlighted:hover:text-accent-foreground data-highlighted:focus-visible:bg-accent data-highlighted:focus-visible:text-accent-foreground";
+    "data-highlighted:bg-accent/60 data-highlighted:text-foreground hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground data-highlighted:hover:bg-accent/70 data-highlighted:hover:text-foreground data-highlighted:focus-visible:bg-accent/70 data-highlighted:focus-visible:text-foreground";
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab") return;
@@ -326,51 +363,88 @@ export default function ProjectScriptsControl({
             <MenuTrigger
               render={
                 <Button
-                  size="icon-xs"
+                  size="xs"
                   variant="outline"
                   className={cn(hasTopBarRunningScript && RUNNING_SCRIPT_BUTTON_CLASS_NAME)}
                   aria-label="Script actions"
                 />
               }
             >
-              <ChevronDownIcon className="size-4" />
+              <PlayIcon className="size-3.5 text-primary" />
+              <span className="ml-0.5">Scripts</span>
+              <ChevronDownIcon className="size-3.5 opacity-70" />
             </MenuTrigger>
-            <MenuPopup align="end">
+            <MenuPopup align="end" className="w-[min(86vw,28rem)]">
               {scripts.map((script) => {
                 const shortcutLabel = shortcutLabelForCommand(
                   keybindings,
                   commandForProjectScript(script.id),
                 );
                 const scriptRunning = runningScriptIds.has(script.id);
+                const detectedDevServerUrl =
+                  detectedDevServerUrlsByScriptId[script.id] ??
+                  (script.id === primaryScript.id ? previewUrl : undefined) ??
+                  extractPreviewUrlFromCommand(script.command);
+                const previewUrlDetail = detectedDevServerUrl
+                  ? formatPreviewUrlDetail(detectedDevServerUrl)
+                  : null;
+                const showScriptDetails = scriptRunning || previewUrlDetail !== null;
+                const actionLabel = scriptRunning ? "View" : "Run";
                 return (
                   <MenuItem
                     key={script.id}
                     className={cn(
-                      "group",
+                      "group grid min-h-11 grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 rounded-md px-3 py-2 text-left sm:min-h-11 sm:py-2",
                       dropdownItemClassName,
-                      scriptRunning && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                      scriptRunning && "bg-accent/25",
                     )}
-                    onClick={() => onRunScript(script)}
+                    onClick={() =>
+                      scriptRunning ? onViewRunningScript(script) : onRunScript(script)
+                    }
                   >
-                    {scriptRunning ? (
-                      <SquareIcon className="size-4 fill-current" />
+                    {previewUrlDetail ? (
+                      <GlobeIcon
+                        className={cn("row-span-2 size-4.5", scriptServerIconClassName(script.id))}
+                      />
                     ) : (
-                      <ScriptIcon icon={script.icon} className="size-4" />
+                      <ScriptIcon
+                        icon={script.icon}
+                        className={cn(
+                          "row-span-2 size-4.5 text-muted-foreground",
+                          scriptRunning && "text-emerald-500",
+                        )}
+                      />
                     )}
-                    <span className="truncate">
+                    <span className="min-w-0 truncate text-sm font-medium text-foreground">
                       {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
                     </span>
-                    <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
+                    <span className="col-start-2 min-w-0 truncate text-xs leading-5 text-muted-foreground empty:hidden">
+                      {showScriptDetails ? script.command : null}
+                    </span>
+                    {previewUrlDetail ? (
+                      <span className="col-start-2 min-w-0 truncate text-xs leading-5 text-muted-foreground">
+                        {previewUrlDetail}
+                      </span>
+                    ) : null}
+                    <span className="col-start-3 row-span-2 row-start-1 flex min-w-16 items-center justify-end gap-2 text-muted-foreground">
                       {shortcutLabel && (
-                        <MenuShortcut className="ms-0 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
+                        <MenuShortcut className="ms-0 hidden transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0 sm:inline">
                           {shortcutLabel}
                         </MenuShortcut>
                       )}
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+                        {scriptRunning ? (
+                          <TerminalSquareIcon className="size-4" />
+                        ) : (
+                          <PlayIcon className="size-4" />
+                        )}
+                        {actionLabel}
+                      </span>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        className="absolute right-0 top-1/2 size-6 -translate-y-1/2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
+                        className="size-6 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
                         aria-label={`Edit ${script.name}`}
                         onPointerDown={(event) => {
                           event.preventDefault();

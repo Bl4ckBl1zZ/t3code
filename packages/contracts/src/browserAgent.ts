@@ -418,6 +418,7 @@ export const BrowserAgentOpenOrFocusPreviewInput = Schema.Struct({
   devServerUrl: TrimmedNonEmptyString,
   repoName: TrimmedNonEmptyString,
   preferredAgentId: Schema.optional(BrowserAgentId),
+  requireLocalControl: Schema.optional(Schema.Boolean),
 });
 export type BrowserAgentOpenOrFocusPreviewInput = typeof BrowserAgentOpenOrFocusPreviewInput.Type;
 

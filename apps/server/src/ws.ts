@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
@@ -136,6 +137,17 @@ const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError)
 const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+function isAlreadyArchivedArchiveDispatchError(
+  command: OrchestrationCommand,
+  error: OrchestrationDispatchCommandError,
+): boolean {
+  return (
+    command.type === "thread.archive" &&
+    error.message.includes("already archived") &&
+    error.message.includes("thread.archive")
+  );
+}
 
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
@@ -915,22 +927,42 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              const shouldStopSessionAfterArchive =
+              const threadBeforeArchive =
                 normalizedCommand.type === "thread.archive"
                   ? yield* projectionSnapshotQuery
-                      .getThreadShellById(normalizedCommand.threadId)
-                      .pipe(
-                        Effect.map(
-                          Option.match({
-                            onNone: () => false,
-                            onSome: (thread) =>
-                              thread.session !== null && thread.session.status !== "stopped",
-                          }),
-                        ),
-                        Effect.orElseSucceed(() => false),
-                      )
-                  : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+                      .getThreadShellById(normalizedCommand.threadId, { includeArchived: true })
+                      .pipe(Effect.orElseSucceed(() => Option.none()))
+                  : Option.none();
+              if (
+                normalizedCommand.type === "thread.archive" &&
+                Option.isSome(threadBeforeArchive) &&
+                threadBeforeArchive.value.archivedAt !== null
+              ) {
+                return yield* projectionSnapshotQuery.getSnapshotSequence().pipe(
+                  Effect.map(({ snapshotSequence }) => ({ sequence: snapshotSequence })),
+                  Effect.orElseSucceed(() => ({ sequence: 0 })),
+                );
+              }
+              const shouldStopSessionAfterArchive =
+                normalizedCommand.type === "thread.archive" &&
+                Option.isSome(threadBeforeArchive) &&
+                threadBeforeArchive.value.session !== null &&
+                threadBeforeArchive.value.session.status !== "stopped";
+              const dispatchResult = yield* Effect.result(
+                dispatchNormalizedCommand(normalizedCommand),
+              );
+              if (Result.isFailure(dispatchResult)) {
+                if (
+                  isAlreadyArchivedArchiveDispatchError(normalizedCommand, dispatchResult.failure)
+                ) {
+                  return yield* projectionSnapshotQuery.getSnapshotSequence().pipe(
+                    Effect.map(({ snapshotSequence }) => ({ sequence: snapshotSequence })),
+                    Effect.orElseSucceed(() => ({ sequence: 0 })),
+                  );
+                }
+                return yield* dispatchResult.failure;
+              }
+              const result = dispatchResult.success;
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -1165,6 +1197,9 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   browserAgentRegistry.openOrFocusPreview(input, {
                     sidebarSessionToken: issued.token,
                     preferredSessionId: currentSessionId,
+                    preferLocalControl:
+                      config.mode === "desktop" || input.requireLocalControl === true,
+                    allowCrossSessionFallback: input.requireLocalControl !== true,
                   }),
                 ),
               ),

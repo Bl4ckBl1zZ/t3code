@@ -219,6 +219,25 @@ describe("resolveBrowserAgentReachablePreviewUrl", () => {
     );
   });
 
+  it("uses the active environment host before desktop advertised endpoints", async () => {
+    installWindow("http://127.0.0.1:3773/", {
+      getAdvertisedEndpoints: () =>
+        Promise.resolve([
+          endpoint({
+            id: "tailscale-ip:100.105.249.96",
+            httpBaseUrl: "http://100.105.249.96:3773/",
+            reachability: "private-network",
+          }),
+        ]),
+    });
+
+    await expect(
+      resolveBrowserAgentReachablePreviewUrl("http://localhost:5173/", {
+        environmentHttpBaseUrl: "http://100.105.249.97:3773/",
+      }),
+    ).resolves.toBe("http://100.105.249.97:5173/");
+  });
+
   it("keeps localhost when only loopback endpoints are available", async () => {
     installWindow("http://127.0.0.1:3773/", {
       getAdvertisedEndpoints: () =>
