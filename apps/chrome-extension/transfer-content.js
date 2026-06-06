@@ -4,6 +4,7 @@ const ANNOTATION_INPUT_CONTAINER_ID = "t3code-browser-agent-annotation-input-con
 const ANNOTATION_INPUT_ID = "t3code-browser-agent-annotation-input";
 const ANNOTATION_MIC_BUTTON_ID = "t3code-browser-agent-annotation-mic";
 const OPEN_SIDE_PANEL_PROMPT_ID = "t3code-browser-agent-open-side-panel-prompt";
+const AGENT_CURSOR_HOST_ID = "t3code-browser-agent-cursor-host";
 const CANCEL_ANNOTATION_MESSAGE_TYPE = "t3code.browserAgent.cancelAnnotation";
 const MAX_AUDIO_TRANSCRIPTION_BYTES = 24 * 1024 * 1024;
 const MAX_AUDIO_TRANSCRIPTION_SIZE_LABEL = "24MB";
@@ -24,6 +25,13 @@ const LOADING_ICON =
 
 let annotationState = null;
 let threadSnapshotRefs = new Map();
+let agentCursorState = {
+  host: null,
+  root: null,
+  hideTimer: null,
+  lastX: null,
+  lastY: null,
+};
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve, reject) => {
@@ -40,6 +48,178 @@ function sendRuntimeMessage(message) {
       resolve(response);
     });
   });
+}
+
+function ensureAgentCursor() {
+  if (agentCursorState.host?.isConnected && agentCursorState.root) {
+    return agentCursorState;
+  }
+
+  document.getElementById(AGENT_CURSOR_HOST_ID)?.remove();
+  const host = document.createElement("div");
+  host.id = AGENT_CURSOR_HOST_ID;
+  const root = host.attachShadow({ mode: "open" });
+  root.innerHTML = `
+    <style>
+      :host {
+        all: initial;
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 0;
+        height: 0;
+        z-index: 2147483647;
+        pointer-events: none;
+      }
+
+      .cursor {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 0;
+        height: 0;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate3d(-200px, -200px, 0);
+        transition:
+          opacity 120ms ease,
+          transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+        will-change: transform, opacity;
+      }
+
+      .cursor[data-visible="true"] {
+        opacity: 1;
+      }
+
+      .pointer {
+        position: absolute;
+        left: -3px;
+        top: -3px;
+        width: 44px;
+        height: 44px;
+        color: #2563eb;
+        filter:
+          drop-shadow(0 2px 3px rgba(0, 0, 0, 0.55))
+          drop-shadow(0 0 0.5px rgba(255, 255, 255, 0.95));
+      }
+
+      .ring {
+        position: absolute;
+        left: -18px;
+        top: -18px;
+        width: 40px;
+        height: 40px;
+        border: 4px solid rgba(37, 99, 235, 0.95);
+        border-radius: 999px;
+        opacity: 0;
+        transform: scale(0.5);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+      }
+    </style>
+    <div class="cursor" part="cursor">
+      <span class="ring" part="ring"></span>
+      <svg class="pointer" viewBox="0 0 32 32" aria-hidden="true">
+        <path
+          fill="currentColor"
+          stroke="white"
+          stroke-width="2.4"
+          stroke-linejoin="round"
+          d="M4 3.5 24.5 18.6 15.7 20.1 20.4 29.2 15.3 31 10.8 21.9 4.9 28.4 4 3.5Z"
+        ></path>
+      </svg>
+    </div>
+  `;
+  (document.documentElement || document.body).append(host);
+  agentCursorState = {
+    host,
+    root,
+    hideTimer: null,
+    lastX: agentCursorState.lastX,
+    lastY: agentCursorState.lastY,
+  };
+  return agentCursorState;
+}
+
+function keepAgentCursorVisible(state) {
+  if (state.hideTimer !== null) {
+    window.clearTimeout(state.hideTimer);
+    state.hideTimer = null;
+  }
+}
+
+function pulseAgentCursor() {
+  const ring = ensureAgentCursor().root?.querySelector(".ring");
+  if (!(ring instanceof HTMLElement)) {
+    return;
+  }
+  ring.getAnimations().forEach((animation) => animation.cancel());
+  ring.animate(
+    [
+      { opacity: 0.95, transform: "scale(0.45)" },
+      { opacity: 0.55, transform: "scale(1.05)", offset: 0.45 },
+      { opacity: 0, transform: "scale(1.45)" },
+    ],
+    {
+      duration: 430,
+      easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+    },
+  );
+}
+
+function showAgentCursorAt(clientX, clientY, options = {}) {
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return;
+  }
+  const state = ensureAgentCursor();
+  keepAgentCursorVisible(state);
+  const cursor = state.root?.querySelector(".cursor");
+  if (!(cursor instanceof HTMLElement)) {
+    return;
+  }
+  const x = Math.max(0, Math.min(window.innerWidth, clientX));
+  const y = Math.max(0, Math.min(window.innerHeight, clientY));
+  if (state.lastX === null || state.lastY === null) {
+    cursor.style.transitionDuration = "120ms, 0ms";
+    window.requestAnimationFrame(() => {
+      cursor.style.transitionDuration = "";
+    });
+  }
+  cursor.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  cursor.setAttribute("data-visible", "true");
+  state.lastX = x;
+  state.lastY = y;
+  if (options.pulse === true) {
+    pulseAgentCursor();
+  }
+}
+
+function clientPointFromInput(input, target = null, options = {}) {
+  const scale = options.devicePixelCoordinates === true ? window.devicePixelRatio || 1 : 1;
+  if (typeof input?.x === "number" && typeof input?.y === "number") {
+    return {
+      clientX: input.x / scale,
+      clientY: input.y / scale,
+    };
+  }
+  if (target instanceof Element) {
+    const rect = target.getBoundingClientRect();
+    return {
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    };
+  }
+  return {
+    clientX: window.innerWidth / 2,
+    clientY: window.innerHeight / 2,
+  };
+}
+
+function showAgentCursorForInput(input, target = null, options = {}) {
+  const point = clientPointFromInput(input, target, {
+    devicePixelCoordinates: options.devicePixelCoordinates === true,
+  });
+  const pulse = options.pulse === true || input?.type === "click" || input?.type === "double-click";
+  showAgentCursorAt(point.clientX, point.clientY, { pulse });
 }
 
 function getPreferredAudioRecordingOptions() {
@@ -952,6 +1132,9 @@ function dispatchMouseSequence(element, input, clickCount = 1) {
 
 function handleThreadTabInput(input) {
   if (input?.type === "scroll") {
+    showAgentCursorForInput(input, null, {
+      devicePixelCoordinates: true,
+    });
     window.scrollBy({
       left: input.deltaX,
       top: input.deltaY,
@@ -966,23 +1149,36 @@ function handleThreadTabInput(input) {
   }
 
   if (input.type === "click" || input.type === "double-click") {
+    showAgentCursorForInput(input, target, {
+      devicePixelCoordinates: true,
+      pulse: true,
+    });
     dispatchMouseSequence(target, input, input.type === "double-click" ? 2 : 1);
     return { ok: true };
   }
 
   if (input.type === "type") {
+    showAgentCursorForInput(input, target, {
+      devicePixelCoordinates: true,
+    });
     target.focus?.();
     insertTextIntoElement(target, input.text);
     return { ok: true };
   }
 
   if (input.type === "fill") {
+    showAgentCursorForInput(input, target, {
+      devicePixelCoordinates: true,
+    });
     target.focus?.();
     fillTextIntoElement(target, input.text);
     return { ok: true };
   }
 
   if (input.type === "key") {
+    showAgentCursorForInput(input, target, {
+      devicePixelCoordinates: true,
+    });
     target.focus?.();
     target.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: input.key }),
@@ -1033,6 +1229,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return respond(buildThreadTabSnapshot);
     case "t3code.browserAgent.threadTabInput":
       return respond(() => handleThreadTabInput(message.input));
+    case "t3code.browserAgent.showAgentCursor":
+      return respond(() => {
+        showAgentCursorForInput(
+          {
+            type: message.interaction ?? "move",
+            x: message.x,
+            y: message.y,
+          },
+          null,
+          {
+            pulse: message.interaction === "click" || message.interaction === "double-click",
+          },
+        );
+        return { ok: true };
+      });
     default:
       return false;
   }

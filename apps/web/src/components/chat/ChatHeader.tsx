@@ -1,10 +1,8 @@
 import {
-  type AuthClientMetadataDeviceType,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
-  type ServerAuthPolicy,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime";
@@ -24,7 +22,6 @@ import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { PreviewButton } from "./PreviewButton";
 import { BrowserAnnotationButton } from "./BrowserAnnotationButton";
-import { detectBrowserDeviceType, resolvePreviewDeviceType } from "./PreviewButton.logic";
 import {
   fetchSessionState,
   isBrowserAgentSidebarMode,
@@ -150,16 +147,9 @@ export const ChatHeader = memo(function ChatHeader({
   const [currentSessionCanManageAccess, setCurrentSessionCanManageAccess] = useState(() =>
     Boolean(typeof window !== "undefined" && window.desktopBridge),
   );
-  const [currentAuthPolicy, setCurrentAuthPolicy] = useState<ServerAuthPolicy | null>(null);
-  const [currentDeviceType, setCurrentDeviceType] = useState<AuthClientMetadataDeviceType | null>(
-    () =>
-      typeof window !== "undefined" && window.desktopBridge ? "desktop" : detectBrowserDeviceType(),
-  );
   useEffect(() => {
     if (typeof window !== "undefined" && window.desktopBridge) {
       setCurrentSessionCanManageAccess(true);
-      setCurrentAuthPolicy(null);
-      setCurrentDeviceType("desktop");
       return;
     }
 
@@ -170,19 +160,10 @@ export const ChatHeader = memo(function ChatHeader({
         setCurrentSessionCanManageAccess(
           session.authenticated ? (session.scopes?.includes("access:write") ?? false) : false,
         );
-        setCurrentAuthPolicy(session.auth.policy);
-        setCurrentDeviceType(
-          resolvePreviewDeviceType({
-            detectedDeviceType: detectBrowserDeviceType(),
-            sessionDeviceType: session.authenticated ? session.client?.deviceType : null,
-          }),
-        );
       })
       .catch(() => {
         if (cancelled) return;
         setCurrentSessionCanManageAccess(false);
-        setCurrentAuthPolicy(null);
-        setCurrentDeviceType(detectBrowserDeviceType());
       });
 
     return () => {
@@ -285,12 +266,8 @@ export const ChatHeader = memo(function ChatHeader({
                 activeProjectScripts={activeProjectScripts}
                 projectPreviewUrl={projectPreviewUrl}
                 activeThreadEnvironmentId={activeThreadEnvironmentId}
-                primaryEnvironmentId={primaryEnvironmentId}
                 activeThreadId={activeThreadId}
                 detectedDevServerUrl={detectedDevServerUrl}
-                currentSessionCanManageAccess={currentSessionCanManageAccess}
-                currentAuthPolicy={currentAuthPolicy}
-                currentDeviceType={currentDeviceType}
               />
             )}
             {showTerminalToggle && (

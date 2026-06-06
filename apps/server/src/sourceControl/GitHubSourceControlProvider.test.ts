@@ -114,6 +114,32 @@ it.effect("marks GitHub PRs ready for review through provider-neutral input name
   }),
 );
 
+it.effect("merges GitHub PRs through provider-neutral input names", () =>
+  Effect.gen(function* () {
+    let mergeInput: Parameters<GitHubCli.GitHubCliShape["mergePullRequest"]>[0] | null = null;
+    const provider = yield* makeProvider({
+      mergePullRequest: (input) => {
+        mergeInput = input;
+        return Effect.void;
+      },
+    });
+
+    if (!provider.mergeChangeRequest) {
+      assert.fail("Expected GitHub provider to support merging PRs");
+    }
+
+    yield* provider.mergeChangeRequest({
+      cwd: "/repo",
+      reference: "42",
+    });
+
+    assert.deepStrictEqual(mergeInput, {
+      cwd: "/repo",
+      reference: "42",
+    });
+  }),
+);
+
 it.effect("uses gh json listing for non-open change request state queries", () =>
   Effect.gen(function* () {
     let executeArgs: ReadonlyArray<string> = [];

@@ -1,8 +1,10 @@
 import type {
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceConfig,
   ProviderInstanceId,
   ServerSettings,
+  ThreadId,
   UnifiedSettings,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -88,4 +90,131 @@ export function buildProviderInstanceUpdatePatch(input: {
       ? { textGenerationModelSelection: input.textGenerationModelSelection }
       : {}),
   };
+}
+
+export type ArchivedWorktreeCleanupThread = {
+  readonly environmentId: EnvironmentId;
+  readonly id: ThreadId;
+  readonly projectCwd: string;
+  readonly worktreePath: string | null;
+};
+
+export type RetainedWorktreeThread = {
+  readonly environmentId: EnvironmentId;
+  readonly id: ThreadId;
+  readonly worktreePath: string | null;
+};
+
+export type ArchivedWorktreeCleanupTarget = {
+  readonly environmentId: EnvironmentId;
+  readonly projectCwd: string;
+  readonly worktreePath: string;
+};
+
+export type ListedWorktreeCleanupCandidate = {
+  readonly environmentId: EnvironmentId;
+  readonly projectCwd: string;
+  readonly path: string;
+  readonly refName: string | null;
+  readonly isMain: boolean;
+};
+
+export type UnlinkedWorktreeCleanupTarget = {
+  readonly environmentId: EnvironmentId;
+  readonly projectCwd: string;
+  readonly path: string;
+  readonly refName: string | null;
+};
+
+function normalizeWorktreePath(worktreePath: string | null): string | null {
+  const trimmed = worktreePath?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function worktreeUsageKey(environmentId: EnvironmentId, worktreePath: string): string {
+  return `${environmentId}\u001f${worktreePath}`;
+}
+
+function threadKey(environmentId: EnvironmentId, threadId: ThreadId): string {
+  return `${environmentId}\u001f${threadId}`;
+}
+
+export function collectArchivedWorktreeCleanupTargets(input: {
+  readonly archivedThreads: ReadonlyArray<ArchivedWorktreeCleanupThread>;
+  readonly deletedArchivedThreads: ReadonlyArray<ArchivedWorktreeCleanupThread>;
+  readonly retainedThreads: ReadonlyArray<RetainedWorktreeThread>;
+}): ReadonlyArray<ArchivedWorktreeCleanupTarget> {
+  const deletedThreadKeys = new Set(
+    input.deletedArchivedThreads.map((thread) => threadKey(thread.environmentId, thread.id)),
+  );
+  const retainedWorktreeKeys = new Set<string>();
+
+  for (const thread of input.retainedThreads) {
+    const worktreePath = normalizeWorktreePath(thread.worktreePath);
+    if (worktreePath) {
+      retainedWorktreeKeys.add(worktreeUsageKey(thread.environmentId, worktreePath));
+    }
+  }
+
+  for (const thread of input.archivedThreads) {
+    if (deletedThreadKeys.has(threadKey(thread.environmentId, thread.id))) {
+      continue;
+    }
+    const worktreePath = normalizeWorktreePath(thread.worktreePath);
+    if (worktreePath) {
+      retainedWorktreeKeys.add(worktreeUsageKey(thread.environmentId, worktreePath));
+    }
+  }
+
+  const cleanupTargets = new Map<string, ArchivedWorktreeCleanupTarget>();
+  for (const thread of input.deletedArchivedThreads) {
+    const worktreePath = normalizeWorktreePath(thread.worktreePath);
+    if (!worktreePath) {
+      continue;
+    }
+    const key = worktreeUsageKey(thread.environmentId, worktreePath);
+    if (retainedWorktreeKeys.has(key) || cleanupTargets.has(key)) {
+      continue;
+    }
+    cleanupTargets.set(key, {
+      environmentId: thread.environmentId,
+      projectCwd: thread.projectCwd,
+      worktreePath,
+    });
+  }
+
+  return Array.from(cleanupTargets.values());
+}
+
+export function collectUnlinkedWorktreeCleanupTargets(input: {
+  readonly worktrees: ReadonlyArray<ListedWorktreeCleanupCandidate>;
+  readonly activeThreads: ReadonlyArray<RetainedWorktreeThread>;
+}): ReadonlyArray<UnlinkedWorktreeCleanupTarget> {
+  const activeWorktreeKeys = new Set<string>();
+  for (const thread of input.activeThreads) {
+    const worktreePath = normalizeWorktreePath(thread.worktreePath);
+    if (worktreePath) {
+      activeWorktreeKeys.add(worktreeUsageKey(thread.environmentId, worktreePath));
+    }
+  }
+
+  const cleanupTargets = new Map<string, UnlinkedWorktreeCleanupTarget>();
+  for (const worktree of input.worktrees) {
+    const worktreePath = normalizeWorktreePath(worktree.path);
+    if (!worktreePath || worktree.isMain) {
+      continue;
+    }
+    const key = worktreeUsageKey(worktree.environmentId, worktreePath);
+    if (activeWorktreeKeys.has(key) || cleanupTargets.has(key)) {
+      continue;
+    }
+    cleanupTargets.set(key, {
+      environmentId: worktree.environmentId,
+      projectCwd: worktree.projectCwd,
+      path: worktreePath,
+      refName: worktree.refName,
+    });
+  }
+
+  return Array.from(cleanupTargets.values());
 }

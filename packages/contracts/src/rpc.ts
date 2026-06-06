@@ -23,6 +23,7 @@ import {
   BrowserAgentOpenOrFocusThreadTabInput,
   BrowserAgentRuntimeCommandInput,
   BrowserAgentSetThreadTabControlInput,
+  BrowserAgentSessionResult,
   BrowserAgentStartThreadTabCaptureInput,
   BrowserAgentStreamEvent,
   BrowserAgentThreadLinkInput,
@@ -82,6 +83,8 @@ import {
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
+  VcsListWorktreesInput,
+  VcsListWorktreesResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -158,6 +161,12 @@ import {
   ProviderSlashCommandsListError,
   ProviderSlashCommandsListInput,
   ProviderSlashCommandsListResult,
+  ServerSkillDeleteInput,
+  ServerSkillManagementError,
+  ServerSkillReadInput,
+  ServerSkillReadResult,
+  ServerSkillSetEnabledInput,
+  ServerSkillUpsertInput,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -216,6 +225,7 @@ export const WS_METHODS = {
   vcsSyncBase: "vcs.syncBase",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
+  vcsListWorktrees: "vcs.listWorktrees",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
@@ -227,6 +237,7 @@ export const WS_METHODS = {
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
   gitMarkPullRequestReadyForReview: "git.markPullRequestReadyForReview",
+  gitMergePullRequest: "git.mergePullRequest",
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
@@ -250,6 +261,10 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverSkillUpsert: "server.skill.upsert",
+  serverSkillRead: "server.skill.read",
+  serverSkillSetEnabled: "server.skill.setEnabled",
+  serverSkillDelete: "server.skill.delete",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -271,6 +286,7 @@ export const WS_METHODS = {
 
   // Browser agent methods
   browserAgentsList: "browserAgents.list",
+  browserAgentsIssueSession: "browserAgents.session.issue",
   browserAgentsOpenOrFocusPreview: "browserAgents.openOrFocusPreview",
   browserAgentsActivateAnnotation: "browserAgents.activateAnnotation",
   browserAgentsOpenOrFocusThreadTab: "browserAgents.threadTab.openOrFocus",
@@ -356,6 +372,30 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerSkillUpsertRpc = Rpc.make(WS_METHODS.serverSkillUpsert, {
+  payload: ServerSkillUpsertInput,
+  success: ServerProviderUpdatedPayload,
+  error: Schema.Union([ServerSkillManagementError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerSkillReadRpc = Rpc.make(WS_METHODS.serverSkillRead, {
+  payload: ServerSkillReadInput,
+  success: ServerSkillReadResult,
+  error: Schema.Union([ServerSkillManagementError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerSkillSetEnabledRpc = Rpc.make(WS_METHODS.serverSkillSetEnabled, {
+  payload: ServerSkillSetEnabledInput,
+  success: ServerProviderUpdatedPayload,
+  error: Schema.Union([ServerSkillManagementError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerSkillDeleteRpc = Rpc.make(WS_METHODS.serverSkillDelete, {
+  payload: ServerSkillDeleteInput,
+  success: ServerProviderUpdatedPayload,
+  error: Schema.Union([ServerSkillManagementError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -444,6 +484,12 @@ export const WsBrowserAgentsListRpc = Rpc.make(WS_METHODS.browserAgentsList, {
   payload: Schema.Struct({}),
   success: BrowserAgentListResult,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsBrowserAgentsIssueSessionRpc = Rpc.make(WS_METHODS.browserAgentsIssueSession, {
+  payload: Schema.Struct({}),
+  success: BrowserAgentSessionResult,
+  error: Schema.Union([BrowserAgentCommandError, EnvironmentAuthorizationError]),
 });
 
 export const WsBrowserAgentsOpenOrFocusPreviewRpc = Rpc.make(
@@ -756,9 +802,20 @@ export const WsGitMarkPullRequestReadyForReviewRpc = Rpc.make(
   },
 );
 
+export const WsGitMergePullRequestRpc = Rpc.make(WS_METHODS.gitMergePullRequest, {
+  payload: GitPullRequestRefInput,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsListWorktreesRpc = Rpc.make(WS_METHODS.vcsListWorktrees, {
+  payload: VcsListWorktreesInput,
+  success: VcsListWorktreesResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
@@ -971,6 +1028,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerSkillUpsertRpc,
+  WsServerSkillReadRpc,
+  WsServerSkillSetEnabledRpc,
+  WsServerSkillDeleteRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
@@ -984,6 +1045,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsBrowserAgentsListRpc,
+  WsBrowserAgentsIssueSessionRpc,
   WsBrowserAgentsOpenOrFocusPreviewRpc,
   WsBrowserAgentsActivateAnnotationRpc,
   WsBrowserAgentsOpenOrFocusThreadTabRpc,
@@ -1028,7 +1090,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsGitMarkPullRequestReadyForReviewRpc,
+  WsGitMergePullRequestRpc,
   WsVcsListRefsRpc,
+  WsVcsListWorktreesRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,

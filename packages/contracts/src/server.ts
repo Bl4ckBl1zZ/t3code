@@ -110,6 +110,60 @@ export const ServerProviderSkill = Schema.Struct({
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
 
+export const ServerSkillName = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9_-]*$/),
+);
+export type ServerSkillName = typeof ServerSkillName.Type;
+
+export const ServerSkillUpsertInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  name: ServerSkillName,
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  description: TrimmedNonEmptyString,
+  shortDescription: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.String.check(Schema.isMaxLength(50_000)),
+  overwrite: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type ServerSkillUpsertInput = typeof ServerSkillUpsertInput.Type;
+
+export const ServerSkillReadInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  path: TrimmedNonEmptyString,
+});
+export type ServerSkillReadInput = typeof ServerSkillReadInput.Type;
+
+export const ServerSkillReadResult = Schema.Struct({
+  contents: Schema.String,
+});
+export type ServerSkillReadResult = typeof ServerSkillReadResult.Type;
+
+export const ServerSkillSetEnabledInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  path: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+});
+export type ServerSkillSetEnabledInput = typeof ServerSkillSetEnabledInput.Type;
+
+export const ServerSkillDeleteInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  path: TrimmedNonEmptyString,
+});
+export type ServerSkillDeleteInput = typeof ServerSkillDeleteInput.Type;
+
+export class ServerSkillManagementError extends Schema.TaggedErrorClass<ServerSkillManagementError>()(
+  "ServerSkillManagementError",
+  {
+    instanceId: ProviderInstanceId,
+    detail: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Skill management failed for ${this.instanceId}: ${this.detail}`;
+  }
+}
+
 /**
  * Availability of a configured provider instance from the runtime's POV.
  *

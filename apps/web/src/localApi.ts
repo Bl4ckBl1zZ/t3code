@@ -143,6 +143,22 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.updateSettings(patch)
           : Promise.reject(unavailableLocalBackendError()),
+      upsertSkill: (input) =>
+        rpcClient
+          ? rpcClient.server.upsertSkill(input)
+          : Promise.reject(unavailableLocalBackendError()),
+      readSkill: (input) =>
+        rpcClient
+          ? rpcClient.server.readSkill(input)
+          : Promise.reject(unavailableLocalBackendError()),
+      setSkillEnabled: (input) =>
+        rpcClient
+          ? rpcClient.server.setSkillEnabled(input)
+          : Promise.reject(unavailableLocalBackendError()),
+      deleteSkill: (input) =>
+        rpcClient
+          ? rpcClient.server.deleteSkill(input)
+          : Promise.reject(unavailableLocalBackendError()),
       discoverSourceControl: () =>
         rpcClient
           ? rpcClient.server.discoverSourceControl()

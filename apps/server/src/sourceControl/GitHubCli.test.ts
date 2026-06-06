@@ -133,6 +133,27 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("merges pull requests without an interactive prompt", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+
+      const gh = yield* GitHubCli.GitHubCli;
+      yield* gh.mergePullRequest({
+        cwd: "/repo",
+        repository: "Bl4ckBl1zZ/t3code",
+        reference: "42",
+      });
+
+      expect(mockRun).toHaveBeenCalledWith({
+        operation: "GitHubCli.execute",
+        command: "gh",
+        args: ["pr", "merge", "42", "--merge", "--repo", "Bl4ckBl1zZ/t3code"],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("preserves GitHub merge policy states over conflict-only mergeability", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(

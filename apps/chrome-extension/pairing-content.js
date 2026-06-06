@@ -5,6 +5,23 @@ const AUTO_CONNECT_RESULT_TYPE = "t3code.browserAgent.autoConnect.result";
 const PAIR_RUNTIME_MESSAGE_TYPE = "t3code.browserAgent.pair";
 const AUTO_CONNECT_RUNTIME_MESSAGE_TYPE = "t3code.browserAgent.autoConnectNow";
 const AUTO_PAIR_PATH = "/browser-agent/auto-pair";
+const BROWSER_AGENT_SESSION_PATH = "/browser-agent/session";
+const PAIRING_CONTENT_RUNTIME_KEY = "__t3codeBrowserAgentPairingContent";
+
+globalThis[PAIRING_CONTENT_RUNTIME_KEY]?.dispose?.();
+const listenerDisposers = [];
+globalThis[PAIRING_CONTENT_RUNTIME_KEY] = {
+  dispose() {
+    while (listenerDisposers.length > 0) {
+      listenerDisposers.pop()?.();
+    }
+  },
+};
+
+function addWindowMessageListener(listener) {
+  window.addEventListener("message", listener);
+  listenerDisposers.push(() => window.removeEventListener("message", listener));
+}
 
 function parseAutoPairUrl() {
   const url = new URL(window.location.href);
@@ -18,13 +35,23 @@ function parseAutoPairUrl() {
     hashParams.get("t3BrowserAgentCredential") ??
     url.searchParams.get("t3BrowserAgentCredential") ??
     "";
-  if (!sameOrigin(url.origin, baseUrl) || !credential.trim()) {
+  const sessionToken =
+    hashParams.get("t3BrowserAgentSessionToken") ??
+    url.searchParams.get("t3BrowserAgentSessionToken") ??
+    "";
+  const useBrowserSession = url.searchParams.get("t3BrowserAgentUseBrowserSession") === "1";
+  if (!sameOrigin(url.origin, baseUrl)) {
+    return null;
+  }
+  if (!credential.trim() && !sessionToken.trim() && !useBrowserSession) {
     return null;
   }
 
   return {
     baseUrl,
-    credential,
+    credential: credential.trim() || null,
+    sessionToken: sessionToken.trim() || null,
+    useBrowserSession,
     closeTabAfterPair: url.searchParams.get("t3BrowserAgentClose") === "1",
   };
 }
@@ -94,11 +121,40 @@ function scrubPairingParams() {
   const url = new URL(window.location.href);
   url.searchParams.delete("t3BrowserAgentPair");
   url.searchParams.delete("t3BrowserAgentBaseUrl");
+  url.searchParams.delete("t3BrowserAgentUseBrowserSession");
   url.searchParams.delete("t3BrowserAgentSessionToken");
   url.searchParams.delete("t3BrowserAgentCredential");
   url.searchParams.delete("t3BrowserAgentClose");
   url.hash = "";
   window.history.replaceState(null, document.title, url.toString());
+}
+
+async function fetchBrowserAgentSession(baseUrl) {
+  const response = await fetch(new URL(BROWSER_AGENT_SESSION_PATH, baseUrl), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      accept: "application/json",
+    },
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      body?.message ??
+        body?.error ??
+        `Could not prepare a browser-agent session (${response.status}).`,
+    );
+  }
+  if (typeof body?.sessionToken !== "string" || body.sessionToken.length === 0) {
+    throw new Error("The backend did not return a browser-agent session token.");
+  }
+  if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+    throw new Error("The backend did not return a browser-agent session id.");
+  }
+  return {
+    sessionId: body.sessionId,
+    sessionToken: body.sessionToken,
+  };
 }
 
 function renderStatus(title, body) {
@@ -150,10 +206,18 @@ async function pairFromUrl() {
 
   scrubPairingParams();
   renderStatus("Pairing T3 Code Browser Agent", "Keep this tab open for a moment.");
+  const browserAgentSession = pairing.useBrowserSession
+    ? await fetchBrowserAgentSession(pairing.baseUrl)
+    : pairing.sessionToken
+      ? { sessionToken: pairing.sessionToken }
+      : null;
   const response = await sendRuntimeMessage({
     type: PAIR_RUNTIME_MESSAGE_TYPE,
     baseUrl: pairing.baseUrl,
-    credential: pairing.credential,
+    ...(pairing.credential ? { credential: pairing.credential } : {}),
+    ...(browserAgentSession?.sessionToken
+      ? { sessionToken: browserAgentSession.sessionToken }
+      : {}),
     closeTabAfterPair: pairing.closeTabAfterPair,
   });
 
@@ -168,7 +232,7 @@ async function pairFromUrl() {
   renderStatus("Browser paired", "Returning to T3 Code.");
 }
 
-window.addEventListener("message", (event) => {
+addWindowMessageListener((event) => {
   if (event.source !== window) {
     return;
   }
@@ -191,18 +255,35 @@ window.addEventListener("message", (event) => {
     return;
   }
 
-  void sendRuntimeMessage({
-    type: PAIR_RUNTIME_MESSAGE_TYPE,
-    baseUrl: data.baseUrl,
-    credential: data.credential,
-  })
+  void Promise.resolve()
+    .then(async () => {
+      const browserAgentSession =
+        data.useBrowserSession === true
+          ? await fetchBrowserAgentSession(data.baseUrl)
+          : typeof data.sessionToken === "string"
+            ? { sessionToken: data.sessionToken }
+            : null;
+      const response = await sendRuntimeMessage({
+        type: PAIR_RUNTIME_MESSAGE_TYPE,
+        baseUrl: data.baseUrl,
+        ...(typeof data.credential === "string" ? { credential: data.credential } : {}),
+        ...(browserAgentSession?.sessionToken
+          ? { sessionToken: browserAgentSession.sessionToken }
+          : {}),
+      });
+      return {
+        response,
+        sessionId: browserAgentSession?.sessionId,
+      };
+    })
     .then((response) => {
       window.postMessage(
         {
           type: AUTO_PAIR_RESULT_TYPE,
           requestId: data.requestId,
-          ok: response?.ok === true,
-          ...(response?.error ? { error: response.error } : {}),
+          ok: response.response?.ok === true,
+          ...(response.sessionId ? { sessionId: response.sessionId } : {}),
+          ...(response.response?.error ? { error: response.response.error } : {}),
         },
         window.location.origin,
       );
@@ -220,7 +301,7 @@ window.addEventListener("message", (event) => {
     });
 });
 
-window.addEventListener("message", (event) => {
+addWindowMessageListener((event) => {
   if (event.source !== window) {
     return;
   }

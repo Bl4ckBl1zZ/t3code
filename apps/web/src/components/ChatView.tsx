@@ -63,7 +63,7 @@ import {
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
-import { normalizeBrowserAgentPreviewUrl } from "../browserAgents";
+import { normalizePreviewUrl } from "../previewUrls";
 import {
   deriveCompletionDividerBeforeEntryId,
   derivePendingApprovals,
@@ -3105,7 +3105,7 @@ export default function ChatView(props: ChatViewProps) {
       const api = readEnvironmentApi(environmentId);
       if (!api) return;
 
-      const normalizedPreviewUrl = normalizeBrowserAgentPreviewUrl(rawPreviewUrl);
+      const normalizedPreviewUrl = normalizePreviewUrl(rawPreviewUrl);
       const nextBrowserPreviewUrl =
         normalizedPreviewUrl.trim().length > 0 ? normalizedPreviewUrl : null;
 

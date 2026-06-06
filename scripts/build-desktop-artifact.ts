@@ -774,6 +774,87 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   }
 });
 
+function isMacDirTargetContainer(entry: string): boolean {
+  return entry === "mac" || entry.startsWith("mac-");
+}
+
+const copyDesktopBuildArtifactPath = Effect.fn("copyDesktopBuildArtifactPath")(function* (input: {
+  readonly from: string;
+  readonly to: string;
+  readonly type: "File" | "Directory";
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  if (input.type === "File") {
+    yield* fs.copyFile(input.from, input.to);
+    return;
+  }
+
+  if (process.platform === "darwin") {
+    yield* runCommand(ChildProcess.make("ditto", [input.from, input.to]), {
+      label: `ditto ${input.from} ${input.to}`,
+      verbose: false,
+    });
+    return;
+  }
+
+  yield* fs.copy(input.from, input.to);
+});
+
+export const copyDesktopBuildArtifacts = Effect.fn("copyDesktopBuildArtifacts")(function* (input: {
+  readonly stageDistDir: string;
+  readonly outputDir: string;
+}) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const stageEntries = yield* fs.readDirectory(input.stageDistDir);
+  yield* fs.makeDirectory(input.outputDir, { recursive: true });
+
+  const copiedArtifacts: string[] = [];
+  for (const entry of stageEntries) {
+    const from = path.join(input.stageDistDir, entry);
+    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
+    if (!stat || (stat.type !== "File" && stat.type !== "Directory")) continue;
+
+    if (stat.type === "Directory" && isMacDirTargetContainer(entry)) {
+      const nestedEntries = yield* fs.readDirectory(from).pipe(Effect.orElseSucceed(() => []));
+      const nestedAppEntries: string[] = [];
+      for (const nestedEntry of nestedEntries) {
+        if (!nestedEntry.endsWith(".app")) continue;
+        const nestedFrom = path.join(from, nestedEntry);
+        const nestedStat = yield* fs.stat(nestedFrom).pipe(Effect.orElseSucceed(() => null));
+        if (nestedStat?.type === "Directory") {
+          nestedAppEntries.push(nestedEntry);
+        }
+      }
+
+      if (nestedAppEntries.length > 0) {
+        yield* fs
+          .remove(path.join(input.outputDir, entry), { recursive: true, force: true })
+          .pipe(Effect.ignore);
+        for (const nestedEntry of nestedAppEntries) {
+          const nestedFrom = path.join(from, nestedEntry);
+          const nestedTo = path.join(input.outputDir, nestedEntry);
+          yield* fs.remove(nestedTo, { recursive: true, force: true }).pipe(Effect.ignore);
+          yield* copyDesktopBuildArtifactPath({
+            from: nestedFrom,
+            to: nestedTo,
+            type: "Directory",
+          });
+          copiedArtifacts.push(nestedTo);
+        }
+        continue;
+      }
+    }
+
+    const to = path.join(input.outputDir, entry);
+    yield* fs.remove(to, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* copyDesktopBuildArtifactPath({ from, to, type: stat.type });
+    copiedArtifacts.push(to);
+  }
+
+  return copiedArtifacts;
+});
+
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -998,19 +1079,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  const stageEntries = yield* fs.readDirectory(stageDistDir);
-  yield* fs.makeDirectory(options.outputDir, { recursive: true });
-
-  const copiedArtifacts: string[] = [];
-  for (const entry of stageEntries) {
-    const from = path.join(stageDistDir, entry);
-    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
-
-    const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
-    copiedArtifacts.push(to);
-  }
+  const copiedArtifacts = yield* copyDesktopBuildArtifacts({
+    stageDistDir,
+    outputDir: options.outputDir,
+  });
 
   if (copiedArtifacts.length === 0) {
     return yield* new BuildScriptError({

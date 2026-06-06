@@ -145,6 +145,7 @@ function browserToolArguments(data: Record<string, unknown> | undefined): Record
 
 export type BrowserToolActivityAction =
   | "open"
+  | "close"
   | "navigate"
   | "snapshot"
   | "click"
@@ -210,6 +211,8 @@ function browserToolPresentation(
   switch (toolName) {
     case "browser_open_tab":
       return output("Opened browser tab", "open");
+    case "browser_close_tab":
+      return output("Closed browser tab", "close");
     case "browser_navigate":
       return output("Navigated browser", "navigate");
     case "browser_back":

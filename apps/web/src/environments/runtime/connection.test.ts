@@ -91,6 +91,7 @@ function createTestClient(config?: { readonly emitInitialSnapshot?: boolean }) {
       resolvePullRequest: vi.fn(async () => undefined),
       preparePullRequestThread: vi.fn(async () => undefined),
       markPullRequestReadyForReview: vi.fn(async () => undefined),
+      mergePullRequest: vi.fn(async () => undefined),
     },
     review: {
       getDiffPreview: vi.fn(async () => undefined),

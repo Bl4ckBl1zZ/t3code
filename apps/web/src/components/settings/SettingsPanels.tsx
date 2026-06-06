@@ -1,7 +1,14 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  LoaderIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
@@ -45,11 +52,19 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
+import { readEnvironmentApi } from "../../environmentApi";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { useShallow } from "zustand/react/shallow";
-import { selectProjectsAcrossEnvironments, useStore } from "../../store";
+import {
+  selectProjectsAcrossEnvironments,
+  selectThreadsAcrossEnvironments,
+  useStore,
+} from "../../store";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { invalidateSourceControlState } from "../../lib/sourceControlActions";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
+import { cn, newCommandId } from "../../lib/utils";
+import { formatWorktreePathForDisplay } from "../../worktreeCleanup";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -68,7 +83,11 @@ import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   buildProviderInstanceUpdatePatch,
+  collectArchivedWorktreeCleanupTargets,
+  collectUnlinkedWorktreeCleanupTargets,
   formatDiagnosticsDescription,
+  type ArchivedWorktreeCleanupThread,
+  type UnlinkedWorktreeCleanupTarget,
 } from "./SettingsPanels.logic";
 import {
   SettingResetButton,
@@ -969,6 +988,32 @@ export function GeneralSettingsPanel() {
   );
 }
 
+type ManagedUnlinkedWorktree = UnlinkedWorktreeCleanupTarget & {
+  readonly projectName: string;
+};
+
+function managedUnlinkedWorktreeKey(
+  target: Pick<ManagedUnlinkedWorktree, "environmentId" | "path">,
+) {
+  return `${target.environmentId}\u001f${target.path}`;
+}
+
+async function settleSequentially<T>(
+  items: ReadonlyArray<T>,
+  task: (item: T) => Promise<void>,
+): Promise<Array<PromiseSettledResult<void>>> {
+  const results: Array<PromiseSettledResult<void>> = [];
+  for (const item of items) {
+    try {
+      await task(item);
+      results.push({ status: "fulfilled", value: undefined });
+    } catch (reason) {
+      results.push({ status: "rejected", reason });
+    }
+  }
+  return results;
+}
+
 export function ProviderSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
@@ -1393,7 +1438,17 @@ export function ProviderSettingsPanel() {
 
 export function ArchivedThreadsPanel() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const activeThreads = useStore(useShallow(selectThreadsAcrossEnvironments));
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const [isDeletingArchivedWorkspaces, setIsDeletingArchivedWorkspaces] = useState(false);
+  const [unlinkedWorktrees, setUnlinkedWorktrees] = useState<
+    ReadonlyArray<ManagedUnlinkedWorktree>
+  >([]);
+  const [unlinkedWorktreeError, setUnlinkedWorktreeError] = useState<string | null>(null);
+  const [isLoadingUnlinkedWorktrees, setIsLoadingUnlinkedWorktrees] = useState(false);
+  const [deletingUnlinkedWorktreeKeys, setDeletingUnlinkedWorktreeKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const environmentIds = useMemo(
     () => [...new Set(projects.map((project) => project.environmentId))],
     [projects],
@@ -1455,6 +1510,292 @@ export function ArchivedThreadsPanel() {
     return groups;
   }, [archivedSnapshots]);
 
+  const archivedThreadCount = useMemo(
+    () => archivedGroups.reduce((count, group) => count + group.threads.length, 0),
+    [archivedGroups],
+  );
+
+  const refreshUnlinkedWorktrees = useCallback(async () => {
+    if (projects.length === 0) {
+      setUnlinkedWorktrees([]);
+      setUnlinkedWorktreeError(null);
+      return;
+    }
+
+    setIsLoadingUnlinkedWorktrees(true);
+    setUnlinkedWorktreeError(null);
+    try {
+      const results = await Promise.allSettled(
+        projects.map(async (project): Promise<ReadonlyArray<ManagedUnlinkedWorktree>> => {
+          const api = readEnvironmentApi(project.environmentId);
+          if (!api) {
+            throw new Error(`Environment API unavailable for ${project.environmentId}.`);
+          }
+          const result = await api.vcs.listWorktrees({ cwd: project.cwd });
+          if (!result.isRepo) {
+            return [];
+          }
+          return collectUnlinkedWorktreeCleanupTargets({
+            worktrees: result.worktrees.map((worktree) => ({
+              environmentId: project.environmentId,
+              projectCwd: project.cwd,
+              path: worktree.path,
+              refName: worktree.refName,
+              isMain: worktree.isMain,
+            })),
+            activeThreads,
+          }).map((target) => ({
+            ...target,
+            projectName: project.name,
+          }));
+        }),
+      );
+
+      const entries: ManagedUnlinkedWorktree[] = [];
+      const failedResult = results.find((result) => result.status === "rejected");
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          entries.push(...result.value);
+        }
+      }
+      entries.sort(
+        (left, right) =>
+          left.projectName.localeCompare(right.projectName) || left.path.localeCompare(right.path),
+      );
+      setUnlinkedWorktrees(entries);
+      if (failedResult?.status === "rejected") {
+        const reason = failedResult.reason;
+        setUnlinkedWorktreeError(
+          reason instanceof Error ? reason.message : "Failed to load some worktrees.",
+        );
+      }
+    } finally {
+      setIsLoadingUnlinkedWorktrees(false);
+    }
+  }, [activeThreads, projects]);
+
+  useEffect(() => {
+    void refreshUnlinkedWorktrees();
+  }, [refreshUnlinkedWorktrees]);
+
+  const deleteUnlinkedWorktrees = useCallback(
+    async (targets: ReadonlyArray<ManagedUnlinkedWorktree>) => {
+      if (targets.length === 0) {
+        return;
+      }
+      const localApi = readLocalApi();
+      if (!localApi) {
+        return;
+      }
+
+      const confirmed = await localApi.dialogs.confirm(
+        [
+          `Delete ${targets.length} unlinked worktree workspace${targets.length === 1 ? "" : "s"}?`,
+          "These worktrees are not linked to active threads.",
+          "Conversation history is not deleted.",
+          "This action cannot be undone.",
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const targetKeys = new Set(targets.map(managedUnlinkedWorktreeKey));
+      setDeletingUnlinkedWorktreeKeys((current) => new Set([...current, ...targetKeys]));
+      try {
+        const results = await settleSequentially(targets, async (target) => {
+          const api = readEnvironmentApi(target.environmentId);
+          if (!api) {
+            throw new Error(`Environment API unavailable for ${target.environmentId}.`);
+          }
+          await api.vcs.removeWorktree({
+            cwd: target.projectCwd,
+            path: target.path,
+            force: true,
+          });
+          await invalidateSourceControlState({
+            environmentId: target.environmentId,
+            cwd: target.projectCwd,
+          });
+        });
+        const failedResults = results.filter((result) => result.status === "rejected");
+        if (failedResults.length > 0) {
+          const firstError = failedResults[0]?.reason;
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Some worktree workspaces could not be deleted",
+              description:
+                firstError instanceof Error
+                  ? firstError.message
+                  : `${failedResults.length} worktree workspace${
+                      failedResults.length === 1 ? "" : "s"
+                    } failed to delete.`,
+            }),
+          );
+        } else {
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: "Worktree workspaces deleted",
+              description: `Deleted ${targets.length} unlinked worktree workspace${
+                targets.length === 1 ? "" : "s"
+              }.`,
+            }),
+          );
+        }
+        await refreshUnlinkedWorktrees();
+      } finally {
+        setDeletingUnlinkedWorktreeKeys((current) => {
+          const next = new Set(current);
+          for (const key of targetKeys) {
+            next.delete(key);
+          }
+          return next;
+        });
+      }
+    },
+    [refreshUnlinkedWorktrees],
+  );
+
+  const handleDeleteAllArchivedWorkspaces = useCallback(async () => {
+    if (archivedGroups.length === 0 || isDeletingArchivedWorkspaces) {
+      return;
+    }
+
+    const localApi = readLocalApi();
+    if (!localApi) {
+      return;
+    }
+
+    const archivedThreads = archivedGroups.flatMap((group) =>
+      group.threads.map(
+        (thread): ArchivedWorktreeCleanupThread => ({
+          environmentId: thread.environmentId,
+          id: thread.id,
+          projectCwd: group.project.cwd,
+          worktreePath: thread.worktreePath,
+        }),
+      ),
+    );
+    const plannedWorktreeCleanupTargets = collectArchivedWorktreeCleanupTargets({
+      archivedThreads,
+      deletedArchivedThreads: archivedThreads,
+      retainedThreads: activeThreads,
+    });
+
+    const workspaceCount = archivedGroups.length;
+    const threadCount = archivedThreadCount;
+    const worktreeCount = plannedWorktreeCleanupTargets.length;
+    const confirmed = await localApi.dialogs.confirm(
+      [
+        `Delete all ${workspaceCount} archived workspace${workspaceCount === 1 ? "" : "s"}?`,
+        `This permanently clears conversation history for ${threadCount} archived thread${
+          threadCount === 1 ? "" : "s"
+        }.`,
+        ...(worktreeCount > 0
+          ? [
+              `This also removes ${worktreeCount} orphaned worktree workspace${
+                worktreeCount === 1 ? "" : "s"
+              } from disk.`,
+            ]
+          : []),
+        "Active threads are not affected.",
+        "This action cannot be undone.",
+      ].join("\n"),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingArchivedWorkspaces(true);
+    try {
+      const results = await Promise.allSettled(
+        archivedThreads.map(async (thread) => {
+          const api = readEnvironmentApi(thread.environmentId);
+          if (!api) {
+            throw new Error(`Environment API unavailable for ${thread.environmentId}.`);
+          }
+          await api.orchestration.dispatchCommand({
+            type: "thread.delete",
+            commandId: newCommandId(),
+            threadId: thread.id,
+          });
+        }),
+      );
+      const deletedArchivedThreads = archivedThreads.filter(
+        (_thread, index) => results[index]?.status === "fulfilled",
+      );
+      const worktreeCleanupTargets = collectArchivedWorktreeCleanupTargets({
+        archivedThreads,
+        deletedArchivedThreads,
+        retainedThreads: activeThreads,
+      });
+      const worktreeCleanupResults = await settleSequentially(
+        worktreeCleanupTargets,
+        async (target) => {
+          const api = readEnvironmentApi(target.environmentId);
+          if (!api) {
+            throw new Error(`Environment API unavailable for ${target.environmentId}.`);
+          }
+          await api.vcs.removeWorktree({
+            cwd: target.projectCwd,
+            path: target.worktreePath,
+            force: true,
+          });
+          await invalidateSourceControlState({
+            environmentId: target.environmentId,
+            cwd: target.projectCwd,
+          });
+        },
+      );
+      const failedResults = results.filter((result) => result.status === "rejected");
+      const failedWorktreeResults = worktreeCleanupResults.filter(
+        (result) => result.status === "rejected",
+      );
+      refreshArchivedThreads();
+
+      if (failedResults.length > 0 || failedWorktreeResults.length > 0) {
+        const firstError = failedResults[0]?.reason ?? failedWorktreeResults[0]?.reason;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Some archived workspaces could not be deleted",
+            description:
+              firstError instanceof Error
+                ? firstError.message
+                : `${failedResults.length} archived thread${
+                    failedResults.length === 1 ? "" : "s"
+                  } and ${failedWorktreeResults.length} worktree workspace${
+                    failedWorktreeResults.length === 1 ? "" : "s"
+                  } failed to delete.`,
+          }),
+        );
+        return;
+      }
+
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Archived workspaces deleted",
+          description: `Deleted ${threadCount} archived thread${
+            threadCount === 1 ? "" : "s"
+          } and ${worktreeCleanupTargets.length} worktree workspace${
+            worktreeCleanupTargets.length === 1 ? "" : "s"
+          }.`,
+        }),
+      );
+    } finally {
+      setIsDeletingArchivedWorkspaces(false);
+    }
+  }, [
+    activeThreads,
+    archivedGroups,
+    archivedThreadCount,
+    isDeletingArchivedWorkspaces,
+    refreshArchivedThreads,
+  ]);
+
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -1493,6 +1834,96 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection title="Unlinked worktree workspaces">
+        <SettingsRow
+          title={
+            <span className="inline-flex items-center gap-2">
+              {isLoadingUnlinkedWorktrees ? (
+                <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+              ) : (
+                <Trash2Icon className="size-3.5 text-muted-foreground" />
+              )}
+              {unlinkedWorktrees.length === 0
+                ? "No unlinked worktree workspaces"
+                : `${unlinkedWorktrees.length} unlinked worktree workspace${
+                    unlinkedWorktrees.length === 1 ? "" : "s"
+                  }`}
+            </span>
+          }
+          description={
+            unlinkedWorktreeError ??
+            "Worktrees that are not linked to active threads can be removed from disk without deleting conversation history."
+          }
+          control={
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                disabled={isLoadingUnlinkedWorktrees}
+                onClick={() => void refreshUnlinkedWorktrees()}
+              >
+                <RefreshCwIcon
+                  className={cn("size-3.5", isLoadingUnlinkedWorktrees && "animate-spin")}
+                />
+                <span>Refresh</span>
+              </Button>
+              {unlinkedWorktrees.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="destructive-outline"
+                  size="sm"
+                  className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                  disabled={deletingUnlinkedWorktreeKeys.size > 0}
+                  onClick={() => void deleteUnlinkedWorktrees(unlinkedWorktrees)}
+                >
+                  <Trash2Icon className="size-3.5" />
+                  <span>Delete all</span>
+                </Button>
+              ) : null}
+            </div>
+          }
+        />
+        {unlinkedWorktrees.map((worktree) => {
+          const isDeleting = deletingUnlinkedWorktreeKeys.has(managedUnlinkedWorktreeKey(worktree));
+          return (
+            <SettingsRow
+              key={managedUnlinkedWorktreeKey(worktree)}
+              title={formatWorktreePathForDisplay(worktree.path)}
+              description={
+                <>
+                  {worktree.projectName}
+                  {worktree.refName ? (
+                    <>
+                      {" \u00b7 "}
+                      <span className="font-mono">{worktree.refName}</span>
+                    </>
+                  ) : null}
+                </>
+              }
+              control={
+                <Button
+                  type="button"
+                  variant="destructive-outline"
+                  size="sm"
+                  className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                  disabled={isDeleting}
+                  onClick={() => void deleteUnlinkedWorktrees([worktree])}
+                >
+                  {isDeleting ? (
+                    <LoaderIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2Icon className="size-3.5" />
+                  )}
+                  <span>{isDeleting ? "Deleting" : "Delete"}</span>
+                </Button>
+              }
+            />
+          );
+        })}
+      </SettingsSection>
+
       {archivedGroups.length === 0 ? (
         <SettingsSection title="Archived threads">
           <SettingsRow
@@ -1518,62 +1949,92 @@ export function ArchivedThreadsPanel() {
           />
         </SettingsSection>
       ) : (
-        archivedGroups.map(({ project, threads: projectThreads }) => (
-          <SettingsSection
-            key={project.id}
-            title={project.name}
-            icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
-          >
-            {projectThreads.map((thread) => (
-              <SettingsRow
-                key={thread.id}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  void handleArchivedThreadContextMenu(
-                    scopeThreadRef(thread.environmentId, thread.id),
-                    {
-                      x: event.clientX,
-                      y: event.clientY,
-                    },
-                  );
-                }}
-                title={thread.title}
-                description={
-                  <>
-                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                    {" \u00b7 Created "}
-                    {formatRelativeTimeLabel(thread.createdAt)}
-                  </>
-                }
-                control={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
-                    onClick={() =>
-                      void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id))
-                        .then(() => refreshArchivedThreads())
-                        .catch((error) => {
-                          toastManager.add(
-                            stackedThreadToast({
-                              type: "error",
-                              title: "Failed to unarchive thread",
-                              description:
-                                error instanceof Error ? error.message : "An error occurred.",
-                            }),
-                          );
-                        })
-                    }
-                  >
-                    <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
-                  </Button>
-                }
-              />
-            ))}
+        <>
+          <SettingsSection title="Archived workspaces">
+            <SettingsRow
+              title="Delete all archived workspaces"
+              description={`${archivedGroups.length} workspace${
+                archivedGroups.length === 1 ? "" : "s"
+              } with ${archivedThreadCount} archived thread${
+                archivedThreadCount === 1 ? "" : "s"
+              }.`}
+              control={
+                <Button
+                  type="button"
+                  variant="destructive-outline"
+                  size="sm"
+                  className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                  disabled={isDeletingArchivedWorkspaces}
+                  onClick={() => void handleDeleteAllArchivedWorkspaces()}
+                >
+                  {isDeletingArchivedWorkspaces ? (
+                    <LoaderIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2Icon className="size-3.5" />
+                  )}
+                  <span>{isDeletingArchivedWorkspaces ? "Deleting" : "Delete all"}</span>
+                </Button>
+              }
+            />
           </SettingsSection>
-        ))
+
+          {archivedGroups.map(({ project, threads: projectThreads }) => (
+            <SettingsSection
+              key={project.id}
+              title={project.name}
+              icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
+            >
+              {projectThreads.map((thread) => (
+                <SettingsRow
+                  key={thread.id}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    void handleArchivedThreadContextMenu(
+                      scopeThreadRef(thread.environmentId, thread.id),
+                      {
+                        x: event.clientX,
+                        y: event.clientY,
+                      },
+                    );
+                  }}
+                  title={thread.title}
+                  description={
+                    <>
+                      Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+                      {" \u00b7 Created "}
+                      {formatRelativeTimeLabel(thread.createdAt)}
+                    </>
+                  }
+                  control={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                      onClick={() =>
+                        void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id))
+                          .then(() => refreshArchivedThreads())
+                          .catch((error) => {
+                            toastManager.add(
+                              stackedThreadToast({
+                                type: "error",
+                                title: "Failed to unarchive thread",
+                                description:
+                                  error instanceof Error ? error.message : "An error occurred.",
+                              }),
+                            );
+                          })
+                      }
+                    >
+                      <ArchiveX className="size-3.5" />
+                      <span>Unarchive</span>
+                    </Button>
+                  }
+                />
+              ))}
+            </SettingsSection>
+          ))}
+        </>
       )}
     </SettingsPageContainer>
   );

@@ -7,10 +7,12 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
+  authWebSocketTokenCompatibilityRouteLayer,
   audioTranscriptionRouteLayer,
   browserAgentAutoConnectRouteLayer,
   browserAgentAutoPairRouteLayer,
   browserAgentExtensionDownloadRouteLayer,
+  browserAgentSessionRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentHttpApiLayer,
@@ -362,7 +364,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
+  authWebSocketTokenCompatibilityRouteLayer,
   browserAgentAutoConnectRouteLayer,
+  browserAgentSessionRouteLayer,
   browserAgentAutoPairRouteLayer,
   browserAgentExtensionDownloadRouteLayer,
   browserAgentRouteLayer,

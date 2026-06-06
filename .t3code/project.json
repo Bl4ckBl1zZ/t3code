@@ -2,6 +2,14 @@
   "$schema": "https://t3.chat/schemas/project.json",
   "scripts": [
     {
+      "id": "dev",
+      "name": "DEV",
+      "command": "pnpm dev:desktop",
+      "icon": "play",
+      "runOnWorktreeCreate": false,
+      "pinnedToTopBar": true
+    },
+    {
       "id": "build",
       "name": "BUILD",
       "command": "bun run dist:desktop:applications:restart",

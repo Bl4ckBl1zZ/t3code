@@ -88,6 +88,7 @@ const rpcClientMock = {
       registerListener(gitStatusListeners, listener),
     ),
     listRefs: vi.fn(),
+    listWorktrees: vi.fn(),
     createWorktree: vi.fn(),
     removeWorktree: vi.fn(),
     createRef: vi.fn(),
@@ -99,6 +100,7 @@ const rpcClientMock = {
     resolvePullRequest: vi.fn(),
     preparePullRequestThread: vi.fn(),
     markPullRequestReadyForReview: vi.fn(),
+    mergePullRequest: vi.fn(),
   },
   review: {
     getDiffPreview: vi.fn(),

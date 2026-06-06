@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
+  AuthSessionId,
   EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
@@ -11,6 +12,7 @@ import {
 
 export const BrowserAgentId = TrimmedNonEmptyString.pipe(Schema.brand("BrowserAgentId"));
 export type BrowserAgentId = typeof BrowserAgentId.Type;
+export const LOCAL_BROWSER_AGENT_SESSION_ID = AuthSessionId.make("browser-agent-local-control");
 
 export const BrowserAgentConnectionId = TrimmedNonEmptyString.pipe(
   Schema.brand("BrowserAgentConnectionId"),
@@ -165,6 +167,7 @@ export const BROWSER_AGENT_RUNTIME_PRIMITIVES = [
   "threadTab.openOrFocus",
   "threadTab.attachActive",
   "threadTab.detach",
+  "threadTab.close",
   "threadTab.capture.start",
   "threadTab.capture.stop",
   "threadTab.history",
@@ -241,6 +244,12 @@ export const BrowserAgent = Schema.Struct({
   lastSeenAt: IsoDateTime,
 });
 export type BrowserAgent = typeof BrowserAgent.Type;
+
+export const BrowserAgentSessionResult = Schema.Struct({
+  sessionId: AuthSessionId,
+  sessionToken: TrimmedNonEmptyString,
+});
+export type BrowserAgentSessionResult = typeof BrowserAgentSessionResult.Type;
 
 export const BrowserTabSnapshot = Schema.Struct({
   agentId: BrowserAgentId,
@@ -418,6 +427,7 @@ export const BrowserAgentOpenOrFocusPreviewInput = Schema.Struct({
   devServerUrl: TrimmedNonEmptyString,
   repoName: TrimmedNonEmptyString,
   preferredAgentId: Schema.optional(BrowserAgentId),
+  preferredSessionId: Schema.optional(AuthSessionId),
   requireLocalControl: Schema.optional(Schema.Boolean),
 });
 export type BrowserAgentOpenOrFocusPreviewInput = typeof BrowserAgentOpenOrFocusPreviewInput.Type;
@@ -732,6 +742,11 @@ export const BrowserAgentOutboundMessage = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("browserAgent.command.detachThreadTab"),
+    commandId: BrowserAgentCommandId,
+    workspaceLinkId: BrowserWorkspaceLinkId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("browserAgent.command.closeThreadTab"),
     commandId: BrowserAgentCommandId,
     workspaceLinkId: BrowserWorkspaceLinkId,
   }),

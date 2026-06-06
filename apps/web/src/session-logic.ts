@@ -1113,6 +1113,7 @@ function extractBrowserAction(
 ): WorkLogEntry["browserAction"] | undefined {
   switch (payload?.browserAction) {
     case "open":
+    case "close":
     case "navigate":
     case "snapshot":
     case "click":

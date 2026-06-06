@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getPrimaryKnownEnvironment,
+  readPrimaryEnvironmentTarget,
   resolvePrimaryEnvironmentHttpUrl,
   resolveInitialPrimaryEnvironmentDescriptor,
   resetPrimaryEnvironmentDescriptorForTests,
@@ -172,6 +173,24 @@ describe("environmentBootstrap", () => {
     await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
     expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
       "http://127.0.0.1:5733/.well-known/t3/environment",
+    );
+  });
+
+  it("uses the current remote origin instead of configured loopback urls", () => {
+    vi.stubEnv("VITE_DEV_SERVER_URL", "http://127.0.0.1:5733");
+    vi.stubEnv("VITE_HTTP_URL", "http://127.0.0.1:13773");
+    vi.stubEnv("VITE_WS_URL", "ws://127.0.0.1:13773");
+    installTestBrowser("https://desktop.tail.ts.net/");
+
+    expect(readPrimaryEnvironmentTarget()).toEqual({
+      source: "window-origin",
+      target: {
+        httpBaseUrl: "https://desktop.tail.ts.net/",
+        wsBaseUrl: "wss://desktop.tail.ts.net/",
+      },
+    });
+    expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
+      "https://desktop.tail.ts.net/.well-known/t3/environment",
     );
   });
 });

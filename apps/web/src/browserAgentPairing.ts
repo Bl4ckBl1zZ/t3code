@@ -1,13 +1,18 @@
-import type { BrowserAgentListResult } from "@t3tools/contracts";
+import {
+  LOCAL_BROWSER_AGENT_SESSION_ID,
+  type AuthSessionId,
+  type BrowserAgentId,
+  type BrowserAgentListResult,
+  type BrowserAgentSessionResult,
+} from "@t3tools/contracts";
 import {
   BROWSER_AGENT_AUTO_PAIR_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
+  BROWSER_AGENT_SESSION_PATH,
 } from "@t3tools/shared/browserAgent";
 
 import { selectPairingEndpoint } from "./advertisedEndpointSelection";
-import { createServerPairingCredential } from "./environments/primary/auth";
 import { readPrimaryEnvironmentTarget } from "./environments/primary/target";
-import { ensureLocalApi } from "./localApi";
 import { useUiStateStore } from "./uiStateStore";
 
 export { BROWSER_AGENT_AUTO_PAIR_PATH, BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH };
@@ -16,22 +21,29 @@ const AUTO_PAIR_RESULT_TYPE = "t3code.browserAgent.autoPair.result";
 const AUTO_CONNECT_REQUEST_TYPE = "t3code.browserAgent.autoConnect";
 const AUTO_CONNECT_RESULT_TYPE = "t3code.browserAgent.autoConnect.result";
 const AUTO_PAIR_CONNECT_TIMEOUT_MS = 12_000;
-const AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS = 1_500;
+const AUTO_PAIR_STRICT_SESSION_TIMEOUT_MS = 2_000;
+const AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS = 8_000;
+const AUTO_CONNECT_CONTENT_SCRIPT_TIMEOUT_MS = 1_500;
 const AUTO_PAIR_POLL_INTERVAL_MS = 250;
+
+type BrowserAgentSnapshotAgent = BrowserAgentListResult["agents"][number];
 
 interface BrowserAgentListClient {
   readonly browserAgents: {
     readonly list: () => Promise<BrowserAgentListResult>;
+    readonly issueSession?: () => Promise<BrowserAgentSessionResult>;
   };
 }
 
 interface WaitForBrowserAgentConnectionOptions {
   readonly timeoutMs?: number;
   readonly pollIntervalMs?: number;
+  readonly sessionId?: AuthSessionId | string | null;
 }
 
 interface AutoPairContentScriptResult {
   readonly ok: boolean;
+  readonly sessionId?: AuthSessionId;
   readonly error?: string;
 }
 
@@ -45,15 +57,26 @@ interface AutoPairBrowserAgentOptions {
   readonly allowExternalBrowserLaunch?: boolean;
 }
 
+export interface BrowserAgentPairingResult {
+  readonly preferredAgentId: BrowserAgentId | null;
+  readonly preferredSessionId: AuthSessionId | null;
+}
+
 export class BrowserAgentExtensionUnavailableError extends Error {
   readonly downloadUrl: string;
+  readonly setupUrl: string;
 
-  constructor(input: { readonly downloadUrl: string; readonly cause?: unknown }) {
+  constructor(input: {
+    readonly downloadUrl: string;
+    readonly setupUrl?: string;
+    readonly cause?: unknown;
+  }) {
     super(
       "The T3 Code Browser Agent Chrome extension is not installed or is not running in this browser.",
     );
     this.name = "BrowserAgentExtensionUnavailableError";
     this.downloadUrl = input.downloadUrl;
+    this.setupUrl = input.setupUrl ?? input.downloadUrl;
     if (input.cause !== undefined) {
       this.cause = input.cause;
     }
@@ -80,6 +103,10 @@ function summarizeBrowserAgentSnapshot(snapshot: BrowserAgentListResult): string
   const connectedSessionIds = Array.from(
     new Set(connectedAgents.map((agent) => agent.sessionId ?? "unknown")),
   );
+  const connectedAgentIds = connectedAgents.map((agent) => {
+    const localControl = agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID ? ":local-control" : "";
+    return `${agent.id ?? "unknown"}@${agent.sessionId ?? "unknown"}${localControl}`;
+  });
 
   return [
     `currentSessionId=${currentSessionId ?? "none"}`,
@@ -89,7 +116,47 @@ function summarizeBrowserAgentSnapshot(snapshot: BrowserAgentListResult): string
     connectedSessionIds.length > 0
       ? `connectedSessionIds=${connectedSessionIds.join(",")}`
       : "connectedSessionIds=none",
+    connectedAgentIds.length > 0
+      ? `connectedAgentIds=${connectedAgentIds.join(",")}`
+      : "connectedAgentIds=none",
   ].join(", ");
+}
+
+function selectMostRecentAgent(
+  agents: readonly BrowserAgentSnapshotAgent[],
+): BrowserAgentSnapshotAgent | null {
+  return (
+    agents.toSorted((left, right) =>
+      String(right.lastSeenAt ?? "").localeCompare(String(left.lastSeenAt ?? "")),
+    )[0] ?? null
+  );
+}
+
+function selectConnectedBrowserAgent(
+  snapshot: BrowserAgentListResult,
+  sessionId?: AuthSessionId | string | null,
+): BrowserAgentSnapshotAgent | null {
+  return selectMostRecentAgent(
+    snapshot.agents.filter(
+      (agent) =>
+        agent.connected &&
+        (sessionId === undefined || sessionId === null || agent.sessionId === sessionId),
+    ),
+  );
+}
+
+function selectConnectedRemotePairingAgent(
+  snapshot: BrowserAgentListResult,
+): BrowserAgentSnapshotAgent | null {
+  return selectMostRecentAgent(selectConnectedRemotePairingAgents(snapshot));
+}
+
+function selectConnectedRemotePairingAgents(
+  snapshot: BrowserAgentListResult,
+): readonly BrowserAgentSnapshotAgent[] {
+  return snapshot.agents.filter(
+    (agent) => agent.connected && agent.sessionId !== LOCAL_BROWSER_AGENT_SESSION_ID,
+  );
 }
 
 function normalizeBaseUrl(rawUrl: string): string {
@@ -106,6 +173,48 @@ function sameOriginAsCurrentPage(rawUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+async function createBrowserAgentSessionFromHttp(
+  baseUrl: string,
+): Promise<BrowserAgentSessionResult> {
+  const response = await fetch(new URL(BROWSER_AGENT_SESSION_PATH, baseUrl), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Unable to create a browser-agent session (${response.status}).`);
+  }
+
+  const result = (await response.json()) as {
+    readonly sessionId?: unknown;
+    readonly sessionToken?: unknown;
+  };
+  if (typeof result.sessionId !== "string" || typeof result.sessionToken !== "string") {
+    throw new Error("The backend did not return a browser-agent session token.");
+  }
+  return {
+    sessionId: result.sessionId as AuthSessionId,
+    sessionToken: result.sessionToken,
+  };
+}
+
+async function createBrowserAgentSession(
+  client: BrowserAgentListClient,
+  baseUrl: string,
+): Promise<BrowserAgentSessionResult> {
+  const issueSession = client.browserAgents.issueSession;
+  if (issueSession) {
+    try {
+      return await issueSession();
+    } catch {
+      // BACKWARD COMPATIBILITY: older servers do not expose the RPC method yet.
+    }
+  }
+  return await createBrowserAgentSessionFromHttp(baseUrl);
 }
 
 function uniqueBaseUrls(baseUrls: readonly string[]): readonly string[] {
@@ -164,14 +273,26 @@ export async function resolveBrowserAgentAutoConnectBaseUrls(
 
 export function buildBrowserAgentAutoPairUrl(input: {
   readonly baseUrl: string;
-  readonly credential: string;
+  readonly credential?: string;
+  readonly sessionToken?: string;
+  readonly useBrowserSession?: boolean;
 }): string {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const url = new URL(BROWSER_AGENT_AUTO_PAIR_PATH, baseUrl);
   url.searchParams.set("t3BrowserAgentPair", "1");
   url.searchParams.set("t3BrowserAgentBaseUrl", baseUrl);
   url.searchParams.set("t3BrowserAgentClose", "1");
-  url.hash = new URLSearchParams([["t3BrowserAgentCredential", input.credential]]).toString();
+  if (input.useBrowserSession === true) {
+    url.searchParams.set("t3BrowserAgentUseBrowserSession", "1");
+  }
+  const hashParams = new URLSearchParams();
+  if (input.credential) {
+    hashParams.set("t3BrowserAgentCredential", input.credential);
+  }
+  if (input.sessionToken) {
+    hashParams.set("t3BrowserAgentSessionToken", input.sessionToken);
+  }
+  url.hash = hashParams.toString();
   return url.toString();
 }
 
@@ -210,17 +331,19 @@ export function isNoBrowserAgentConnectedError(error: unknown): boolean {
 
 async function requestContentScriptPair(input: {
   readonly baseUrl: string;
-  readonly credential: string;
+  readonly credential?: string;
+  readonly sessionToken?: string;
+  readonly useBrowserSession?: boolean;
   readonly timeoutMs?: number;
-}): Promise<boolean> {
+}): Promise<AutoPairContentScriptResult | null> {
   if (!sameOriginAsCurrentPage(input.baseUrl)) {
-    return false;
+    return null;
   }
 
   const requestId = randomRequestId();
   const timeoutMs = input.timeoutMs ?? AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS;
 
-  return await new Promise<boolean>((resolve, reject) => {
+  return await new Promise<AutoPairContentScriptResult | null>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
       settled = true;
@@ -231,11 +354,11 @@ async function requestContentScriptPair(input: {
       if (settled) return;
       cleanup();
       if (!result) {
-        resolve(false);
+        resolve(null);
         return;
       }
       if (result.ok) {
-        resolve(true);
+        resolve(result);
         return;
       }
       reject(new Error(result.error ?? "The browser extension rejected the pairing request."));
@@ -247,6 +370,7 @@ async function requestContentScriptPair(input: {
             readonly type?: unknown;
             readonly requestId?: unknown;
             readonly ok?: unknown;
+            readonly sessionId?: unknown;
             readonly error?: unknown;
           }
         | undefined;
@@ -255,6 +379,9 @@ async function requestContentScriptPair(input: {
       }
       finish({
         ok: data.ok === true,
+        ...(typeof data.sessionId === "string"
+          ? { sessionId: data.sessionId as AuthSessionId }
+          : {}),
         ...(typeof data.error === "string" ? { error: data.error } : {}),
       });
     };
@@ -266,7 +393,9 @@ async function requestContentScriptPair(input: {
         type: AUTO_PAIR_REQUEST_TYPE,
         requestId,
         baseUrl: input.baseUrl,
-        credential: input.credential,
+        ...(input.credential ? { credential: input.credential } : {}),
+        ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
+        ...(input.useBrowserSession ? { useBrowserSession: true } : {}),
       },
       window.location.origin,
     );
@@ -283,7 +412,7 @@ async function requestContentScriptAutoConnect(input: {
   }
 
   const requestId = randomRequestId();
-  const timeoutMs = input.timeoutMs ?? AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS;
+  const timeoutMs = input.timeoutMs ?? AUTO_CONNECT_CONTENT_SCRIPT_TIMEOUT_MS;
 
   return await new Promise<boolean>((resolve) => {
     let settled = false;
@@ -330,10 +459,13 @@ async function requestContentScriptAutoConnect(input: {
   });
 }
 
-export async function waitForBrowserAgentConnection(
+async function waitForBrowserAgentMatch(
   client: BrowserAgentListClient,
   options?: WaitForBrowserAgentConnectionOptions,
-): Promise<void> {
+  selectAgent: (snapshot: BrowserAgentListResult) => BrowserAgentSnapshotAgent | null = (
+    snapshot,
+  ) => selectConnectedBrowserAgent(snapshot, options?.sessionId),
+): Promise<BrowserAgentSnapshotAgent> {
   const timeoutMs = options?.timeoutMs ?? AUTO_PAIR_CONNECT_TIMEOUT_MS;
   const pollIntervalMs = options?.pollIntervalMs ?? AUTO_PAIR_POLL_INTERVAL_MS;
   const deadline = Date.now() + timeoutMs;
@@ -344,8 +476,9 @@ export async function waitForBrowserAgentConnection(
     try {
       const snapshot = await client.browserAgents.list();
       lastSnapshot = snapshot;
-      if (snapshot.agents.some((agent) => agent.connected)) {
-        return;
+      const agent = selectAgent(snapshot);
+      if (agent) {
+        return agent;
       }
     } catch (error) {
       lastError = error;
@@ -366,52 +499,103 @@ export async function waitForBrowserAgentConnection(
   );
 }
 
+export async function waitForBrowserAgentConnection(
+  client: BrowserAgentListClient,
+  options?: WaitForBrowserAgentConnectionOptions,
+): Promise<void> {
+  await waitForBrowserAgentMatch(client, options);
+}
+
 export async function autoPairBrowserAgent(
   client: BrowserAgentListClient,
   options?: AutoPairBrowserAgentOptions,
-): Promise<void> {
+): Promise<BrowserAgentPairingResult> {
   const baseUrl = options?.baseUrl
     ? normalizeBaseUrl(options.baseUrl)
     : await resolveBrowserAgentBackendBaseUrl();
   const downloadUrl = buildBrowserAgentExtensionDownloadUrl({ baseUrl });
+  const setupUrl = buildBrowserAgentAutoPairUrl({ baseUrl, useBrowserSession: true });
+
+  if (sameOriginAsCurrentPage(baseUrl)) {
+    let pairResult: AutoPairContentScriptResult | null = null;
+    let session: BrowserAgentSessionResult;
+    let issuedSessionSetupUrl: string | null = null;
+    try {
+      session = await createBrowserAgentSession(client, baseUrl);
+      issuedSessionSetupUrl = buildBrowserAgentAutoPairUrl({
+        baseUrl,
+        sessionToken: session.sessionToken,
+      });
+      pairResult = await requestContentScriptPair({
+        baseUrl,
+        sessionToken: session.sessionToken,
+      });
+    } catch (error) {
+      throw new BrowserAgentExtensionUnavailableError({
+        downloadUrl,
+        setupUrl: issuedSessionSetupUrl ?? setupUrl,
+        cause: error,
+      });
+    }
+    if (!pairResult) {
+      throw new BrowserAgentExtensionUnavailableError({
+        downloadUrl,
+        setupUrl: issuedSessionSetupUrl ?? setupUrl,
+      });
+    }
+    const preferredSessionId = pairResult.sessionId ?? session.sessionId;
+    const initialSnapshot = await client.browserAgents.list().catch(() => null);
+    if (initialSnapshot) {
+      const exactAgent = selectConnectedBrowserAgent(initialSnapshot, preferredSessionId);
+      if (exactAgent) {
+        return { preferredAgentId: exactAgent.id, preferredSessionId };
+      }
+      const remoteAgents = selectConnectedRemotePairingAgents(initialSnapshot);
+      const onlyRemoteAgent = remoteAgents[0];
+      if (remoteAgents.length === 1 && onlyRemoteAgent) {
+        return { preferredAgentId: onlyRemoteAgent.id, preferredSessionId };
+      }
+    }
+
+    try {
+      const agent = await waitForBrowserAgentMatch(client, {
+        sessionId: preferredSessionId,
+        timeoutMs: AUTO_PAIR_STRICT_SESSION_TIMEOUT_MS,
+      });
+      return { preferredAgentId: agent.id, preferredSessionId };
+    } catch (error) {
+      try {
+        const fallbackAgent = await waitForBrowserAgentMatch(
+          client,
+          { timeoutMs: AUTO_PAIR_CONNECT_TIMEOUT_MS },
+          selectConnectedRemotePairingAgent,
+        );
+        return {
+          preferredAgentId: fallbackAgent.id,
+          preferredSessionId,
+        };
+      } catch {
+        throw new BrowserAgentExtensionUnavailableError({
+          downloadUrl,
+          setupUrl: issuedSessionSetupUrl ?? setupUrl,
+          cause: error,
+        });
+      }
+    }
+  }
+
   const autoConnected = await requestContentScriptAutoConnect({
     pageBaseUrl: baseUrl,
     baseUrls: await resolveBrowserAgentAutoConnectBaseUrls(baseUrl),
   });
   if (autoConnected) {
-    await waitForBrowserAgentConnection(client);
-    return;
+    const agent = await waitForBrowserAgentMatch(client);
+    return { preferredAgentId: agent.id, preferredSessionId: null };
   }
 
   if (options?.allowExternalBrowserLaunch === false) {
-    throw new BrowserAgentExtensionUnavailableError({ downloadUrl });
+    throw new BrowserAgentExtensionUnavailableError({ downloadUrl, setupUrl });
   }
 
-  const pairing = await createServerPairingCredential({ label: "Browser agent auto-pair" });
-  const pairedInCurrentPage = await requestContentScriptPair({
-    baseUrl,
-    credential: pairing.credential,
-  });
-
-  if (!pairedInCurrentPage) {
-    if (!window.desktopBridge && sameOriginAsCurrentPage(baseUrl)) {
-      throw new BrowserAgentExtensionUnavailableError({ downloadUrl });
-    }
-
-    await ensureLocalApi().shell.openExternal(
-      buildBrowserAgentAutoPairUrl({
-        baseUrl,
-        credential: pairing.credential,
-      }),
-    );
-  }
-
-  try {
-    await waitForBrowserAgentConnection(client);
-  } catch (error) {
-    if (!window.desktopBridge && !pairedInCurrentPage) {
-      throw new BrowserAgentExtensionUnavailableError({ downloadUrl, cause: error });
-    }
-    throw error;
-  }
+  throw new BrowserAgentExtensionUnavailableError({ downloadUrl, setupUrl });
 }

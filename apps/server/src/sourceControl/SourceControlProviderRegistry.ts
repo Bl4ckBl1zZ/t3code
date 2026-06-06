@@ -162,6 +162,15 @@ export function bindProviderContext(
             }) ?? Effect.void,
         }
       : {}),
+    ...(provider.mergeChangeRequest
+      ? {
+          mergeChangeRequest: (input) =>
+            provider.mergeChangeRequest?.({
+              ...input,
+              context: input.context ?? context,
+            }) ?? Effect.void,
+        }
+      : {}),
   });
 }
 

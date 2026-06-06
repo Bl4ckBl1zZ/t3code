@@ -2,9 +2,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import {
+  copyDesktopBuildArtifacts,
   createStagePnpmConfig,
   resolveDesktopRuntimeDependencies,
   resolveBuildOptions,
@@ -157,6 +160,85 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);
       assert.equal(resolved.mockUpdates, false);
+    }),
+  );
+
+  it.effect("copies macOS app directory artifacts into the output directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3code-desktop-artifact-copy-test-",
+      });
+      const stageDistDir = path.join(root, "dist");
+      const outputDir = path.join(root, "output");
+      const stageAppAsar = path.join(
+        stageDistDir,
+        "mac-arm64",
+        "T3 Code (Alpha).app",
+        "Contents",
+        "Resources",
+        "app.asar",
+      );
+      const stageFrameworkDir = path.join(
+        stageDistDir,
+        "mac-arm64",
+        "T3 Code (Alpha).app",
+        "Contents",
+        "Frameworks",
+        "Electron Framework.framework",
+      );
+      const outputAppAsar = path.join(
+        outputDir,
+        "T3 Code (Alpha).app",
+        "Contents",
+        "Resources",
+        "app.asar",
+      );
+      const outputFrameworkBinaryLink = path.join(
+        outputDir,
+        "T3 Code (Alpha).app",
+        "Contents",
+        "Frameworks",
+        "Electron Framework.framework",
+        "Electron Framework",
+      );
+
+      yield* fs.makeDirectory(path.dirname(stageAppAsar), { recursive: true });
+      yield* fs.writeFileString(stageAppAsar, "fresh app bundle");
+      yield* fs.makeDirectory(path.join(stageFrameworkDir, "Versions", "A"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(stageFrameworkDir, "Versions", "A", "Electron Framework"),
+        "framework",
+      );
+      yield* fs.symlink("A", path.join(stageFrameworkDir, "Versions", "Current"));
+      yield* fs.symlink(
+        "Versions/Current/Electron Framework",
+        path.join(stageFrameworkDir, "Electron Framework"),
+      );
+      yield* fs.writeFileString(path.join(stageDistDir, "T3-Code-0.0.0-arm64.dmg"), "dmg");
+
+      yield* fs.makeDirectory(path.dirname(outputAppAsar), { recursive: true });
+      yield* fs.writeFileString(outputAppAsar, "stale app bundle");
+      yield* fs.makeDirectory(path.join(outputDir, "mac-arm64"), { recursive: true });
+
+      const copiedArtifacts = yield* copyDesktopBuildArtifacts({ stageDistDir, outputDir });
+
+      assert.deepStrictEqual(copiedArtifacts.map((artifact) => path.basename(artifact)).sort(), [
+        "T3 Code (Alpha).app",
+        "T3-Code-0.0.0-arm64.dmg",
+      ]);
+      assert.equal(yield* fs.readFileString(outputAppAsar), "fresh app bundle");
+      assert.equal(
+        yield* fs.readFileString(path.join(outputDir, "T3-Code-0.0.0-arm64.dmg")),
+        "dmg",
+      );
+      assert.equal(yield* fs.exists(path.join(outputDir, "mac-arm64")), false);
+      assert.equal(
+        yield* fs.readLink(outputFrameworkBinaryLink),
+        "Versions/Current/Electron Framework",
+      );
+      assert.equal(yield* fs.exists(outputFrameworkBinaryLink), true);
     }),
   );
 });

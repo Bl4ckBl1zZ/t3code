@@ -4,7 +4,7 @@ import { FolderGit2Icon, LoaderIcon, SaveIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { normalizeBrowserAgentPreviewUrl } from "../../browserAgents";
+import { normalizePreviewUrl } from "../../previewUrls";
 import { readEnvironmentApi } from "../../environmentApi";
 import { newCommandId } from "../../lib/utils";
 import {
@@ -204,7 +204,7 @@ export function PerProjectRepoSettingsPanel() {
   const savePreviewUrl = useCallback(
     async (rawValue: string) => {
       if (!selectedProject) return;
-      const nextPreviewUrl = normalizeBrowserAgentPreviewUrl(rawValue);
+      const nextPreviewUrl = normalizePreviewUrl(rawValue);
       setPreviewUrl(nextPreviewUrl);
       setSavingField("preview");
       try {

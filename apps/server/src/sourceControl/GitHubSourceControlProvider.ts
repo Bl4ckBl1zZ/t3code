@@ -252,6 +252,16 @@ export const make = Effect.fn("makeGitHubSourceControlProvider")(function* () {
         })
         .pipe(Effect.mapError((error) => providerError("markChangeRequestReadyForReview", error)));
     },
+    mergeChangeRequest: (input) => {
+      const repository = repositoryFromContext(input.context);
+      return github
+        .mergePullRequest({
+          cwd: input.cwd,
+          ...(repository ? { repository } : {}),
+          reference: input.reference,
+        })
+        .pipe(Effect.mapError((error) => providerError("mergeChangeRequest", error)));
+    },
   });
 });
 

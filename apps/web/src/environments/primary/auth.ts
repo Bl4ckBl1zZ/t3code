@@ -378,8 +378,17 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
 export async function createServerPairingCredential(input?: {
   readonly label?: string;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
+  readonly debugSource?: string;
 }): Promise<AuthPairingCredentialResult> {
   const trimmedLabel = input?.label?.trim();
+  if (typeof console !== "undefined") {
+    console.info("[t3 auth] create pairing credential request", {
+      source: input?.debugSource ?? "unknown",
+      label: trimmedLabel || null,
+      scopes: input?.scopes ?? null,
+      stack: new Error().stack,
+    });
+  }
   try {
     return await runPrimaryHttp(
       PrimaryEnvironmentHttpClient.pipe(
@@ -395,6 +404,14 @@ export async function createServerPairingCredential(input?: {
       ),
     );
   } catch (error) {
+    if (typeof console !== "undefined") {
+      console.error("[t3 auth] create pairing credential failed", {
+        source: input?.debugSource ?? "unknown",
+        label: trimmedLabel || null,
+        status: readHttpApiStatus(error) ?? null,
+        error,
+      });
+    }
     throw new Error(
       readHttpApiErrorMessage(
         error,

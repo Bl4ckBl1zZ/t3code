@@ -122,6 +122,7 @@ export interface WsRpcClient {
       options?: StreamSubscriptionOptions,
     ) => () => void;
     readonly listRefs: RpcUnaryMethod<typeof WS_METHODS.vcsListRefs>;
+    readonly listWorktrees: RpcUnaryMethod<typeof WS_METHODS.vcsListWorktrees>;
     readonly createWorktree: RpcUnaryMethod<typeof WS_METHODS.vcsCreateWorktree>;
     readonly removeWorktree: RpcUnaryMethod<typeof WS_METHODS.vcsRemoveWorktree>;
     readonly createRef: RpcUnaryMethod<typeof WS_METHODS.vcsCreateRef>;
@@ -140,6 +141,7 @@ export interface WsRpcClient {
     readonly markPullRequestReadyForReview: RpcUnaryMethod<
       typeof WS_METHODS.gitMarkPullRequestReadyForReview
     >;
+    readonly mergePullRequest: RpcUnaryMethod<typeof WS_METHODS.gitMergePullRequest>;
   };
   readonly review: {
     readonly getDiffPreview: RpcUnaryMethod<typeof WS_METHODS.reviewGetDiffPreview>;
@@ -149,6 +151,7 @@ export interface WsRpcClient {
   };
   readonly browserAgents: {
     readonly list: RpcUnaryNoArgMethod<typeof WS_METHODS.browserAgentsList>;
+    readonly issueSession: RpcUnaryNoArgMethod<typeof WS_METHODS.browserAgentsIssueSession>;
     readonly openOrFocusPreview: RpcUnaryMethod<typeof WS_METHODS.browserAgentsOpenOrFocusPreview>;
     readonly activateAnnotation: RpcUnaryMethod<typeof WS_METHODS.browserAgentsActivateAnnotation>;
     readonly openOrFocusThreadTab: RpcUnaryMethod<
@@ -207,6 +210,10 @@ export interface WsRpcClient {
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverUpdateSettings>>;
+    readonly upsertSkill: RpcUnaryMethod<typeof WS_METHODS.serverSkillUpsert>;
+    readonly readSkill: RpcUnaryMethod<typeof WS_METHODS.serverSkillRead>;
+    readonly setSkillEnabled: RpcUnaryMethod<typeof WS_METHODS.serverSkillSetEnabled>;
+    readonly deleteSkill: RpcUnaryMethod<typeof WS_METHODS.serverSkillDelete>;
     readonly subscribeConfig: RpcStreamMethod<typeof WS_METHODS.subscribeServerConfig>;
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
@@ -344,6 +351,8 @@ export function createWsRpcClient(
         );
       },
       listRefs: (input) => transport.request((client) => client[WS_METHODS.vcsListRefs](input)),
+      listWorktrees: (input) =>
+        transport.request((client) => client[WS_METHODS.vcsListWorktrees](input)),
       createWorktree: (input) =>
         transport.request((client) => client[WS_METHODS.vcsCreateWorktree](input)),
       removeWorktree: (input) =>
@@ -378,6 +387,8 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.gitPreparePullRequestThread](input)),
       markPullRequestReadyForReview: (input) =>
         transport.request((client) => client[WS_METHODS.gitMarkPullRequestReadyForReview](input)),
+      mergePullRequest: (input) =>
+        transport.request((client) => client[WS_METHODS.gitMergePullRequest](input)),
     },
     review: {
       getDiffPreview: (input) =>
@@ -387,6 +398,8 @@ export function createWsRpcClient(
     },
     browserAgents: {
       list: () => transport.request((client) => client[WS_METHODS.browserAgentsList]({})),
+      issueSession: () =>
+        transport.request((client) => client[WS_METHODS.browserAgentsIssueSession]({})),
       openOrFocusPreview: (input) =>
         transport.request((client) => client[WS_METHODS.browserAgentsOpenOrFocusPreview](input)),
       activateAnnotation: (input) =>
@@ -466,6 +479,14 @@ export function createWsRpcClient(
       getSettings: () => transport.request((client) => client[WS_METHODS.serverGetSettings]({})),
       updateSettings: (patch) =>
         transport.request((client) => client[WS_METHODS.serverUpdateSettings]({ patch })),
+      upsertSkill: (input) =>
+        transport.request((client) => client[WS_METHODS.serverSkillUpsert](input)),
+      readSkill: (input) =>
+        transport.request((client) => client[WS_METHODS.serverSkillRead](input)),
+      setSkillEnabled: (input) =>
+        transport.request((client) => client[WS_METHODS.serverSkillSetEnabled](input)),
+      deleteSkill: (input) =>
+        transport.request((client) => client[WS_METHODS.serverSkillDelete](input)),
       subscribeConfig: (listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeServerConfig]({}),

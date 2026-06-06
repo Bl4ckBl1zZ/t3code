@@ -3,13 +3,18 @@
 This is an unpacked Chrome extension that connects Chrome with a T3 Code backend over the
 browser-agent WebSocket.
 
-Load it from `chrome://extensions` with Developer Mode enabled, choosing this
-`apps/chrome-extension` directory.
+In development, run `pnpm dev:desktop` and load the stable app-data extension folder from
+`chrome://extensions` with Developer Mode enabled. On macOS dev builds this is usually
+`~/Library/Application Support/t3code-dev/Chrome Extension`. The dev runner keeps that folder in
+sync with `apps/chrome-extension` and the extension reloads itself after synced changes.
 
-After pulling a newer T3 Code build, click the extension icon and choose **Reload extension**.
-For the manual Chrome path, open `chrome://extensions`, find **T3 Code Browser Agent**, and click
-the reload button. Reloading keeps the saved pairing credentials and reconnects the browser-agent
-WebSocket.
+For one-off extension development without the desktop dev runner, load this `apps/chrome-extension`
+directory directly.
+
+After pulling a newer packaged T3 Code build, click the extension icon and choose **Reload
+extension**. For the manual Chrome path, open `chrome://extensions`, find **T3 Code Browser Agent**,
+and click the reload button. Reloading keeps the saved pairing credentials and reconnects the
+browser-agent WebSocket.
 
 The normal host-machine path is automatic: click **Preview** in T3 Code. If no browser agent is
 connected yet, T3 Code asks this extension to try the desktop loopback `/browser-agent/local-ws`
@@ -22,9 +27,10 @@ Manual pairing is still available from the extension icon for remote browsers or
 reachable T3 Code backend URL plus a pairing token from the app.
 
 After connecting, **Preview** sends a backend command to the extension. The extension opens or
-focuses the matching dev-server tab, groups it by repo name, records that tab as the active
-workspace, and serves the T3 Code chat from Chrome's native side panel. If Chrome does not open the
-side panel automatically, click the extension icon in the preview window.
+focuses the matching dev-server tab, groups it by repo name, collapses the group, records that tab
+as the active workspace, and serves the T3 Code chat from Chrome's native side panel. Agent-created
+thread tabs use the same collapsed tab-group behavior. If Chrome does not open the side panel
+automatically, click the extension icon in the preview window.
 
 When the browser is paired and the active tab is not a linked preview tab, clicking the extension
 icon opens the paired T3 Code backend URL instead.

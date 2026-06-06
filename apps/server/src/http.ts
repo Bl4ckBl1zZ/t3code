@@ -15,6 +15,7 @@ import {
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOADS_DIR,
   BROWSER_AGENT_EXTENSION_SOURCE_DIR_NAME,
+  BROWSER_AGENT_SESSION_PATH,
 } from "@t3tools/shared/browserAgent";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
@@ -92,7 +93,13 @@ const PROJECT_FAVICON_GITHUB_GRAPHQL_QUERY = `
 `;
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
+const AUTH_WEBSOCKET_TOKEN_COMPATIBILITY_PATH = "/api/auth/ws-token";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
+const CREDENTIAL_RESPONSE_HEADERS = {
+  ...browserApiCorsHeaders,
+  "cache-control": "no-store",
+  pragma: "no-cache",
+} as const;
 const BROWSER_AGENT_AUTO_PAIR_HTML = `<!doctype html>
 <html lang="en">
   <head>
@@ -251,6 +258,90 @@ export const browserAgentAutoConnectRouteLayer = HttpRouter.add(
     );
   }).pipe(
     Effect.catchTags({
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+export const browserAgentSessionRouteLayer = HttpRouter.add(
+  "POST",
+  BROWSER_AGENT_SESSION_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchTags({
+        ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
+        ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
+      }),
+    );
+
+    if (!session.scopes.includes(AuthOrchestrationOperateScope)) {
+      return yield* failEnvironmentScopeRequired(AuthOrchestrationOperateScope);
+    }
+
+    const issued = yield* serverAuth
+      .issueSession({
+        subject: session.subject,
+        scopes: session.scopes,
+        label: "Browser agent extension",
+      })
+      .pipe(
+        Effect.catchTag("ServerAuthInternalError", (error) =>
+          failEnvironmentInternal("access_token_issuance_failed", error),
+        ),
+      );
+
+    return HttpServerResponse.jsonUnsafe(
+      {
+        authenticated: true,
+        scopes: issued.scopes,
+        sessionId: issued.sessionId,
+        sessionMethod: issued.method,
+        expiresAt: DateTime.toUtc(issued.expiresAt),
+        sessionToken: issued.token,
+      },
+      { status: 200, headers: CREDENTIAL_RESPONSE_HEADERS },
+    );
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+export const authWebSocketTokenCompatibilityRouteLayer = HttpRouter.add(
+  "POST",
+  AUTH_WEBSOCKET_TOKEN_COMPATIBILITY_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchTags({
+        ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
+        ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
+      }),
+    );
+    const issued = yield* serverAuth
+      .issueWebSocketTicket(session)
+      .pipe(
+        Effect.catchTag("ServerAuthInternalError", (error) =>
+          failEnvironmentInternal("websocket_ticket_issuance_failed", error),
+        ),
+      );
+
+    return HttpServerResponse.jsonUnsafe(
+      {
+        token: issued.ticket,
+        expiresAt: issued.expiresAt,
+      },
+      { status: 200, headers: CREDENTIAL_RESPONSE_HEADERS },
+    );
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
       EnvironmentInternalError: HttpServerRespondable.toResponse,
     }),
   ),

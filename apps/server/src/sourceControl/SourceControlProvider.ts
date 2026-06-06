@@ -99,6 +99,11 @@ export interface SourceControlProviderShape {
     readonly context?: SourceControlProviderContext;
     readonly reference: string;
   }) => Effect.Effect<void, SourceControlProviderError>;
+  readonly mergeChangeRequest?: (input: {
+    readonly cwd: string;
+    readonly context?: SourceControlProviderContext;
+    readonly reference: string;
+  }) => Effect.Effect<void, SourceControlProviderError>;
 }
 
 export class SourceControlProvider extends Context.Service<

@@ -72,6 +72,18 @@ describe("buildTurnStartParams", () => {
     }
   });
 
+  it("documents provider-neutral T3 extension points in Codex modes", () => {
+    for (const instructions of [
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+    ]) {
+      assert.match(instructions, /T3 App Extensions/);
+      assert.match(instructions, /MCP-backed integrations/);
+      assert.match(instructions, /T3 app tool or MCP tool/);
+      assert.match(instructions, /\$skill/);
+    }
+  });
+
   it("includes plan collaboration mode when requested", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
@@ -265,6 +277,7 @@ describe("openCodexThread", () => {
         expect.objectContaining({ name: "browser_snapshot" }),
         expect.objectContaining({ name: "browser_click" }),
         expect.objectContaining({ name: "browser_fill" }),
+        expect.objectContaining({ name: "browser_close_tab" }),
       ]),
     });
   });

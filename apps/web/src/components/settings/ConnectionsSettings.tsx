@@ -1060,7 +1060,11 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   const handleCreatePairingLink = useCallback(async () => {
     setIsCreatingPairingLink(true);
     try {
-      await createServerPairingCredential({ label: pairingLabel, scopes: pairingScopes });
+      await createServerPairingCredential({
+        label: pairingLabel,
+        scopes: pairingScopes,
+        debugSource: "connections-settings-create-pairing",
+      });
       setPairingLabel("");
       setPairingScopes([...AuthStandardClientScopes]);
       setDialogOpen(false);

@@ -108,6 +108,12 @@ export interface GitHubCliShape {
     readonly repository?: string;
     readonly reference: string;
   }) => Effect.Effect<void, GitHubCliError>;
+
+  readonly mergePullRequest: (input: {
+    readonly cwd: string;
+    readonly repository?: string;
+    readonly reference: string;
+  }) => Effect.Effect<void, GitHubCliError>;
 }
 
 export class GitHubCli extends Context.Service<GitHubCli, GitHubCliShape>()(
@@ -412,6 +418,11 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
       execute({
         cwd: input.cwd,
         args: ["pr", "ready", input.reference, ...repoArgs(input.repository)],
+      }).pipe(Effect.asVoid),
+    mergePullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "merge", input.reference, "--merge", ...repoArgs(input.repository)],
       }).pipe(Effect.asVoid),
   });
 });

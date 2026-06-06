@@ -217,6 +217,7 @@ function createClient() {
       resolvePullRequest: vi.fn(async () => undefined),
       preparePullRequestThread: vi.fn(async () => undefined),
       markPullRequestReadyForReview: vi.fn(async () => undefined),
+      mergePullRequest: vi.fn(async () => undefined),
     },
   };
 }

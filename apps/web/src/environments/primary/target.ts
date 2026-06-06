@@ -62,6 +62,19 @@ function resolveHttpRequestBaseUrl(httpBaseUrl: string): string {
   return currentUrl.origin;
 }
 
+function shouldUseWindowOriginForConfiguredLoopbackTarget(httpBaseUrl: string): boolean {
+  const currentUrl = new URL(window.location.href);
+  if (currentUrl.protocol !== "http:" && currentUrl.protocol !== "https:") {
+    return false;
+  }
+  if (isLoopbackHostname(currentUrl.hostname)) {
+    return false;
+  }
+
+  const targetUrl = new URL(normalizeBaseUrl(httpBaseUrl));
+  return currentUrl.origin !== targetUrl.origin && isLoopbackHostname(targetUrl.hostname);
+}
+
 function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
   const configuredHttpBaseUrl = import.meta.env.VITE_HTTP_URL?.trim() || undefined;
   const configuredWsBaseUrl = import.meta.env.VITE_WS_URL?.trim() || undefined;
@@ -80,6 +93,10 @@ function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
     (configuredHttpBaseUrl?.startsWith("https:")
       ? swapBaseUrlProtocol(configuredHttpBaseUrl, "wss:")
       : swapBaseUrlProtocol(configuredHttpBaseUrl!, "ws:"));
+
+  if (shouldUseWindowOriginForConfiguredLoopbackTarget(resolvedHttpBaseUrl)) {
+    return null;
+  }
 
   return {
     source: "configured",

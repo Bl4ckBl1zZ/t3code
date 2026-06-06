@@ -12,6 +12,8 @@ const AUTO_CONNECT_INTERVAL_MINUTES = 1;
 const AUTO_CONNECT_REQUEST_TIMEOUT_MS = 800;
 const AUTO_CONNECT_PORT_START = 3773;
 const AUTO_CONNECT_PORT_COUNT = 12;
+const DEV_RELOAD_MANIFEST_PATH = "dev-reload.json";
+const DEV_RELOAD_POLL_INTERVAL_MS = 1_500;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 5_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
@@ -67,6 +69,7 @@ const RUNTIME_PRIMITIVES = [
   "threadTab.openOrFocus",
   "threadTab.attachActive",
   "threadTab.detach",
+  "threadTab.close",
   "threadTab.capture.start",
   "threadTab.capture.stop",
   "threadTab.history",
@@ -98,6 +101,9 @@ let liveCaptureWorkspaceLinkIds = new Set();
 let cdpScreencastSessions = new Map();
 let nextCdpScreencastFrameSequence = 0;
 let sidebarSessionTokensCache = null;
+let devReloadToken = null;
+let devReloadPollTimer = null;
+let devReloadScheduled = false;
 
 function addDiagnosticLog(level, message, details = null) {
   diagnosticLogs.push({
@@ -149,10 +155,10 @@ function normalizeBaseUrl(value) {
   }
 }
 
-function wsUrlFor(baseUrl, token) {
+function wsUrlFor(baseUrl, ticket) {
   const url = new URL(`${baseUrl}/browser-agent/ws`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("wsToken", token);
+  url.searchParams.set("wsTicket", ticket);
   return url.toString();
 }
 
@@ -317,6 +323,23 @@ async function upsertLink(link) {
   next.push(link);
   workspaceLinksCache = next;
   await chrome.storage.local.set({ [LINKS_KEY]: next });
+}
+
+async function removeWorkspaceLink(workspaceLinkId) {
+  const links = await readLinks();
+  const removedLink = links.find((entry) => entry.id === workspaceLinkId) ?? null;
+  const nextLinks = links.filter((entry) => entry.id !== workspaceLinkId);
+  workspaceLinksCache = nextLinks;
+  await Promise.all([
+    chrome.storage.local.set({ [LINKS_KEY]: nextLinks }),
+    removeSidebarSessionToken(workspaceLinkId),
+  ]);
+  const activeRecord = await readActiveWorkspaceLink();
+  if (activeRecord?.linkId === workspaceLinkId) {
+    await chrome.storage.local.remove(ACTIVE_LINK_KEY);
+  }
+  await syncNativeSidePanelOptionsForAllTabs();
+  return removedLink;
 }
 
 function tabsHaveSameIdentity(left, right) {
@@ -725,6 +748,96 @@ function isTrustedAutoConnectContentSender(sender, message) {
   }
 }
 
+async function readDevReloadManifest() {
+  try {
+    const response = await fetch(chrome.runtime.getURL(DEV_RELOAD_MANIFEST_PATH), {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const manifest = await response.json();
+    if (manifest?.enabled !== true || typeof manifest.token !== "string") {
+      return null;
+    }
+    return manifest;
+  } catch {
+    return null;
+  }
+}
+
+function isTrustedT3PageTab(tab) {
+  if (typeof tab?.url !== "string") {
+    return false;
+  }
+  try {
+    const url = new URL(tab.url);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      isTrustedAutoConnectHostname(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function injectPairingContentIntoTrustedTabs(reason) {
+  if (!chrome.scripting?.executeScript) {
+    return;
+  }
+  const tabs = await chrome.tabs.query({});
+  let injectedCount = 0;
+  await Promise.allSettled(
+    tabs.filter(isTrustedT3PageTab).map(async (tab) => {
+      if (typeof tab.id !== "number") {
+        return;
+      }
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        files: ["pairing-content.js"],
+      });
+      injectedCount += 1;
+    }),
+  );
+  if (injectedCount > 0) {
+    addDiagnosticLog("info", "Injected pairing content script into trusted tabs", {
+      reason,
+      count: injectedCount,
+    });
+  }
+}
+
+async function checkDevExtensionReload(reason) {
+  const manifest = await readDevReloadManifest();
+  if (!manifest) {
+    return false;
+  }
+  if (devReloadToken === null) {
+    devReloadToken = manifest.token;
+    await injectPairingContentIntoTrustedTabs(reason);
+    return true;
+  }
+  if (manifest.token !== devReloadToken && !devReloadScheduled) {
+    devReloadScheduled = true;
+    addDiagnosticLog("info", "Reloading extension after dev source sync", {
+      previousToken: devReloadToken,
+      nextToken: manifest.token,
+    });
+    setTimeout(() => chrome.runtime.reload(), 150);
+  }
+  return true;
+}
+
+function startDevExtensionReloadWatcher(reason) {
+  void checkDevExtensionReload(reason);
+  if (devReloadPollTimer !== null) {
+    return;
+  }
+  devReloadPollTimer = setInterval(() => {
+    void checkDevExtensionReload("poll");
+  }, DEV_RELOAD_POLL_INTERVAL_MS);
+}
+
 async function pairBackend(input) {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   if (!baseUrl) {
@@ -744,8 +857,8 @@ async function pairBackend(input) {
       pairedAt: new Date().toISOString(),
     };
     await writeBackend(backend);
-    await connectBackend({ force: true });
-    return { ok: true };
+    const connection = await connectBackend({ force: true });
+    return { ok: true, result: connection };
   }
 
   const credential = String(input.credential ?? "").trim();
@@ -765,19 +878,20 @@ async function pairBackend(input) {
     pairedAt: new Date().toISOString(),
   };
   await writeBackend(backend);
-  await connectBackend({ force: true });
-  return { ok: true };
+  const connection = await connectBackend({ force: true });
+  return { ok: true, result: connection };
 }
 
-async function getWsToken(backend) {
-  const result = await fetchJson(backend.baseUrl, "/api/auth/ws-token", {
+async function getWsTicket(backend) {
+  const result = await fetchJson(backend.baseUrl, "/api/auth/websocket-ticket", {
     method: "POST",
     token: backend.sessionToken,
   });
-  if (typeof result.token !== "string") {
-    throw new Error("The backend did not return a WebSocket token.");
+  const ticket = typeof result.ticket === "string" ? result.ticket : result.token;
+  if (typeof ticket !== "string") {
+    throw new Error("The backend did not return a WebSocket ticket.");
   }
-  return result.token;
+  return ticket;
 }
 
 async function assertBrowserAgentBackend(backend) {
@@ -845,13 +959,13 @@ async function diagnoseBackend(backend) {
       sessionMethod: session?.sessionMethod ?? null,
     };
   });
-  const wsToken = await runDiagnosticStep("ws-token", async () => {
-    const result = await fetchJson(backend.baseUrl, "/api/auth/ws-token", {
+  const websocketTicket = await runDiagnosticStep("websocket-ticket", async () => {
+    const result = await fetchJson(backend.baseUrl, "/api/auth/websocket-ticket", {
       method: "POST",
       token: backend.sessionToken,
     });
     return {
-      receivedToken: typeof result.token === "string" && result.token.length > 0,
+      receivedTicket: typeof result.ticket === "string" && result.ticket.length > 0,
     };
   });
 
@@ -859,7 +973,7 @@ async function diagnoseBackend(backend) {
     paired: true,
     baseUrl: backend.baseUrl,
     pairedAt: backend.pairedAt ?? null,
-    checks: [environment, authSession, wsToken],
+    checks: [environment, authSession, websocketTicket],
   };
 }
 
@@ -1027,7 +1141,10 @@ async function connectLocalControlBackend(baseUrl) {
 
 async function connectBackend(options = {}) {
   if (connecting) {
-    return connecting;
+    if (!options.force) {
+      return connecting;
+    }
+    await connecting.catch(() => undefined);
   }
   connecting = (async () => {
     lastConnectionAttemptAt = new Date().toISOString();
@@ -1048,10 +1165,10 @@ async function connectBackend(options = {}) {
     }
 
     await assertBrowserAgentBackend(backend);
-    const token = await getWsToken(backend);
+    const ticket = await getWsTicket(backend);
     await openBrowserAgentSocket({
       baseUrl: backend.baseUrl,
-      wsUrl: wsUrlFor(backend.baseUrl, token),
+      wsUrl: wsUrlFor(backend.baseUrl, ticket),
     });
     return { connected: true, transport: "paired" };
   })();
@@ -1318,10 +1435,11 @@ async function navigateTabToUrl(tab, url) {
   return (await waitForTabUrl(tab.id, url)) ?? tab;
 }
 
-async function ensureGrouped(tabId, repoName) {
+async function ensureGrouped(tabId, repoName, options = {}) {
   if (!chrome.tabs.group || !chrome.tabGroups?.update) {
     return;
   }
+  const collapsed = options.collapsed ?? true;
   try {
     const tabs = await chrome.tabs.query({});
     const groupIds = Array.from(
@@ -1351,10 +1469,12 @@ async function ensureGrouped(tabId, repoName) {
     await chrome.tabGroups.update(groupId, {
       title: repoName,
       color: "green",
-      collapsed: false,
     });
+    if (collapsed) {
+      await chrome.tabGroups.update(groupId, { collapsed: true });
+    }
   } catch (error) {
-    console.warn("[T3 Code] failed to group preview tab", error);
+    console.warn("[T3 Code] failed to group browser-agent tab", error);
   }
 }
 
@@ -1873,6 +1993,7 @@ async function openOrFocusThreadTab(command) {
     await chrome.windows.update(tab.windowId, { focused: true });
     await chrome.tabs.update(tab.id, { active: true });
   }
+  await ensureGrouped(tab.id, link.repoName);
   if (command.url) {
     tab = await navigateTabToUrl(tab, command.url);
     addDiagnosticLog("info", "Thread tab navigation settled", {
@@ -1942,22 +2063,50 @@ async function attachActiveTab(command) {
 }
 
 async function detachThreadTab(command) {
-  const links = await readLinks();
-  const nextLinks = links.filter((entry) => entry.id !== command.workspaceLinkId);
-  workspaceLinksCache = nextLinks;
-  await Promise.all([
-    chrome.storage.local.set({ [LINKS_KEY]: nextLinks }),
-    removeSidebarSessionToken(command.workspaceLinkId),
-  ]);
-  const activeRecord = await readActiveWorkspaceLink();
-  if (activeRecord?.linkId === command.workspaceLinkId) {
-    await chrome.storage.local.remove(ACTIVE_LINK_KEY);
-  }
-  await syncNativeSidePanelOptionsForAllTabs();
+  await removeWorkspaceLink(command.workspaceLinkId);
   sendToServer({
     type: "browserAgent.command.result",
     commandId: command.commandId,
     ok: true,
+  });
+}
+
+async function closeThreadTab(command) {
+  const link = await findStoredWorkspaceLink(command.workspaceLinkId);
+  const tab = link ? await findPreviewTab(link).catch(() => null) : null;
+  await removeWorkspaceLink(command.workspaceLinkId);
+  if (link) {
+    sendThreadTabUpdated(link, null, "closed");
+  }
+
+  let closed = false;
+  if (tab?.id !== undefined) {
+    await detachCdpFromTab(tab.id);
+    await chrome.tabs
+      .remove(Number(tab.id))
+      .then(() => {
+        closed = true;
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/No tab with id/i.test(message)) {
+          throw error;
+        }
+      });
+  }
+  await sendTabsSnapshot().catch(() => undefined);
+  sendToServer({
+    type: "browserAgent.command.result",
+    commandId: command.commandId,
+    ok: true,
+    ...(tab?.id !== undefined ? { tabId: tab.id } : {}),
+    ...(tab?.windowId !== undefined ? { windowId: tab.windowId } : {}),
+    payload: {
+      ok: true,
+      closed,
+      tabId: tab?.id ?? null,
+      windowId: tab?.windowId ?? null,
+    },
   });
 }
 
@@ -2207,6 +2356,40 @@ async function inputThreadTab(command) {
   });
 }
 
+function cdpMouseCursorInteraction(event) {
+  switch (event?.type) {
+    case "mousePressed":
+      return "click";
+    case "mouseWheel":
+      return "scroll";
+    case "mouseMoved":
+    case "mouseReleased":
+      return "move";
+    default:
+      return null;
+  }
+}
+
+async function showAgentCursorForCdpInput(tabId, event) {
+  if (typeof event?.x !== "number" || typeof event?.y !== "number") {
+    return;
+  }
+  const interaction = cdpMouseCursorInteraction(event);
+  if (!interaction) {
+    return;
+  }
+  try {
+    await sendTabMessage(tabId, {
+      type: "t3code.browserAgent.showAgentCursor",
+      x: event.x,
+      y: event.y,
+      interaction,
+    });
+  } catch {
+    // Some browser pages cannot receive content scripts; CDP input can still proceed.
+  }
+}
+
 async function snapshotThreadTab(command) {
   const { tab } = await tabForWorkspaceLinkId(command.workspaceLinkId);
   const payload = ensureOkResponse(
@@ -2419,6 +2602,7 @@ async function handleRuntimeCommand(command) {
     }
     case "cdp.input.dispatch": {
       const event = params.event && typeof params.event === "object" ? params.event : params;
+      await showAgentCursorForCdpInput(tab.id, event);
       payload = await sendCdpCommand(tab.id, "Input.dispatchMouseEvent", event);
       break;
     }
@@ -2515,6 +2699,9 @@ async function handleServerMessage(rawData) {
         return;
       case "browserAgent.command.detachThreadTab":
         await detachThreadTab(command);
+        return;
+      case "browserAgent.command.closeThreadTab":
+        await closeThreadTab(command);
         return;
       case "browserAgent.command.startTabCapture":
         await startTabCapture(command);
@@ -2936,16 +3123,19 @@ chrome.alarms?.onAlarm?.addListener((alarm) => {
 
 chrome.runtime.onStartup.addListener(() => {
   void configureSidePanelBehavior();
+  startDevExtensionReloadWatcher("startup");
   scheduleAutoConnectAlarm();
   autoConnectInBackground("startup");
 });
 chrome.runtime.onInstalled.addListener(() => {
   void configureSidePanelBehavior();
+  startDevExtensionReloadWatcher("install");
   scheduleAutoConnectAlarm();
   autoConnectInBackground("install");
 });
 
 void readLinks().catch(() => undefined);
 void configureSidePanelBehavior();
+startDevExtensionReloadWatcher("service worker activation");
 scheduleAutoConnectAlarm();
 autoConnectInBackground("service worker activation");

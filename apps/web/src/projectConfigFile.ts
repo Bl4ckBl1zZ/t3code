@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { setupProjectScript } from "@t3tools/shared/projectScripts";
 
-import { normalizeBrowserAgentPreviewUrl } from "./browserAgents";
+import { normalizePreviewUrl } from "./previewUrls";
 import { nextProjectScriptId } from "./projectScripts";
 
 type ProjectConfigJson = Record<string, unknown>;
@@ -61,7 +61,7 @@ function normalizedPreviewUrl(rawUrl: string | null): string | null {
   if (rawUrl === null) {
     return null;
   }
-  const normalized = normalizeBrowserAgentPreviewUrl(rawUrl);
+  const normalized = normalizePreviewUrl(rawUrl);
   return normalized.length > 0 ? normalized : null;
 }
 

@@ -86,6 +86,9 @@ export interface GitManagerShape {
   readonly markPullRequestReadyForReview: (
     input: GitPullRequestRefInput,
   ) => Effect.Effect<void, GitManagerServiceError>;
+  readonly mergePullRequest: (
+    input: GitPullRequestRefInput,
+  ) => Effect.Effect<void, GitManagerServiceError>;
   readonly runStackedAction: (
     input: GitRunStackedActionInput,
     options?: GitRunStackedActionOptions,
@@ -1747,6 +1750,24 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     yield* invalidateStatus(input.cwd);
   });
 
+  const mergePullRequest: GitManagerShape["mergePullRequest"] = Effect.fn("mergePullRequest")(
+    function* (input) {
+      const provider = yield* sourceControlProvider(input.cwd);
+      if (!provider.mergeChangeRequest) {
+        return yield* gitManagerError(
+          "mergePullRequest",
+          `${provider.kind} does not support direct pull request merge.`,
+        );
+      }
+
+      yield* provider.mergeChangeRequest({
+        cwd: input.cwd,
+        reference: normalizePullRequestReference(input.reference),
+      });
+      yield* invalidateStatus(input.cwd);
+    },
+  );
+
   const runFeatureBranchStep = Effect.fn("runFeatureBranchStep")(function* (
     modelSelection: ModelSelection,
     cwd: string,
@@ -1984,6 +2005,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     resolvePullRequest,
     preparePullRequestThread,
     markPullRequestReadyForReview,
+    mergePullRequest,
     runStackedAction,
   } satisfies GitManagerShape;
 });

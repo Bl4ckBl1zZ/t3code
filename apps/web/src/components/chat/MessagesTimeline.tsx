@@ -1257,6 +1257,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
     case "accessibility":
       return ScanSearchIcon;
     case "open":
+    case "close":
     case "navigate":
     case "page":
     case "runtime-evaluate":

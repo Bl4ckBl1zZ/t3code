@@ -6,6 +6,8 @@ import type {
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
+  VcsListWorktreesInput,
+  VcsListWorktreesResult,
   VcsPullInput,
   VcsPullResult,
   VcsSyncBaseInput,
@@ -60,6 +62,11 @@ import type {
   ServerProviderUpdateInput,
   ServerProviderUpdatedPayload,
   ServerRemoveKeybindingResult,
+  ServerSkillDeleteInput,
+  ServerSkillReadInput,
+  ServerSkillReadResult,
+  ServerSkillSetEnabledInput,
+  ServerSkillUpsertInput,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
   ServerTraceDiagnosticsResult,
@@ -534,6 +541,10 @@ export interface LocalApi {
     removeKeybinding: (input: ServerRemoveKeybindingInput) => Promise<ServerRemoveKeybindingResult>;
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
+    upsertSkill: (input: ServerSkillUpsertInput) => Promise<ServerProviderUpdatedPayload>;
+    readSkill: (input: ServerSkillReadInput) => Promise<ServerSkillReadResult>;
+    setSkillEnabled: (input: ServerSkillSetEnabledInput) => Promise<ServerProviderUpdatedPayload>;
+    deleteSkill: (input: ServerSkillDeleteInput) => Promise<ServerProviderUpdatedPayload>;
     discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
     getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
     getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;
@@ -616,6 +627,7 @@ export interface EnvironmentApi {
   };
   vcs: {
     listRefs: (input: VcsListRefsInput) => Promise<VcsListRefsResult>;
+    listWorktrees: (input: VcsListWorktreesInput) => Promise<VcsListWorktreesResult>;
     createWorktree: (input: VcsCreateWorktreeInput) => Promise<VcsCreateWorktreeResult>;
     removeWorktree: (input: VcsRemoveWorktreeInput) => Promise<void>;
     createRef: (input: VcsCreateRefInput) => Promise<VcsCreateRefResult>;
@@ -638,6 +650,7 @@ export interface EnvironmentApi {
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
     markPullRequestReadyForReview: (input: GitPullRequestRefInput) => Promise<void>;
+    mergePullRequest: (input: GitPullRequestRefInput) => Promise<void>;
   };
   review: {
     getDiffPreview: (input: ReviewDiffPreviewInput) => Promise<ReviewDiffPreviewResult>;

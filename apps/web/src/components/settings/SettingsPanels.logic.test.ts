@@ -1,12 +1,16 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   buildProviderInstanceUpdatePatch,
+  collectArchivedWorktreeCleanupTargets,
+  collectUnlinkedWorktreeCleanupTargets,
   formatDiagnosticsDescription,
 } from "./SettingsPanels.logic";
 
@@ -100,5 +104,127 @@ describe("buildProviderInstanceUpdatePatch", () => {
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
     expect(patch.providers).toBeUndefined();
+  });
+});
+
+describe("collectArchivedWorktreeCleanupTargets", () => {
+  const environmentId = EnvironmentId.make("environment-local");
+  const archivedThread = (input: {
+    readonly id: string;
+    readonly projectCwd?: string;
+    readonly worktreePath: string | null;
+  }) => ({
+    environmentId,
+    id: ThreadId.make(input.id),
+    projectCwd: input.projectCwd ?? "/repo/project",
+    worktreePath: input.worktreePath,
+  });
+
+  it("collects each orphaned deleted archived worktree once", () => {
+    const firstThread = archivedThread({
+      id: "thread-1",
+      worktreePath: " /repo/.t3/worktrees/feature-a ",
+    });
+    const secondThread = archivedThread({
+      id: "thread-2",
+      worktreePath: "/repo/.t3/worktrees/feature-a",
+    });
+
+    expect(
+      collectArchivedWorktreeCleanupTargets({
+        archivedThreads: [firstThread, secondThread],
+        deletedArchivedThreads: [firstThread, secondThread],
+        retainedThreads: [],
+      }),
+    ).toEqual([
+      {
+        environmentId,
+        projectCwd: "/repo/project",
+        worktreePath: "/repo/.t3/worktrees/feature-a",
+      },
+    ]);
+  });
+
+  it("keeps worktrees used by active or failed archived threads", () => {
+    const deletedThread = archivedThread({
+      id: "thread-deleted",
+      worktreePath: "/repo/.t3/worktrees/shared-archived",
+    });
+    const failedThread = archivedThread({
+      id: "thread-failed",
+      worktreePath: "/repo/.t3/worktrees/shared-archived",
+    });
+    const activeSharedThread = {
+      environmentId,
+      id: ThreadId.make("thread-active"),
+      worktreePath: "/repo/.t3/worktrees/shared-active",
+    };
+    const activeSharedArchivedThread = archivedThread({
+      id: "thread-active-shared-archived",
+      worktreePath: "/repo/.t3/worktrees/shared-active",
+    });
+
+    expect(
+      collectArchivedWorktreeCleanupTargets({
+        archivedThreads: [deletedThread, failedThread, activeSharedArchivedThread],
+        deletedArchivedThreads: [deletedThread, activeSharedArchivedThread],
+        retainedThreads: [activeSharedThread],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("collectUnlinkedWorktreeCleanupTargets", () => {
+  const environmentId = EnvironmentId.make("environment-local");
+
+  it("excludes main and active-thread-linked worktrees", () => {
+    expect(
+      collectUnlinkedWorktreeCleanupTargets({
+        worktrees: [
+          {
+            environmentId,
+            projectCwd: "/repo/project",
+            path: "/repo/project",
+            refName: "main",
+            isMain: true,
+          },
+          {
+            environmentId,
+            projectCwd: "/repo/project",
+            path: "/repo/.t3/worktrees/active",
+            refName: "feature/active",
+            isMain: false,
+          },
+          {
+            environmentId,
+            projectCwd: "/repo/project",
+            path: " /repo/.t3/worktrees/orphan ",
+            refName: "feature/orphan",
+            isMain: false,
+          },
+          {
+            environmentId,
+            projectCwd: "/repo/project",
+            path: "/repo/.t3/worktrees/orphan",
+            refName: "feature/orphan-copy",
+            isMain: false,
+          },
+        ],
+        activeThreads: [
+          {
+            environmentId,
+            id: ThreadId.make("thread-active"),
+            worktreePath: "/repo/.t3/worktrees/active",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        environmentId,
+        projectCwd: "/repo/project",
+        path: "/repo/.t3/worktrees/orphan",
+        refName: "feature/orphan",
+      },
+    ]);
   });
 });

@@ -77,6 +77,19 @@ function connectAgent(registry: BrowserAgentRegistry) {
             });
           });
         }
+        if (message.type === "browserAgent.command.closeThreadTab") {
+          queueMicrotask(() => {
+            registry.handleMessage(connectionId, {
+              type: "browserAgent.command.result",
+              commandId: message.commandId,
+              ok: true,
+              payload: {
+                ok: true,
+                closed: true,
+              },
+            });
+          });
+        }
         if (message.type === "browserAgent.command.runtime") {
           queueMicrotask(() => {
             registry.handleMessage(connectionId, {
@@ -222,6 +235,33 @@ describe("Codex browser dynamic tools", () => {
       "codex:provider-thread-subagent",
       "default",
     ]);
+  });
+
+  it("lets agents close the linked browser tab when finished", async () => {
+    const registry = new BrowserAgentRegistry();
+    const { connectionId, sentMessages } = connectAgent(registry);
+    await openLinkedTab(registry, connectionId);
+
+    const response = await Effect.runPromise(
+      handleCodexBrowserDynamicToolCall({
+        environmentId,
+        threadId,
+        registry,
+        payload: {
+          tool: "browser_close_tab",
+          arguments: {},
+          callId: "call-close",
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+        },
+      }),
+    );
+
+    expect(response.success).toBe(true);
+    expect(sentMessages.at(-1)).toMatchObject({
+      type: "browserAgent.command.closeThreadTab",
+    });
+    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toBeNull();
   });
 
   it("returns a failed tool result when browser access is paused", async () => {

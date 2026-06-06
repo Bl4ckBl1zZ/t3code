@@ -43,7 +43,8 @@ type SourceControlActionKind =
   | "publishRepository"
   | "runStackedAction"
   | "markPullRequestReadyForReview"
-  | "preparePullRequestThread";
+  | "preparePullRequestThread"
+  | "mergePullRequest";
 
 interface SourceControlActionScope {
   readonly environmentId: EnvironmentId | null;
@@ -124,6 +125,7 @@ function getVcsActionOperationForKind(kind: SourceControlActionKind): VcsActionO
     case "publishRepository":
     case "markPullRequestReadyForReview":
     case "preparePullRequestThread":
+    case "mergePullRequest":
       return null;
   }
 }
@@ -416,6 +418,27 @@ export function useMarkPullRequestReadyForReviewAction(scope: SourceControlActio
 
   return useSourceControlAction({
     kind: "markPullRequestReadyForReview",
+    scope,
+    action,
+  });
+}
+
+export function useMergePullRequestAction(scope: SourceControlActionScope) {
+  const action = useCallback(
+    async (args: { reference: string }): Promise<void> => {
+      if (!scope.cwd || !scope.environmentId) {
+        throw new Error("Pull request merge is unavailable.");
+      }
+      await ensureEnvironmentApi(scope.environmentId).git.mergePullRequest({
+        cwd: scope.cwd,
+        reference: args.reference,
+      });
+    },
+    [scope],
+  );
+
+  return useSourceControlAction({
+    kind: "mergePullRequest",
     scope,
     action,
   });

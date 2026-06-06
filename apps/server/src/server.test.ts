@@ -4206,6 +4206,44 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("issues browser-agent bearer sessions from an authenticated browser request", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const sessionUrl = yield* getHttpServerUrl("/browser-agent/session");
+      const sessionResponse = yield* fetchEffect(sessionUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+        },
+      });
+      const sessionBody = yield* responseJsonEffect<{
+        readonly authenticated?: boolean;
+        readonly sessionId?: string;
+        readonly sessionToken?: string;
+      }>(sessionResponse);
+
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(typeof sessionBody.sessionId, "string");
+      assert.equal(typeof sessionBody.sessionToken, "string");
+
+      const authStateUrl = yield* getHttpServerUrl("/api/auth/session");
+      const authStateResponse = yield* fetchEffect(authStateUrl, {
+        headers: {
+          authorization: `Bearer ${sessionBody.sessionToken ?? ""}`,
+        },
+      });
+      const authStateBody = yield* responseJsonEffect<{
+        readonly authenticated?: boolean;
+      }>(authStateResponse);
+
+      assert.equal(authStateResponse.status, 200);
+      assert.equal(authStateBody.authenticated, true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves attachment files from state dir", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -5246,6 +5284,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.succeed({
                 worktree: { path: "/tmp/wt", refName: "feature/demo" },
               }),
+            listWorktrees: () => Effect.succeed({ worktrees: [], isRepo: true }),
             removeWorktree: () => Effect.void,
             createRef: (input) => Effect.succeed({ refName: input.refName }),
             switchRef: (input) => Effect.succeed({ refName: input.refName }),

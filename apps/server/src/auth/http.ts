@@ -61,6 +61,19 @@ const appendDpopChallengeOnUnauthorized = (error: EnvironmentAuthInvalidError) =
     return yield* error;
   });
 
+function readRemoteAddressForDebug(source: unknown): string | null {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const candidate = source as {
+    readonly remoteAddress?: string | null;
+    readonly socket?: {
+      readonly remoteAddress?: string | null;
+    };
+  };
+  return candidate.socket?.remoteAddress ?? candidate.remoteAddress ?? null;
+}
+
 export const currentEnvironmentTraceId = Effect.currentParentSpan.pipe(
   Effect.map((span) => span.traceId),
   Effect.orElseSucceed(() => "unavailable"),
@@ -316,7 +329,33 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.pairingCredential")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            const session = yield* requireEnvironmentScope(AuthAccessWriteScope);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const requestUrl = HttpServerRequest.toURL(request);
+            const session = yield* EnvironmentAuthenticatedPrincipal;
+            const logDetails = {
+              endpoint: args.endpoint.name,
+              method: request.method,
+              path: requestUrl._tag === "Some" ? requestUrl.value.pathname : "unknown",
+              origin: request.headers.origin ?? null,
+              referer: request.headers.referer ?? null,
+              userAgent: request.headers["user-agent"] ?? null,
+              forwardedFor: request.headers["x-forwarded-for"] ?? null,
+              remoteAddress: readRemoteAddressForDebug(request.source),
+              sessionId: session.sessionId,
+              subject: session.subject,
+              sessionMethod: session.method,
+              scopes: session.scopes,
+              requestedLabel: args.payload.label ?? null,
+              requestedScopes: args.payload.scopes ?? null,
+            };
+            yield* Effect.logInfo("pairing credential request received", logDetails);
+            if (!session.scopes.has(AuthAccessWriteScope)) {
+              yield* Effect.logWarning("pairing credential request rejected without owner scope", {
+                ...logDetails,
+                requiredScope: AuthAccessWriteScope,
+              });
+              return yield* failEnvironmentScopeRequired(AuthAccessWriteScope);
+            }
             const delegatedScopes = args.payload.scopes ?? AuthStandardClientScopes;
             if (
               delegatedScopes.length === 0 ||

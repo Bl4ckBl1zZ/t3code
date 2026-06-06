@@ -14,10 +14,10 @@ import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthReviewWriteScope,
   AuthRelayWriteScope,
   AuthTerminalOperateScope,
   AuthAccessReadScope,
+  AuthReviewWriteScope,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
@@ -51,6 +51,7 @@ import {
   FilesystemBrowseError,
   ProviderSlashCommandsListError,
   ProviderInstanceId,
+  ServerSkillManagementError,
   EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -79,6 +80,12 @@ import {
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { ProviderService } from "./provider/Services/ProviderService.ts";
 import { listCodexSlashCommands } from "./provider/codexSlashCommands.ts";
+import {
+  deleteCodexSkill,
+  readCodexSkill,
+  setCodexSkillEnabled,
+  upsertCodexSkill,
+} from "./provider/codexSkills.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
@@ -188,6 +195,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverSkillUpsert, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverSkillRead, AuthOrchestrationReadScope],
+  [WS_METHODS.serverSkillSetEnabled, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverSkillDelete, AuthOrchestrationOperateScope],
   [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
@@ -201,6 +212,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.sourceControlCloneRepository, AuthOrchestrationOperateScope],
   [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
   [WS_METHODS.browserAgentsList, AuthOrchestrationReadScope],
+  [WS_METHODS.browserAgentsIssueSession, AuthOrchestrationOperateScope],
   [WS_METHODS.browserAgentsOpenOrFocusPreview, AuthOrchestrationOperateScope],
   [WS_METHODS.browserAgentsActivateAnnotation, AuthOrchestrationOperateScope],
   [WS_METHODS.browserAgentsOpenOrFocusThreadTab, AuthOrchestrationOperateScope],
@@ -246,14 +258,16 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.gitResolvePullRequest, AuthOrchestrationOperateScope],
   [WS_METHODS.gitPreparePullRequestThread, AuthOrchestrationOperateScope],
   [WS_METHODS.gitMarkPullRequestReadyForReview, AuthOrchestrationOperateScope],
+  [WS_METHODS.gitMergePullRequest, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsListRefs, AuthOrchestrationReadScope],
   [WS_METHODS.vcsCreateWorktree, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsRemoveWorktree, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsCreateRef, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsSwitchRef, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsInit, AuthOrchestrationOperateScope],
+  [WS_METHODS.vcsListWorktrees, AuthOrchestrationReadScope],
   [WS_METHODS.reviewGetDiffPreview, AuthReviewWriteScope],
-  [WS_METHODS.reviewListPullRequestComments, AuthReviewWriteScope],
+  [WS_METHODS.reviewListPullRequestComments, AuthOrchestrationReadScope],
   [WS_METHODS.terminalOpen, AuthTerminalOperateScope],
   [WS_METHODS.terminalAttach, AuthTerminalOperateScope],
   [WS_METHODS.terminalWrite, AuthTerminalOperateScope],
@@ -1175,34 +1189,80 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             Effect.sync(() => browserAgentRegistry.snapshot({ currentSessionId })),
             { "rpc.aggregate": "browser-agent" },
           ),
-        [WS_METHODS.browserAgentsOpenOrFocusPreview]: (input) =>
+        [WS_METHODS.browserAgentsIssueSession]: (_input) =>
           observeRpcEffect(
-            WS_METHODS.browserAgentsOpenOrFocusPreview,
+            WS_METHODS.browserAgentsIssueSession,
             serverAuth
               .issueSession({
                 subject: currentSession.subject,
                 scopes: currentSession.scopes,
-                label: "Browser agent sidebar",
+                label: "Browser agent extension",
               })
               .pipe(
+                Effect.map((issued) => ({
+                  sessionId: issued.sessionId,
+                  sessionToken: issued.token,
+                })),
                 Effect.mapError(
                   (cause) =>
                     new BrowserAgentCommandError({
                       code: "command-failed",
-                      message: "Failed to prepare browser sidebar session.",
+                      message: "Failed to prepare browser-agent session.",
                       cause,
                     }),
                 ),
-                Effect.flatMap((issued) =>
-                  browserAgentRegistry.openOrFocusPreview(input, {
-                    sidebarSessionToken: issued.token,
-                    preferredSessionId: currentSessionId,
-                    preferLocalControl:
-                      config.mode === "desktop" || input.requireLocalControl === true,
-                    allowCrossSessionFallback: input.requireLocalControl !== true,
-                  }),
-                ),
               ),
+            { "rpc.aggregate": "browser-agent" },
+          ),
+        [WS_METHODS.browserAgentsOpenOrFocusPreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.browserAgentsOpenOrFocusPreview,
+            Effect.gen(function* () {
+              const requireLocalControl = input.requireLocalControl === true;
+              const preferredSessionId = input.preferredSessionId ?? currentSessionId;
+              const preferLocalControl =
+                input.preferredSessionId === undefined &&
+                (config.mode === "desktop" || requireLocalControl);
+              const allowCrossSessionFallback =
+                input.preferredSessionId === undefined && !requireLocalControl;
+              yield* Effect.logInfo("browser preview rpc received", {
+                environmentId: input.environmentId,
+                threadId: input.threadId,
+                devServerUrl: input.devServerUrl,
+                repoName: input.repoName,
+                preferredAgentId: input.preferredAgentId ?? null,
+                requestedPreferredSessionId: input.preferredSessionId ?? null,
+                requireLocalControl,
+                serverMode: config.mode,
+                currentSessionId,
+                currentSessionSubject: currentSession.subject,
+                preferredSessionId,
+                preferLocalControl,
+                allowCrossSessionFallback,
+              });
+              const issued = yield* serverAuth
+                .issueSession({
+                  subject: currentSession.subject,
+                  scopes: currentSession.scopes,
+                  label: "Browser agent sidebar",
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new BrowserAgentCommandError({
+                        code: "command-failed",
+                        message: "Failed to prepare browser sidebar session.",
+                        cause,
+                      }),
+                  ),
+                );
+              return yield* browserAgentRegistry.openOrFocusPreview(input, {
+                sidebarSessionToken: issued.token,
+                preferredSessionId,
+                preferLocalControl,
+                allowCrossSessionFallback,
+              });
+            }),
             { "rpc.aggregate": "browser-agent" },
           ),
         [WS_METHODS.browserAgentsActivateAnnotation]: (input) =>
@@ -1534,6 +1594,111 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverSkillUpsert]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillUpsert,
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSkillManagementError({
+                      instanceId: input.instanceId,
+                      detail: "Could not read server settings.",
+                      cause,
+                    }),
+                ),
+              );
+              yield* upsertCodexSkill({
+                instanceId: input.instanceId,
+                settings,
+                name: input.name,
+                ...(input.displayName ? { displayName: input.displayName } : {}),
+                description: input.description,
+                ...(input.shortDescription ? { shortDescription: input.shortDescription } : {}),
+                body: input.body,
+                overwrite: input.overwrite,
+              });
+              return yield* providerRegistry
+                .refreshInstance(input.instanceId)
+                .pipe(Effect.map((providers) => ({ providers })));
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillRead]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillRead,
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSkillManagementError({
+                      instanceId: input.instanceId,
+                      detail: "Could not read server settings.",
+                      cause,
+                    }),
+                ),
+              );
+              const contents = yield* readCodexSkill({
+                instanceId: input.instanceId,
+                settings,
+                path: input.path,
+              });
+              return { contents };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillSetEnabled]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillSetEnabled,
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSkillManagementError({
+                      instanceId: input.instanceId,
+                      detail: "Could not read server settings.",
+                      cause,
+                    }),
+                ),
+              );
+              yield* setCodexSkillEnabled({
+                instanceId: input.instanceId,
+                settings,
+                cwd: config.cwd,
+                path: input.path,
+                enabled: input.enabled,
+              });
+              return yield* providerRegistry
+                .refreshInstance(input.instanceId)
+                .pipe(Effect.map((providers) => ({ providers })));
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSkillDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSkillDelete,
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSkillManagementError({
+                      instanceId: input.instanceId,
+                      detail: "Could not read server settings.",
+                      cause,
+                    }),
+                ),
+              );
+              yield* deleteCodexSkill({
+                instanceId: input.instanceId,
+                settings,
+                path: input.path,
+              });
+              return yield* providerRegistry
+                .refreshInstance(input.instanceId)
+                .pipe(Effect.map((providers) => ({ providers })));
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverTranscribeAudio]: (input) =>
           observeRpcEffect(WS_METHODS.serverTranscribeAudio, audioTranscription.transcribe(input), {
             "rpc.aggregate": "server",
@@ -1829,8 +1994,18 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "git" },
           ),
+        [WS_METHODS.gitMergePullRequest]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitMergePullRequest,
+            gitWorkflow.mergePullRequest(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "git" },
+          ),
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsListWorktrees]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsListWorktrees, gitWorkflow.listWorktrees(input), {
             "rpc.aggregate": "vcs",
           }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>

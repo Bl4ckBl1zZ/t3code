@@ -13,6 +13,8 @@ import {
   type VcsCreateWorktreeResult,
   type VcsListRefsInput,
   type VcsListRefsResult,
+  type VcsListWorktreesInput,
+  type VcsListWorktreesResult,
   type GitManagerServiceError,
   type GitPreparePullRequestThreadInput,
   type GitPreparePullRequestThreadResult,
@@ -63,7 +65,13 @@ export interface GitWorkflowServiceShape {
   readonly markPullRequestReadyForReview: (
     input: GitPullRequestRefInput,
   ) => Effect.Effect<void, GitManagerServiceError>;
+  readonly mergePullRequest: (
+    input: GitPullRequestRefInput,
+  ) => Effect.Effect<void, GitManagerServiceError>;
   readonly listRefs: (input: VcsListRefsInput) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+  readonly listWorktrees: (
+    input: VcsListWorktreesInput,
+  ) => Effect.Effect<VcsListWorktreesResult, GitCommandError>;
   readonly createWorktree: (
     input: VcsCreateWorktreeInput,
   ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
@@ -134,6 +142,13 @@ function nonRepositoryListRefs(): VcsListRefsResult {
     hasPrimaryRemote: false,
     nextCursor: null,
     totalCount: 0,
+  };
+}
+
+function nonRepositoryListWorktrees(): VcsListWorktreesResult {
+  return {
+    worktrees: [],
+    isRepo: false,
   };
 }
 
@@ -300,10 +315,20 @@ export const make = Effect.fn("makeGitWorkflowService")(function* () {
       "GitWorkflowService.markPullRequestReadyForReview",
       gitManager.markPullRequestReadyForReview,
     ),
+    mergePullRequest: routeGitManager(
+      "GitWorkflowService.mergePullRequest",
+      gitManager.mergePullRequest,
+    ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
+        ),
+      ),
+    listWorktrees: (input) =>
+      detectGitRepositoryForCommand("GitWorkflowService.listWorktrees", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.listWorktrees(input) : Effect.succeed(nonRepositoryListWorktrees()),
         ),
       ),
     createWorktree: (input) =>

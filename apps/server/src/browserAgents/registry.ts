@@ -35,6 +35,7 @@ import {
   type BrowserAgentThreadLinkInput,
   type BrowserAgentThreadTabInputCommandInput,
   type BrowserAgentThreadTabNavigateInput,
+  LOCAL_BROWSER_AGENT_SESSION_ID,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 
@@ -68,7 +69,7 @@ const DEFAULT_BROWSER_SCREENSHOT_QUALITY = {
   maxHeight: 4096,
   fps: 2,
 } as const;
-export const LOCAL_BROWSER_AGENT_SESSION_ID = AuthSessionId.make("browser-agent-local-control");
+export { LOCAL_BROWSER_AGENT_SESSION_ID };
 const DEFAULT_BROWSER_CONTEXT_ID = BrowserAgentContextId.make("default");
 let nextEphemeralId = 0;
 
@@ -162,6 +163,21 @@ function browserLabel(agent: BrowserAgent): string {
     return `${browser} on ${label}`;
   }
   return label || browser || "Browser";
+}
+
+function summarizeAgentForPreviewDebug(agent: BrowserAgent) {
+  return {
+    agentId: agent.id,
+    connectionId: agent.connectionId,
+    sessionId: agent.sessionId,
+    localControl: agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID,
+    connected: agent.connected,
+    label: browserLabel(agent),
+    browser: agent.device.browser ?? null,
+    platform: agent.device.platform ?? null,
+    extensionVersion: agent.device.extensionVersion,
+    lastSeenAt: agent.lastSeenAt,
+  };
 }
 
 function browserControlStateFromLegacy(
@@ -650,6 +666,45 @@ export class BrowserAgentRegistry {
     });
   }
 
+  closeThreadTab(
+    input: BrowserAgentThreadLinkInput,
+  ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
+    const registry = this;
+    return Effect.gen(function* () {
+      const link = yield* registry.requireThreadLink(input);
+      const agent = yield* registry.requireLinkedAgent(link);
+      yield* registry.requireAgentPrimitive(agent, "threadTab.close");
+      if (link.tabId === undefined || link.windowId === undefined) {
+        return yield* toCommandError({
+          code: "tab-not-linked",
+          message: "This thread does not have an active browser tab yet.",
+        });
+      }
+      const commandId = makeCommandId("close-thread-tab");
+      const deferred = yield* Deferred.make<BrowserAgentIncomingCommandResultMessage>();
+      registry.pendingCommands.set(commandId, {
+        commandId,
+        agentId: agent.id,
+        deferred,
+      });
+      yield* registry.sendToAgent(agent.id, {
+        type: "browserAgent.command.closeThreadTab",
+        commandId,
+        workspaceLinkId: link.id,
+      });
+      const message = yield* registry.awaitCommandResult(commandId, deferred);
+      registry.workspaceLinks.delete(workspaceLinkKey(link));
+      registry.workspaceLinksById.delete(link.id);
+      registry.emit({ type: "workspace-link-removed", linkId: link.id });
+      return {
+        commandId,
+        agentId: agent.id,
+        workspaceLink: link,
+        ...(message.payload !== undefined ? { payload: message.payload } : {}),
+      };
+    });
+  }
+
   setThreadTabControl(
     input: BrowserAgentSetThreadTabControlInput,
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
@@ -950,6 +1005,16 @@ export class BrowserAgentRegistry {
   ): Effect.Effect<BrowserAgentCommandResult, BrowserAgentCommandError, never> {
     const registry = this;
     return Effect.gen(function* () {
+      yield* Effect.logInfo("browser preview registry open requested", {
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        devServerUrl: input.devServerUrl,
+        repoName: input.repoName,
+        preferredAgentId: input.preferredAgentId ?? null,
+        preferredSessionId: options?.preferredSessionId ?? null,
+        preferLocalControl: options?.preferLocalControl ?? null,
+        allowCrossSessionFallback: options?.allowCrossSessionFallback ?? null,
+      });
       const agent = yield* registry.selectAgent({
         environmentId: input.environmentId,
         threadId: input.threadId,
@@ -961,6 +1026,11 @@ export class BrowserAgentRegistry {
         ...(options?.allowCrossSessionFallback !== undefined
           ? { allowCrossSessionFallback: options.allowCrossSessionFallback }
           : {}),
+      });
+      yield* Effect.logInfo("browser preview registry agent selected", {
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        selectedAgent: summarizeAgentForPreviewDebug(agent),
       });
       yield* registry.requireAgentPrimitive(agent, "preview.openOrFocus");
       const timestamp = nowIso();
@@ -1298,77 +1368,131 @@ export class BrowserAgentRegistry {
     readonly preferLocalControl?: boolean;
     readonly allowCrossSessionFallback?: boolean;
   }): Effect.Effect<BrowserAgent, BrowserAgentCommandError, never> {
-    const connectedAgents = Array.from(this.agents.values()).filter((agent) => agent.connected);
-    if (connectedAgents.length === 0) {
-      return Effect.fail(
-        toCommandError({
+    const agents = this.agents;
+    const workspaceLinks = this.workspaceLinks;
+    return Effect.gen(function* () {
+      const connectedAgents = Array.from(agents.values()).filter((agent) => agent.connected);
+      const existing = workspaceLinks.get(workspaceLinkKey(input));
+      yield* Effect.logInfo("browser preview registry selecting agent", {
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        browserContextId: input.browserContextId ?? DEFAULT_BROWSER_CONTEXT_ID,
+        preferredAgentId: input.preferredAgentId ?? null,
+        preferredSessionId: input.preferredSessionId ?? null,
+        preferLocalControl: input.preferLocalControl ?? null,
+        allowCrossSessionFallback: input.allowCrossSessionFallback ?? null,
+        existingWorkspaceLinkId: existing?.id ?? null,
+        existingWorkspaceAgentId: existing?.agentId ?? null,
+        connectedAgentCount: connectedAgents.length,
+        connectedAgents: connectedAgents.map(summarizeAgentForPreviewDebug),
+      });
+      if (connectedAgents.length === 0) {
+        yield* Effect.logInfo("browser preview registry no connected agents", {
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+          preferLocalControl: input.preferLocalControl ?? null,
+          allowCrossSessionFallback: input.allowCrossSessionFallback ?? null,
+        });
+        return yield* toCommandError({
           code: "no-agent-connected",
           message: "No browser extension local-control session is connected.",
-        }),
-      );
-    }
-
-    if (input.preferredAgentId) {
-      const preferred = this.agents.get(input.preferredAgentId);
-      if (preferred?.connected) {
-        return Effect.succeed(preferred);
+        });
       }
-      return Effect.fail(
-        toCommandError({
+
+      if (input.preferredAgentId) {
+        const preferred = agents.get(input.preferredAgentId);
+        if (preferred?.connected) {
+          yield* Effect.logInfo("browser preview registry selected preferred agent", {
+            selectedAgent: summarizeAgentForPreviewDebug(preferred),
+          });
+          return preferred;
+        }
+        yield* Effect.logInfo("browser preview registry preferred agent disconnected", {
+          preferredAgentId: input.preferredAgentId,
+        });
+        return yield* toCommandError({
           code: "agent-disconnected",
           message: "The selected browser extension is disconnected.",
-        }),
-      );
-    }
-
-    if (input.preferLocalControl === true) {
-      const localControlMostRecent = connectedAgents
-        .filter((agent) => agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID)
-        .toSorted((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
-      if (localControlMostRecent) {
-        return Effect.succeed(localControlMostRecent);
+        });
       }
-    }
 
-    const existing = this.workspaceLinks.get(workspaceLinkKey(input));
-    if (input.preferredSessionId) {
-      if (existing) {
-        const linkedAgent = this.agents.get(existing.agentId);
-        if (linkedAgent?.connected && linkedAgent.sessionId === input.preferredSessionId) {
-          return Effect.succeed(linkedAgent);
+      if (input.preferLocalControl === true) {
+        const localControlMostRecent = connectedAgents
+          .filter((agent) => agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID)
+          .toSorted((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+        if (localControlMostRecent) {
+          yield* Effect.logInfo("browser preview registry selected local-control agent", {
+            selectedAgent: summarizeAgentForPreviewDebug(localControlMostRecent),
+          });
+          return localControlMostRecent;
+        }
+        yield* Effect.logInfo("browser preview registry local-control agent missing", {
+          connectedAgentCount: connectedAgents.length,
+          allowCrossSessionFallback: input.allowCrossSessionFallback ?? null,
+        });
+      }
+
+      if (input.preferredSessionId) {
+        if (existing) {
+          const linkedAgent = agents.get(existing.agentId);
+          if (linkedAgent?.connected && linkedAgent.sessionId === input.preferredSessionId) {
+            yield* Effect.logInfo("browser preview registry selected existing same-session agent", {
+              selectedAgent: summarizeAgentForPreviewDebug(linkedAgent),
+              existingWorkspaceLinkId: existing.id,
+            });
+            return linkedAgent;
+          }
+        }
+
+        const sameSessionMostRecent = connectedAgents
+          .filter((agent) => agent.sessionId === input.preferredSessionId)
+          .toSorted((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
+        if (sameSessionMostRecent) {
+          yield* Effect.logInfo("browser preview registry selected same-session agent", {
+            selectedAgent: summarizeAgentForPreviewDebug(sameSessionMostRecent),
+          });
+          return sameSessionMostRecent;
+        }
+        yield* Effect.logInfo("browser preview registry same-session agent missing", {
+          preferredSessionId: input.preferredSessionId,
+        });
+      }
+
+      if (input.allowCrossSessionFallback !== false) {
+        if (existing) {
+          const linkedAgent = agents.get(existing.agentId);
+          if (linkedAgent?.connected) {
+            yield* Effect.logInfo("browser preview registry selected existing fallback agent", {
+              selectedAgent: summarizeAgentForPreviewDebug(linkedAgent),
+              existingWorkspaceLinkId: existing.id,
+            });
+            return linkedAgent;
+          }
+        }
+
+        const mostRecent = connectedAgents.toSorted((left, right) =>
+          right.lastSeenAt.localeCompare(left.lastSeenAt),
+        )[0];
+        if (mostRecent) {
+          yield* Effect.logInfo("browser preview registry selected cross-session fallback agent", {
+            selectedAgent: summarizeAgentForPreviewDebug(mostRecent),
+          });
+          return mostRecent;
         }
       }
 
-      const sameSessionMostRecent = connectedAgents
-        .filter((agent) => agent.sessionId === input.preferredSessionId)
-        .toSorted((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0];
-      if (sameSessionMostRecent) {
-        return Effect.succeed(sameSessionMostRecent);
-      }
-    }
-
-    if (input.allowCrossSessionFallback !== false) {
-      if (existing) {
-        const linkedAgent = this.agents.get(existing.agentId);
-        if (linkedAgent?.connected) {
-          return Effect.succeed(linkedAgent);
-        }
-      }
-
-      const mostRecent = connectedAgents.toSorted((left, right) =>
-        right.lastSeenAt.localeCompare(left.lastSeenAt),
-      )[0];
-      if (mostRecent) {
-        return Effect.succeed(mostRecent);
-      }
-    }
-
-    return Effect.fail(
-      toCommandError({
+      yield* Effect.logInfo("browser preview registry selection failed", {
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        preferLocalControl: input.preferLocalControl ?? null,
+        allowCrossSessionFallback: input.allowCrossSessionFallback ?? null,
+        connectedAgentCount: connectedAgents.length,
+      });
+      return yield* toCommandError({
         code: "no-agent-connected",
         message: "No browser extension local-control session is connected.",
-      }),
-    );
+      });
+    });
   }
 
   private sendToAgent(

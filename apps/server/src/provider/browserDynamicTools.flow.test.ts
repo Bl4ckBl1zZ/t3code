@@ -243,6 +243,16 @@ class FakeThreadBrowserAgent {
         this.sendResult(message, { payload: { ok: true } });
         break;
 
+      case "browserAgent.command.closeThreadTab":
+        this.requireLinkedWorkspace(message.workspaceLinkId);
+        this.workspaceLinkId = null;
+        this.sendResult(message, {
+          tabId: this.tabId,
+          windowId: this.windowId,
+          payload: { ok: true, closed: true },
+        });
+        break;
+
       case "browserAgent.command.openOrFocusPreview":
       case "browserAgent.command.activateAnnotation":
       case "browserAgent.command.requestTabsSnapshot":
@@ -709,10 +719,25 @@ describe("Codex browser dynamic tools full thread flow", () => {
       error: "The linked browser tab is closed.",
     });
 
+    const reopened = await callBrowserTool({
+      registry,
+      tool: "browser_open_tab",
+      arguments: { url: fixtureUrl },
+    });
+    expect(reopened.success).toBe(true);
+
+    const closeResult = await callBrowserTool({
+      registry,
+      tool: "browser_close_tab",
+    });
+    expect(closeResult.success).toBe(true);
+    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toBeNull();
+
     expect(fakeBrowser.failures).toEqual([]);
     expect(fakeBrowser.messages.map((message) => message.type)).toEqual(
       expect.arrayContaining([
         "browserAgent.command.openOrFocusThreadTab",
+        "browserAgent.command.closeThreadTab",
         "browserAgent.command.startTabCapture",
         "browserAgent.command.snapshot",
         "browserAgent.command.input",

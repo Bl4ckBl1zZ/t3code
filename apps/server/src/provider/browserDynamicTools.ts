@@ -23,6 +23,7 @@ const browserToolNames = new Set([
   "browser_screenshot",
   "browser_current_page",
   "browser_open_tab",
+  "browser_close_tab",
   "browser_cdp_evaluate",
   "browser_accessibility_snapshot",
   "browser_diagnostics",
@@ -155,6 +156,12 @@ export const CODEX_BROWSER_DYNAMIC_TOOLS: ReadonlyArray<DynamicToolSpec> = [
         },
       },
     },
+  },
+  {
+    name: "browser_close_tab",
+    description:
+      "Close the browser tab linked to this T3 Code thread when the agent is done with it.",
+    inputSchema: objectSchema,
   },
   {
     name: "browser_cdp_evaluate",
@@ -422,6 +429,17 @@ export function handleCodexBrowserDynamicToolCall(input: {
             }),
           ),
         ]);
+
+      case "browser_close_tab": {
+        const result = yield* registry.closeThreadTab(linkInput);
+        return toolResult([
+          jsonContent({
+            ok: true,
+            commandId: result.commandId,
+            payload: result.payload ?? null,
+          }),
+        ]);
+      }
 
       case "browser_navigate": {
         const url = yield* parseToolInput(() => readRequiredString(args, "url"));

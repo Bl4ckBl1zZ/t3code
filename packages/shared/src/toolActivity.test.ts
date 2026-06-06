@@ -169,4 +169,23 @@ describe("toolActivity", () => {
       browserAction: "open",
     });
   });
+
+  it("labels browser tab close tool calls", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "dynamic_tool_call",
+        title: "Tool call",
+        data: {
+          item: {
+            type: "dynamicToolCall",
+            tool: "browser_close_tab",
+            arguments: {},
+          },
+        },
+      }),
+    ).toEqual({
+      summary: "Closed browser tab",
+      browserAction: "close",
+    });
+  });
 });

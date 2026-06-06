@@ -49,6 +49,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       refreshStatus: rpcClient.vcs.refreshStatus,
       onStatus: (input, callback, options) => rpcClient.vcs.onStatus(input, callback, options),
       listRefs: rpcClient.vcs.listRefs,
+      listWorktrees: rpcClient.vcs.listWorktrees,
       createWorktree: rpcClient.vcs.createWorktree,
       removeWorktree: rpcClient.vcs.removeWorktree,
       createRef: rpcClient.vcs.createRef,
@@ -59,6 +60,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       resolvePullRequest: rpcClient.git.resolvePullRequest,
       preparePullRequestThread: rpcClient.git.preparePullRequestThread,
       markPullRequestReadyForReview: rpcClient.git.markPullRequestReadyForReview,
+      mergePullRequest: rpcClient.git.mergePullRequest,
     },
     review: {
       getDiffPreview: rpcClient.review.getDiffPreview,

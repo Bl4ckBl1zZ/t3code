@@ -33,10 +33,8 @@ import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import {
-  buildGitAgentPrompt,
   buildGitActionProgressStages,
   buildMenuItems,
-  type GitAgentPromptIntent,
   type GitActionIconName,
   type GitActionMenuItem,
   type GitQuickAction,
@@ -71,6 +69,7 @@ import { openInPreferredEditor } from "~/editorPreferences";
 import {
   useGitStackedAction,
   useMarkPullRequestReadyForReviewAction,
+  useMergePullRequestAction,
   useSourceControlActionRunning,
   useSourceControlPublishRepositoryAction,
   useVcsInitAction,
@@ -152,8 +151,8 @@ const RUNNING_SOURCE_CONTROL_ACTIONS = [
   "syncBase",
   "publishRepository",
   "markPullRequestReadyForReview",
+  "mergePullRequest",
 ] as const;
-const USE_AGENT_PROMPTS_FOR_GIT_ACTIONS = true;
 const PULL_QUICK_ACTION_CLASS_NAME =
   "border-cyan-500/50 bg-cyan-500/12 text-cyan-700 shadow-cyan-500/20 shadow-sm [:hover,[data-pressed]]:bg-cyan-500/18 dark:border-cyan-300/45 dark:bg-cyan-300/12 dark:text-cyan-100 dark:shadow-cyan-300/20 dark:[:hover,[data-pressed]]:bg-cyan-300/18";
 
@@ -379,54 +378,6 @@ function GitQuickActionIcon({
   }
   if (quickAction.label === "Commit") return <GitCommitIcon className={iconClassName} />;
   return <InfoIcon className={iconClassName} />;
-}
-
-function gitStackedActionToPromptIntent(action: GitStackedAction): GitAgentPromptIntent {
-  switch (action) {
-    case "commit":
-      return "commit";
-    case "push":
-      return "push";
-    case "create_pr":
-      return "create_pr";
-    case "commit_push":
-      return "commit_push";
-    case "commit_push_pr":
-      return "commit_push_pr";
-  }
-}
-
-function quickActionPromptIntent(quickAction: GitQuickAction): GitAgentPromptIntent | null {
-  if (quickAction.label === "Archive") return "archive_merged_thread";
-  if (quickAction.kind === "prompt_ai") {
-    if (quickAction.label === "Resolve conflicts") return "resolve_conflicts";
-    return "sync_base";
-  }
-  if (quickAction.kind === "open_pr") {
-    if (quickAction.label === "Merge") return "merge_pr";
-    if (quickAction.label === "Merged") return "archive_merged_thread";
-    return "inspect_pr";
-  }
-  if (quickAction.kind === "open_publish") return "publish_repository";
-  if (quickAction.kind === "run_pull") return "pull";
-  if (quickAction.kind === "run_sync_base") return "sync_base";
-  if (quickAction.kind === "run_action" && quickAction.action) {
-    return gitStackedActionToPromptIntent(quickAction.action);
-  }
-  return null;
-}
-
-function menuItemPromptIntent(item: GitActionMenuItem): GitAgentPromptIntent | null {
-  if (item.id === "commit") return "commit";
-  if (item.id === "push") return "push";
-  if (item.id === "pr") {
-    if (item.kind === "open_pr") {
-      if (item.label === "Merged") return "archive_merged_thread";
-      return "inspect_pr";
-    }
-    return "create_pr";
-  }
-  return null;
 }
 
 function gitQuickActionToneClassName(tone: GitQuickAction["tone"]): string | undefined {
@@ -1205,6 +1156,7 @@ export default function GitActionsControl({
   const syncBaseAction = useVcsSyncBaseAction(sourceControlScope);
   const markPullRequestReadyForReviewAction =
     useMarkPullRequestReadyForReviewAction(sourceControlScope);
+  const mergePullRequestAction = useMergePullRequestAction(sourceControlScope);
   const isGitActionRunning = useSourceControlActionRunning(
     sourceControlScope,
     RUNNING_SOURCE_CONTROL_ACTIONS,
@@ -1445,31 +1397,6 @@ export default function GitActionsControl({
       setComposerDraftPrompt,
       threadToastData,
     ],
-  );
-
-  const buildAgentPrompt = useCallback(
-    (
-      intent: GitAgentPromptIntent,
-      options?: {
-        readonly commitMessage?: string;
-        readonly filePaths?: readonly string[];
-        readonly promptHint?: string;
-        readonly unreadCommentCount?: number;
-      },
-    ) =>
-      buildGitAgentPrompt({
-        intent,
-        cwd: gitCwd,
-        gitStatus: gitStatusForActions,
-        threadRef: activeThreadRef,
-        ...(options?.commitMessage ? { commitMessage: options.commitMessage } : {}),
-        ...(options?.filePaths ? { filePaths: options.filePaths } : {}),
-        ...(options?.promptHint ? { promptHint: options.promptHint } : {}),
-        ...(options?.unreadCommentCount !== undefined
-          ? { unreadCommentCount: options.unreadCommentCount }
-          : {}),
-      }),
-    [activeThreadRef, gitCwd, gitStatusForActions],
   );
 
   runGitActionWithToast = useEffectEvent(
@@ -1738,18 +1665,6 @@ export default function GitActionsControl({
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
 
-    if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-      promptAi(
-        buildAgentPrompt("commit", {
-          ...(commitMessage ? { commitMessage } : {}),
-          ...(filePaths ? { filePaths } : {}),
-          promptHint:
-            "Create a new feature ref before committing. Pick a descriptive branch name from the actual change.",
-        }),
-      );
-      return;
-    }
-
     void runGitActionWithToast({
       action: "commit",
       ...(commitMessage ? { commitMessage } : {}),
@@ -1810,6 +1725,38 @@ export default function GitActionsControl({
       return;
     }
 
+    if (renderedQuickAction.kind === "open_pr" && renderedQuickAction.label === "Merge") {
+      const pr = gitStatusForActions?.pr;
+      if (!pr) {
+        toastManager.add({
+          type: "error",
+          title: "No pull request found.",
+          data: threadToastData,
+        });
+        return;
+      }
+
+      const promise = mergePullRequestAction.run({ reference: String(pr.number) });
+      void toastManager.promise<
+        Awaited<ReturnType<typeof mergePullRequestAction.run>>,
+        ThreadToastData
+      >(promise, {
+        loading: { title: "Merging pull request...", data: threadToastData },
+        success: () => ({
+          title: "Pull request merged",
+          description: `${changeRequestTerminology.shortLabel} #${pr.number} was merged.`,
+          data: threadToastData,
+        }),
+        error: (err) => ({
+          title: "Merge failed",
+          description: err instanceof Error ? err.message : "An error occurred.",
+          data: threadToastData,
+        }),
+      });
+      void promise.catch(() => undefined);
+      return;
+    }
+
     if (renderedQuickAction.kind === "mark_pr_ready_for_review") {
       const pr = gitStatusForActions?.pr;
       if (!pr) {
@@ -1840,19 +1787,6 @@ export default function GitActionsControl({
       });
       void promise.catch(() => undefined);
       return;
-    }
-
-    if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-      const promptIntent = quickActionPromptIntent(renderedQuickAction);
-      if (promptIntent) {
-        promptAi(
-          buildAgentPrompt(
-            promptIntent,
-            renderedQuickAction.prompt ? { promptHint: renderedQuickAction.prompt } : undefined,
-          ),
-        );
-        return;
-      }
     }
 
     if (quickAction.kind === "open_pr") {
@@ -1936,15 +1870,6 @@ export default function GitActionsControl({
       void openExistingPr();
       return;
     }
-    if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-      const promptIntent = menuItemPromptIntent(item);
-      if (promptIntent) {
-        promptAi(
-          buildAgentPrompt(promptIntent, item.prompt ? { promptHint: item.prompt } : undefined),
-        );
-        return;
-      }
-    }
     if (item.kind === "open_pr") {
       void openExistingPr();
       return;
@@ -1974,16 +1899,6 @@ export default function GitActionsControl({
     setDialogCommitMessage("");
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
-
-    if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-      promptAi(
-        buildAgentPrompt("commit", {
-          ...(commitMessage ? { commitMessage } : {}),
-          ...(filePaths ? { filePaths } : {}),
-        }),
-      );
-      return;
-    }
 
     void runGitActionWithToast({
       action: "commit",
@@ -2030,10 +1945,6 @@ export default function GitActionsControl({
           size="xs"
           disabled={initAction.isPending}
           onClick={() => {
-            if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-              promptAi(buildAgentPrompt("initialize"));
-              return;
-            }
             void initAction.run();
           }}
         >
@@ -2164,14 +2075,6 @@ export default function GitActionsControl({
                     }
                     disabled={gitControlsDisabled}
                     onClick={() => {
-                      if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-                        promptAi(
-                          buildAgentPrompt("review_pr_comments", {
-                            unreadCommentCount: pullRequestCommentsAction.unreadCount,
-                          }),
-                        );
-                        return;
-                      }
                       pullRequestCommentsAction.onOpen();
                     }}
                   >
@@ -2197,10 +2100,6 @@ export default function GitActionsControl({
                 <MenuItem
                   disabled={isGitActionRunning || gitControlsDisabled}
                   onClick={() => {
-                    if (USE_AGENT_PROMPTS_FOR_GIT_ACTIONS) {
-                      promptAi(buildAgentPrompt("publish_repository"));
-                      return;
-                    }
                     setIsPublishDialogOpen(true);
                   }}
                 >
