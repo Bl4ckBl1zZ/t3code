@@ -1,6 +1,6 @@
-import type { EnvironmentId, ProjectScript, ThreadId } from "@t3tools/contracts";
-import { MonitorUpIcon } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import type { EnvironmentId, PreviewTarget, ThreadId } from "@t3tools/contracts";
+import { ChevronDownIcon, MonitorUpIcon } from "lucide-react";
+import { memo, useState } from "react";
 
 import {
   autoPairBrowserAgent,
@@ -11,8 +11,14 @@ import {
   requireEnvironmentConnection,
 } from "../../environments/runtime";
 import { ensureLocalApi } from "../../localApi";
-import { resolvePreviewUrl, resolveReachablePreviewUrl } from "../../previewUrls";
+import { resolveReachablePreviewUrl } from "../../previewUrls";
+import {
+  formatPreviewTargetUrl,
+  previewTargetSourceLabel,
+  type WorkspacePreviewSelection,
+} from "../../previewTargets";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -54,29 +60,16 @@ function previewSetupUrlForLog(setupUrl: string): string {
 
 export const PreviewButton = memo(function PreviewButton({
   activeProjectName,
-  activeProjectScripts,
-  projectPreviewUrl,
   activeThreadEnvironmentId,
   activeThreadId,
-  detectedDevServerUrl,
+  previewSelection,
 }: {
   readonly activeProjectName: string | undefined;
-  readonly activeProjectScripts: readonly ProjectScript[] | undefined;
-  readonly projectPreviewUrl: string | null | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly activeThreadId: ThreadId;
-  readonly detectedDevServerUrl: string | null;
+  readonly previewSelection: WorkspacePreviewSelection;
 }) {
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
-  const devServerUrl = useMemo(
-    () =>
-      resolvePreviewUrl({
-        projectPreviewUrl,
-        detectedDevServerUrl,
-        scripts: activeProjectScripts,
-      }),
-    [activeProjectScripts, detectedDevServerUrl, projectPreviewUrl],
-  );
   const environmentHttpBaseUrl = getEnvironmentHttpBaseUrl(activeThreadEnvironmentId);
 
   const openSetupUrl = (url: string) => {
@@ -93,18 +86,22 @@ export const PreviewButton = memo(function PreviewButton({
     }
   };
 
-  const openPreviewInBrowserAgent = () => {
+  const openPreviewInBrowserAgent = (target: PreviewTarget | null) => {
     if (isOpeningPreview) return;
-    if (!activeProjectName) {
+    if (!activeProjectName || !target) {
       return;
     }
 
+    const devServerUrl = target.url;
     const baseDebugDetails = {
       activeProjectName,
       activeThreadEnvironmentId,
       currentWindowOrigin: typeof window !== "undefined" ? window.location.origin : null,
       environmentHttpBaseUrl,
       devServerUrl,
+      previewTargetId: target.id,
+      previewTargetSource: target.source,
+      previewTargetStatus: target.status,
       route: "browser-agent",
     };
     logPreviewDebug("click", baseDebugDetails);
@@ -167,11 +164,11 @@ export const PreviewButton = memo(function PreviewButton({
           toastManager.add(
             stackedThreadToast({
               type: "warning",
-              title: "Browser extension needed",
+              title: "Connect this browser",
               description:
-                "Open the T3 Code Browser Agent setup page in this browser, then retry Preview.",
+                "Open this T3 Code host in the browser with the extension, pair or sign in there, then retry Preview.",
               actionProps: {
-                children: "Open setup",
+                children: "Open host",
                 onClick: () => openSetupUrl(error.setupUrl),
               },
             }),
@@ -197,6 +194,59 @@ export const PreviewButton = memo(function PreviewButton({
       });
   };
 
+  const selectedTarget = previewSelection.selectedTarget;
+  const disabled =
+    isOpeningPreview ||
+    !activeProjectName ||
+    previewSelection.kind === "starting" ||
+    !selectedTarget;
+  const tooltipMessage =
+    previewSelection.kind === "ready" && selectedTarget
+      ? `Open ${formatPreviewTargetUrl(selectedTarget)} with the browser extension.`
+      : previewSelection.message;
+
+  if (previewSelection.kind === "ambiguous") {
+    return (
+      <Menu highlightItemOnHover={false}>
+        <MenuTrigger
+          render={
+            <Button
+              className="shrink-0"
+              size="xs"
+              variant="outline"
+              aria-label="Preview"
+              disabled={isOpeningPreview || !activeProjectName}
+            />
+          }
+        >
+          <MonitorUpIcon className="size-3" />
+          <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+            Preview
+          </span>
+          <ChevronDownIcon className="size-3 opacity-70" />
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-[min(86vw,22rem)]">
+          {previewSelection.targets.map((target) => (
+            <MenuItem
+              key={target.id}
+              className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 rounded-md px-3 py-2 text-left"
+              onClick={() => openPreviewInBrowserAgent(target)}
+            >
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                {formatPreviewTargetUrl(target)}
+              </span>
+              <span className="text-xs text-muted-foreground">{target.port}</span>
+              <span className="col-span-2 min-w-0 truncate text-xs text-muted-foreground">
+                {previewTargetSourceLabel(target.source)}
+                {target.command ? ` - ${target.command}` : ""}
+              </span>
+            </MenuItem>
+          ))}
+        </MenuPopup>
+      </Menu>
+    );
+  }
+
   return (
     <>
       <Tooltip>
@@ -207,8 +257,8 @@ export const PreviewButton = memo(function PreviewButton({
               size="xs"
               variant="outline"
               aria-label="Preview"
-              disabled={isOpeningPreview || !activeProjectName}
-              onClick={openPreviewInBrowserAgent}
+              disabled={disabled}
+              onClick={() => openPreviewInBrowserAgent(selectedTarget)}
             />
           }
         >
@@ -217,7 +267,7 @@ export const PreviewButton = memo(function PreviewButton({
             Preview
           </span>
         </TooltipTrigger>
-        <TooltipPopup side="bottom">{`Open ${devServerUrl} with the browser extension.`}</TooltipPopup>
+        <TooltipPopup side="bottom">{tooltipMessage}</TooltipPopup>
       </Tooltip>
     </>
   );

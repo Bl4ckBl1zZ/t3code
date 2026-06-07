@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, WorkspaceId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -37,6 +37,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface WorkspaceExplorerTarget {
   readonly environmentId: EnvironmentId;
+  readonly workspaceId?: WorkspaceId | undefined;
   readonly cwd: string;
   readonly label: string;
 }
@@ -47,6 +48,7 @@ interface WorkspaceExplorerProps {
   readonly revealRequest?: {
     readonly requestId: number;
     readonly environmentId: EnvironmentId;
+    readonly workspaceId?: WorkspaceId | undefined;
     readonly cwd: string;
     readonly relativePath: string;
   } | null;
@@ -331,6 +333,9 @@ function DirectoryRows({
                 } else if (entry.kind === "file" || entry.kind === "symlink") {
                   openFileTab({
                     environmentId: target.environmentId,
+                    ...(target.workspaceId !== undefined
+                      ? { workspaceId: target.workspaceId }
+                      : {}),
                     cwd: target.cwd,
                     relativePath: entry.relativePath,
                   });
@@ -471,6 +476,8 @@ export function WorkspaceExplorer({
       !target ||
       !revealRequest ||
       target.environmentId !== revealRequest.environmentId ||
+      (revealRequest.workspaceId !== undefined &&
+        target.workspaceId !== revealRequest.workspaceId) ||
       target.cwd !== revealRequest.cwd
     ) {
       return;

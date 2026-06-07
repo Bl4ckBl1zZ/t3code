@@ -1,10 +1,13 @@
 import {
   CommandId,
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   ProjectId,
   ThreadId,
   TurnId,
+  WorkspaceActionId,
+  WorkspaceId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   ProviderInstanceId,
@@ -21,6 +24,8 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+const asWorkspaceId = (value: string): WorkspaceId => WorkspaceId.make(value);
+const asWorkspaceActionId = (value: string): WorkspaceActionId => WorkspaceActionId.make(value);
 
 const seedReadModel = Effect.gen(function* () {
   const now = "2026-01-01T00:00:00.000Z";
@@ -47,8 +52,37 @@ const seedReadModel = Effect.gen(function* () {
     },
   });
 
-  const withFirstThread = yield* projectEvent(withProject, {
+  const withWorkspace = yield* projectEvent(withProject, {
     sequence: 2,
+    eventId: asEventId("evt-workspace-create"),
+    aggregateKind: "workspace",
+    aggregateId: asWorkspaceId("project-delete:primary"),
+    type: "workspace.created",
+    occurredAt: now,
+    commandId: asCommandId("cmd-workspace-create"),
+    causationEventId: null,
+    correlationId: asCommandId("cmd-workspace-create"),
+    metadata: {},
+    payload: {
+      workspaceId: asWorkspaceId("project-delete:primary"),
+      organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+      projectId: asProjectId("project-delete"),
+      title: "main",
+      cwd: "/tmp/project-delete",
+      branch: null,
+      worktreePath: null,
+      baseBranch: null,
+      mode: "local",
+      status: "ready",
+      defaultSubChatId: null,
+      browserPreviewUrl: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+
+  const withFirstThread = yield* projectEvent(withWorkspace, {
+    sequence: 3,
     eventId: asEventId("evt-thread-create-1"),
     aggregateKind: "thread",
     aggregateId: asThreadId("thread-delete-1"),
@@ -76,7 +110,7 @@ const seedReadModel = Effect.gen(function* () {
   });
 
   return yield* projectEvent(withFirstThread, {
-    sequence: 3,
+    sequence: 4,
     eventId: asEventId("evt-thread-create-2"),
     aggregateKind: "thread",
     aggregateId: asThreadId("thread-delete-2"),
@@ -128,6 +162,41 @@ const seedReadModelWithActiveThread = Effect.gen(function* () {
         runtimeMode: "approval-required",
         activeTurnId: asTurnId("turn-active"),
         lastError: null,
+        updatedAt: now,
+      },
+    },
+  });
+});
+
+const seedReadModelWithActiveWorkspaceAction = Effect.gen(function* () {
+  const readModel = yield* seedReadModel;
+  const now = "2026-01-01T00:00:01.000Z";
+  return yield* projectEvent(readModel, {
+    sequence: readModel.snapshotSequence + 1,
+    eventId: asEventId("evt-workspace-action-running"),
+    aggregateKind: "workspace-action",
+    aggregateId: asWorkspaceActionId("action-running"),
+    type: "workspace-action.upserted",
+    occurredAt: now,
+    commandId: asCommandId("cmd-workspace-action-running"),
+    causationEventId: null,
+    correlationId: asCommandId("cmd-workspace-action-running"),
+    metadata: {},
+    payload: {
+      action: {
+        id: asWorkspaceActionId("action-running"),
+        organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+        projectId: asProjectId("project-delete"),
+        workspaceId: asWorkspaceId("project-delete:primary"),
+        subChatId: asThreadId("thread-delete-1"),
+        terminalId: null,
+        kind: "script.run",
+        title: "Run tests",
+        status: "running",
+        source: "script",
+        createdAt: now,
+        startedAt: now,
+        completedAt: null,
         updatedAt: now,
       },
     },
@@ -281,6 +350,42 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
       );
 
       expect(error.message).toContain("has an active session");
+    }),
+  );
+
+  it.effect("rejects deleting a workspace with an active sub-chat session", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModelWithActiveThread;
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "workspace.delete",
+            commandId: asCommandId("cmd-workspace-delete-active-thread"),
+            workspaceId: asWorkspaceId("project-delete:primary"),
+          },
+          readModel,
+        }),
+      );
+
+      expect(error.message).toContain("has active sub-chat");
+    }),
+  );
+
+  it.effect("rejects archiving a workspace with an active action", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModelWithActiveWorkspaceAction;
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "workspace.archive",
+            commandId: asCommandId("cmd-workspace-archive-active-action"),
+            workspaceId: asWorkspaceId("project-delete:primary"),
+          },
+          readModel,
+        }),
+      );
+
+      expect(error.message).toContain("has active action");
     }),
   );
 });

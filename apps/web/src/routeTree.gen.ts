@@ -26,6 +26,9 @@ import { Route as SettingsArchivedRouteImport } from './routes/settings.archived
 import { Route as OrganizationsOrganizationIdRouteImport } from './routes/organizations.$organizationId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as WWorkspaceIdCSubChatIdRouteImport } from './routes/w.$workspaceId.c.$subChatId'
+import { Route as OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRouteImport } from './routes/orgs.$organizationId.projects.$projectId.workspaces.$workspaceId.chats.$subChatId'
+import { Route as OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRouteImport } from './routes/orgs.$organizationId.projects.$projectId.workspaces.$workspaceId.chats.draft.$draftId'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
@@ -113,6 +116,27 @@ const ChatEnvironmentIdThreadIdRoute =
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
   } as any)
+const WWorkspaceIdCSubChatIdRoute = WWorkspaceIdCSubChatIdRouteImport.update({
+  id: '/w/$workspaceId/c/$subChatId',
+  path: '/w/$workspaceId/c/$subChatId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute =
+  OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRouteImport.update(
+    {
+      id: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId',
+      path: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId',
+      getParentRoute: () => rootRouteImport,
+    } as any,
+  )
+const OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute =
+  OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRouteImport.update(
+    {
+      id: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId',
+      path: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId',
+      getParentRoute: () => rootRouteImport,
+    } as any,
+  )
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
@@ -131,6 +155,9 @@ export interface FileRoutesByFullPath {
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/w/$workspaceId/c/$subChatId': typeof WWorkspaceIdCSubChatIdRoute
+  '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId': typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute
+  '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId': typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute
 }
 export interface FileRoutesByTo {
   '/pair': typeof PairRoute
@@ -149,6 +176,9 @@ export interface FileRoutesByTo {
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/w/$workspaceId/c/$subChatId': typeof WWorkspaceIdCSubChatIdRoute
+  '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId': typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute
+  '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId': typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -169,6 +199,9 @@ export interface FileRoutesById {
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/w/$workspaceId/c/$subChatId': typeof WWorkspaceIdCSubChatIdRoute
+  '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId': typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute
+  '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId': typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -189,6 +222,9 @@ export interface FileRouteTypes {
     | '/settings/source-control'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/w/$workspaceId/c/$subChatId'
+    | '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId'
+    | '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/pair'
@@ -207,6 +243,9 @@ export interface FileRouteTypes {
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/w/$workspaceId/c/$subChatId'
+    | '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId'
+    | '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId'
   id:
     | '__root__'
     | '/_chat'
@@ -226,6 +265,9 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/w/$workspaceId/c/$subChatId'
+    | '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId'
+    | '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -233,6 +275,9 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   OrganizationsOrganizationIdRoute: typeof OrganizationsOrganizationIdRoute
+  WWorkspaceIdCSubChatIdRoute: typeof WWorkspaceIdCSubChatIdRoute
+  OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute: typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute
+  OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute: typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -356,6 +401,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/w/$workspaceId/c/$subChatId': {
+      id: '/w/$workspaceId/c/$subChatId'
+      path: '/w/$workspaceId/c/$subChatId'
+      fullPath: '/w/$workspaceId/c/$subChatId'
+      preLoaderRoute: typeof WWorkspaceIdCSubChatIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId': {
+      id: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId'
+      path: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId'
+      fullPath: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/$subChatId'
+      preLoaderRoute: typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId': {
+      id: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId'
+      path: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId'
+      fullPath: '/orgs/$organizationId/projects/$projectId/workspaces/$workspaceId/chats/draft/$draftId'
+      preLoaderRoute: typeof OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -408,6 +474,11 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   OrganizationsOrganizationIdRoute: OrganizationsOrganizationIdRoute,
+  WWorkspaceIdCSubChatIdRoute: WWorkspaceIdCSubChatIdRoute,
+  OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute:
+    OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsSubChatIdRoute,
+  OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute:
+    OrgsOrganizationIdProjectsProjectIdWorkspacesWorkspaceIdChatsDraftDraftIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,9 +1,14 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
+  OrchestrationSubChatShell,
   OrchestrationThread,
+  OrchestrationWorkspaceActionShell,
+  OrchestrationWorkspaceShell,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -14,6 +19,13 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  WorkspaceActionRemovedPayload,
+  WorkspaceActionUpsertedPayload,
+  WorkspaceArchivedPayload,
+  WorkspaceCreatedPayload,
+  WorkspaceDeletedPayload,
+  WorkspaceMetaUpdatedPayload,
+  WorkspaceUnarchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
@@ -32,6 +44,18 @@ type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
 
+function legacyWorkspaceIdForThread(input: {
+  readonly projectId: string;
+  readonly worktreePath: string | null;
+}): WorkspaceId {
+  // BACKWARD COMPATIBILITY: Mirrors the pre-workspace project/worktree grouping.
+  const workspaceKey =
+    input.worktreePath === null || input.worktreePath.trim().length === 0
+      ? "primary"
+      : `worktree:${Buffer.from(input.worktreePath).toString("base64url")}`;
+  return WorkspaceId.make(`${input.projectId}:${workspaceKey}`);
+}
+
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
   if (status === "missing") return "interrupted" as const;
@@ -44,6 +68,23 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function updateWorkspace(
+  workspaces: ReadonlyArray<OrchestrationWorkspaceShell> | undefined,
+  workspaceId: WorkspaceId,
+  patch: Partial<Omit<OrchestrationWorkspaceShell, "id">>,
+): OrchestrationWorkspaceShell[] {
+  return (workspaces ?? []).map((workspace) =>
+    workspace.id === workspaceId ? { ...workspace, ...patch } : workspace,
+  );
+}
+
+function removeWorkspaceAction(
+  actions: ReadonlyArray<OrchestrationWorkspaceActionShell> | undefined,
+  actionId: string,
+): OrchestrationWorkspaceActionShell[] {
+  return (actions ?? []).filter((action) => action.id !== actionId);
 }
 
 function decodeForEvent<A>(
@@ -244,6 +285,134 @@ export function projectEvent(
         })),
       );
 
+    case "workspace.created":
+      return decodeForEvent(WorkspaceCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const workspace: OrchestrationWorkspaceShell = {
+            id: payload.workspaceId,
+            organizationId: payload.organizationId,
+            projectId: payload.projectId,
+            title: payload.title,
+            cwd: payload.cwd,
+            branch: payload.branch,
+            worktreePath: payload.worktreePath,
+            baseBranch: payload.baseBranch,
+            mode: payload.mode,
+            status: payload.status,
+            defaultSubChatId: payload.defaultSubChatId,
+            browserPreviewUrl: payload.browserPreviewUrl ?? null,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            archivedAt: null,
+          };
+          const existing = nextBase.workspaces?.find((entry) => entry.id === workspace.id);
+          return {
+            ...nextBase,
+            workspaces: existing
+              ? (nextBase.workspaces ?? []).map((entry) =>
+                  entry.id === workspace.id ? workspace : entry,
+                )
+              : [...(nextBase.workspaces ?? []), workspace],
+          };
+        }),
+      );
+
+    case "workspace.meta-updated":
+      return decodeForEvent(WorkspaceMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces, payload.workspaceId, {
+            ...(payload.title !== undefined ? { title: payload.title } : {}),
+            ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
+            ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.baseBranch !== undefined ? { baseBranch: payload.baseBranch } : {}),
+            ...(payload.mode !== undefined ? { mode: payload.mode } : {}),
+            ...(payload.status !== undefined ? { status: payload.status } : {}),
+            ...(payload.defaultSubChatId !== undefined
+              ? { defaultSubChatId: payload.defaultSubChatId }
+              : {}),
+            ...(payload.browserPreviewUrl !== undefined
+              ? { browserPreviewUrl: payload.browserPreviewUrl }
+              : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "workspace.archived":
+      return decodeForEvent(WorkspaceArchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces, payload.workspaceId, {
+            archivedAt: payload.archivedAt,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "workspace.unarchived":
+      return decodeForEvent(WorkspaceUnarchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces, payload.workspaceId, {
+            archivedAt: null,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "workspace.deleted":
+      return decodeForEvent(WorkspaceDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: (nextBase.workspaces ?? []).filter(
+            (workspace) => workspace.id !== payload.workspaceId,
+          ),
+          subChats: (nextBase.subChats ?? []).filter(
+            (subChat) => subChat.workspaceId !== payload.workspaceId,
+          ),
+          workspaceActions: (nextBase.workspaceActions ?? []).filter(
+            (action) => action.workspaceId !== payload.workspaceId,
+          ),
+        })),
+      );
+
+    case "workspace-action.upserted":
+      return decodeForEvent(
+        WorkspaceActionUpsertedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const existing = nextBase.workspaceActions?.find(
+            (action) => action.id === payload.action.id,
+          );
+          return {
+            ...nextBase,
+            workspaceActions: existing
+              ? (nextBase.workspaceActions ?? []).map((action) =>
+                  action.id === payload.action.id ? payload.action : action,
+                )
+              : [...(nextBase.workspaceActions ?? []), payload.action],
+          };
+        }),
+      );
+
+    case "workspace-action.removed":
+      return decodeForEvent(
+        WorkspaceActionRemovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaceActions: removeWorkspaceAction(nextBase.workspaceActions, payload.actionId),
+        })),
+      );
+
     case "thread.created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -257,6 +426,12 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            workspaceId:
+              payload.workspaceId ??
+              legacyWorkspaceIdForThread({
+                projectId: payload.projectId,
+                worktreePath: payload.worktreePath,
+              }),
             tabGroupId: payload.tabGroupId ?? payload.threadId,
             tabType: payload.tabType ?? "chat",
             title: payload.title,
@@ -279,11 +454,30 @@ export function projectEvent(
           "thread",
         );
         const existing = nextBase.threads.find((entry) => entry.id === thread.id);
+        const subChat: OrchestrationSubChatShell = {
+          ...thread,
+          id: thread.id,
+          organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+          workspaceId:
+            thread.workspaceId ??
+            legacyWorkspaceIdForThread({
+              projectId: thread.projectId,
+              worktreePath: thread.worktreePath,
+            }),
+          latestUserMessageAt: null,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          hasActionableProposedPlan: false,
+        };
+        const existingSubChat = nextBase.subChats?.find((entry) => entry.id === subChat.id);
         return {
           ...nextBase,
           threads: existing
             ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
             : [...nextBase.threads, thread],
+          subChats: existingSubChat
+            ? (nextBase.subChats ?? []).map((entry) => (entry.id === subChat.id ? subChat : entry))
+            : [...(nextBase.subChats ?? []), subChat],
         };
       });
 

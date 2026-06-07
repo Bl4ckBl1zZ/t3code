@@ -15,9 +15,9 @@ import {
 } from "@t3tools/client-runtime";
 import type {
   EnvironmentId,
-  TerminalAttachInput,
   TerminalSessionSnapshot,
   ThreadId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 
 import { appAtomRegistry } from "./rpc/atomRegistry";
@@ -36,7 +36,7 @@ export function subscribeTerminalMetadata(input: {
 export function attachTerminalSession(input: {
   readonly environmentId: EnvironmentId;
   readonly client: Parameters<typeof terminalSessionManager.attach>[0]["client"];
-  readonly terminal: TerminalAttachInput;
+  readonly terminal: Parameters<typeof terminalSessionManager.attach>[0]["terminal"];
   readonly onSnapshot?: (snapshot: TerminalSessionSnapshot) => void;
   readonly onEvent?: Parameters<typeof terminalSessionManager.attach>[0]["onEvent"];
 }) {
@@ -58,6 +58,7 @@ export function useTerminalSession(input: TerminalSessionTarget): TerminalSessio
 
 export function useKnownTerminalSessions(input: {
   readonly environmentId: EnvironmentId | null;
+  readonly workspaceId?: WorkspaceId | null;
   readonly threadId: ThreadId | null;
 }): ReadonlyArray<KnownTerminalSession> {
   const filter = getKnownTerminalSessionListFilter(input);
@@ -68,6 +69,7 @@ export function useKnownTerminalSessions(input: {
 
 export function useThreadRunningTerminalIds(input: {
   readonly environmentId: EnvironmentId | null;
+  readonly workspaceId?: WorkspaceId | null;
   readonly threadId: ThreadId | null;
 }): ReadonlyArray<string> {
   const filter = getKnownTerminalSessionListFilter(input);

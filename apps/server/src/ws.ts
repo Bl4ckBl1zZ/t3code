@@ -589,64 +589,135 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
-      ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
+      ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamEvent>, never, never> => {
+        const threadUpsertEvents = (threadId: ThreadId) =>
+          Effect.all({
+            thread: projectionSnapshotQuery.getThreadShellById(threadId),
+            subChat: projectionSnapshotQuery.getSubChatShellById(threadId),
+            workspace: projectionSnapshotQuery.getWorkspaceShellByThreadId(threadId),
+          }).pipe(
+            Effect.map(({ thread, subChat, workspace }) => {
+              const events: OrchestrationShellStreamEvent[] = [];
+              if (Option.isSome(workspace)) {
+                events.push({
+                  kind: "workspace-upserted",
+                  sequence: event.sequence,
+                  workspace: workspace.value,
+                });
+              }
+              if (Option.isSome(thread)) {
+                events.push({
+                  kind: "thread-upserted",
+                  sequence: event.sequence,
+                  thread: thread.value,
+                });
+              }
+              if (Option.isSome(subChat)) {
+                events.push({
+                  kind: "sub-chat-upserted",
+                  sequence: event.sequence,
+                  subChat: subChat.value,
+                });
+              }
+              return events;
+            }),
+            Effect.orElseSucceed(() => []),
+          );
+
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
             return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
-                Option.map(project, (nextProject) => ({
-                  kind: "project-upserted" as const,
-                  sequence: event.sequence,
-                  project: nextProject,
-                })),
+                Option.isSome(project)
+                  ? [
+                      {
+                        kind: "project-upserted" as const,
+                        sequence: event.sequence,
+                        project: project.value,
+                      },
+                    ]
+                  : [],
               ),
-              Effect.orElseSucceed(() => Option.none()),
+              Effect.orElseSucceed(() => []),
             );
+          case "workspace.created":
+          case "workspace.meta-updated":
+          case "workspace.archived":
+          case "workspace.unarchived":
+            return projectionSnapshotQuery
+              .getWorkspaceShellById(event.payload.workspaceId, { includeArchived: true })
+              .pipe(
+                Effect.map(
+                  (workspace): ReadonlyArray<OrchestrationShellStreamEvent> =>
+                    Option.isSome(workspace)
+                      ? [
+                          {
+                            kind: "workspace-upserted",
+                            sequence: event.sequence,
+                            workspace: workspace.value,
+                          },
+                        ]
+                      : [],
+                ),
+                Effect.orElseSucceed(() => []),
+              );
+          case "workspace.deleted":
+            return Effect.succeed([
+              {
+                kind: "workspace-removed",
+                sequence: event.sequence,
+                workspaceId: event.payload.workspaceId,
+              },
+            ] satisfies ReadonlyArray<OrchestrationShellStreamEvent>);
+          case "workspace-action.upserted":
+            return Effect.succeed([
+              {
+                kind: "workspace-action-upserted",
+                sequence: event.sequence,
+                action: event.payload.action,
+              },
+            ] satisfies ReadonlyArray<OrchestrationShellStreamEvent>);
+          case "workspace-action.removed":
+            return Effect.succeed([
+              {
+                kind: "workspace-action-removed",
+                sequence: event.sequence,
+                actionId: event.payload.actionId,
+              },
+            ] satisfies ReadonlyArray<OrchestrationShellStreamEvent>);
           case "project.deleted":
-            return Effect.succeed(
-              Option.some({
+            return Effect.succeed([
+              {
                 kind: "project-removed" as const,
                 sequence: event.sequence,
                 projectId: event.payload.projectId,
-              }),
-            );
+              },
+            ]);
           case "thread.deleted":
           case "thread.archived":
-            return Effect.succeed(
-              Option.some({
+            // BACKWARD COMPATIBILITY: delete/archive events only carry threadId,
+            // so workspace cleanup relies on the next snapshot until event
+            // payloads include the owning workspaceId.
+            return Effect.succeed([
+              {
                 kind: "thread-removed" as const,
                 sequence: event.sequence,
                 threadId: event.payload.threadId,
-              }),
-            );
+              },
+              {
+                kind: "sub-chat-removed" as const,
+                sequence: event.sequence,
+                subChatId: event.payload.threadId,
+              },
+            ]);
           case "thread.unarchived":
-            return projectionSnapshotQuery.getThreadShellById(event.payload.threadId).pipe(
-              Effect.map((thread) =>
-                Option.map(thread, (nextThread) => ({
-                  kind: "thread-upserted" as const,
-                  sequence: event.sequence,
-                  thread: nextThread,
-                })),
-              ),
-              Effect.orElseSucceed(() => Option.none()),
-            );
+            return threadUpsertEvents(event.payload.threadId);
           default:
             if (event.aggregateKind !== "thread") {
-              return Effect.succeed(Option.none());
+              return Effect.succeed([]);
             }
-            return projectionSnapshotQuery
-              .getThreadShellById(ThreadId.make(event.aggregateId))
-              .pipe(
-                Effect.map((thread) =>
-                  Option.map(thread, (nextThread) => ({
-                    kind: "thread-upserted" as const,
-                    sequence: event.sequence,
-                    thread: nextThread,
-                  })),
-                ),
-                Effect.orElseSucceed(() => Option.none()),
-              );
+            return threadUpsertEvents(ThreadId.make(event.aggregateId));
         }
       };
 
@@ -1092,9 +1163,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.mapEffect(toShellStreamEvent),
-                Stream.flatMap((event) =>
-                  Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
-                ),
+                Stream.flatMap((events) => Stream.fromIterable(events)),
               );
 
               return Stream.concat(

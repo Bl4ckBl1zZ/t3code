@@ -9,20 +9,33 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  DEFAULT_LOCAL_ORGANIZATION_ID,
+  OrganizationId,
   ProjectScript,
+  SubChatId,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
+  type OrchestrationOrganizationShell,
   type OrchestrationProjectShell,
   type OrchestrationProposedPlan,
   type OrchestrationProject,
   type OrchestrationSession,
+  type OrchestrationSubChatShell,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
+  type OrchestrationWorkspaceActionShell,
+  type OrchestrationWorkspaceShell,
   ModelSelection,
   ProjectId,
   ThreadId,
+  WorkspaceActionId,
+  WorkspaceActionSource,
+  WorkspaceActionStatus,
+  WorkspaceId,
+  WorkspaceMode,
+  WorkspaceStatus,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -115,6 +128,52 @@ const ProjectIdLookupInput = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
+});
+const WorkspaceIdLookupInput = Schema.Struct({
+  workspaceId: WorkspaceId,
+});
+const ProjectionWorkspaceLookupRowSchema = Schema.Struct({
+  workspaceId: WorkspaceId,
+  organizationId: OrganizationId,
+  projectId: ProjectId,
+  title: Schema.String,
+  cwd: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  worktreePath: Schema.NullOr(Schema.String),
+  baseBranch: Schema.NullOr(Schema.String),
+  mode: WorkspaceMode,
+  status: WorkspaceStatus,
+  defaultSubChatId: Schema.NullOr(SubChatId),
+  browserPreviewUrl: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime),
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+const ProjectionSubChatLookupRowSchema = Schema.Struct({
+  subChatId: SubChatId,
+  workspaceId: WorkspaceId,
+  organizationId: OrganizationId,
+  projectId: ProjectId,
+  updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime),
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+const ProjectionWorkspaceActionLookupRowSchema = Schema.Struct({
+  actionId: WorkspaceActionId,
+  workspaceId: WorkspaceId,
+  organizationId: OrganizationId,
+  projectId: ProjectId,
+  subChatId: Schema.NullOr(SubChatId),
+  terminalId: Schema.NullOr(Schema.String),
+  kind: Schema.String,
+  title: Schema.String,
+  status: WorkspaceActionStatus,
+  source: WorkspaceActionSource,
+  createdAt: IsoDateTime,
+  startedAt: Schema.NullOr(IsoDateTime),
+  completedAt: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
 });
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
@@ -229,6 +288,7 @@ function mapProjectShellRow(
 ): OrchestrationProjectShell {
   return {
     id: row.projectId,
+    organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
     title: row.title,
     workspaceRoot: row.workspaceRoot,
     repositoryIdentity,
@@ -237,6 +297,233 @@ function mapProjectShellRow(
     browserPreviewUrl: row.browserPreviewUrl,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function legacyWorkspaceIdForThread(input: {
+  readonly projectId: ProjectId;
+  readonly worktreePath: string | null;
+}): WorkspaceId {
+  const workspaceKey =
+    input.worktreePath === null || input.worktreePath.trim().length === 0
+      ? "primary"
+      : `worktree:${Buffer.from(input.worktreePath).toString("base64url")}`;
+  return WorkspaceId.make(`${input.projectId}:${workspaceKey}`);
+}
+
+function legacyWorkspaceIdForProject(projectId: ProjectId): WorkspaceId {
+  return legacyWorkspaceIdForThread({ projectId, worktreePath: null });
+}
+
+function buildLegacyWorkspaceShells(input: {
+  readonly projectRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>>;
+  readonly threadRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>>;
+  readonly includeArchivedThreads?: boolean;
+}): OrchestrationWorkspaceShell[] {
+  const projectById = new Map(input.projectRows.map((project) => [project.projectId, project]));
+  const workspacesById = new Map<WorkspaceId, OrchestrationWorkspaceShell>();
+
+  for (const project of input.projectRows) {
+    if (project.deletedAt !== null) {
+      continue;
+    }
+    const workspaceId = legacyWorkspaceIdForProject(project.projectId);
+    workspacesById.set(workspaceId, {
+      id: workspaceId,
+      organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+      projectId: project.projectId,
+      title: "main",
+      cwd: project.workspaceRoot,
+      branch: null,
+      worktreePath: null,
+      baseBranch: null,
+      mode: "local",
+      status: "ready",
+      defaultSubChatId: null,
+      browserPreviewUrl: project.browserPreviewUrl,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      archivedAt: null,
+    });
+  }
+
+  for (const thread of input.threadRows) {
+    if (
+      thread.deletedAt !== null ||
+      (thread.archivedAt !== null && input.includeArchivedThreads !== true)
+    ) {
+      continue;
+    }
+    const project = projectById.get(thread.projectId);
+    if (!project || project.deletedAt !== null) {
+      continue;
+    }
+
+    const workspaceId = legacyWorkspaceIdForThread({
+      projectId: thread.projectId,
+      worktreePath: thread.worktreePath,
+    });
+    const existing = workspacesById.get(workspaceId);
+    const cwd = thread.worktreePath ?? project.workspaceRoot;
+    const title = thread.worktreePath
+      ? (thread.branch ?? thread.worktreePath.split(/[\\/]/u).at(-1) ?? "worktree")
+      : "main";
+
+    if (!existing) {
+      workspacesById.set(workspaceId, {
+        id: workspaceId,
+        organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+        projectId: thread.projectId,
+        title,
+        cwd,
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        baseBranch: null,
+        mode: thread.worktreePath ? "worktree" : "local",
+        status: "ready",
+        defaultSubChatId: thread.threadId,
+        browserPreviewUrl: project.browserPreviewUrl,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        archivedAt: null,
+      });
+      continue;
+    }
+
+    workspacesById.set(workspaceId, {
+      ...existing,
+      defaultSubChatId: existing.defaultSubChatId ?? thread.threadId,
+      branch: existing.branch ?? thread.branch,
+      updatedAt: existing.updatedAt > thread.updatedAt ? existing.updatedAt : thread.updatedAt,
+    });
+  }
+
+  return [...workspacesById.values()].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+  );
+}
+
+function mapWorkspaceRow(
+  row: Schema.Schema.Type<typeof ProjectionWorkspaceLookupRowSchema>,
+): OrchestrationWorkspaceShell {
+  return {
+    id: row.workspaceId,
+    organizationId: row.organizationId,
+    projectId: row.projectId,
+    title: row.title,
+    cwd: row.cwd,
+    branch: row.branch,
+    worktreePath: row.worktreePath,
+    baseBranch: row.baseBranch,
+    mode: row.mode,
+    status: row.status,
+    defaultSubChatId: row.defaultSubChatId,
+    browserPreviewUrl: row.browserPreviewUrl,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt,
+  };
+}
+
+function mapWorkspaceActionRow(
+  row: Schema.Schema.Type<typeof ProjectionWorkspaceActionLookupRowSchema>,
+): OrchestrationWorkspaceActionShell {
+  return {
+    id: row.actionId,
+    organizationId: row.organizationId,
+    projectId: row.projectId,
+    workspaceId: row.workspaceId,
+    subChatId: row.subChatId,
+    terminalId: row.terminalId,
+    kind: row.kind,
+    title: row.title,
+    status: row.status,
+    source: row.source,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mergeWorkspaceShells(input: {
+  readonly concreteRows: ReadonlyArray<
+    Schema.Schema.Type<typeof ProjectionWorkspaceLookupRowSchema>
+  >;
+  readonly legacyWorkspaces: ReadonlyArray<OrchestrationWorkspaceShell>;
+  readonly includeArchived?: boolean;
+}): OrchestrationWorkspaceShell[] {
+  const byId = new Map<WorkspaceId, OrchestrationWorkspaceShell>();
+  for (const workspace of input.legacyWorkspaces) {
+    byId.set(workspace.id, workspace);
+  }
+  for (const row of input.concreteRows) {
+    if (row.deletedAt !== null) {
+      continue;
+    }
+    if (row.archivedAt !== null && input.includeArchived !== true) {
+      continue;
+    }
+    byId.set(row.workspaceId, mapWorkspaceRow(row));
+  }
+  return [...byId.values()].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+  );
+}
+
+function buildWorkspaceIdByThread(input: {
+  readonly threadRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>>;
+  readonly subChatRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionSubChatLookupRowSchema>>;
+}): Map<ThreadId, WorkspaceId> {
+  const byThread = new Map<ThreadId, WorkspaceId>();
+  for (const row of input.subChatRows) {
+    if (row.deletedAt === null) {
+      byThread.set(ThreadId.make(row.subChatId), row.workspaceId);
+    }
+  }
+  for (const row of input.threadRows) {
+    if (!byThread.has(row.threadId)) {
+      byThread.set(
+        row.threadId,
+        legacyWorkspaceIdForThread({
+          projectId: row.projectId,
+          worktreePath: row.worktreePath,
+        }),
+      );
+    }
+  }
+  return byThread;
+}
+
+function workspaceIdForThreadRow(
+  row: Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>,
+  workspaceIdByThread: ReadonlyMap<ThreadId, WorkspaceId>,
+): WorkspaceId {
+  return (
+    workspaceIdByThread.get(row.threadId) ??
+    legacyWorkspaceIdForThread({
+      projectId: row.projectId,
+      worktreePath: row.worktreePath,
+    })
+  );
+}
+
+function buildLegacyOrganizationShell(input: {
+  readonly projectRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>>;
+  readonly updatedAt: string;
+}): OrchestrationOrganizationShell {
+  const createdAt =
+    input.projectRows
+      .filter((project) => project.deletedAt === null)
+      .map((project) => project.createdAt)
+      .toSorted()[0] ?? input.updatedAt;
+  return {
+    id: DEFAULT_LOCAL_ORGANIZATION_ID,
+    title: "Local",
+    createdAt,
+    updatedAt: input.updatedAt,
   };
 }
 
@@ -344,6 +631,232 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listWorkspaceRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkspaceLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          title,
+          cwd,
+          branch,
+          worktree_path AS "worktreePath",
+          base_branch AS "baseBranch",
+          mode,
+          status,
+          default_sub_chat_id AS "defaultSubChatId",
+          browser_preview_url AS "browserPreviewUrl",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_workspaces
+        ORDER BY created_at ASC, workspace_id ASC
+      `,
+  });
+
+  const listActiveWorkspaceRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkspaceLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          title,
+          cwd,
+          branch,
+          worktree_path AS "worktreePath",
+          base_branch AS "baseBranch",
+          mode,
+          status,
+          default_sub_chat_id AS "defaultSubChatId",
+          browser_preview_url AS "browserPreviewUrl",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_workspaces
+        WHERE deleted_at IS NULL
+          AND archived_at IS NULL
+        ORDER BY created_at ASC, workspace_id ASC
+      `,
+  });
+
+  const listArchivedWorkspaceRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkspaceLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          title,
+          cwd,
+          branch,
+          worktree_path AS "worktreePath",
+          base_branch AS "baseBranch",
+          mode,
+          status,
+          default_sub_chat_id AS "defaultSubChatId",
+          browser_preview_url AS "browserPreviewUrl",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_workspaces
+        WHERE deleted_at IS NULL
+          AND archived_at IS NOT NULL
+        ORDER BY archived_at DESC, workspace_id ASC
+      `,
+  });
+
+  const listSubChatRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionSubChatLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          sub_chat_id AS "subChatId",
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_sub_chats
+        ORDER BY updated_at DESC, sub_chat_id ASC
+      `,
+  });
+
+  const listActiveSubChatRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionSubChatLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          sub_chat_id AS "subChatId",
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_sub_chats
+        WHERE deleted_at IS NULL
+          AND archived_at IS NULL
+        ORDER BY updated_at DESC, sub_chat_id ASC
+      `,
+  });
+
+  const listArchivedSubChatRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionSubChatLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          sub_chat_id AS "subChatId",
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_sub_chats
+        WHERE deleted_at IS NULL
+          AND archived_at IS NOT NULL
+        ORDER BY archived_at DESC, sub_chat_id ASC
+      `,
+  });
+
+  const listWorkspaceActionRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkspaceActionLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          action_id AS "actionId",
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          sub_chat_id AS "subChatId",
+          terminal_id AS "terminalId",
+          kind,
+          title,
+          status,
+          source,
+          created_at AS "createdAt",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          updated_at AS "updatedAt"
+        FROM projection_workspace_actions
+        ORDER BY updated_at DESC, action_id ASC
+      `,
+  });
+
+  const listActiveWorkspaceActionRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkspaceActionLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          actions.action_id AS "actionId",
+          actions.workspace_id AS "workspaceId",
+          actions.organization_id AS "organizationId",
+          actions.project_id AS "projectId",
+          actions.sub_chat_id AS "subChatId",
+          actions.terminal_id AS "terminalId",
+          actions.kind,
+          actions.title,
+          actions.status,
+          actions.source,
+          actions.created_at AS "createdAt",
+          actions.started_at AS "startedAt",
+          actions.completed_at AS "completedAt",
+          actions.updated_at AS "updatedAt"
+        FROM projection_workspace_actions AS actions
+        INNER JOIN projection_workspaces AS workspaces
+          ON workspaces.workspace_id = actions.workspace_id
+        WHERE workspaces.deleted_at IS NULL
+          AND workspaces.archived_at IS NULL
+        ORDER BY actions.updated_at DESC, actions.action_id ASC
+      `,
+  });
+
+  const listArchivedWorkspaceActionRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkspaceActionLookupRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          actions.action_id AS "actionId",
+          actions.workspace_id AS "workspaceId",
+          actions.organization_id AS "organizationId",
+          actions.project_id AS "projectId",
+          actions.sub_chat_id AS "subChatId",
+          actions.terminal_id AS "terminalId",
+          actions.kind,
+          actions.title,
+          actions.status,
+          actions.source,
+          actions.created_at AS "createdAt",
+          actions.started_at AS "startedAt",
+          actions.completed_at AS "completedAt",
+          actions.updated_at AS "updatedAt"
+        FROM projection_workspace_actions AS actions
+        INNER JOIN projection_workspaces AS workspaces
+          ON workspaces.workspace_id = actions.workspace_id
+        WHERE workspaces.deleted_at IS NULL
+          AND workspaces.archived_at IS NOT NULL
+        ORDER BY actions.updated_at DESC, actions.action_id ASC
       `,
   });
 
@@ -726,6 +1239,34 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getWorkspaceRowById = SqlSchema.findOneOption({
+    Request: WorkspaceIdLookupInput,
+    Result: ProjectionWorkspaceLookupRowSchema,
+    execute: ({ workspaceId }) =>
+      sql`
+        SELECT
+          workspace_id AS "workspaceId",
+          organization_id AS "organizationId",
+          project_id AS "projectId",
+          title,
+          cwd,
+          branch,
+          worktree_path AS "worktreePath",
+          base_branch AS "baseBranch",
+          mode,
+          status,
+          default_sub_chat_id AS "defaultSubChatId",
+          browser_preview_url AS "browserPreviewUrl",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_workspaces
+        WHERE workspace_id = ${workspaceId}
+        LIMIT 1
+      `,
+  });
+
   const getThreadCheckpointContextThreadRow = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadCheckpointContextThreadRowSchema,
@@ -994,6 +1535,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listWorkspaceRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listWorkspaces:query",
+                "ProjectionSnapshotQuery.getSnapshot:listWorkspaces:decodeRows",
+              ),
+            ),
+          ),
+          listSubChatRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listSubChats:query",
+                "ProjectionSnapshotQuery.getSnapshot:listSubChats:decodeRows",
+              ),
+            ),
+          ),
+          listWorkspaceActionRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listWorkspaceActions:query",
+                "ProjectionSnapshotQuery.getSnapshot:listWorkspaceActions:decodeRows",
+              ),
+            ),
+          ),
           listThreadMessageRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1057,6 +1622,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ([
             projectRows,
             threadRows,
+            workspaceRows,
+            subChatRows,
+            workspaceActionRows,
             messageRows,
             proposedPlanRows,
             activityRows,
@@ -1079,6 +1647,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
               for (const row of threadRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of workspaceRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of subChatRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of workspaceActionRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
               for (const row of stateRows) {
@@ -1206,6 +1783,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
               const projects: ReadonlyArray<OrchestrationProject> = projectRows.map((row) => ({
                 id: row.projectId,
+                organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
                 title: row.title,
                 workspaceRoot: row.workspaceRoot,
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
@@ -1217,9 +1795,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 deletedAt: row.deletedAt,
               }));
 
+              const workspaceIdByThread = buildWorkspaceIdByThread({ threadRows, subChatRows });
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
                 projectId: row.projectId,
+                workspaceId: workspaceIdForThreadRow(row, workspaceIdByThread),
                 tabGroupId: row.tabGroupId,
                 tabType: row.tabType,
                 title: row.title,
@@ -1239,10 +1819,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
               }));
+              const workspaces = mergeWorkspaceShells({
+                concreteRows: workspaceRows,
+                legacyWorkspaces: buildLegacyWorkspaceShells({
+                  projectRows,
+                  threadRows,
+                  includeArchivedThreads: true,
+                }),
+                includeArchived: true,
+              });
 
               const snapshot = {
                 snapshotSequence: computeSnapshotSequence(stateRows),
+                organizations: [
+                  buildLegacyOrganizationShell({
+                    projectRows,
+                    updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+                  }),
+                ],
                 projects,
+                workspaces,
+                workspaceActions: workspaceActionRows.map(mapWorkspaceActionRow),
                 threads,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
@@ -1282,6 +1879,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listWorkspaceRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkspaces:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkspaces:decodeRows",
+              ),
+            ),
+          ),
+          listSubChatRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listSubChats:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listSubChats:decodeRows",
+              ),
+            ),
+          ),
+          listWorkspaceActionRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkspaceActions:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkspaceActions:decodeRows",
+              ),
+            ),
+          ),
           listThreadProposedPlanRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1318,7 +1939,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       )
       .pipe(
         Effect.flatMap(
-          ([projectRows, threadRows, proposedPlanRows, sessionRows, latestTurnRows, stateRows]) =>
+          ([
+            projectRows,
+            threadRows,
+            workspaceRows,
+            subChatRows,
+            workspaceActionRows,
+            proposedPlanRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+          ]) =>
             Effect.sync(() => {
               let updatedAt: string | null = null;
               const projects: OrchestrationProject[] = [];
@@ -1332,6 +1963,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
                 projects.push({
                   id: row.projectId,
+                  organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
                   title: row.title,
                   workspaceRoot: row.workspaceRoot,
                   defaultModelSelection: row.defaultModelSelection,
@@ -1344,6 +1976,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               }
               for (let index = 0; index < threadRows.length; index += 1) {
                 const row = threadRows[index];
+                if (!row) {
+                  continue;
+                }
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (let index = 0; index < workspaceRows.length; index += 1) {
+                const row = workspaceRows[index];
+                if (!row) {
+                  continue;
+                }
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (let index = 0; index < subChatRows.length; index += 1) {
+                const row = subChatRows[index];
+                if (!row) {
+                  continue;
+                }
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (let index = 0; index < workspaceActionRows.length; index += 1) {
+                const row = workspaceActionRows[index];
                 if (!row) {
                   continue;
                 }
@@ -1413,6 +2066,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 proposedPlansByThread.set(row.threadId, threadProposedPlans);
               }
 
+              const workspaceIdByThread = buildWorkspaceIdByThread({ threadRows, subChatRows });
+
               for (let index = 0; index < threadRows.length; index += 1) {
                 const row = threadRows[index];
                 if (!row) {
@@ -1421,6 +2076,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
+                  workspaceId: workspaceIdForThreadRow(row, workspaceIdByThread),
                   tabGroupId: row.tabGroupId,
                   tabType: row.tabType,
                   title: row.title,
@@ -1444,7 +2100,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
               return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
+                organizations: [
+                  buildLegacyOrganizationShell({
+                    projectRows,
+                    updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+                  }),
+                ],
                 projects,
+                workspaces: mergeWorkspaceShells({
+                  concreteRows: workspaceRows,
+                  legacyWorkspaces: buildLegacyWorkspaceShells({
+                    projectRows,
+                    threadRows,
+                    includeArchivedThreads: true,
+                  }),
+                  includeArchived: true,
+                }),
+                workspaceActions: workspaceActionRows.map(mapWorkspaceActionRow),
                 threads,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
@@ -1478,6 +2150,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listActiveWorkspaceRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getShellSnapshot:listWorkspaces:query",
+                "ProjectionSnapshotQuery.getShellSnapshot:listWorkspaces:decodeRows",
+              ),
+            ),
+          ),
+          listActiveSubChatRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getShellSnapshot:listSubChats:query",
+                "ProjectionSnapshotQuery.getShellSnapshot:listSubChats:decodeRows",
+              ),
+            ),
+          ),
+          listActiveWorkspaceActionRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getShellSnapshot:listWorkspaceActions:query",
+                "ProjectionSnapshotQuery.getShellSnapshot:listWorkspaceActions:decodeRows",
+              ),
+            ),
+          ),
           listActiveThreadSessionRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1505,53 +2201,81 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ]),
       )
       .pipe(
-        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, stateRows]) =>
-          Effect.gen(function* () {
-            let updatedAt: string | null = null;
-            for (const row of projectRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
-            for (const row of threadRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
-            for (const row of sessionRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
-            for (const row of latestTurnRows) {
-              updatedAt = maxIso(updatedAt, row.requestedAt);
-              if (row.startedAt !== null) {
-                updatedAt = maxIso(updatedAt, row.startedAt);
+        Effect.flatMap(
+          ([
+            projectRows,
+            threadRows,
+            workspaceRows,
+            subChatRows,
+            workspaceActionRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+          ]) =>
+            Effect.gen(function* () {
+              let updatedAt: string | null = null;
+              for (const row of projectRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
               }
-              if (row.completedAt !== null) {
-                updatedAt = maxIso(updatedAt, row.completedAt);
+              for (const row of threadRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
               }
-            }
-            for (const row of stateRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
+              for (const row of workspaceRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of subChatRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of workspaceActionRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of sessionRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of latestTurnRows) {
+                updatedAt = maxIso(updatedAt, row.requestedAt);
+                if (row.startedAt !== null) {
+                  updatedAt = maxIso(updatedAt, row.startedAt);
+                }
+                if (row.completedAt !== null) {
+                  updatedAt = maxIso(updatedAt, row.completedAt);
+                }
+              }
+              for (const row of stateRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
 
-            const repositoryIdentities = yield* resolveRepositoryIdentitiesForProjects(projectRows);
-            const latestTurnByThread = new Map(
-              latestTurnRows.map((row) => [row.threadId, mapLatestTurn(row)] as const),
-            );
-            const sessionByThread = new Map(
-              sessionRows.map((row) => [row.threadId, mapSessionRow(row)] as const),
-            );
+              const repositoryIdentities =
+                yield* resolveRepositoryIdentitiesForProjects(projectRows);
+              const latestTurnByThread = new Map(
+                latestTurnRows.map((row) => [row.threadId, mapLatestTurn(row)] as const),
+              );
+              const sessionByThread = new Map(
+                sessionRows.map((row) => [row.threadId, mapSessionRow(row)] as const),
+              );
+              const workspaces = mergeWorkspaceShells({
+                concreteRows: workspaceRows,
+                legacyWorkspaces: buildLegacyWorkspaceShells({ projectRows, threadRows }),
+              });
+              const workspaceById = new Map(
+                workspaces.map((workspace) => [workspace.id, workspace]),
+              );
+              const subChatById = new Map(subChatRows.map((row) => [row.subChatId, row] as const));
+              const workspaceIdByThread = buildWorkspaceIdByThread({ threadRows, subChatRows });
 
-            const snapshot = {
-              snapshotSequence: computeSnapshotSequence(stateRows),
-              projects: Arr.filterMap(projectRows, (row) =>
+              const projects = Arr.filterMap(projectRows, (row) =>
                 row.deletedAt === null
                   ? Result.succeed(
                       mapProjectShellRow(row, repositoryIdentities.get(row.projectId) ?? null),
                     )
                   : Result.failVoid,
-              ),
-              threads: Arr.filterMap(threadRows, (row) =>
+              );
+              const threads = Arr.filterMap(threadRows, (row) =>
                 row.deletedAt === null
                   ? Result.succeed({
                       id: row.threadId,
                       projectId: row.projectId,
+                      workspaceId: workspaceIdForThreadRow(row, workspaceIdByThread),
                       tabGroupId: row.tabGroupId,
                       tabType: row.tabType,
                       title: row.title,
@@ -1571,18 +2295,48 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                     } satisfies OrchestrationThreadShell)
                   : Result.failVoid,
-              ),
-              updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
-            };
+              );
+              const subChats = Arr.filterMap(threads, (thread) => {
+                if (!thread.workspaceId) {
+                  return Result.failVoid;
+                }
+                const workspace = workspaceById.get(thread.workspaceId);
+                if (!workspace) {
+                  return Result.failVoid;
+                }
+                const subChat = subChatById.get(SubChatId.make(thread.id));
+                return Result.succeed({
+                  ...thread,
+                  id: thread.id,
+                  organizationId: subChat?.organizationId ?? workspace.organizationId,
+                  workspaceId: workspace.id,
+                } satisfies OrchestrationSubChatShell);
+              });
 
-            return yield* decodeShellSnapshot(snapshot).pipe(
-              Effect.mapError(
-                toPersistenceDecodeError(
-                  "ProjectionSnapshotQuery.getShellSnapshot:decodeShellSnapshot",
+              const snapshot = {
+                snapshotSequence: computeSnapshotSequence(stateRows),
+                organizations: [
+                  buildLegacyOrganizationShell({
+                    projectRows,
+                    updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+                  }),
+                ],
+                projects,
+                workspaces,
+                subChats,
+                workspaceActions: workspaceActionRows.map(mapWorkspaceActionRow),
+                threads,
+                updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+              };
+
+              return yield* decodeShellSnapshot(snapshot).pipe(
+                Effect.mapError(
+                  toPersistenceDecodeError(
+                    "ProjectionSnapshotQuery.getShellSnapshot:decodeShellSnapshot",
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            }),
         ),
         Effect.mapError((error) => {
           if (isPersistenceError(error)) {
@@ -1609,6 +2363,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getArchivedShellSnapshot:listThreads:query",
                 "ProjectionSnapshotQuery.getArchivedShellSnapshot:listThreads:decodeRows",
+              ),
+            ),
+          ),
+          listArchivedWorkspaceRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listWorkspaces:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listWorkspaces:decodeRows",
+              ),
+            ),
+          ),
+          listArchivedSubChatRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listSubChats:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listSubChats:decodeRows",
+              ),
+            ),
+          ),
+          listArchivedWorkspaceActionRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listWorkspaceActions:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listWorkspaceActions:decodeRows",
               ),
             ),
           ),
@@ -1639,55 +2417,87 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ]),
       )
       .pipe(
-        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, stateRows]) =>
-          Effect.gen(function* () {
-            let updatedAt: string | null = null;
-            for (const row of projectRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
-            for (const row of threadRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
-            for (const row of sessionRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
-            for (const row of latestTurnRows) {
-              updatedAt = maxIso(updatedAt, row.requestedAt);
-              if (row.startedAt !== null) {
-                updatedAt = maxIso(updatedAt, row.startedAt);
+        Effect.flatMap(
+          ([
+            projectRows,
+            threadRows,
+            workspaceRows,
+            subChatRows,
+            workspaceActionRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+          ]) =>
+            Effect.gen(function* () {
+              let updatedAt: string | null = null;
+              for (const row of projectRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
               }
-              if (row.completedAt !== null) {
-                updatedAt = maxIso(updatedAt, row.completedAt);
+              for (const row of threadRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
               }
-            }
-            for (const row of stateRows) {
-              updatedAt = maxIso(updatedAt, row.updatedAt);
-            }
+              for (const row of workspaceRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of subChatRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of workspaceActionRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of sessionRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of latestTurnRows) {
+                updatedAt = maxIso(updatedAt, row.requestedAt);
+                if (row.startedAt !== null) {
+                  updatedAt = maxIso(updatedAt, row.startedAt);
+                }
+                if (row.completedAt !== null) {
+                  updatedAt = maxIso(updatedAt, row.completedAt);
+                }
+              }
+              for (const row of stateRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
 
-            const activeProjectIds = new Set(threadRows.map((row) => row.projectId));
-            const repositoryIdentities = yield* resolveRepositoryIdentitiesForProjects(
-              projectRows.filter((row) => activeProjectIds.has(row.projectId)),
-            );
-            const latestTurnByThread = new Map(
-              latestTurnRows.map((row) => [row.threadId, mapLatestTurn(row)] as const),
-            );
-            const sessionByThread = new Map(
-              sessionRows.map((row) => [row.threadId, mapSessionRow(row)] as const),
-            );
+              const activeProjectIds = new Set(threadRows.map((row) => row.projectId));
+              const repositoryIdentities = yield* resolveRepositoryIdentitiesForProjects(
+                projectRows.filter((row) => activeProjectIds.has(row.projectId)),
+              );
+              const latestTurnByThread = new Map(
+                latestTurnRows.map((row) => [row.threadId, mapLatestTurn(row)] as const),
+              );
+              const sessionByThread = new Map(
+                sessionRows.map((row) => [row.threadId, mapSessionRow(row)] as const),
+              );
+              const workspaces = mergeWorkspaceShells({
+                concreteRows: workspaceRows,
+                legacyWorkspaces: buildLegacyWorkspaceShells({
+                  projectRows,
+                  threadRows,
+                  includeArchivedThreads: true,
+                }),
+                includeArchived: true,
+              });
+              const workspaceById = new Map(
+                workspaces.map((workspace) => [workspace.id, workspace]),
+              );
+              const subChatById = new Map(subChatRows.map((row) => [row.subChatId, row] as const));
+              const workspaceIdByThread = buildWorkspaceIdByThread({ threadRows, subChatRows });
 
-            const snapshot = {
-              snapshotSequence: computeSnapshotSequence(stateRows),
-              projects: Arr.filterMap(projectRows, (row) =>
+              const projects = Arr.filterMap(projectRows, (row) =>
                 row.deletedAt === null && activeProjectIds.has(row.projectId)
                   ? Result.succeed(
                       mapProjectShellRow(row, repositoryIdentities.get(row.projectId) ?? null),
                     )
                   : Result.failVoid,
-              ),
-              threads: threadRows.map(
+              );
+              const threads = threadRows.map(
                 (row): OrchestrationThreadShell => ({
                   id: row.threadId,
                   projectId: row.projectId,
+                  workspaceId: workspaceIdForThreadRow(row, workspaceIdByThread),
                   tabGroupId: row.tabGroupId,
                   tabType: row.tabType,
                   title: row.title,
@@ -1706,18 +2516,48 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                 }),
-              ),
-              updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
-            };
+              );
+              const subChats = Arr.filterMap(threads, (thread) => {
+                if (!thread.workspaceId) {
+                  return Result.failVoid;
+                }
+                const workspace = workspaceById.get(thread.workspaceId);
+                if (!workspace) {
+                  return Result.failVoid;
+                }
+                const subChat = subChatById.get(SubChatId.make(thread.id));
+                return Result.succeed({
+                  ...thread,
+                  id: thread.id,
+                  organizationId: subChat?.organizationId ?? workspace.organizationId,
+                  workspaceId: workspace.id,
+                } satisfies OrchestrationSubChatShell);
+              });
 
-            return yield* decodeShellSnapshot(snapshot).pipe(
-              Effect.mapError(
-                toPersistenceDecodeError(
-                  "ProjectionSnapshotQuery.getArchivedShellSnapshot:decodeShellSnapshot",
+              const snapshot = {
+                snapshotSequence: computeSnapshotSequence(stateRows),
+                organizations: [
+                  buildLegacyOrganizationShell({
+                    projectRows,
+                    updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+                  }),
+                ],
+                projects,
+                workspaces,
+                subChats,
+                workspaceActions: workspaceActionRows.map(mapWorkspaceActionRow),
+                threads,
+                updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+              };
+
+              return yield* decodeShellSnapshot(snapshot).pipe(
+                Effect.mapError(
+                  toPersistenceDecodeError(
+                    "ProjectionSnapshotQuery.getArchivedShellSnapshot:decodeShellSnapshot",
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            }),
         ),
         Effect.mapError((error) => {
           if (isPersistenceError(error)) {
@@ -1936,6 +2776,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       return Option.some({
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        workspaceId: legacyWorkspaceIdForThread({
+          projectId: threadRow.value.projectId,
+          worktreePath: threadRow.value.worktreePath,
+        }),
         tabGroupId: threadRow.value.tabGroupId,
         tabType: threadRow.value.tabType,
         title: threadRow.value.title,
@@ -1954,6 +2798,133 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
       } satisfies OrchestrationThreadShell);
+    });
+
+  const getWorkspaceShellById: ProjectionSnapshotQueryShape["getWorkspaceShellById"] = (
+    workspaceId,
+    options,
+  ) =>
+    Effect.gen(function* () {
+      const workspaceRow = yield* getWorkspaceRowById({ workspaceId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getWorkspaceShellById:getWorkspace:query",
+            "ProjectionSnapshotQuery.getWorkspaceShellById:getWorkspace:decodeRow",
+          ),
+        ),
+      );
+      if (Option.isSome(workspaceRow)) {
+        if (
+          workspaceRow.value.deletedAt !== null ||
+          (workspaceRow.value.archivedAt !== null && options?.includeArchived !== true)
+        ) {
+          return Option.none<OrchestrationWorkspaceShell>();
+        }
+        return Option.some({
+          id: workspaceRow.value.workspaceId,
+          organizationId: workspaceRow.value.organizationId,
+          projectId: workspaceRow.value.projectId,
+          title: workspaceRow.value.title,
+          cwd: workspaceRow.value.cwd,
+          branch: workspaceRow.value.branch,
+          worktreePath: workspaceRow.value.worktreePath,
+          baseBranch: workspaceRow.value.baseBranch,
+          mode: workspaceRow.value.mode,
+          status: workspaceRow.value.status,
+          defaultSubChatId: workspaceRow.value.defaultSubChatId,
+          browserPreviewUrl: workspaceRow.value.browserPreviewUrl,
+          createdAt: workspaceRow.value.createdAt,
+          updatedAt: workspaceRow.value.updatedAt,
+          archivedAt: workspaceRow.value.archivedAt,
+        } satisfies OrchestrationWorkspaceShell);
+      }
+
+      const [projectRows, threadRows] = yield* Effect.all([
+        listProjectRows(undefined).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getWorkspaceShellById:listProjects:query",
+              "ProjectionSnapshotQuery.getWorkspaceShellById:listProjects:decodeRows",
+            ),
+          ),
+        ),
+        listThreadRows(undefined).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getWorkspaceShellById:listThreads:query",
+              "ProjectionSnapshotQuery.getWorkspaceShellById:listThreads:decodeRows",
+            ),
+          ),
+        ),
+      ]);
+      const legacyWorkspace =
+        buildLegacyWorkspaceShells({
+          projectRows,
+          threadRows,
+          includeArchivedThreads: options?.includeArchived === true,
+        }).find((workspace) => workspace.id === workspaceId) ?? null;
+      return legacyWorkspace === null
+        ? Option.none<OrchestrationWorkspaceShell>()
+        : Option.some(legacyWorkspace);
+    });
+
+  const getWorkspaceShellByThreadId: ProjectionSnapshotQueryShape["getWorkspaceShellByThreadId"] = (
+    threadId,
+    options,
+  ) =>
+    Effect.gen(function* () {
+      const readThreadRow =
+        options?.includeArchived === true ? getThreadRowById : getActiveThreadRowById;
+      const threadRow = yield* readThreadRow({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getWorkspaceShellByThreadId:getThread:query",
+            "ProjectionSnapshotQuery.getWorkspaceShellByThreadId:getThread:decodeRow",
+          ),
+        ),
+      );
+      if (Option.isNone(threadRow)) {
+        return Option.none<OrchestrationWorkspaceShell>();
+      }
+
+      const projectRow = yield* getActiveProjectRowById({
+        projectId: threadRow.value.projectId,
+      }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getWorkspaceShellByThreadId:getProject:query",
+            "ProjectionSnapshotQuery.getWorkspaceShellByThreadId:getProject:decodeRow",
+          ),
+        ),
+      );
+      if (Option.isNone(projectRow)) {
+        return Option.none<OrchestrationWorkspaceShell>();
+      }
+
+      const [workspace] = buildLegacyWorkspaceShells({
+        projectRows: [projectRow.value],
+        threadRows: [threadRow.value],
+        includeArchivedThreads: options?.includeArchived === true,
+      });
+      return workspace ? Option.some(workspace) : Option.none<OrchestrationWorkspaceShell>();
+    });
+
+  const getSubChatShellById: ProjectionSnapshotQueryShape["getSubChatShellById"] = (
+    threadId,
+    options,
+  ) =>
+    Effect.gen(function* () {
+      const threadShell = yield* getThreadShellById(threadId, options);
+      if (Option.isNone(threadShell) || threadShell.value.workspaceId === undefined) {
+        return Option.none<OrchestrationSubChatShell>();
+      }
+
+      return Option.some({
+        ...threadShell.value,
+        id: threadShell.value.id,
+        organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+        workspaceId: threadShell.value.workspaceId,
+      } satisfies OrchestrationSubChatShell);
     });
 
   const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
@@ -2032,6 +3003,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       const thread = {
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        workspaceId: legacyWorkspaceIdForThread({
+          projectId: threadRow.value.projectId,
+          worktreePath: threadRow.value.worktreePath,
+        }),
         tabGroupId: threadRow.value.tabGroupId,
         tabType: threadRow.value.tabType,
         title: threadRow.value.title,
@@ -2110,6 +3085,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,
+    getWorkspaceShellById,
+    getWorkspaceShellByThreadId,
+    getSubChatShellById,
     getThreadDetailById,
   } satisfies ProjectionSnapshotQueryShape;
 });

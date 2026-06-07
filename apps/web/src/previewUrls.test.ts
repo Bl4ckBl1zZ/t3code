@@ -103,7 +103,7 @@ describe("resolvePreviewUrl", () => {
     ).toBe("http://localhost:4444");
   });
 
-  it("falls back to detected then inferred project dev-server URLs", () => {
+  it("falls back to detected URLs but does not invent openable default ports", () => {
     expect(
       resolvePreviewUrl({
         detectedDevServerUrl: "http://localhost:5173/",
@@ -116,7 +116,7 @@ describe("resolvePreviewUrl", () => {
         detectedDevServerUrl: null,
         scripts: [script("pnpm next dev")],
       }),
-    ).toBe("http://localhost:3000/");
+    ).toBe("");
   });
 });
 

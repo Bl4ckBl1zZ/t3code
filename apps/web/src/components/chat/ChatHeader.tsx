@@ -28,7 +28,7 @@ import {
   usePrimaryEnvironmentId,
 } from "../../environments/primary";
 import { shouldShowBrowserAgentControls } from "../../browserAgents";
-import { topBarMainProjectScript } from "../../projectScripts";
+import type { WorkspacePreviewSelection } from "../../previewTargets";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -40,7 +40,7 @@ interface ChatHeaderProps {
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
   projectPreviewUrl: string | null | undefined;
-  detectedDevServerUrl: string | null;
+  previewSelection: WorkspacePreviewSelection;
   detectedDevServerUrlsByScriptId: Readonly<Record<string, string>>;
   preferredScriptId: string | null;
   runningProjectScriptIds: ReadonlySet<string>;
@@ -93,13 +93,10 @@ export function shouldShowPreviewButton(input: {
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly browserAgentSidebarMode: boolean;
-  readonly mainActionRunning: boolean;
-  readonly projectPreviewUrl?: string | null | undefined;
+  readonly previewVisible: boolean;
 }): boolean {
   return (
-    (input.mainActionRunning || (input.projectPreviewUrl?.trim().length ?? 0) > 0) &&
-    !input.browserAgentSidebarMode &&
-    shouldShowBrowserAgentControls(input)
+    input.previewVisible && !input.browserAgentSidebarMode && shouldShowBrowserAgentControls(input)
   );
 }
 
@@ -119,7 +116,7 @@ export const ChatHeader = memo(function ChatHeader({
   openInCwd,
   activeProjectScripts,
   projectPreviewUrl,
-  detectedDevServerUrl,
+  previewSelection,
   detectedDevServerUrlsByScriptId,
   preferredScriptId,
   runningProjectScriptIds,
@@ -172,12 +169,6 @@ export const ChatHeader = memo(function ChatHeader({
   }, []);
   const browserAgentSidebarMode = typeof window !== "undefined" && isBrowserAgentSidebarMode();
   const showProjectScriptsControl = shouldShowProjectScriptsControl({ activeProjectScripts });
-  const mainProjectScript = activeProjectScripts
-    ? topBarMainProjectScript(activeProjectScripts, preferredScriptId)
-    : null;
-  const mainProjectScriptRunning = mainProjectScript
-    ? runningProjectScriptIds.has(mainProjectScript.id)
-    : false;
   const showOpenInPicker =
     !browserAgentSidebarMode &&
     shouldShowOpenInPicker({
@@ -191,8 +182,7 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     primaryEnvironmentId,
     browserAgentSidebarMode,
-    mainActionRunning: mainProjectScriptRunning,
-    projectPreviewUrl,
+    previewVisible: previewSelection.kind !== "hidden",
   });
   const showBrowserAnnotationButton = shouldShowBrowserAnnotationButton({
     activeProjectName,
@@ -263,11 +253,9 @@ export const ChatHeader = memo(function ChatHeader({
             {showPreviewButton && (
               <PreviewButton
                 activeProjectName={activeProjectName}
-                activeProjectScripts={activeProjectScripts}
-                projectPreviewUrl={projectPreviewUrl}
                 activeThreadEnvironmentId={activeThreadEnvironmentId}
                 activeThreadId={activeThreadId}
-                detectedDevServerUrl={detectedDevServerUrl}
+                previewSelection={previewSelection}
               />
             )}
             {showTerminalToggle && (

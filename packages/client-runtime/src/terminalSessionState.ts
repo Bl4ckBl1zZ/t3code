@@ -4,6 +4,7 @@ import type {
   TerminalSessionSnapshot,
   TerminalSummary,
   EnvironmentId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { ThreadId, type TerminalAttachInput } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -32,12 +33,14 @@ export interface TerminalBufferState {
 
 export interface TerminalSessionTarget {
   readonly environmentId: EnvironmentId | null;
+  readonly workspaceId?: WorkspaceId | null;
   readonly threadId: ThreadId | null;
   readonly terminalId: string | null;
 }
 
 export interface KnownTerminalSessionTarget {
   readonly environmentId: EnvironmentId;
+  readonly workspaceId?: WorkspaceId | null;
   readonly threadId: ThreadId;
   readonly terminalId: string;
 }
@@ -54,12 +57,14 @@ export interface KnownTerminalMetadata {
 
 export interface TerminalSessionListFilter {
   readonly environmentId: EnvironmentId | null;
+  readonly workspaceId?: WorkspaceId | null;
   readonly threadId?: ThreadId | null;
   readonly terminalId?: string | null;
 }
 
 export interface KnownTerminalSessionListFilter {
   readonly environmentId: EnvironmentId;
+  readonly workspaceId: WorkspaceId | null;
   readonly threadId: ThreadId | null;
   readonly terminalId: string | null;
 }
@@ -78,10 +83,14 @@ export interface TerminalMetadataClient {
   };
 }
 
+type TerminalAttachClientInput = Omit<TerminalAttachInput, "workspaceId"> & {
+  readonly workspaceId?: WorkspaceId | undefined;
+};
+
 export interface TerminalAttachClient {
   readonly terminal: {
     readonly attach: (
-      input: TerminalAttachInput,
+      input: TerminalAttachClientInput,
       listener: (event: TerminalAttachStreamEvent) => void,
       options?: { readonly onResubscribe?: () => void },
     ) => () => void;
@@ -167,6 +176,7 @@ export function getKnownTerminalSessionTarget(
 
   return {
     environmentId: target.environmentId,
+    workspaceId: target.workspaceId ?? null,
     threadId: target.threadId,
     terminalId: target.terminalId,
   };
@@ -181,6 +191,7 @@ export function getKnownTerminalSessionListFilter(
 
   return {
     environmentId: filter.environmentId,
+    workspaceId: filter.workspaceId ?? null,
     threadId: filter.threadId ?? null,
     terminalId: filter.terminalId ?? null,
   };
@@ -192,12 +203,15 @@ function knownTargetFromSummary(
 ): KnownTerminalSessionTarget {
   return {
     environmentId,
+    workspaceId: summary.workspaceId ?? null,
     threadId: ThreadId.make(summary.threadId),
     terminalId: summary.terminalId,
   };
 }
 
 function keyFromKnownTarget(target: KnownTerminalSessionTarget): string {
+  // BACKWARD COMPATIBILITY: PTY attach/update events remain thread-keyed.
+  // Workspace ownership is metadata used for filtering, not the storage key.
   return `${target.environmentId}:${target.threadId}:${target.terminalId}`;
 }
 
@@ -268,6 +282,9 @@ function listKnownSessionsFromMetadata(
       if (filter?.environmentId && target.environmentId !== filter.environmentId) {
         return Result.failVoid;
       }
+      if (filter?.workspaceId && target.workspaceId !== filter.workspaceId) {
+        return Result.failVoid;
+      }
       if (filter?.threadId && target.threadId !== filter.threadId) {
         return Result.failVoid;
       }
@@ -300,6 +317,7 @@ export const knownTerminalSessionsAtom = Atom.family((filter: KnownTerminalSessi
       (target) => get(terminalSessionBufferAtom(target)),
       {
         environmentId: filter.environmentId,
+        ...(filter.workspaceId !== null ? { workspaceId: filter.workspaceId } : {}),
         ...(filter.threadId !== null ? { threadId: filter.threadId } : {}),
         ...(filter.terminalId !== null ? { terminalId: filter.terminalId } : {}),
       },
@@ -313,6 +331,7 @@ export const runningTerminalIdsAtom = Atom.family((filter: KnownTerminalSessionL
       Object.values(get(terminalSessionMetadataAtom(filter.environmentId))),
       Arr.filterMap((entry) =>
         entry.target.environmentId === filter.environmentId &&
+        (filter.workspaceId === null || entry.target.workspaceId === filter.workspaceId) &&
         (filter.threadId === null || entry.target.threadId === filter.threadId) &&
         (filter.terminalId === null || entry.target.terminalId === filter.terminalId) &&
         entry.summary.hasRunningSubprocess
@@ -367,6 +386,7 @@ export function createTerminalSessionManager(config: TerminalSessionManagerConfi
   ): void {
     const knownTarget = getKnownTerminalSessionTarget({
       environmentId: target.environmentId,
+      workspaceId: snapshot.workspaceId ?? null,
       threadId: ThreadId.make(snapshot.threadId),
       terminalId: snapshot.terminalId,
     });
@@ -425,6 +445,7 @@ export function createTerminalSessionManager(config: TerminalSessionManagerConfi
 
     const knownTarget = getKnownTerminalSessionTarget({
       environmentId,
+      workspaceId: null,
       threadId: ThreadId.make(event.threadId),
       terminalId: event.terminalId,
     });
@@ -448,6 +469,7 @@ export function createTerminalSessionManager(config: TerminalSessionManagerConfi
 
     const knownTarget = getKnownTerminalSessionTarget({
       environmentId: target.environmentId,
+      workspaceId: null,
       threadId: ThreadId.make(event.threadId),
       terminalId: event.terminalId,
     });
@@ -575,7 +597,7 @@ export function createTerminalSessionManager(config: TerminalSessionManagerConfi
   function attach(input: {
     readonly environmentId: EnvironmentId;
     readonly client: TerminalAttachClient;
-    readonly terminal: TerminalAttachInput;
+    readonly terminal: TerminalAttachClientInput;
     readonly onSnapshot?: (snapshot: TerminalSessionSnapshot) => void;
     readonly onEvent?: (event: TerminalAttachStreamEvent) => void;
     readonly options?: { readonly onResubscribe?: () => void };

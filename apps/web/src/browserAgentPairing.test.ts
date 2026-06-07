@@ -6,7 +6,6 @@ import {
 import {
   BROWSER_AGENT_AUTO_PAIR_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
-  BROWSER_AGENT_SESSION_PATH,
 } from "@t3tools/shared/browserAgent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -241,7 +240,7 @@ describe("browser agent pairing", () => {
     ).resolves.toEqual(["http://127.0.0.1:4277/", "http://100.105.249.96:3773/"]);
   });
 
-  it("pairs the same-origin extension with a browser-agent session issued by the page", async () => {
+  it("pairs the same-origin extension through the browser's host session", async () => {
     let messageListener: ((event: MessageEvent) => void) | null = null;
     let pairRequest: Record<string, unknown> | null = null;
     const windowStub = {
@@ -263,34 +262,20 @@ describe("browser agent pairing", () => {
               type: "t3code.browserAgent.autoPair.result",
               requestId: message.requestId,
               ok: true,
+              sessionId: "session-browser",
             },
           } as unknown as MessageEvent);
         }, 0);
       }),
     };
     vi.stubGlobal("window", windowStub);
-    const fetchMock = vi
-      .fn<(input: URL | RequestInfo, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            sessionId: "session-issued",
-            sessionToken: "token-issued",
-          }),
-          {
-            status: 200,
-            headers: {
-              "content-type": "application/json",
-            },
-          },
-        ),
-      );
+    const fetchMock = vi.fn<(input: URL | RequestInfo, init?: RequestInit) => Promise<Response>>();
     vi.stubGlobal("fetch", fetchMock);
     const client = {
       browserAgents: {
         list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
           currentSessionId: "session-page",
-          agents: [{ id: "browser-agent:issued", connected: true, sessionId: "session-issued" }],
+          agents: [{ id: "browser-agent:issued", connected: true, sessionId: "session-browser" }],
           tabs: [],
           workspaceLinks: [],
         } as unknown as BrowserAgentListResult),
@@ -304,26 +289,20 @@ describe("browser agent pairing", () => {
       }),
     ).resolves.toEqual({
       preferredAgentId: "browser-agent:issued",
-      preferredSessionId: "session-issued",
+      preferredSessionId: "session-browser",
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-      new URL(BROWSER_AGENT_SESSION_PATH, "https://desktop.tail.ts.net/").toString(),
-    );
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-      method: "POST",
-      credentials: "include",
-    });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(pairRequest).toMatchObject({
       type: "t3code.browserAgent.autoPair",
       baseUrl: "https://desktop.tail.ts.net/",
-      sessionToken: "token-issued",
+      useBrowserSession: true,
     });
-    expect(pairRequest).not.toHaveProperty("useBrowserSession");
+    expect(pairRequest).not.toHaveProperty("sessionToken");
     expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the authenticated RPC connection to issue same-origin browser-agent sessions", async () => {
+  it("does not mint a browser-agent token through the authenticated RPC connection", async () => {
     let messageListener: ((event: MessageEvent) => void) | null = null;
     let pairRequest: Record<string, unknown> | null = null;
     const windowStub = {
@@ -345,6 +324,7 @@ describe("browser agent pairing", () => {
               type: "t3code.browserAgent.autoPair.result",
               requestId: message.requestId,
               ok: true,
+              sessionId: "session-browser",
             },
           } as unknown as MessageEvent);
         }, 0);
@@ -362,7 +342,7 @@ describe("browser agent pairing", () => {
         issueSession,
         list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
           currentSessionId: "session-page",
-          agents: [{ id: "browser-agent:rpc", connected: true, sessionId: "session-rpc" }],
+          agents: [{ id: "browser-agent:rpc", connected: true, sessionId: "session-browser" }],
           tabs: [],
           workspaceLinks: [],
         } as unknown as BrowserAgentListResult),
@@ -376,20 +356,176 @@ describe("browser agent pairing", () => {
       }),
     ).resolves.toEqual({
       preferredAgentId: "browser-agent:rpc",
-      preferredSessionId: "session-rpc",
+      preferredSessionId: "session-browser",
     });
 
-    expect(issueSession).toHaveBeenCalledTimes(1);
+    expect(issueSession).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(pairRequest).toMatchObject({
       type: "t3code.browserAgent.autoPair",
       baseUrl: "https://desktop.tail.ts.net/",
-      sessionToken: "token-rpc",
+      useBrowserSession: true,
     });
+    expect(pairRequest).not.toHaveProperty("sessionToken");
     expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
   });
 
-  it("uses a connected remote extension agent when the freshly issued session does not register", async () => {
+  it("falls back to browser-host setup when browser-session pairing is rejected", async () => {
+    let messageListener: ((event: MessageEvent) => void) | null = null;
+    const pairRequests: Record<string, unknown>[] = [];
+    const windowStub = {
+      location: new URL("https://desktop.tail.ts.net/"),
+      setTimeout,
+      clearTimeout,
+      addEventListener: vi.fn((type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === "message" && typeof listener === "function") {
+          messageListener = listener as (event: MessageEvent) => void;
+        }
+      }),
+      removeEventListener: vi.fn(),
+      postMessage: vi.fn((message: Record<string, unknown>) => {
+        pairRequests.push(message);
+        setTimeout(() => {
+          messageListener?.({
+            source: windowStub,
+            data: {
+              type: "t3code.browserAgent.autoPair.result",
+              requestId: message.requestId,
+              ok: false,
+              error:
+                "This browser is not authenticated to this T3 Code host. Open the T3 Code host in this browser, pair or sign in there, then retry Preview.",
+            },
+          } as unknown as MessageEvent);
+        }, 0);
+      }),
+    };
+    vi.stubGlobal("window", windowStub);
+    const fetchMock = vi.fn<(input: URL | RequestInfo, init?: RequestInit) => Promise<Response>>();
+    vi.stubGlobal("fetch", fetchMock);
+    const issueSession = vi.fn<() => Promise<BrowserAgentSessionResult>>().mockResolvedValue({
+      sessionId: "session-rpc" as BrowserAgentSessionResult["sessionId"],
+      sessionToken: "token-rpc" as BrowserAgentSessionResult["sessionToken"],
+    });
+    const client = {
+      browserAgents: {
+        issueSession,
+        list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
+          currentSessionId: "session-page",
+          agents: [{ id: "browser-agent:http", connected: true, sessionId: "session-http" }],
+          tabs: [],
+          workspaceLinks: [],
+        } as unknown as BrowserAgentListResult),
+      },
+    };
+
+    let caught: unknown = null;
+    try {
+      await autoPairBrowserAgent(client, {
+        baseUrl: "https://desktop.tail.ts.net/",
+        allowExternalBrowserLaunch: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isBrowserAgentExtensionUnavailableError(caught)).toBe(true);
+    if (!isBrowserAgentExtensionUnavailableError(caught)) {
+      throw new Error("Expected BrowserAgentExtensionUnavailableError.");
+    }
+    expect(issueSession).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pairRequests).toHaveLength(1);
+    expect(pairRequests[0]).toMatchObject({
+      type: "t3code.browserAgent.autoPair",
+      baseUrl: "https://desktop.tail.ts.net/",
+      useBrowserSession: true,
+    });
+    expect(pairRequests[0]).not.toHaveProperty("sessionToken");
+    const setupUrl = new URL(caught.setupUrl);
+    expect(setupUrl.searchParams.get("t3BrowserAgentUseBrowserSession")).toBe("1");
+    expect(
+      new URLSearchParams(setupUrl.hash.slice(1)).get("t3BrowserAgentSessionToken"),
+    ).toBeNull();
+  });
+
+  it("keeps manual setup browser-session based when browser-session pairing is rejected", async () => {
+    let messageListener: ((event: MessageEvent) => void) | null = null;
+    const pairRequests: Record<string, unknown>[] = [];
+    const windowStub = {
+      location: new URL("https://desktop.tail.ts.net/"),
+      setTimeout,
+      clearTimeout,
+      addEventListener: vi.fn((type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === "message" && typeof listener === "function") {
+          messageListener = listener as (event: MessageEvent) => void;
+        }
+      }),
+      removeEventListener: vi.fn(),
+      postMessage: vi.fn((message: Record<string, unknown>) => {
+        pairRequests.push(message);
+        setTimeout(() => {
+          messageListener?.({
+            source: windowStub,
+            data: {
+              type: "t3code.browserAgent.autoPair.result",
+              requestId: message.requestId,
+              ok: false,
+              error: "The backend rejected the browser agent session token.",
+            },
+          } as unknown as MessageEvent);
+        }, 0);
+      }),
+    };
+    vi.stubGlobal("window", windowStub);
+    const fetchMock = vi.fn<(input: URL | RequestInfo, init?: RequestInit) => Promise<Response>>();
+    vi.stubGlobal("fetch", fetchMock);
+    const issueSession = vi.fn<() => Promise<BrowserAgentSessionResult>>().mockResolvedValue({
+      sessionId: "session-rpc" as BrowserAgentSessionResult["sessionId"],
+      sessionToken: "token-rpc" as BrowserAgentSessionResult["sessionToken"],
+    });
+    const client = {
+      browserAgents: {
+        issueSession,
+        list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
+          currentSessionId: "session-page",
+          agents: [],
+          tabs: [],
+          workspaceLinks: [],
+        } as unknown as BrowserAgentListResult),
+      },
+    };
+
+    let caught: unknown = null;
+    try {
+      await autoPairBrowserAgent(client, {
+        baseUrl: "https://desktop.tail.ts.net/",
+        allowExternalBrowserLaunch: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isBrowserAgentExtensionUnavailableError(caught)).toBe(true);
+    if (!isBrowserAgentExtensionUnavailableError(caught)) {
+      throw new Error("Expected BrowserAgentExtensionUnavailableError.");
+    }
+    expect(issueSession).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(pairRequests).toHaveLength(1);
+    expect(pairRequests[0]).toMatchObject({
+      type: "t3code.browserAgent.autoPair",
+      baseUrl: "https://desktop.tail.ts.net/",
+      useBrowserSession: true,
+    });
+    expect(pairRequests[0]).not.toHaveProperty("sessionToken");
+    const setupUrl = new URL(caught.setupUrl);
+    expect(setupUrl.searchParams.get("t3BrowserAgentUseBrowserSession")).toBe("1");
+    expect(
+      new URLSearchParams(setupUrl.hash.slice(1)).get("t3BrowserAgentSessionToken"),
+    ).toBeNull();
+  });
+
+  it("uses the connected local-control extension when the browser-issued session does not register", async () => {
     let messageListener: ((event: MessageEvent) => void) | null = null;
     const windowStub = {
       location: new URL("https://desktop.tail.ts.net/"),
@@ -409,6 +545,7 @@ describe("browser agent pairing", () => {
               type: "t3code.browserAgent.autoPair.result",
               requestId: message.requestId,
               ok: true,
+              sessionId: "session-issued",
             },
           } as unknown as MessageEvent);
         }, 0);
@@ -464,12 +601,63 @@ describe("browser agent pairing", () => {
         allowExternalBrowserLaunch: false,
       }),
     ).resolves.toEqual({
-      preferredAgentId: "browser-agent:remote",
-      preferredSessionId: "session-issued",
+      preferredAgentId: "browser-agent:local-control",
+      preferredSessionId: null,
     });
   });
 
-  it("opens manual setup with an issued session token when the content script is unavailable", async () => {
+  it("uses an already connected extension when the app tab has no pairing content script", async () => {
+    const windowStub = {
+      location: new URL("https://desktop.tail.ts.net/"),
+      setTimeout: vi.fn((callback: () => void) => {
+        callback();
+        return 1;
+      }),
+      clearTimeout: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      postMessage: vi.fn(),
+    };
+    vi.stubGlobal("window", windowStub);
+    const client = {
+      browserAgents: {
+        list: vi.fn<() => Promise<BrowserAgentListResult>>().mockResolvedValue({
+          currentSessionId: "session-page",
+          agents: [
+            {
+              id: "browser-agent:local-control",
+              connected: true,
+              sessionId: LOCAL_BROWSER_AGENT_SESSION_ID,
+              lastSeenAt: "2026-01-01T00:00:02.000Z",
+            },
+          ],
+          tabs: [],
+          workspaceLinks: [],
+        } as unknown as BrowserAgentListResult),
+      },
+    };
+
+    await expect(
+      autoPairBrowserAgent(client, {
+        baseUrl: "https://desktop.tail.ts.net/",
+        allowExternalBrowserLaunch: false,
+      }),
+    ).resolves.toEqual({
+      preferredAgentId: "browser-agent:local-control",
+      preferredSessionId: null,
+    });
+
+    expect(windowStub.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "t3code.browserAgent.autoPair",
+        useBrowserSession: true,
+      }),
+      "https://desktop.tail.ts.net",
+    );
+    expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens manual setup with browser-session issuance when the content script is unavailable", async () => {
     const windowStub = {
       location: new URL("https://desktop.tail.ts.net/"),
       setTimeout: vi.fn((callback: () => void) => {
@@ -527,10 +715,10 @@ describe("browser agent pairing", () => {
       throw new Error("Expected BrowserAgentExtensionUnavailableError.");
     }
     const setupUrl = new URL(caught.setupUrl);
-    expect(setupUrl.searchParams.get("t3BrowserAgentUseBrowserSession")).toBeNull();
-    expect(new URLSearchParams(setupUrl.hash.slice(1)).get("t3BrowserAgentSessionToken")).toBe(
-      "token-issued",
-    );
+    expect(setupUrl.searchParams.get("t3BrowserAgentUseBrowserSession")).toBe("1");
+    expect(
+      new URLSearchParams(setupUrl.hash.slice(1)).get("t3BrowserAgentSessionToken"),
+    ).toBeNull();
   });
 
   it("detects the no-agent RPC failure", () => {

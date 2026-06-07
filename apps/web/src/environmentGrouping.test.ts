@@ -79,8 +79,17 @@ function makeSidebarThreadSummary(
 
 function makeEmptyEnvironmentState(): EnvironmentState {
   return {
+    organizationIds: [],
+    organizationById: {},
+    projectIdsByOrganizationId: {},
     projectIds: [],
     projectById: {},
+    workspaceIdsByProjectId: {},
+    workspaceById: {},
+    subChatIdsByWorkspaceId: {},
+    subChatShellById: {},
+    workspaceActionIdsByWorkspaceId: {},
+    workspaceActionById: {},
     threadIds: [],
     threadIdsByProjectId: {},
     threadShellById: {},

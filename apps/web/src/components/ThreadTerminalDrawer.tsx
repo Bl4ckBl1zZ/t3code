@@ -6,6 +6,7 @@ import {
   type TerminalAttachStreamEvent,
   type TerminalSessionSnapshot,
   type ThreadId,
+  type WorkspaceId,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import { Terminal, type ITheme } from "@xterm/xterm";
@@ -257,6 +258,7 @@ interface TerminalViewportProps {
   terminalId: string;
   terminalLabel: string;
   cwd: string;
+  workspaceId?: WorkspaceId | null | undefined;
   worktreePath?: string | null;
   runtimeEnv?: Record<string, string>;
   onSessionExited: () => void;
@@ -274,12 +276,18 @@ interface TerminalLaunchLocation {
   readonly runtimeEnv?: Record<string, string>;
 }
 
+interface TerminalSessionTarget {
+  readonly threadId: ThreadId;
+  readonly workspaceId?: WorkspaceId | null | undefined;
+}
+
 export function TerminalViewport({
   threadRef,
   threadId,
   terminalId,
   terminalLabel,
   cwd,
+  workspaceId,
   worktreePath,
   runtimeEnv,
   onSessionExited,
@@ -422,7 +430,12 @@ export function TerminalViewport({
       const activeTerminal = terminalRef.current;
       if (!activeTerminal) return;
       try {
-        await api.terminal.write({ threadId, terminalId, data });
+        await api.terminal.write({
+          threadId,
+          ...(workspaceId != null ? { workspaceId } : {}),
+          terminalId,
+          data,
+        });
       } catch (error) {
         writeSystemMessage(activeTerminal, error instanceof Error ? error.message : fallbackError);
       }
@@ -532,7 +545,12 @@ export function TerminalViewport({
 
     const inputDisposable = terminal.onData((data) => {
       void api.terminal
-        .write({ threadId, terminalId, data })
+        .write({
+          threadId,
+          ...(workspaceId != null ? { workspaceId } : {}),
+          terminalId,
+          data,
+        })
         .catch((err) =>
           writeSystemMessage(
             terminal,
@@ -663,6 +681,7 @@ export function TerminalViewport({
         client: api,
         terminal: {
           threadId,
+          ...(workspaceId != null ? { workspaceId } : {}),
           terminalId,
           cwd,
           ...(worktreePath !== undefined ? { worktreePath } : {}),
@@ -698,6 +717,7 @@ export function TerminalViewport({
       void api.terminal
         .resize({
           threadId,
+          ...(workspaceId != null ? { workspaceId } : {}),
           terminalId,
           cols: activeTerminal.cols,
           rows: activeTerminal.rows,
@@ -727,7 +747,7 @@ export function TerminalViewport({
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
+  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, workspaceId, worktreePath]);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -755,6 +775,7 @@ export function TerminalViewport({
       void api.terminal
         .resize({
           threadId,
+          ...(workspaceId != null ? { workspaceId } : {}),
           terminalId,
           cols: terminal.cols,
           rows: terminal.rows,
@@ -764,7 +785,7 @@ export function TerminalViewport({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [drawerHeight, environmentId, resizeEpoch, terminalId, threadId]);
+  }, [drawerHeight, environmentId, resizeEpoch, terminalId, threadId, workspaceId]);
   return (
     <div
       ref={containerRef}
@@ -777,6 +798,7 @@ interface ThreadTerminalDrawerProps {
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
   cwd: string;
+  workspaceId?: WorkspaceId | null | undefined;
   worktreePath?: string | null;
   runtimeEnv?: Record<string, string>;
   visible?: boolean;
@@ -802,6 +824,8 @@ interface ThreadTerminalDrawerProps {
   terminalLabelsById?: ReadonlyMap<string, string>;
   /** Prefer per-session launch locations when the server already knows a terminal. */
   terminalLaunchLocationsById?: ReadonlyMap<string, TerminalLaunchLocation>;
+  /** Prefer per-session targets when workspace drawers include terminals from sibling sub-chats. */
+  terminalTargetsById?: ReadonlyMap<string, TerminalSessionTarget>;
 }
 
 interface TerminalActionButtonProps {
@@ -837,6 +861,7 @@ export default function ThreadTerminalDrawer({
   threadRef,
   threadId,
   cwd,
+  workspaceId,
   worktreePath,
   runtimeEnv,
   visible = true,
@@ -860,6 +885,7 @@ export default function ThreadTerminalDrawer({
   keybindings,
   terminalLabelsById,
   terminalLaunchLocationsById,
+  terminalTargetsById,
 }: ThreadTerminalDrawerProps) {
   const [drawerHeight, setDrawerHeight] = useState(() => clampDrawerHeight(height));
   const [resizeEpoch, setResizeEpoch] = useState(0);
@@ -1001,6 +1027,12 @@ export default function ThreadTerminalDrawer({
       );
     },
     [cwd, runtimeEnv, terminalLaunchLocationsById, worktreePath],
+  );
+  const resolveTerminalTarget = useCallback(
+    (terminalId: string): TerminalSessionTarget => {
+      return terminalTargetsById?.get(terminalId) ?? { threadId, workspaceId };
+    },
+    [terminalTargetsById, threadId, workspaceId],
   );
   const splitTerminalActionLabel = hasReachedSplitLimit
     ? `Split Terminal (max ${MAX_TERMINALS_PER_GROUP} per group)`
@@ -1233,6 +1265,7 @@ export default function ThreadTerminalDrawer({
               >
                 {visibleTerminalIds.map((terminalId) => {
                   const terminalLaunchLocation = resolveTerminalLaunchLocation(terminalId);
+                  const terminalTarget = resolveTerminalTarget(terminalId);
                   return (
                     <div
                       key={terminalId}
@@ -1250,10 +1283,11 @@ export default function ThreadTerminalDrawer({
                       <div className="h-full p-1">
                         <TerminalViewport
                           threadRef={threadRef}
-                          threadId={threadId}
+                          threadId={terminalTarget.threadId}
                           terminalId={terminalId}
                           terminalLabel={terminalLabelById.get(terminalId) ?? "Terminal"}
                           cwd={terminalLaunchLocation.cwd}
+                          workspaceId={terminalTarget.workspaceId}
                           {...(terminalLaunchLocation.worktreePath !== undefined
                             ? { worktreePath: terminalLaunchLocation.worktreePath }
                             : {})}
@@ -1275,27 +1309,33 @@ export default function ThreadTerminalDrawer({
               </div>
             ) : (
               <div className="h-full p-1">
-                <TerminalViewport
-                  key={resolvedActiveTerminalId}
-                  threadRef={threadRef}
-                  threadId={threadId}
-                  terminalId={resolvedActiveTerminalId}
-                  terminalLabel={terminalLabelById.get(resolvedActiveTerminalId) ?? "Terminal"}
-                  cwd={activeTerminalLaunchLocation.cwd}
-                  {...(activeTerminalLaunchLocation.worktreePath !== undefined
-                    ? { worktreePath: activeTerminalLaunchLocation.worktreePath }
-                    : {})}
-                  {...(activeTerminalLaunchLocation.runtimeEnv
-                    ? { runtimeEnv: activeTerminalLaunchLocation.runtimeEnv }
-                    : {})}
-                  onSessionExited={() => onCloseTerminal(resolvedActiveTerminalId)}
-                  onAddTerminalContext={onAddTerminalContext}
-                  focusRequestId={focusRequestId}
-                  autoFocus
-                  resizeEpoch={resizeEpoch}
-                  drawerHeight={drawerHeight}
-                  keybindings={keybindings}
-                />
+                {(() => {
+                  const terminalTarget = resolveTerminalTarget(resolvedActiveTerminalId);
+                  return (
+                    <TerminalViewport
+                      key={resolvedActiveTerminalId}
+                      threadRef={threadRef}
+                      threadId={terminalTarget.threadId}
+                      terminalId={resolvedActiveTerminalId}
+                      terminalLabel={terminalLabelById.get(resolvedActiveTerminalId) ?? "Terminal"}
+                      cwd={activeTerminalLaunchLocation.cwd}
+                      workspaceId={terminalTarget.workspaceId}
+                      {...(activeTerminalLaunchLocation.worktreePath !== undefined
+                        ? { worktreePath: activeTerminalLaunchLocation.worktreePath }
+                        : {})}
+                      {...(activeTerminalLaunchLocation.runtimeEnv
+                        ? { runtimeEnv: activeTerminalLaunchLocation.runtimeEnv }
+                        : {})}
+                      onSessionExited={() => onCloseTerminal(resolvedActiveTerminalId)}
+                      onAddTerminalContext={onAddTerminalContext}
+                      focusRequestId={focusRequestId}
+                      autoFocus
+                      resizeEpoch={resizeEpoch}
+                      drawerHeight={drawerHeight}
+                      keybindings={keybindings}
+                    />
+                  );
+                })()}
               </div>
             )}
           </div>

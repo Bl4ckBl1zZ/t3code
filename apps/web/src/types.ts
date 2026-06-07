@@ -9,6 +9,7 @@ import type {
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
+  OrganizationId,
   TurnId,
   MessageId,
   ProviderDriverKind,
@@ -17,6 +18,12 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadTabType,
+  WorkspaceActionId,
+  WorkspaceActionSource,
+  WorkspaceActionStatus,
+  WorkspaceId,
+  WorkspaceMode,
+  WorkspaceStatus,
 } from "@t3tools/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -84,6 +91,7 @@ export interface TurnDiffSummary {
 
 export interface Project {
   id: ProjectId;
+  organizationId?: OrganizationId | undefined;
   environmentId: EnvironmentId;
   name: string;
   cwd: string;
@@ -95,11 +103,62 @@ export interface Project {
   scripts: ProjectScript[];
 }
 
+export interface Organization {
+  id: OrganizationId;
+  environmentId: EnvironmentId;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Workspace {
+  id: WorkspaceId;
+  organizationId: OrganizationId;
+  projectId: ProjectId;
+  environmentId: EnvironmentId;
+  title: string;
+  cwd: string;
+  branch: string | null;
+  worktreePath: string | null;
+  baseBranch: string | null;
+  mode: WorkspaceMode;
+  status: WorkspaceStatus;
+  defaultSubChatId: ThreadId | null;
+  browserPreviewUrl?: string | null | undefined;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface SubChatShell extends SidebarThreadSummary {
+  organizationId: OrganizationId;
+  workspaceId: WorkspaceId;
+}
+
+export interface WorkspaceAction {
+  id: WorkspaceActionId;
+  organizationId: OrganizationId;
+  projectId: ProjectId;
+  workspaceId: WorkspaceId;
+  environmentId: EnvironmentId;
+  subChatId: ThreadId | null;
+  terminalId: string | null;
+  kind: string;
+  title: string;
+  status: WorkspaceActionStatus;
+  source: WorkspaceActionSource;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
 export interface Thread {
   id: ThreadId;
   environmentId: EnvironmentId;
   codexThreadId: string | null;
   projectId: ProjectId;
+  workspaceId?: WorkspaceId | undefined;
   tabGroupId?: ThreadId;
   tabType?: ThreadTabType;
   title: string;
@@ -126,6 +185,7 @@ export interface ThreadShell {
   environmentId: EnvironmentId;
   codexThreadId: string | null;
   projectId: ProjectId;
+  workspaceId?: WorkspaceId | undefined;
   tabGroupId?: ThreadId;
   tabType?: ThreadTabType;
   title: string;
@@ -149,6 +209,7 @@ export interface SidebarThreadSummary {
   id: ThreadId;
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  workspaceId?: WorkspaceId | undefined;
   tabGroupId?: ThreadId;
   tabType?: ThreadTabType;
   title: string;

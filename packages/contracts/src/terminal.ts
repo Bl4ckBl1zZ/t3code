@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProjectId, TrimmedNonEmptyString, WorkspaceId } from "./baseSchemas.ts";
 
 /**
  * Client-side id for the first shell opened on a thread. Ids are uniformly
@@ -26,6 +26,7 @@ const TerminalEnvSchema = Schema.Record(TerminalEnvKeySchema, TerminalEnvValueSc
 
 export const TerminalThreadInput = Schema.Struct({
   threadId: TrimmedNonEmptyStringSchema,
+  workspaceId: Schema.optional(WorkspaceId),
 });
 export type TerminalThreadInput = typeof TerminalThreadInput.Type;
 
@@ -121,6 +122,7 @@ export type TerminalProjectScriptContext = typeof TerminalProjectScriptContext.T
 
 export const TerminalSessionSnapshot = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
+  workspaceId: Schema.optional(WorkspaceId),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   cwd: Schema.String.check(Schema.isNonEmpty()),
   worktreePath: Schema.NullOr(TrimmedNonEmptyStringSchema),
@@ -138,6 +140,7 @@ export type TerminalSessionSnapshot = typeof TerminalSessionSnapshot.Type;
 
 export const TerminalSummary = Schema.Struct({
   threadId: Schema.String.check(Schema.isNonEmpty()),
+  workspaceId: Schema.optional(WorkspaceId),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   cwd: Schema.String.check(Schema.isNonEmpty()),
   worktreePath: Schema.NullOr(TrimmedNonEmptyStringSchema),

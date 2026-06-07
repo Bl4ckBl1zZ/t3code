@@ -10,6 +10,7 @@ import {
   type TerminalSessionSnapshot,
   type TerminalSessionStatus,
   type TerminalSummary,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import {
@@ -114,6 +115,7 @@ interface ShellCandidate {
 
 interface TerminalStartInput {
   threadId: string;
+  workspaceId?: string;
   terminalId: string;
   cwd: string;
   worktreePath?: string | null;
@@ -124,6 +126,7 @@ interface TerminalStartInput {
 
 interface TerminalSessionState {
   threadId: string;
+  workspaceId: string | null;
   terminalId: string;
   cwd: string;
   worktreePath: string | null;
@@ -231,6 +234,7 @@ function projectScriptContextFromRuntimeEnv(
 function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   return {
     threadId: session.threadId,
+    ...(session.workspaceId !== null ? { workspaceId: WorkspaceId.make(session.workspaceId) } : {}),
     terminalId: session.terminalId,
     cwd: session.cwd,
     worktreePath: session.worktreePath,
@@ -249,6 +253,7 @@ function summary(session: TerminalSessionState): TerminalSummary {
   const projectScript = projectScriptContextFromRuntimeEnv(session.runtimeEnv);
   return {
     threadId: session.threadId,
+    ...(session.workspaceId !== null ? { workspaceId: WorkspaceId.make(session.workspaceId) } : {}),
     terminalId: session.terminalId,
     cwd: session.cwd,
     worktreePath: session.worktreePath,
@@ -1719,6 +1724,9 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       const startingAt = yield* nowIso;
       yield* modifyManagerState((state) => {
         session.status = "starting";
+        if (input.workspaceId !== undefined) {
+          session.workspaceId = input.workspaceId;
+        }
         session.cwd = input.cwd;
         session.worktreePath = input.worktreePath ?? null;
         session.cols = input.cols;
@@ -2005,6 +2013,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
         const session: TerminalSessionState = {
           threadId: input.threadId,
+          workspaceId: input.workspaceId ?? null,
           terminalId,
           cwd: input.cwd,
           worktreePath: input.worktreePath ?? null,
@@ -2041,6 +2050,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           session,
           {
             threadId: input.threadId,
+            ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
             terminalId,
             cwd: input.cwd,
             ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
@@ -2054,6 +2064,9 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
       }
 
       const liveSession = existing.value;
+      if (input.workspaceId !== undefined) {
+        liveSession.workspaceId = input.workspaceId;
+      }
       const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
       const currentRuntimeEnv = liveSession.runtimeEnv;
       const targetCols = input.cols ?? liveSession.cols;
@@ -2093,6 +2106,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           liveSession,
           {
             threadId: input.threadId,
+            ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
             terminalId,
             cwd: input.cwd,
             worktreePath: liveSession.worktreePath,
@@ -2429,6 +2443,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             const rows = input.rows ?? DEFAULT_OPEN_ROWS;
             session = {
               threadId: input.threadId,
+              workspaceId: input.workspaceId ?? null,
               terminalId,
               cwd: input.cwd,
               worktreePath: input.worktreePath ?? null,
@@ -2462,6 +2477,9 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           } else {
             session = existingSession.value;
             yield* stopProcess(session);
+            if (input.workspaceId !== undefined) {
+              session.workspaceId = input.workspaceId;
+            }
             session.cwd = input.cwd;
             session.worktreePath = input.worktreePath ?? null;
             session.runtimeEnv = normalizedRuntimeEnv(input.env);
@@ -2480,6 +2498,7 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
             session,
             {
               threadId: input.threadId,
+              ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
               terminalId,
               cwd: input.cwd,
               ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),

@@ -1,11 +1,14 @@
 import {
   CheckpointRef,
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   EventId,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
+  WorkspaceActionId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -27,23 +30,264 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
 
 const projectionSnapshotLayer = it.layer(
-  OrchestrationProjectionSnapshotQueryLive.pipe(
-    Layer.provideMerge(RepositoryIdentityResolverLive),
-    Layer.provideMerge(SqlitePersistenceMemory),
-    Layer.provideMerge(NodeServices.layer),
+  Layer.fresh(
+    OrchestrationProjectionSnapshotQueryLive.pipe(
+      Layer.provideMerge(RepositoryIdentityResolverLive),
+      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(NodeServices.layer),
+    ),
   ),
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("hydrates concrete workspace hierarchy rows in shell and command snapshots", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = asProjectId("project-hierarchy-read");
+      const threadId = ThreadId.make("thread-hierarchy-read");
+      const workspaceId = WorkspaceId.make("workspace-hierarchy-read");
+      const actionId = WorkspaceActionId.make("action-hierarchy-read");
+
+      yield* sql`DELETE FROM projection_workspace_actions`;
+      yield* sql`DELETE FROM projection_sub_chats`;
+      yield* sql`DELETE FROM projection_workspaces`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          ${projectId},
+          'Hierarchy Read Project',
+          '/tmp/hierarchy-read',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-03-01T00:00:00.000Z',
+          '2026-03-01T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_workspaces (
+          workspace_id,
+          organization_id,
+          project_id,
+          title,
+          cwd,
+          branch,
+          worktree_path,
+          base_branch,
+          mode,
+          status,
+          default_sub_chat_id,
+          browser_preview_url,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          ${workspaceId},
+          ${DEFAULT_LOCAL_ORGANIZATION_ID},
+          ${projectId},
+          'Concrete Workspace',
+          '/tmp/hierarchy-read/.worktrees/concrete',
+          'feature/concrete',
+          '/tmp/hierarchy-read/.worktrees/concrete',
+          'main',
+          'worktree',
+          'ready',
+          ${threadId},
+          'http://localhost:5173',
+          '2026-03-01T00:00:02.000Z',
+          '2026-03-01T00:00:03.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          ${threadId},
+          ${projectId},
+          'Concrete Sub Chat',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          'feature/concrete',
+          '/tmp/hierarchy-read/.worktrees/concrete',
+          NULL,
+          NULL,
+          0,
+          0,
+          0,
+          '2026-03-01T00:00:04.000Z',
+          '2026-03-01T00:00:05.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_sub_chats (
+          sub_chat_id,
+          workspace_id,
+          organization_id,
+          project_id,
+          title,
+          role,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          ${threadId},
+          ${workspaceId},
+          ${DEFAULT_LOCAL_ORGANIZATION_ID},
+          ${projectId},
+          'Concrete Sub Chat',
+          'agent',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          NULL,
+          '2026-03-01T00:00:04.000Z',
+          '2026-03-01T00:00:05.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_workspace_actions (
+          action_id,
+          workspace_id,
+          organization_id,
+          project_id,
+          sub_chat_id,
+          terminal_id,
+          kind,
+          title,
+          status,
+          source,
+          payload_json,
+          result_json,
+          created_at,
+          started_at,
+          completed_at,
+          updated_at
+        )
+        VALUES (
+          ${actionId},
+          ${workspaceId},
+          ${DEFAULT_LOCAL_ORGANIZATION_ID},
+          ${projectId},
+          ${threadId},
+          'terminal-read',
+          'terminal-command',
+          'Install deps',
+          'completed',
+          'user',
+          '{}',
+          NULL,
+          '2026-03-01T00:00:06.000Z',
+          '2026-03-01T00:00:06.000Z',
+          '2026-03-01T00:00:07.000Z',
+          '2026-03-01T00:00:07.000Z'
+        )
+      `;
+
+      let sequence = 12;
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        yield* sql`
+          INSERT INTO projection_state (
+            projector,
+            last_applied_sequence,
+            updated_at
+          )
+          VALUES (
+            ${projector},
+            ${sequence},
+            '2026-03-01T00:00:08.000Z'
+          )
+        `;
+        sequence += 1;
+      }
+
+      const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      const shellWorkspace = shellSnapshot.workspaces?.find(
+        (workspace) => workspace.id === workspaceId,
+      );
+      const shellAction = shellSnapshot.workspaceActions?.find((action) => action.id === actionId);
+      assert.equal(shellWorkspace?.title, "Concrete Workspace");
+      assert.equal(shellSnapshot.subChats?.[0]?.workspaceId, workspaceId);
+      assert.equal(shellAction?.status, "completed");
+
+      const commandReadModel = yield* snapshotQuery.getCommandReadModel();
+      assert.equal(
+        commandReadModel.workspaces?.some((workspace) => workspace.id === workspaceId),
+        true,
+      );
+      assert.equal(
+        commandReadModel.workspaceActions?.some((action) => action.id === actionId),
+        true,
+      );
+      assert.equal(commandReadModel.threads[0]?.workspaceId, workspaceId);
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
 
-      yield* sql`DELETE FROM projection_projects`;
-      yield* sql`DELETE FROM projection_state`;
+      yield* sql`DELETE FROM projection_workspace_actions`;
+      yield* sql`DELETE FROM projection_sub_chats`;
+      yield* sql`DELETE FROM projection_workspaces`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_messages`;
       yield* sql`DELETE FROM projection_thread_proposed_plans`;
       yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
 
       yield* sql`
         INSERT INTO projection_projects (
@@ -260,6 +504,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(snapshot.projects, [
         {
           id: asProjectId("project-1"),
+          organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           repositoryIdentity: null,
@@ -286,6 +531,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         {
           id: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
+          workspaceId: WorkspaceId.make("project-1:primary"),
           tabGroupId: ThreadId.make("thread-1"),
           tabType: "chat",
           title: "Thread 1",
@@ -371,9 +617,18 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.snapshotSequence, 5);
+      assert.deepEqual(shellSnapshot.organizations, [
+        {
+          id: DEFAULT_LOCAL_ORGANIZATION_ID,
+          title: "Local",
+          createdAt: "2026-02-24T00:00:00.000Z",
+          updatedAt: "2026-02-24T00:00:09.000Z",
+        },
+      ]);
       assert.deepEqual(shellSnapshot.projects, [
         {
           id: asProjectId("project-1"),
+          organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           repositoryIdentity: null,
@@ -399,6 +654,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         {
           id: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
+          workspaceId: WorkspaceId.make("project-1:primary"),
           tabGroupId: ThreadId.make("thread-1"),
           tabType: "chat",
           title: "Thread 1",
@@ -440,6 +696,53 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasActionableProposedPlan: false,
         },
       ]);
+      assert.deepEqual(shellSnapshot.workspaces, [
+        {
+          id: WorkspaceId.make("project-1:primary"),
+          organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+          projectId: asProjectId("project-1"),
+          title: "main",
+          cwd: "/tmp/project-1",
+          branch: null,
+          worktreePath: null,
+          baseBranch: null,
+          mode: "local",
+          status: "ready",
+          defaultSubChatId: ThreadId.make("thread-1"),
+          browserPreviewUrl: null,
+          createdAt: "2026-02-24T00:00:00.000Z",
+          updatedAt: "2026-02-24T00:00:03.000Z",
+          archivedAt: null,
+        },
+      ]);
+      const threadShell = shellSnapshot.threads[0];
+      assert.isDefined(threadShell);
+      assert.deepEqual(shellSnapshot.subChats, [
+        {
+          ...threadShell,
+          id: ThreadId.make("thread-1"),
+          workspaceId: WorkspaceId.make("project-1:primary"),
+          organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+        },
+      ]);
+
+      const workspaceShell = shellSnapshot.workspaces?.[0];
+      assert.isDefined(workspaceShell);
+      const workspaceByThread = yield* snapshotQuery.getWorkspaceShellByThreadId(
+        ThreadId.make("thread-1"),
+      );
+      assert.equal(workspaceByThread._tag, "Some");
+      if (workspaceByThread._tag === "Some") {
+        assert.deepEqual(workspaceByThread.value, workspaceShell);
+      }
+
+      const subChatById = yield* snapshotQuery.getSubChatShellById(ThreadId.make("thread-1"));
+      assert.equal(subChatById._tag, "Some");
+      const subChatShell = shellSnapshot.subChats?.[0];
+      assert.isDefined(subChatShell);
+      if (subChatById._tag === "Some") {
+        assert.deepEqual(subChatById.value, subChatShell);
+      }
 
       const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
       assert.equal(threadDetail._tag, "Some");

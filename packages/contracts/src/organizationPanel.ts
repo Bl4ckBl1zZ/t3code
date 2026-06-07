@@ -1,14 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, OrganizationId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ChatAttachment,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   UploadChatAttachment,
 } from "./orchestration.ts";
-
-export const OrganizationId = TrimmedNonEmptyString.pipe(Schema.brand("OrganizationId"));
-export type OrganizationId = typeof OrganizationId.Type;
 
 export const OrganizationPanelSlug = TrimmedNonEmptyString.check(
   Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),

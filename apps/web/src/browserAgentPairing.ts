@@ -3,12 +3,10 @@ import {
   type AuthSessionId,
   type BrowserAgentId,
   type BrowserAgentListResult,
-  type BrowserAgentSessionResult,
 } from "@t3tools/contracts";
 import {
   BROWSER_AGENT_AUTO_PAIR_PATH,
   BROWSER_AGENT_EXTENSION_DOWNLOAD_PATH,
-  BROWSER_AGENT_SESSION_PATH,
 } from "@t3tools/shared/browserAgent";
 
 import { selectPairingEndpoint } from "./advertisedEndpointSelection";
@@ -25,13 +23,19 @@ const AUTO_PAIR_STRICT_SESSION_TIMEOUT_MS = 2_000;
 const AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS = 8_000;
 const AUTO_CONNECT_CONTENT_SCRIPT_TIMEOUT_MS = 1_500;
 const AUTO_PAIR_POLL_INTERVAL_MS = 250;
+const BROWSER_AGENT_PAIRING_DEBUG_PREFIX = "[t3 browser-agent pairing]";
 
 type BrowserAgentSnapshotAgent = BrowserAgentListResult["agents"][number];
+type PreviewAgentSelectionKind = "exact-session" | "local-control" | "remote-fallback";
+
+interface PreviewAgentSelection {
+  readonly kind: PreviewAgentSelectionKind;
+  readonly agent: BrowserAgentSnapshotAgent;
+}
 
 interface BrowserAgentListClient {
   readonly browserAgents: {
     readonly list: () => Promise<BrowserAgentListResult>;
-    readonly issueSession?: () => Promise<BrowserAgentSessionResult>;
   };
 }
 
@@ -93,6 +97,17 @@ function randomRequestId(): string {
   return `browser-agent-auto-pair-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function logBrowserAgentPairingDebug(event: string, details: Record<string, unknown>): void {
+  if (typeof console === "undefined") {
+    return;
+  }
+  console.info(`${BROWSER_AGENT_PAIRING_DEBUG_PREFIX} ${event}`, details);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error ?? "Unknown error");
+}
+
 function summarizeBrowserAgentSnapshot(snapshot: BrowserAgentListResult): string {
   const currentSessionId = snapshot.currentSessionId ?? null;
   const connectedAgents = snapshot.agents.filter((agent) => agent.connected);
@@ -151,6 +166,87 @@ function selectConnectedRemotePairingAgent(
   return selectMostRecentAgent(selectConnectedRemotePairingAgents(snapshot));
 }
 
+function selectConnectedLocalControlBrowserAgent(
+  snapshot: BrowserAgentListResult,
+): BrowserAgentSnapshotAgent | null {
+  return selectMostRecentAgent(
+    snapshot.agents.filter(
+      (agent) => agent.connected && agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID,
+    ),
+  );
+}
+
+function selectConnectedPreviewPairingAgent(
+  snapshot: BrowserAgentListResult,
+): BrowserAgentSnapshotAgent | null {
+  return (
+    selectConnectedLocalControlBrowserAgent(snapshot) ?? selectConnectedRemotePairingAgent(snapshot)
+  );
+}
+
+function selectPreviewAgentFromSnapshot(
+  snapshot: BrowserAgentListResult,
+  preferredSessionId: AuthSessionId | null,
+): PreviewAgentSelection | null {
+  const exactAgent =
+    preferredSessionId === null ? null : selectConnectedBrowserAgent(snapshot, preferredSessionId);
+  if (exactAgent) {
+    return { kind: "exact-session", agent: exactAgent };
+  }
+
+  const localControlAgent = selectConnectedLocalControlBrowserAgent(snapshot);
+  if (localControlAgent) {
+    return { kind: "local-control", agent: localControlAgent };
+  }
+
+  const remoteAgents = selectConnectedRemotePairingAgents(snapshot);
+  const onlyRemoteAgent = remoteAgents[0];
+  return remoteAgents.length === 1 && onlyRemoteAgent
+    ? { kind: "remote-fallback", agent: onlyRemoteAgent }
+    : null;
+}
+
+function pairingResultForSelection(
+  selection: PreviewAgentSelection,
+  preferredSessionId: AuthSessionId | null,
+): BrowserAgentPairingResult {
+  return {
+    preferredAgentId: selection.agent.id,
+    preferredSessionId:
+      selection.kind === "exact-session" && selection.agent.sessionId === preferredSessionId
+        ? preferredSessionId
+        : null,
+  };
+}
+
+function autoPairSelectionLogEvent(selection: PreviewAgentSelection): string {
+  switch (selection.kind) {
+    case "exact-session":
+      return "auto-pair-complete-exact-agent";
+    case "local-control":
+      return "auto-pair-complete-local-control-agent";
+    case "remote-fallback":
+      return "auto-pair-complete-remote-fallback-agent";
+  }
+}
+
+function logAutoPairSelection(input: {
+  readonly baseUrl: string;
+  readonly selection: PreviewAgentSelection;
+  readonly preferredSessionId: AuthSessionId | null;
+  readonly snapshot?: BrowserAgentListResult;
+  readonly event?: string;
+}): void {
+  logBrowserAgentPairingDebug(input.event ?? autoPairSelectionLogEvent(input.selection), {
+    baseUrl: input.baseUrl,
+    preferredAgentId: input.selection.agent.id,
+    selectedSessionId: input.selection.agent.sessionId,
+    selectionKind: input.selection.kind,
+    preferredSessionId: input.preferredSessionId,
+    ...(input.snapshot ? { snapshot: summarizeBrowserAgentSnapshot(input.snapshot) } : {}),
+  });
+}
+
 function selectConnectedRemotePairingAgents(
   snapshot: BrowserAgentListResult,
 ): readonly BrowserAgentSnapshotAgent[] {
@@ -173,48 +269,6 @@ function sameOriginAsCurrentPage(rawUrl: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function createBrowserAgentSessionFromHttp(
-  baseUrl: string,
-): Promise<BrowserAgentSessionResult> {
-  const response = await fetch(new URL(BROWSER_AGENT_SESSION_PATH, baseUrl), {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      accept: "application/json",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`Unable to create a browser-agent session (${response.status}).`);
-  }
-
-  const result = (await response.json()) as {
-    readonly sessionId?: unknown;
-    readonly sessionToken?: unknown;
-  };
-  if (typeof result.sessionId !== "string" || typeof result.sessionToken !== "string") {
-    throw new Error("The backend did not return a browser-agent session token.");
-  }
-  return {
-    sessionId: result.sessionId as AuthSessionId,
-    sessionToken: result.sessionToken,
-  };
-}
-
-async function createBrowserAgentSession(
-  client: BrowserAgentListClient,
-  baseUrl: string,
-): Promise<BrowserAgentSessionResult> {
-  const issueSession = client.browserAgents.issueSession;
-  if (issueSession) {
-    try {
-      return await issueSession();
-    } catch {
-      // BACKWARD COMPATIBILITY: older servers do not expose the RPC method yet.
-    }
-  }
-  return await createBrowserAgentSessionFromHttp(baseUrl);
 }
 
 function uniqueBaseUrls(baseUrls: readonly string[]): readonly string[] {
@@ -337,26 +391,53 @@ async function requestContentScriptPair(input: {
   readonly timeoutMs?: number;
 }): Promise<AutoPairContentScriptResult | null> {
   if (!sameOriginAsCurrentPage(input.baseUrl)) {
+    logBrowserAgentPairingDebug("content-script-pair-skipped-cross-origin", {
+      baseUrl: input.baseUrl,
+      currentOrigin: window.location.origin,
+    });
     return null;
   }
 
   const requestId = randomRequestId();
   const timeoutMs = input.timeoutMs ?? AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS;
+  logBrowserAgentPairingDebug("content-script-pair-request", {
+    requestId,
+    baseUrl: input.baseUrl,
+    hasCredential: Boolean(input.credential),
+    hasSessionToken: Boolean(input.sessionToken),
+    useBrowserSession: input.useBrowserSession === true,
+    timeoutMs,
+  });
 
   return await new Promise<AutoPairContentScriptResult | null>((resolve, reject) => {
     let settled = false;
+    let timeoutId: number | null = null;
     const cleanup = () => {
       settled = true;
-      window.clearTimeout(timeoutId);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
       window.removeEventListener("message", onMessage);
     };
     const finish = (result: AutoPairContentScriptResult | null) => {
       if (settled) return;
       cleanup();
       if (!result) {
+        logBrowserAgentPairingDebug("content-script-pair-timeout", {
+          requestId,
+          baseUrl: input.baseUrl,
+          timeoutMs,
+        });
         resolve(null);
         return;
       }
+      logBrowserAgentPairingDebug("content-script-pair-result", {
+        requestId,
+        baseUrl: input.baseUrl,
+        ok: result.ok,
+        sessionId: result.sessionId ?? null,
+        error: result.error ?? null,
+      });
       if (result.ok) {
         resolve(result);
         return;
@@ -385,7 +466,7 @@ async function requestContentScriptPair(input: {
         ...(typeof data.error === "string" ? { error: data.error } : {}),
       });
     };
-    const timeoutId = window.setTimeout(() => finish(null), timeoutMs);
+    timeoutId = window.setTimeout(() => finish(null), timeoutMs);
 
     window.addEventListener("message", onMessage);
     window.postMessage(
@@ -515,69 +596,136 @@ export async function autoPairBrowserAgent(
     : await resolveBrowserAgentBackendBaseUrl();
   const downloadUrl = buildBrowserAgentExtensionDownloadUrl({ baseUrl });
   const setupUrl = buildBrowserAgentAutoPairUrl({ baseUrl, useBrowserSession: true });
+  logBrowserAgentPairingDebug("auto-pair-start", {
+    baseUrl,
+    currentOrigin: typeof window !== "undefined" ? window.location.origin : null,
+    sameOrigin: sameOriginAsCurrentPage(baseUrl),
+    allowExternalBrowserLaunch: options?.allowExternalBrowserLaunch !== false,
+    setupUrlMode: "browser-session",
+  });
 
   if (sameOriginAsCurrentPage(baseUrl)) {
     let pairResult: AutoPairContentScriptResult | null = null;
-    let session: BrowserAgentSessionResult;
-    let issuedSessionSetupUrl: string | null = null;
     try {
-      session = await createBrowserAgentSession(client, baseUrl);
-      issuedSessionSetupUrl = buildBrowserAgentAutoPairUrl({
-        baseUrl,
-        sessionToken: session.sessionToken,
-      });
       pairResult = await requestContentScriptPair({
         baseUrl,
-        sessionToken: session.sessionToken,
+        useBrowserSession: true,
       });
     } catch (error) {
+      logBrowserAgentPairingDebug("auto-pair-browser-session-pair-failed", {
+        baseUrl,
+        setupUrl,
+        error: errorMessage(error),
+      });
       throw new BrowserAgentExtensionUnavailableError({
         downloadUrl,
-        setupUrl: issuedSessionSetupUrl ?? setupUrl,
+        setupUrl,
         cause: error,
       });
     }
     if (!pairResult) {
+      const fallbackSnapshot = await client.browserAgents.list().catch(() => null);
+      const fallbackSelection = fallbackSnapshot
+        ? selectPreviewAgentFromSnapshot(fallbackSnapshot, null)
+        : null;
+      if (fallbackSelection) {
+        logAutoPairSelection({
+          baseUrl,
+          selection: fallbackSelection,
+          preferredSessionId: null,
+          ...(fallbackSnapshot ? { snapshot: fallbackSnapshot } : {}),
+          event: "auto-pair-complete-existing-agent-no-content-script",
+        });
+        return pairingResultForSelection(fallbackSelection, null);
+      }
+      logBrowserAgentPairingDebug("auto-pair-no-content-script-result", {
+        baseUrl,
+        setupUrl,
+      });
       throw new BrowserAgentExtensionUnavailableError({
         downloadUrl,
-        setupUrl: issuedSessionSetupUrl ?? setupUrl,
+        setupUrl,
       });
     }
-    const preferredSessionId = pairResult.sessionId ?? session.sessionId;
+    const preferredSessionId = pairResult.sessionId ?? null;
     const initialSnapshot = await client.browserAgents.list().catch(() => null);
     if (initialSnapshot) {
-      const exactAgent = selectConnectedBrowserAgent(initialSnapshot, preferredSessionId);
-      if (exactAgent) {
-        return { preferredAgentId: exactAgent.id, preferredSessionId };
-      }
-      const remoteAgents = selectConnectedRemotePairingAgents(initialSnapshot);
-      const onlyRemoteAgent = remoteAgents[0];
-      if (remoteAgents.length === 1 && onlyRemoteAgent) {
-        return { preferredAgentId: onlyRemoteAgent.id, preferredSessionId };
+      logBrowserAgentPairingDebug("auto-pair-initial-snapshot", {
+        baseUrl,
+        preferredSessionId,
+        snapshot: summarizeBrowserAgentSnapshot(initialSnapshot),
+      });
+      const initialSelection = selectPreviewAgentFromSnapshot(initialSnapshot, preferredSessionId);
+      if (initialSelection) {
+        logAutoPairSelection({
+          baseUrl,
+          selection: initialSelection,
+          preferredSessionId,
+        });
+        return pairingResultForSelection(initialSelection, preferredSessionId);
       }
     }
 
     try {
-      const agent = await waitForBrowserAgentMatch(client, {
-        sessionId: preferredSessionId,
-        timeoutMs: AUTO_PAIR_STRICT_SESSION_TIMEOUT_MS,
+      const agent =
+        preferredSessionId === null
+          ? await waitForBrowserAgentMatch(
+              client,
+              { timeoutMs: AUTO_PAIR_CONNECT_TIMEOUT_MS },
+              selectConnectedPreviewPairingAgent,
+            )
+          : await waitForBrowserAgentMatch(client, {
+              sessionId: preferredSessionId,
+              timeoutMs: AUTO_PAIR_STRICT_SESSION_TIMEOUT_MS,
+            });
+      const selection: PreviewAgentSelection = {
+        kind:
+          preferredSessionId !== null && agent.sessionId === preferredSessionId
+            ? "exact-session"
+            : agent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID
+              ? "local-control"
+              : "remote-fallback",
+        agent,
+      };
+      logAutoPairSelection({
+        baseUrl,
+        selection,
+        preferredSessionId,
+        ...(selection.kind === "exact-session"
+          ? { event: "auto-pair-complete-wait-exact-agent" }
+          : {}),
       });
-      return { preferredAgentId: agent.id, preferredSessionId };
+      return pairingResultForSelection(selection, preferredSessionId);
     } catch (error) {
       try {
+        if (preferredSessionId === null) {
+          throw error;
+        }
         const fallbackAgent = await waitForBrowserAgentMatch(
           client,
           { timeoutMs: AUTO_PAIR_CONNECT_TIMEOUT_MS },
-          selectConnectedRemotePairingAgent,
+          selectConnectedPreviewPairingAgent,
         );
+        const fallbackSelection: PreviewAgentSelection = {
+          kind:
+            fallbackAgent.sessionId === LOCAL_BROWSER_AGENT_SESSION_ID
+              ? "local-control"
+              : "remote-fallback",
+          agent: fallbackAgent,
+        };
         return {
-          preferredAgentId: fallbackAgent.id,
-          preferredSessionId,
+          ...pairingResultForSelection(fallbackSelection, preferredSessionId),
         };
       } catch {
+        logBrowserAgentPairingDebug("auto-pair-no-agent-after-pair", {
+          baseUrl,
+          setupUrl,
+          preferredSessionId,
+          error: errorMessage(error),
+        });
         throw new BrowserAgentExtensionUnavailableError({
           downloadUrl,
-          setupUrl: issuedSessionSetupUrl ?? setupUrl,
+          setupUrl,
           cause: error,
         });
       }
@@ -590,12 +738,24 @@ export async function autoPairBrowserAgent(
   });
   if (autoConnected) {
     const agent = await waitForBrowserAgentMatch(client);
+    logBrowserAgentPairingDebug("auto-pair-complete-auto-connect", {
+      baseUrl,
+      preferredAgentId: agent.id,
+    });
     return { preferredAgentId: agent.id, preferredSessionId: null };
   }
 
   if (options?.allowExternalBrowserLaunch === false) {
+    logBrowserAgentPairingDebug("auto-pair-needs-manual-setup-no-launch", {
+      baseUrl,
+      setupUrl,
+    });
     throw new BrowserAgentExtensionUnavailableError({ downloadUrl, setupUrl });
   }
 
+  logBrowserAgentPairingDebug("auto-pair-needs-manual-setup", {
+    baseUrl,
+    setupUrl,
+  });
   throw new BrowserAgentExtensionUnavailableError({ downloadUrl, setupUrl });
 }

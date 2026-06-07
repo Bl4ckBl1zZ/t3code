@@ -48,17 +48,213 @@ export type SidebarProjectFolderEntry<TProject extends SidebarFolderableProject>
 type SidebarThreadIdentity = Pick<SidebarThreadSummary, "id" | "tabGroupId">;
 type SidebarExplorerThread = Pick<
   SidebarThreadSummary,
-  "environmentId" | "projectId" | "worktreePath"
+  "environmentId" | "projectId" | "workspaceId" | "worktreePath"
 >;
 type SidebarExplorerProject = {
   readonly cwd: string;
   readonly name: string;
 };
+type SidebarWorkspaceThread = Pick<
+  SidebarThreadSummary,
+  "branch" | "environmentId" | "projectId" | "workspaceId" | "worktreePath"
+>;
+
+export interface SidebarWorkspaceShell {
+  readonly id: NonNullable<SidebarWorkspaceThread["workspaceId"]>;
+  readonly environmentId: SidebarWorkspaceThread["environmentId"];
+  readonly projectId: SidebarWorkspaceThread["projectId"];
+  readonly title: string;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly archivedAt: string | null;
+}
+
+export interface SidebarWorkspaceThreadGroup<TThread extends SidebarWorkspaceThread> {
+  readonly key: string;
+  readonly environmentId: SidebarWorkspaceThread["environmentId"];
+  readonly projectId: SidebarWorkspaceThread["projectId"];
+  readonly workspaceId?: TThread["workspaceId"] | undefined;
+  readonly title: string;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly threads: readonly TThread[];
+  readonly totalThreadCount: number;
+}
 
 export interface SidebarExplorerTarget {
   readonly environmentId: SidebarExplorerThread["environmentId"];
+  readonly workspaceId?: SidebarExplorerThread["workspaceId"] | undefined;
   readonly cwd: string;
   readonly label: string;
+}
+
+function getPathBasename(path: string | null | undefined): string | null {
+  const normalized = path?.replaceAll("\\", "/").replace(/\/+$/u, "");
+  if (!normalized) {
+    return null;
+  }
+  return normalized.split("/").at(-1) ?? null;
+}
+
+export function resolveSidebarWorkspaceTitle(input: {
+  readonly title: string | null | undefined;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+}): string {
+  const trimmedTitle = input.title?.trim() ?? "";
+  const worktreeName = getPathBasename(input.worktreePath);
+  const branchName = getPathBasename(input.branch);
+  const titleLooksGenerated =
+    branchName !== null &&
+    input.branch !== null &&
+    (trimmedTitle === input.branch ||
+      (worktreeName !== null && trimmedTitle === worktreeName) ||
+      (input.branch.includes("/") && trimmedTitle.endsWith(`-${branchName}`)));
+
+  if (titleLooksGenerated) {
+    return branchName;
+  }
+
+  if (
+    trimmedTitle.length > 0 &&
+    (input.worktreePath === null || input.branch === null || trimmedTitle !== input.branch)
+  ) {
+    return trimmedTitle;
+  }
+
+  if (worktreeName) {
+    return worktreeName;
+  }
+
+  if (trimmedTitle.length > 0) {
+    return trimmedTitle;
+  }
+
+  return input.worktreePath === null ? "main" : (input.branch ?? "worktree");
+}
+
+export function getSidebarWorkspaceThreadGroupKey(input: {
+  readonly environmentId: SidebarWorkspaceThread["environmentId"];
+  readonly projectId: SidebarWorkspaceThread["projectId"];
+  readonly workspaceId: SidebarWorkspaceThread["workspaceId"];
+  readonly worktreePath: string | null;
+}): string {
+  return input.workspaceId !== undefined
+    ? `workspace:${input.environmentId}:${input.workspaceId}`
+    : `legacy:${input.environmentId}:${input.projectId}:${input.worktreePath ?? "main"}`;
+}
+
+export function isSidebarImplicitDefaultWorkspaceGroup(group: {
+  readonly branch: string | null;
+  readonly title: string;
+  readonly workspaceId?: unknown;
+  readonly worktreePath: string | null;
+}): boolean {
+  if (group.workspaceId === undefined || group.worktreePath !== null) {
+    return false;
+  }
+  const normalizedTitle = group.title.trim().toLowerCase();
+  const normalizedBranch = group.branch?.trim().toLowerCase() ?? null;
+  return (
+    normalizedTitle === "main" &&
+    (normalizedBranch === null || normalizedBranch === "main" || normalizedBranch === "master")
+  );
+}
+
+export function buildSidebarWorkspaceThreadGroups<TThread extends SidebarWorkspaceThread>(input: {
+  readonly threads: readonly TThread[];
+  readonly allThreads?: readonly TThread[];
+  readonly workspaces?: readonly SidebarWorkspaceShell[];
+}): SidebarWorkspaceThreadGroup<TThread>[] {
+  const groups: Array<{
+    key: string;
+    environmentId: SidebarWorkspaceThread["environmentId"];
+    projectId: SidebarWorkspaceThread["projectId"];
+    workspaceId?: TThread["workspaceId"] | undefined;
+    title: string;
+    branch: string | null;
+    worktreePath: string | null;
+    threads: TThread[];
+    totalThreadCount: number;
+  }> = [];
+  const groupByKey = new Map<string, (typeof groups)[number]>();
+
+  for (const workspace of input.workspaces ?? []) {
+    if (workspace.archivedAt !== null) {
+      continue;
+    }
+    const key = getSidebarWorkspaceThreadGroupKey({
+      environmentId: workspace.environmentId,
+      projectId: workspace.projectId,
+      workspaceId: workspace.id,
+      worktreePath: workspace.worktreePath,
+    });
+    if (groupByKey.has(key)) {
+      continue;
+    }
+
+    const group = {
+      key,
+      environmentId: workspace.environmentId,
+      projectId: workspace.projectId,
+      workspaceId: workspace.id,
+      title: resolveSidebarWorkspaceTitle({
+        title: workspace.title,
+        branch: workspace.branch,
+        worktreePath: workspace.worktreePath,
+      }),
+      branch: workspace.branch,
+      worktreePath: workspace.worktreePath,
+      threads: [],
+      totalThreadCount: 0,
+    };
+    groupByKey.set(key, group);
+    groups.push(group);
+  }
+
+  for (const thread of input.allThreads ?? input.threads) {
+    const key = getSidebarWorkspaceThreadGroupKey({
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+      workspaceId: thread.workspaceId,
+      worktreePath: thread.worktreePath,
+    });
+    const existing = groupByKey.get(key);
+    if (existing) {
+      existing.totalThreadCount += 1;
+      continue;
+    }
+
+    const group = {
+      key,
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+      workspaceId: thread.workspaceId,
+      title: resolveSidebarWorkspaceTitle({
+        title: null,
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+      }),
+      branch: thread.branch,
+      worktreePath: thread.worktreePath,
+      threads: [],
+      totalThreadCount: 1,
+    };
+    groupByKey.set(key, group);
+    groups.push(group);
+  }
+
+  for (const thread of input.threads) {
+    const key = getSidebarWorkspaceThreadGroupKey({
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+      workspaceId: thread.workspaceId,
+      worktreePath: thread.worktreePath,
+    });
+    groupByKey.get(key)?.threads.push(thread);
+  }
+
+  return groups;
 }
 
 export type ThreadTraversalDirection = "previous" | "next";
@@ -269,6 +465,7 @@ export function resolveSidebarExplorerTarget(input: {
     thread.worktreePath && thread.worktreePath.length > 0 ? thread.worktreePath : null;
   return {
     environmentId: thread.environmentId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
     cwd: worktreePath ?? project.cwd,
     label: worktreePath ? `${project.name} worktree` : project.name,
   };
@@ -684,6 +881,31 @@ export function resolveProjectStatusIndicator(
   }
 
   return highestPriorityStatus;
+}
+
+export function resolveGroupedThreadStatusPills<TThread extends ThreadStatusInput>(input: {
+  readonly threads: readonly TThread[];
+  readonly getGroupKey: (thread: TThread) => string;
+}): Map<string, ThreadStatusPill | null> {
+  const statusesByGroup = new Map<string, ThreadStatusPill[]>();
+  for (const thread of input.threads) {
+    const groupKey = input.getGroupKey(thread);
+    const statuses = statusesByGroup.get(groupKey) ?? [];
+    const status = resolveThreadStatusPill({ thread });
+    if (status !== null) {
+      statuses.push(status);
+    }
+    if (!statusesByGroup.has(groupKey)) {
+      statusesByGroup.set(groupKey, statuses);
+    }
+  }
+
+  return new Map(
+    [...statusesByGroup.entries()].map(([groupKey, statuses]) => [
+      groupKey,
+      resolveProjectStatusIndicator(statuses),
+    ]),
+  );
 }
 
 export function getVisibleThreadsForProject<T extends Pick<Thread, "id">>(input: {

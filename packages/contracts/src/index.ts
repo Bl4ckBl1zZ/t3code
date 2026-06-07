@@ -25,6 +25,7 @@ export * from "./filesystem.ts";
 export * from "./workspaceFiles.ts";
 export * from "./review.ts";
 export * from "./browserAgent.ts";
+export * from "./previewTargets.ts";
 export * from "./organizationPanel.ts";
 export * from "./audioTranscription.ts";
 export * from "./rpc.ts";

@@ -726,7 +726,9 @@ export const BrowserAgentOutboundMessage = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("browserAgent.command.activateAnnotation"),
     commandId: BrowserAgentCommandId,
-    workspaceLink: BrowserWorkspaceLink,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    workspaceLink: Schema.optional(BrowserWorkspaceLink),
   }),
   Schema.Struct({
     type: Schema.Literal("browserAgent.command.openOrFocusThreadTab"),

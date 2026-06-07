@@ -279,17 +279,23 @@ function threadLinkInput(input: {
 
 function browserContextIdFromProviderThread(input: {
   readonly providerThreadId?: string;
-  readonly rootProviderThreadId?: string | undefined;
 }): BrowserAgentContextId | undefined {
   const providerThreadId = input.providerThreadId?.trim();
   if (!providerThreadId) {
     return undefined;
   }
-  const rootProviderThreadId = input.rootProviderThreadId?.trim();
-  if (!rootProviderThreadId || providerThreadId === rootProviderThreadId) {
-    return undefined;
-  }
   return BrowserAgentContextId.make(`codex:${providerThreadId}`);
+}
+
+function isSubAgentProviderThread(input: {
+  readonly providerThreadId?: string;
+  readonly rootProviderThreadId?: string | undefined;
+}): boolean {
+  const providerThreadId = input.providerThreadId?.trim();
+  const rootProviderThreadId = input.rootProviderThreadId?.trim();
+  return Boolean(
+    providerThreadId && rootProviderThreadId && providerThreadId !== rootProviderThreadId,
+  );
 }
 
 function currentPagePayload(input: {
@@ -376,6 +382,9 @@ export function handleCodexBrowserDynamicToolCall(input: {
 
   const browserContextId = browserContextIdFromProviderThread({
     providerThreadId: input.payload.threadId,
+  });
+  const isSubAgentContext = isSubAgentProviderThread({
+    providerThreadId: input.payload.threadId,
     rootProviderThreadId: input.rootProviderThreadId,
   });
   const linkInput = threadLinkInput({
@@ -405,7 +414,7 @@ export function handleCodexBrowserDynamicToolCall(input: {
             ...(input.payload.threadId
               ? { runId: TrimmedNonEmptyString.make(input.payload.threadId) }
               : {}),
-            label: TrimmedNonEmptyString.make(browserContextId ? "Sub-agent" : "Agent"),
+            label: TrimmedNonEmptyString.make(isSubAgentContext ? "Sub-agent" : "Agent"),
           },
           lifecycle: "ephemeral",
         });

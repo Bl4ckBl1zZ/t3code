@@ -17,6 +17,7 @@ const DEV_RELOAD_POLL_INTERVAL_MS = 1_500;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 5_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const PAIRING_DEBUG_PREFIX = "[t3 browser-agent service-worker]";
 const RUNTIME_PROTOCOL_VERSION = 2;
 const RUNTIME_PRIMITIVES = [
   "preview.openOrFocus",
@@ -115,6 +116,15 @@ function addDiagnosticLog(level, message, details = null) {
   if (diagnosticLogs.length > DIAGNOSTIC_LOG_LIMIT) {
     diagnosticLogs = diagnosticLogs.slice(-DIAGNOSTIC_LOG_LIMIT);
   }
+}
+
+function logPairingDebug(event, details = {}) {
+  const payload = {
+    ...details,
+    socketState: socketStateLabel(),
+  };
+  console.info(`${PAIRING_DEBUG_PREFIX} ${event}`, payload);
+  addDiagnosticLog("info", `pairing:${event}`, payload);
 }
 
 function detectBrowser() {
@@ -316,6 +326,9 @@ async function upsertLink(link) {
     if (link.tabId === undefined || link.windowId === undefined) {
       return true;
     }
+    if (!linksShareBrowserContext(entry, link)) {
+      return true;
+    }
     return (
       String(entry.tabId) !== String(link.tabId) || String(entry.windowId) !== String(link.windowId)
     );
@@ -323,6 +336,16 @@ async function upsertLink(link) {
   next.push(link);
   workspaceLinksCache = next;
   await chrome.storage.local.set({ [LINKS_KEY]: next });
+}
+
+function normalizedBrowserContextId(link) {
+  return typeof link?.browserContextId === "string" && link.browserContextId.length > 0
+    ? link.browserContextId
+    : "default";
+}
+
+function linksShareBrowserContext(left, right) {
+  return normalizedBrowserContextId(left) === normalizedBrowserContextId(right);
 }
 
 async function removeWorkspaceLink(workspaceLinkId) {
@@ -844,11 +867,33 @@ async function pairBackend(input) {
     throw new Error("Enter a valid T3 Code backend URL.");
   }
   const providedSessionToken = String(input.sessionToken ?? "").trim();
+  const credential = String(input.credential ?? "").trim();
+  logPairingDebug("pair-start", {
+    baseUrl,
+    hasSessionToken: providedSessionToken.length > 0,
+    sessionTokenLength: providedSessionToken.length,
+    hasCredential: credential.length > 0,
+    closeTabAfterPair: input.closeTabAfterPair === true,
+  });
   if (providedSessionToken) {
+    logPairingDebug("session-token-auth-start", {
+      baseUrl,
+      sessionTokenLength: providedSessionToken.length,
+    });
     const session = await fetchJson(baseUrl, "/api/auth/session", {
       token: providedSessionToken,
     });
+    logPairingDebug("session-token-auth-response", {
+      baseUrl,
+      authenticated: session?.authenticated === true,
+      sessionMethod: session?.sessionMethod ?? null,
+      scopesCount: Array.isArray(session?.scopes) ? session.scopes.length : null,
+    });
     if (!session?.authenticated) {
+      logPairingDebug("session-token-auth-rejected", {
+        baseUrl,
+        sessionMethod: session?.sessionMethod ?? null,
+      });
       throw new Error("The backend rejected the browser agent session token.");
     }
     const backend = {
@@ -856,18 +901,28 @@ async function pairBackend(input) {
       sessionToken: providedSessionToken,
       pairedAt: new Date().toISOString(),
     };
-    await writeBackend(backend);
-    const connection = await connectBackend({ force: true });
+    const connection = await writeConnectAndRefreshTrustedTabs(backend, {
+      logPrefix: "session-token",
+      reinjectReason: "session-token-pair",
+    });
     return { ok: true, result: connection };
   }
 
-  const credential = String(input.credential ?? "").trim();
   if (!credential) {
+    logPairingDebug("pair-missing-credential", { baseUrl });
     throw new Error("Enter a pairing token or browser agent session token.");
   }
+  logPairingDebug("bootstrap-bearer-start", {
+    baseUrl,
+    credentialLength: credential.length,
+  });
   const result = await fetchJson(baseUrl, "/api/auth/bootstrap/bearer", {
     method: "POST",
     body: { credential },
+  });
+  logPairingDebug("bootstrap-bearer-response", {
+    baseUrl,
+    hasSessionToken: typeof result.sessionToken === "string" && result.sessionToken.length > 0,
   });
   if (typeof result.sessionToken !== "string") {
     throw new Error("The backend did not return a bearer session token.");
@@ -877,9 +932,24 @@ async function pairBackend(input) {
     sessionToken: result.sessionToken,
     pairedAt: new Date().toISOString(),
   };
-  await writeBackend(backend);
-  const connection = await connectBackend({ force: true });
+  const connection = await writeConnectAndRefreshTrustedTabs(backend, {
+    logPrefix: "bootstrap",
+    reinjectReason: "bootstrap-pair",
+  });
   return { ok: true, result: connection };
+}
+
+async function writeConnectAndRefreshTrustedTabs(backend, options) {
+  await writeBackend(backend);
+  logPairingDebug(`${options.logPrefix}-backend-written`, { baseUrl: backend.baseUrl });
+  const connection = await connectBackend({ force: true });
+  logPairingDebug(`${options.logPrefix}-connect-complete`, {
+    baseUrl: backend.baseUrl,
+    connected: connection?.connected === true,
+    transportMode: connection?.transportMode ?? null,
+  });
+  await injectPairingContentIntoTrustedTabs(options.reinjectReason);
+  return connection;
 }
 
 async function getWsTicket(backend) {
@@ -1629,7 +1699,7 @@ async function configureSidePanelBehavior() {
     return;
   }
   try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
   } catch (error) {
     console.warn("[T3 Code] failed to configure side panel action behavior", error);
   }
@@ -1952,15 +2022,72 @@ async function openOrFocusPreview(command) {
   });
 }
 
+async function resolveAnnotationTarget(command) {
+  if (command.workspaceLink) {
+    return {
+      link: command.workspaceLink,
+      tab: await findPreviewTab(command.workspaceLink),
+    };
+  }
+
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const links = await readLinks();
+  const link = activeTab ? selectWorkspaceLinkForTab(links, activeTab) : null;
+  return { link, tab: link ? activeTab : null };
+}
+
+function workspaceIdForAnnotationTarget(command) {
+  if (typeof command.environmentId !== "string" || typeof command.threadId !== "string") {
+    return null;
+  }
+  return `browser-workspace:${command.environmentId}:${command.threadId}`;
+}
+
+function workspaceLinkIdForAnnotationTarget(command, browserContextId) {
+  const workspaceId = workspaceIdForAnnotationTarget(command);
+  if (!workspaceId) {
+    return null;
+  }
+  return browserContextId && browserContextId !== "default"
+    ? `${workspaceId}:${browserContextId}`
+    : workspaceId;
+}
+
+function retargetAnnotationWorkspaceLink(link, command) {
+  if (typeof command.environmentId !== "string" || typeof command.threadId !== "string") {
+    return link;
+  }
+  const browserContextId = link.browserContextId ?? "default";
+  const id = workspaceLinkIdForAnnotationTarget(command, browserContextId);
+  const workspaceId = workspaceIdForAnnotationTarget(command);
+  if (!id || !workspaceId) {
+    return link;
+  }
+  return {
+    ...link,
+    id,
+    workspaceId,
+    browserContextId,
+    environmentId: command.environmentId,
+    threadId: command.threadId,
+  };
+}
+
 async function activateAnnotation(command) {
-  const link = command.workspaceLink;
-  const tab = await findPreviewTab(link);
+  const { link, tab } = await resolveAnnotationTarget(command);
+  if (!link) {
+    throw new Error("Current tab is not linked to a T3 Code workspace.");
+  }
   if (!tab?.id) {
     throw new Error("Could not find the dev-server tab for this workspace.");
   }
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
-  const contentLink = await applyDefaultDeepControl(await workspaceLinkForContent(link, tab), tab);
+  const targetLink = retargetAnnotationWorkspaceLink(link, command);
+  const contentLink = await applyDefaultDeepControl(
+    await workspaceLinkForContent(targetLink, tab),
+    tab,
+  );
   await setActiveNativeSidePanelLink(tab, contentLink);
   await sendTabMessage(tab.id, {
     type: "t3code.browserAgent.activateAnnotation",
@@ -1972,6 +2099,9 @@ async function activateAnnotation(command) {
     ok: true,
     tabId: tab.id,
     windowId: tab.windowId,
+    payload: {
+      workspaceLink: contentLink,
+    },
   });
 }
 
@@ -2805,13 +2935,39 @@ function cachedWorkspaceLinkForTab(tab) {
   return selectWorkspaceLinkForTab(workspaceLinksCache, tab);
 }
 
-async function completeSidePanelActionClick(tab, openPromise) {
+async function openWorkspaceSidePanelFromActionClick(tab, link) {
+  addDiagnosticLog("info", "Toolbar action opening linked workspace side panel", {
+    tabId: tab?.id ?? null,
+    windowId: tab?.windowId ?? null,
+    tabUrl: tab?.url ?? null,
+    workspaceLinkId: link?.id ?? null,
+    threadId: link?.threadId ?? null,
+    workspaceId: link?.workspaceId ?? null,
+  });
+  const openPromise = openNativeSidePanel(tab);
+  const contentLink = await workspaceLinkForContent(link, tab);
+  await setActiveNativeSidePanelLink(tab, contentLink);
+  await finishNativeSidePanelActionClick(tab, openPromise);
+  await ensureBrowserAgentTransport().catch((error) => {
+    addDiagnosticLog("warn", "Toolbar action opened side panel without active transport", {
+      workspaceLinkId: link?.id ?? null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+async function finishNativeSidePanelActionClick(tab, openPromise) {
   const result = await openPromise;
   if (result.opened) {
     await clearSidePanelOpenPrompt(tab);
   } else {
     await showSidePanelOpenPrompt(tab, result.reason);
   }
+  return result;
+}
+
+async function completeSidePanelActionClick(tab, openPromise) {
+  await finishNativeSidePanelActionClick(tab, openPromise);
   const backend = await readActivePairedBackend();
   if (backend) {
     currentBackend = backend;
@@ -2820,32 +2976,67 @@ async function completeSidePanelActionClick(tab, openPromise) {
   }
 }
 
-async function openBackendFromActionClick(tab, backend) {
-  currentBackend = backend;
-  void connectBackend().catch((error) => {
-    console.warn("[T3 Code] failed to connect after toolbar backend open", error);
+async function resolveActionClickAppTarget() {
+  const backend = await readActivePairedBackend();
+  const baseUrl = activeBrowserAgentBaseUrl(backend);
+  if (baseUrl) {
+    return { baseUrl, backend };
+  }
+
+  const autoConnectResult = await autoConnectLocalBackend().catch((error) => {
+    addDiagnosticLog("warn", "Toolbar action auto-connect failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   });
+  if (typeof autoConnectResult?.baseUrl === "string" && autoConnectResult.baseUrl.length > 0) {
+    return { baseUrl: autoConnectResult.baseUrl, backend: await readActivePairedBackend() };
+  }
+
+  const refreshedBackend = await readActivePairedBackend();
+  const refreshedBaseUrl = activeBrowserAgentBaseUrl(refreshedBackend);
+  return refreshedBaseUrl ? { baseUrl: refreshedBaseUrl, backend: refreshedBackend } : null;
+}
+
+async function openT3AppFromActionClick(tab, target) {
+  const baseUrl = normalizeBaseUrl(target?.baseUrl);
+  if (!baseUrl) {
+    return false;
+  }
+
+  if (target.backend) {
+    currentBackend = target.backend;
+    void connectBackend().catch((error) => {
+      console.warn("[T3 Code] failed to connect after toolbar backend open", error);
+    });
+  }
 
   const createProperties = {
-    url: backend.baseUrl,
+    url: `${baseUrl}/`,
     active: true,
   };
   if (tab?.windowId !== undefined) {
     createProperties.windowId = tab.windowId;
   }
   await chrome.tabs.create(createProperties);
+  addDiagnosticLog("info", "Toolbar action opened T3 Code app tab", {
+    baseUrl,
+    sourceTabId: tab?.id ?? null,
+    sourceWindowId: tab?.windowId ?? null,
+  });
+  return true;
 }
 
 async function handleNonPreviewActionClick(tab) {
   const links = await readLinks().catch(() => workspaceLinksCache);
-  if (tab?.id && tab.url && selectWorkspaceLinkForTab(links, tab)) {
-    await completeSidePanelActionClick(tab, openNativeSidePanel(tab));
+  const workspaceLink = tab?.id && tab.url ? selectWorkspaceLinkForTab(links, tab) : null;
+  if (workspaceLink) {
+    await openWorkspaceSidePanelFromActionClick(tab, workspaceLink);
     return;
   }
 
-  const backend = await readActivePairedBackend();
-  if (backend?.baseUrl) {
-    await openBackendFromActionClick(tab, backend);
+  const target = await resolveActionClickAppTarget();
+  if (await openT3AppFromActionClick(tab, target)) {
     return;
   }
 
@@ -2973,13 +3164,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "t3code.browserAgent.pair":
       return respond(
         (async () => {
-          const result = await pairBackend(message);
-          if (message.closeTabAfterPair === true && sender.tab?.id !== undefined) {
-            setTimeout(() => {
-              void chrome.tabs.remove(sender.tab.id).catch(() => undefined);
-            }, 750);
+          logPairingDebug("runtime-pair-message", {
+            senderUrl: sender.url ?? sender.tab?.url ?? null,
+            tabId: sender.tab?.id ?? null,
+            hasSessionToken:
+              typeof message.sessionToken === "string" && message.sessionToken.length > 0,
+            sessionTokenLength:
+              typeof message.sessionToken === "string" ? message.sessionToken.length : 0,
+            hasCredential: typeof message.credential === "string" && message.credential.length > 0,
+            closeTabAfterPair: message.closeTabAfterPair === true,
+          });
+          try {
+            const result = await pairBackend(message);
+            logPairingDebug("runtime-pair-message-complete", {
+              senderUrl: sender.url ?? sender.tab?.url ?? null,
+              connected: result?.result?.connected === true,
+            });
+            if (message.closeTabAfterPair === true && sender.tab?.id !== undefined) {
+              setTimeout(() => {
+                void chrome.tabs.remove(sender.tab.id).catch(() => undefined);
+              }, 750);
+            }
+            return result;
+          } catch (error) {
+            logPairingDebug("runtime-pair-message-failed", {
+              senderUrl: sender.url ?? sender.tab?.url ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
           }
-          return result;
         })(),
       );
     case "t3code.browserAgent.forget":
@@ -3068,9 +3281,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.action.onClicked.addListener((tab) => {
-  if (cachedWorkspaceLinkForTab(tab)) {
-    const openPromise = openNativeSidePanel(tab);
-    void completeSidePanelActionClick(tab, openPromise).catch((error) => {
+  const cachedWorkspaceLink = cachedWorkspaceLinkForTab(tab);
+  if (cachedWorkspaceLink) {
+    void openWorkspaceSidePanelFromActionClick(tab, cachedWorkspaceLink).catch((error) => {
       console.warn("[T3 Code] failed to handle preview toolbar click", error);
     });
     return;

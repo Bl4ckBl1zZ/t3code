@@ -7,6 +7,7 @@ import {
   TerminalMetadataStreamEvent,
   TerminalSessionSnapshot,
   ThreadId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 
 import {
@@ -27,6 +28,7 @@ function resetAtomRegistry() {
 
 const TARGET = {
   environmentId: EnvironmentId.make("env-local"),
+  workspaceId: null,
   threadId: ThreadId.make("thread-1"),
   terminalId: "term-1",
 } as const;
@@ -161,6 +163,7 @@ describe("createTerminalSessionManager", () => {
     });
     const otherTarget = {
       environmentId: EnvironmentId.make("env-remote"),
+      workspaceId: null,
       threadId: ThreadId.make("thread-1"),
       terminalId: "term-1",
     } as const;
@@ -392,6 +395,7 @@ describe("createTerminalSessionManager", () => {
       manager,
       {
         environmentId: TARGET.environmentId,
+        workspaceId: null,
         threadId: TARGET.threadId,
         terminalId: "term-2",
       },
@@ -504,6 +508,70 @@ describe("createTerminalSessionManager", () => {
         },
       },
     ]);
+  });
+
+  it("filters known sessions and running ids by workspace metadata", () => {
+    const manager = createTerminalSessionManager({
+      getRegistry: () => atomRegistry,
+    });
+    const workspaceId = WorkspaceId.make("workspace-1");
+    const otherWorkspaceId = WorkspaceId.make("workspace-2");
+
+    applyMetadataEvents(manager, TARGET.environmentId, [
+      {
+        type: "snapshot",
+        terminals: [
+          {
+            workspaceId,
+            threadId: TARGET.threadId,
+            terminalId: TARGET.terminalId,
+            cwd: "/repo",
+            worktreePath: null,
+            status: "running",
+            pid: 123,
+            exitCode: null,
+            exitSignal: null,
+            updatedAt: BASE_SNAPSHOT.updatedAt,
+            hasRunningSubprocess: true,
+            label: "Terminal 1",
+          },
+          {
+            workspaceId: otherWorkspaceId,
+            threadId: TARGET.threadId,
+            terminalId: "term-2",
+            cwd: "/repo",
+            worktreePath: null,
+            status: "running",
+            pid: 124,
+            exitCode: null,
+            exitSignal: null,
+            updatedAt: "2026-04-01T00:00:02.000Z",
+            hasRunningSubprocess: true,
+            label: "Terminal 2",
+          },
+        ],
+      },
+    ]);
+
+    const workspaceFilter = getKnownTerminalSessionListFilter({
+      environmentId: TARGET.environmentId,
+      workspaceId,
+      threadId: null,
+    });
+    expect(workspaceFilter).not.toBeNull();
+    if (workspaceFilter === null) {
+      return;
+    }
+
+    expect(
+      manager
+        .listSessions({
+          environmentId: TARGET.environmentId,
+          workspaceId,
+        })
+        .map((session) => session.target.terminalId),
+    ).toEqual([TARGET.terminalId]);
+    expect(atomRegistry.get(runningTerminalIdsAtom(workspaceFilter))).toEqual([TARGET.terminalId]);
   });
 
   it("derives session atoms from structurally equal target objects", () => {

@@ -12,7 +12,6 @@ import {
 } from "@t3tools/client-runtime";
 import type {
   EnvironmentId,
-  TerminalAttachInput,
   TerminalAttachStreamEvent,
   TerminalMetadataStreamEvent,
   TerminalSessionSnapshot,
@@ -42,7 +41,7 @@ export function subscribeTerminalMetadata(input: {
 export function attachTerminalSession(input: {
   readonly environmentId: EnvironmentId;
   readonly client: Parameters<typeof terminalSessionManager.attach>[0]["client"];
-  readonly terminal: TerminalAttachInput;
+  readonly terminal: Parameters<typeof terminalSessionManager.attach>[0]["terminal"];
   readonly onSnapshot?: (snapshot: TerminalSessionSnapshot) => void;
   readonly onEvent?: (event: TerminalAttachStreamEvent) => void;
 }) {
@@ -66,15 +65,17 @@ export function useTerminalSessionTarget(input: TerminalSessionTarget) {
   return useMemo(
     () => ({
       environmentId: input.environmentId,
+      workspaceId: input.workspaceId ?? null,
       threadId: input.threadId,
       terminalId: input.terminalId,
     }),
-    [input.environmentId, input.threadId, input.terminalId],
+    [input.environmentId, input.threadId, input.terminalId, input.workspaceId],
   );
 }
 
 export function useKnownTerminalSessions(input: {
   readonly environmentId: TerminalSessionTarget["environmentId"];
+  readonly workspaceId?: TerminalSessionTarget["workspaceId"];
   readonly threadId: TerminalSessionTarget["threadId"];
 }) {
   const filter = getKnownTerminalSessionListFilter(input);

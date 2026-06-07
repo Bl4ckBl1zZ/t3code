@@ -1,8 +1,11 @@
 import {
   ApprovalRequestId,
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   type ChatAttachment,
   type OrchestrationEvent,
+  type ProjectId,
   ThreadId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -65,6 +68,18 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
 } as const;
+
+function legacyWorkspaceIdForThread(input: {
+  readonly projectId: string;
+  readonly worktreePath: string | null;
+}): WorkspaceId {
+  // BACKWARD COMPATIBILITY: Legacy thread events did not carry a workspace aggregate.
+  const workspaceKey =
+    input.worktreePath === null || input.worktreePath.trim().length === 0
+      ? "primary"
+      : `worktree:${Buffer.from(input.worktreePath).toString("base64url")}`;
+  return WorkspaceId.make(`${input.projectId}:${workspaceKey}`);
+}
 
 type ProjectorName =
   (typeof ORCHESTRATION_PROJECTOR_NAMES)[keyof typeof ORCHESTRATION_PROJECTOR_NAMES];
@@ -458,6 +473,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
+    const runProjectionSql = <A, E>(effect: Effect.Effect<A, E>) =>
+      effect.pipe(Effect.mapError(toPersistenceSqlError("ProjectionPipeline.applyProjectionSql")));
 
     const applyProjectsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyProjectsProjection",
@@ -567,10 +584,365 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       });
     });
 
+    const upsertWorkspaceForThread = Effect.fn("upsertWorkspaceForThread")(function* (input: {
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly workspaceId?: WorkspaceId | undefined;
+      readonly title: string;
+      readonly branch: string | null;
+      readonly worktreePath: string | null;
+      readonly createdAt: string;
+      readonly updatedAt: string;
+      readonly archivedAt: string | null;
+    }) {
+      const projectRow = yield* projectionProjectRepository.getById({
+        projectId: input.projectId,
+      });
+      if (Option.isNone(projectRow) || projectRow.value.deletedAt !== null) {
+        return;
+      }
+      const existingSubChatRows = yield* runProjectionSql(sql<{ readonly workspaceId: string }>`
+          SELECT workspace_id AS "workspaceId"
+          FROM projection_sub_chats
+          WHERE sub_chat_id = ${input.threadId}
+            AND deleted_at IS NULL
+          LIMIT 1
+        `);
+      const workspaceId =
+        input.workspaceId ??
+        (existingSubChatRows[0]?.workspaceId
+          ? WorkspaceId.make(existingSubChatRows[0].workspaceId)
+          : legacyWorkspaceIdForThread({
+              projectId: input.projectId,
+              worktreePath: input.worktreePath,
+            }));
+      const workspaceTitle =
+        input.worktreePath === null
+          ? "main"
+          : (input.branch ?? input.worktreePath.split(/[\\/]/u).at(-1) ?? "worktree");
+      yield* runProjectionSql(sql`
+        INSERT INTO projection_workspaces (
+          workspace_id,
+          organization_id,
+          project_id,
+          title,
+          cwd,
+          branch,
+          worktree_path,
+          base_branch,
+          mode,
+          status,
+          default_sub_chat_id,
+          browser_preview_url,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          ${workspaceId},
+          ${DEFAULT_LOCAL_ORGANIZATION_ID},
+          ${input.projectId},
+          ${workspaceTitle},
+          ${input.worktreePath ?? projectRow.value.workspaceRoot},
+          ${input.branch},
+          ${input.worktreePath},
+          NULL,
+          ${input.worktreePath === null ? "local" : "worktree"},
+          ${input.archivedAt === null ? "ready" : "archived"},
+          ${input.archivedAt === null ? input.threadId : null},
+          ${projectRow.value.browserPreviewUrl},
+          ${input.worktreePath === null ? projectRow.value.createdAt : input.createdAt},
+          ${input.updatedAt},
+          ${input.archivedAt},
+          NULL
+        )
+        ON CONFLICT(workspace_id) DO UPDATE SET
+          branch = COALESCE(projection_workspaces.branch, excluded.branch),
+          default_sub_chat_id = COALESCE(projection_workspaces.default_sub_chat_id, excluded.default_sub_chat_id),
+          status = CASE
+            WHEN excluded.archived_at IS NULL THEN 'ready'
+            ELSE projection_workspaces.status
+          END,
+          updated_at = excluded.updated_at,
+          archived_at = CASE
+            WHEN excluded.archived_at IS NULL THEN NULL
+            ELSE projection_workspaces.archived_at
+          END,
+          deleted_at = NULL
+      `);
+      yield* runProjectionSql(sql`
+        INSERT INTO projection_sub_chats (
+          sub_chat_id,
+          workspace_id,
+          organization_id,
+          project_id,
+          title,
+          role,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        SELECT
+          thread_id,
+          ${workspaceId},
+          ${DEFAULT_LOCAL_ORGANIZATION_ID},
+          project_id,
+          title,
+          'agent',
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        FROM projection_threads
+        WHERE thread_id = ${input.threadId}
+        ON CONFLICT(sub_chat_id) DO UPDATE SET
+          workspace_id = excluded.workspace_id,
+          title = excluded.title,
+          model_selection_json = excluded.model_selection_json,
+          runtime_mode = excluded.runtime_mode,
+          interaction_mode = excluded.interaction_mode,
+          latest_turn_id = excluded.latest_turn_id,
+          updated_at = excluded.updated_at,
+          archived_at = excluded.archived_at,
+          deleted_at = excluded.deleted_at
+      `);
+    });
+
     const applyThreadsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadsProjection",
     )(function* (event, attachmentSideEffects) {
       switch (event.type) {
+        case "workspace.created":
+          yield* runProjectionSql(sql`
+            INSERT INTO projection_workspaces (
+              workspace_id,
+              organization_id,
+              project_id,
+              title,
+              cwd,
+              branch,
+              worktree_path,
+              base_branch,
+              mode,
+              status,
+              default_sub_chat_id,
+              browser_preview_url,
+              created_at,
+              updated_at,
+              archived_at,
+              deleted_at
+            )
+            VALUES (
+              ${event.payload.workspaceId},
+              ${event.payload.organizationId},
+              ${event.payload.projectId},
+              ${event.payload.title},
+              ${event.payload.cwd},
+              ${event.payload.branch},
+              ${event.payload.worktreePath},
+              ${event.payload.baseBranch},
+              ${event.payload.mode},
+              ${event.payload.status},
+              ${event.payload.defaultSubChatId},
+              ${event.payload.browserPreviewUrl ?? null},
+              ${event.payload.createdAt},
+              ${event.payload.updatedAt},
+              NULL,
+              NULL
+            )
+            ON CONFLICT(workspace_id) DO UPDATE SET
+              title = excluded.title,
+              cwd = excluded.cwd,
+              branch = excluded.branch,
+              worktree_path = excluded.worktree_path,
+              base_branch = excluded.base_branch,
+              mode = excluded.mode,
+              status = excluded.status,
+              default_sub_chat_id = excluded.default_sub_chat_id,
+              browser_preview_url = excluded.browser_preview_url,
+              updated_at = excluded.updated_at,
+              archived_at = excluded.archived_at,
+              deleted_at = excluded.deleted_at
+          `);
+          return;
+
+        case "workspace.meta-updated":
+          yield* runProjectionSql(sql`
+            UPDATE projection_workspaces
+            SET updated_at = ${event.payload.updatedAt}
+            WHERE workspace_id = ${event.payload.workspaceId}
+          `);
+          if (event.payload.title !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET title = ${event.payload.title}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.cwd !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET cwd = ${event.payload.cwd}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.branch !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET branch = ${event.payload.branch}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.worktreePath !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET worktree_path = ${event.payload.worktreePath}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.baseBranch !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET base_branch = ${event.payload.baseBranch}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.mode !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET mode = ${event.payload.mode}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.status !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET status = ${event.payload.status}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.defaultSubChatId !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET default_sub_chat_id = ${event.payload.defaultSubChatId}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          if (event.payload.browserPreviewUrl !== undefined) {
+            yield* runProjectionSql(sql`
+              UPDATE projection_workspaces
+              SET browser_preview_url = ${event.payload.browserPreviewUrl}
+              WHERE workspace_id = ${event.payload.workspaceId}
+            `);
+          }
+          return;
+
+        case "workspace.archived":
+          yield* runProjectionSql(sql`
+            UPDATE projection_workspaces
+            SET
+              status = 'archived',
+              archived_at = ${event.payload.archivedAt},
+              updated_at = ${event.payload.updatedAt}
+            WHERE workspace_id = ${event.payload.workspaceId}
+          `);
+          return;
+
+        case "workspace.unarchived":
+          yield* runProjectionSql(sql`
+            UPDATE projection_workspaces
+            SET
+              status = 'ready',
+              archived_at = NULL,
+              updated_at = ${event.payload.updatedAt}
+            WHERE workspace_id = ${event.payload.workspaceId}
+          `);
+          return;
+
+        case "workspace.deleted":
+          yield* runProjectionSql(sql`
+            UPDATE projection_workspaces
+            SET
+              deleted_at = ${event.payload.deletedAt},
+              updated_at = ${event.payload.deletedAt}
+            WHERE workspace_id = ${event.payload.workspaceId}
+          `);
+          yield* runProjectionSql(sql`
+            UPDATE projection_sub_chats
+            SET deleted_at = ${event.payload.deletedAt}
+            WHERE workspace_id = ${event.payload.workspaceId}
+          `);
+          return;
+
+        case "workspace-action.upserted":
+          yield* runProjectionSql(sql`
+            INSERT INTO projection_workspace_actions (
+              action_id,
+              workspace_id,
+              organization_id,
+              project_id,
+              sub_chat_id,
+              terminal_id,
+              kind,
+              title,
+              status,
+              source,
+              payload_json,
+              result_json,
+              created_at,
+              started_at,
+              completed_at,
+              updated_at
+            )
+            VALUES (
+              ${event.payload.action.id},
+              ${event.payload.action.workspaceId},
+              ${event.payload.action.organizationId},
+              ${event.payload.action.projectId},
+              ${event.payload.action.subChatId},
+              ${event.payload.action.terminalId},
+              ${event.payload.action.kind},
+              ${event.payload.action.title},
+              ${event.payload.action.status},
+              ${event.payload.action.source},
+              '{}',
+              NULL,
+              ${event.payload.action.createdAt},
+              ${event.payload.action.startedAt},
+              ${event.payload.action.completedAt},
+              ${event.payload.action.updatedAt}
+            )
+            ON CONFLICT(action_id) DO UPDATE SET
+              workspace_id = excluded.workspace_id,
+              sub_chat_id = excluded.sub_chat_id,
+              terminal_id = excluded.terminal_id,
+              kind = excluded.kind,
+              title = excluded.title,
+              status = excluded.status,
+              source = excluded.source,
+              started_at = excluded.started_at,
+              completed_at = excluded.completed_at,
+              updated_at = excluded.updated_at
+          `);
+          return;
+
+        case "workspace-action.removed":
+          yield* runProjectionSql(sql`
+            DELETE FROM projection_workspace_actions
+            WHERE action_id = ${event.payload.actionId}
+          `);
+          return;
+
         case "thread.created":
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
@@ -593,6 +965,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             hasActionableProposedPlan: 0,
             deletedAt: null,
           });
+          yield* upsertWorkspaceForThread({
+            threadId: event.payload.threadId,
+            projectId: event.payload.projectId,
+            workspaceId: event.payload.workspaceId,
+            title: event.payload.title,
+            branch: event.payload.branch,
+            worktreePath: event.payload.worktreePath,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.updatedAt,
+            archivedAt: null,
+          });
           return;
 
         case "thread.archived": {
@@ -606,6 +989,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             archivedAt: event.payload.archivedAt,
             updatedAt: event.payload.updatedAt,
+          });
+          yield* upsertWorkspaceForThread({
+            threadId: existingRow.value.threadId,
+            projectId: existingRow.value.projectId,
+            title: existingRow.value.title,
+            branch: existingRow.value.branch,
+            worktreePath: existingRow.value.worktreePath,
+            createdAt: existingRow.value.createdAt,
+            updatedAt: event.payload.updatedAt,
+            archivedAt: event.payload.archivedAt,
           });
           return;
         }
@@ -621,6 +1014,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             archivedAt: null,
             updatedAt: event.payload.updatedAt,
+          });
+          yield* upsertWorkspaceForThread({
+            threadId: existingRow.value.threadId,
+            projectId: existingRow.value.projectId,
+            title: existingRow.value.title,
+            branch: existingRow.value.branch,
+            worktreePath: existingRow.value.worktreePath,
+            createdAt: existingRow.value.createdAt,
+            updatedAt: event.payload.updatedAt,
+            archivedAt: null,
           });
           return;
         }
@@ -646,6 +1049,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { worktreePath: event.payload.worktreePath }
               : {}),
             updatedAt: event.payload.updatedAt,
+          });
+          yield* upsertWorkspaceForThread({
+            threadId: existingRow.value.threadId,
+            projectId: existingRow.value.projectId,
+            title: event.payload.title ?? existingRow.value.title,
+            branch:
+              event.payload.branch !== undefined ? event.payload.branch : existingRow.value.branch,
+            worktreePath:
+              event.payload.worktreePath !== undefined
+                ? event.payload.worktreePath
+                : existingRow.value.worktreePath,
+            createdAt: existingRow.value.createdAt,
+            updatedAt: event.payload.updatedAt,
+            archivedAt: existingRow.value.archivedAt,
           });
           return;
         }
@@ -693,6 +1110,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             deletedAt: event.payload.deletedAt,
             updatedAt: event.payload.deletedAt,
           });
+          yield* runProjectionSql(sql`
+            UPDATE projection_sub_chats
+            SET deleted_at = ${event.payload.deletedAt}
+            WHERE sub_chat_id = ${event.payload.threadId}
+          `);
           return;
         }
 

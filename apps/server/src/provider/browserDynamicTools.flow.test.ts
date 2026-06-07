@@ -4,6 +4,7 @@ import {
   AuthSessionId,
   BROWSER_AGENT_RUNTIME_PRIMITIVES,
   BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+  BrowserAgentContextId,
   EnvironmentId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -18,6 +19,8 @@ const environmentId = EnvironmentId.make("environment-flow");
 const threadId = ThreadId.make("thread-flow");
 const otherThreadId = ThreadId.make("thread-other");
 const fixtureUrl = TrimmedNonEmptyString.make("http://localhost:4173/browser-agent-fixture");
+const providerThreadId = "provider-thread-flow";
+const providerBrowserContextId = BrowserAgentContextId.make(`codex:${providerThreadId}`);
 
 const capabilities = {
   version: 1 as const,
@@ -73,7 +76,7 @@ function callBrowserTool(input: {
         tool: input.tool,
         arguments: input.arguments ?? {},
         callId: `call-${input.tool}`,
-        threadId: "provider-thread-flow",
+        threadId: providerThreadId,
         turnId: "turn-flow",
       },
     }),
@@ -491,6 +494,7 @@ describe("Codex browser dynamic tools full thread flow", () => {
       registry.openOrFocusThreadTab({
         environmentId,
         threadId,
+        browserContextId: providerBrowserContextId,
         url: fixtureUrl,
         repoName: TrimmedNonEmptyString.make("repo"),
         focus: true,
@@ -500,7 +504,13 @@ describe("Codex browser dynamic tools full thread flow", () => {
 
     expect(fakeBrowser.failures).toEqual([]);
     expect(opened.workspaceLink?.threadId).toBe(threadId);
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toMatchObject({
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
+    ).toMatchObject({
       tabId: 101,
       windowId: 5,
       tabStatus: "complete",
@@ -513,6 +523,7 @@ describe("Codex browser dynamic tools full thread flow", () => {
       registry.startThreadTabCapture({
         environmentId,
         threadId,
+        browserContextId: providerBrowserContextId,
         quality: {
           maxWidth: 1280,
           maxHeight: 720,
@@ -524,9 +535,13 @@ describe("Codex browser dynamic tools full thread flow", () => {
       liveViewSessionId: "screenshot-fallback:flow",
       transport: "screenshot-fallback",
     });
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })?.captureState).toBe(
-      "screenshot-fallback",
-    );
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      })?.captureState,
+    ).toBe("screenshot-fallback");
 
     expectSuccessful(
       await callBrowserTool({
@@ -616,7 +631,13 @@ describe("Codex browser dynamic tools full thread flow", () => {
       title: "Second Fixture Page",
     });
 
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toMatchObject({
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
+    ).toMatchObject({
       browserControlState: "deep",
       deepControlEnabled: true,
     });
@@ -661,21 +682,54 @@ describe("Codex browser dynamic tools full thread flow", () => {
       },
     });
 
-    await Effect.runPromise(registry.backThreadTab({ environmentId, threadId }));
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })?.url).toBe(fixtureUrl);
-    await Effect.runPromise(registry.forwardThreadTab({ environmentId, threadId }));
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })?.url).toBe(
-      "http://localhost:4173/browser-agent-fixture/second",
+    await Effect.runPromise(
+      registry.backThreadTab({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
     );
-    await Effect.runPromise(registry.reloadThreadTab({ environmentId, threadId }));
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })?.tabStatus).toBe(
-      "complete",
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      })?.url,
+    ).toBe(fixtureUrl);
+    await Effect.runPromise(
+      registry.forwardThreadTab({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
     );
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      })?.url,
+    ).toBe("http://localhost:4173/browser-agent-fixture/second");
+    await Effect.runPromise(
+      registry.reloadThreadTab({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
+    );
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      })?.tabStatus,
+    ).toBe("complete");
 
     await Effect.runPromise(
       registry.setThreadTabControl({
         environmentId,
         threadId,
+        browserContextId: providerBrowserContextId,
         controlState: "paused-by-user",
       }),
     );
@@ -694,6 +748,7 @@ describe("Codex browser dynamic tools full thread flow", () => {
       registry.setThreadTabControl({
         environmentId,
         threadId,
+        browserContextId: providerBrowserContextId,
         controlState: "enabled",
       }),
     );
@@ -731,7 +786,13 @@ describe("Codex browser dynamic tools full thread flow", () => {
       tool: "browser_close_tab",
     });
     expect(closeResult.success).toBe(true);
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toBeNull();
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
+    ).toBeNull();
 
     expect(fakeBrowser.failures).toEqual([]);
     expect(fakeBrowser.messages.map((message) => message.type)).toEqual(

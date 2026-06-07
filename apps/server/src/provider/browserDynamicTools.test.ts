@@ -4,6 +4,7 @@ import {
   AuthSessionId,
   BROWSER_AGENT_RUNTIME_PRIMITIVES,
   BROWSER_AGENT_RUNTIME_PROTOCOL_VERSION,
+  BrowserAgentContextId,
   EnvironmentId,
   ThreadId,
   type BrowserAgentOutboundMessage,
@@ -14,6 +15,8 @@ import { handleCodexBrowserDynamicToolCall } from "./browserDynamicTools.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const threadId = ThreadId.make("thread-1");
+const providerThreadId = "provider-thread-1";
+const providerBrowserContextId = BrowserAgentContextId.make(`codex:${providerThreadId}`);
 
 const capabilities = {
   version: 1 as const,
@@ -121,6 +124,7 @@ async function openLinkedTab(
     registry.openOrFocusThreadTab({
       environmentId,
       threadId,
+      browserContextId: providerBrowserContextId,
       url: "http://localhost:5173/",
       repoName: "repo",
       focus: true,
@@ -153,7 +157,7 @@ describe("Codex browser dynamic tools", () => {
           tool: "browser_open_tab",
           arguments: { url: "http://localhost:5173/", purpose: "Frontend QA" },
           callId: "call-1",
-          threadId: "provider-thread-1",
+          threadId: providerThreadId,
           turnId: "turn-1",
         },
       }),
@@ -165,6 +169,7 @@ describe("Codex browser dynamic tools", () => {
       url: "http://localhost:5173/",
       focus: false,
       workspaceLink: {
+        browserContextId: providerBrowserContextId,
         role: "agent",
         purpose: "Frontend QA",
         owner: {
@@ -219,7 +224,7 @@ describe("Codex browser dynamic tools", () => {
     expect(openMessages).toHaveLength(2);
     expect(openMessages[0]).toMatchObject({
       workspaceLink: {
-        browserContextId: "default",
+        browserContextId: "codex:provider-thread-main",
         owner: { kind: "agent", label: "Agent" },
       },
     });
@@ -232,8 +237,8 @@ describe("Codex browser dynamic tools", () => {
 
     const snapshot = registry.snapshot();
     expect(snapshot.workspaceLinks.map((link) => link.browserContextId).toSorted()).toEqual([
+      "codex:provider-thread-main",
       "codex:provider-thread-subagent",
-      "default",
     ]);
   });
 
@@ -251,7 +256,7 @@ describe("Codex browser dynamic tools", () => {
           tool: "browser_close_tab",
           arguments: {},
           callId: "call-close",
-          threadId: "provider-thread-1",
+          threadId: providerThreadId,
           turnId: "turn-1",
         },
       }),
@@ -261,7 +266,13 @@ describe("Codex browser dynamic tools", () => {
     expect(sentMessages.at(-1)).toMatchObject({
       type: "browserAgent.command.closeThreadTab",
     });
-    expect(registry.resolveThreadWorkspaceLink({ environmentId, threadId })).toBeNull();
+    expect(
+      registry.resolveThreadWorkspaceLink({
+        environmentId,
+        threadId,
+        browserContextId: providerBrowserContextId,
+      }),
+    ).toBeNull();
   });
 
   it("returns a failed tool result when browser access is paused", async () => {
@@ -272,6 +283,7 @@ describe("Codex browser dynamic tools", () => {
       registry.setThreadTabControl({
         environmentId,
         threadId,
+        browserContextId: providerBrowserContextId,
         controlState: "paused-by-user",
       }),
     );
@@ -285,7 +297,7 @@ describe("Codex browser dynamic tools", () => {
           tool: "browser_current_page",
           arguments: {},
           callId: "call-1",
-          threadId: "provider-thread-1",
+          threadId: providerThreadId,
           turnId: "turn-1",
         },
       }),
@@ -312,7 +324,7 @@ describe("Codex browser dynamic tools", () => {
           tool: "browser_click",
           arguments: { ref: "e1" },
           callId: "call-1",
-          threadId: "provider-thread-1",
+          threadId: providerThreadId,
           turnId: "turn-1",
         },
       }),
@@ -346,7 +358,7 @@ describe("Codex browser dynamic tools", () => {
           tool: "browser_fill",
           arguments: { ref: "e2", text: "replacement value" },
           callId: "call-1",
-          threadId: "provider-thread-1",
+          threadId: providerThreadId,
           turnId: "turn-1",
         },
       }),
@@ -380,7 +392,7 @@ describe("Codex browser dynamic tools", () => {
           tool: "browser_cdp_evaluate",
           arguments: { expression: "document.title" },
           callId: "call-1",
-          threadId: "provider-thread-1",
+          threadId: providerThreadId,
           turnId: "turn-1",
         },
       }),

@@ -200,6 +200,7 @@ describe("ProviderSessionReaper", () => {
           getCounts: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
+          getWorkspaceShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
@@ -209,6 +210,8 @@ describe("ProviderSessionReaper", () => {
                 ? Option.some(input.readModel.threads.find((thread) => thread.id === threadId)!)
                 : Option.none(),
             ),
+          getWorkspaceShellByThreadId: () => Effect.succeed(Option.none()),
+          getSubChatShellById: () => Effect.succeed(Option.none()),
           getThreadDetailById: () => Effect.die("unused"),
         }),
       ),

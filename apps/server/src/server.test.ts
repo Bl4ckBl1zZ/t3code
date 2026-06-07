@@ -785,6 +785,8 @@ const buildAppUnderTest = (options?: {
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
+          getWorkspaceShellByThreadId: () => Effect.succeed(Option.none()),
+          getSubChatShellById: () => Effect.succeed(Option.none()),
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
@@ -4241,6 +4243,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(authStateResponse.status, 200);
       assert.equal(authStateBody.authenticated, true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("issues browser-agent bearer sessions from authenticated websocket rpc", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const issued = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.browserAgentsIssueSession]({})),
+      );
+
+      assert.equal(typeof issued.sessionId, "string");
+      assert.equal(typeof issued.sessionToken, "string");
+
+      const authStateResponse = yield* HttpClient.get("/api/auth/session", {
+        headers: {
+          authorization: `Bearer ${issued.sessionToken}`,
+        },
+      });
+      const authStateBody = (yield* authStateResponse.json) as {
+        readonly authenticated?: boolean;
+        readonly sessionMethod?: string;
+      };
+      assert.equal(authStateResponse.status, 200);
+      assert.equal(authStateBody.authenticated, true);
+      assert.equal(authStateBody.sessionMethod, "bearer-access-token");
+
+      const wsTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: {
+          authorization: `Bearer ${issued.sessionToken}`,
+        },
+      });
+      const wsTicketBody = (yield* wsTicketResponse.json) as {
+        readonly ticket?: string;
+      };
+      assert.equal(wsTicketResponse.status, 200);
+      assert.equal(typeof wsTicketBody.ticket, "string");
+      assert.isTrue((wsTicketBody.ticket ?? "").length > 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

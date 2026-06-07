@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import {
   type BrowserAgentAttachActiveTabInput,
@@ -23,10 +24,10 @@ import {
   type BrowserTabSnapshot,
   type BrowserControlState,
   type BrowserWorkspace,
+  BrowserWorkspaceLink,
   BrowserWorkspaceLinkId,
   BrowserWorkspaceTabId,
   type BrowserWorkspaceTab,
-  type BrowserWorkspaceLink,
   AuthSessionId,
   type BrowserAgentActivateAnnotationInput,
   type BrowserAgentCommandResult,
@@ -39,6 +40,12 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 
+const decodeCommandPayloadWorkspaceLink = Schema.decodeUnknownOption(
+  Schema.Struct({
+    workspaceLink: BrowserWorkspaceLink,
+  }),
+);
+
 type BrowserAgentSender = (
   message: BrowserAgentOutboundMessage,
 ) => Effect.Effect<void, BrowserAgentCommandError, never>;
@@ -50,10 +57,17 @@ interface BrowserAgentConnection {
   agentId: BrowserAgentId | null;
 }
 
+interface PendingWorkspaceLinkTarget {
+  readonly environmentId: BrowserWorkspaceLink["environmentId"];
+  readonly threadId: BrowserWorkspaceLink["threadId"];
+  readonly browserContextId?: BrowserWorkspaceLink["browserContextId"] | undefined;
+}
+
 interface PendingCommand {
   readonly commandId: BrowserAgentCommandId;
   readonly agentId: BrowserAgentId;
   readonly workspaceLinkId?: BrowserWorkspaceLinkId;
+  readonly workspaceLinkTarget?: PendingWorkspaceLinkTarget;
   readonly runtimeCommand?: BrowserAgentRuntimePrimitive;
   readonly deferred?: Deferred.Deferred<BrowserAgentIncomingCommandResultMessage>;
 }
@@ -133,8 +147,54 @@ function makeWorkspaceTabId(input: {
   );
 }
 
+function applyCommandResultToWorkspaceLink(input: {
+  readonly link: BrowserWorkspaceLink;
+  readonly agentId: BrowserAgentId;
+  readonly message: BrowserAgentIncomingCommandResultMessage;
+  readonly resumedControl?: boolean;
+}): BrowserWorkspaceLink {
+  return {
+    ...input.link,
+    agentId: input.agentId,
+    ...(input.message.tabId !== undefined ? { tabId: input.message.tabId } : {}),
+    ...(input.message.windowId !== undefined ? { windowId: input.message.windowId } : {}),
+    ...(typeof (input.message.payload as { url?: unknown } | undefined)?.url === "string"
+      ? { url: (input.message.payload as { url: string }).url }
+      : {}),
+    ...(typeof (input.message.payload as { title?: unknown } | undefined)?.title === "string"
+      ? { title: (input.message.payload as { title: string }).title }
+      : {}),
+    tabStatus: "complete",
+    ...(input.resumedControl === true
+      ? { cdpAttached: true, browserControlState: "deep" as const, deepControlEnabled: true }
+      : {}),
+    lastSeenAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+}
+
 function nullable<T>(value: T | undefined): T | null {
   return value === undefined ? null : value;
+}
+
+function workspaceLinkFromCommandPayload(payload: unknown): BrowserWorkspaceLink | null {
+  const decoded = decodeCommandPayloadWorkspaceLink(payload);
+  return Option.isSome(decoded) ? decoded.value.workspaceLink : null;
+}
+
+function retargetWorkspaceLink(
+  link: BrowserWorkspaceLink,
+  target: PendingWorkspaceLinkTarget,
+): BrowserWorkspaceLink {
+  const browserContextId = target.browserContextId ?? link.browserContextId;
+  return {
+    ...link,
+    id: makeWorkspaceLinkId({ ...target, browserContextId }),
+    workspaceId: makeWorkspaceId(target),
+    browserContextId,
+    environmentId: target.environmentId,
+    threadId: target.threadId,
+  };
 }
 
 function linksPointToSameTab(left: BrowserWorkspaceLink, right: BrowserWorkspaceLink): boolean {
@@ -397,36 +457,54 @@ export class BrowserAgentRegistry {
       case "browserAgent.command.result": {
         const pending = this.pendingCommands.get(message.commandId);
         this.pendingCommands.delete(message.commandId);
-        if (!pending?.workspaceLinkId || message.ok === false) {
+        if (!pending || message.ok === false) {
           if (pending?.deferred) {
+            Effect.runFork(Deferred.succeed(pending.deferred, message));
+          }
+          return connection.agentId;
+        }
+        const payloadWorkspaceLink = workspaceLinkFromCommandPayload(message.payload);
+        if (!pending.workspaceLinkId) {
+          if (payloadWorkspaceLink) {
+            const targetLink = pending.workspaceLinkTarget
+              ? retargetWorkspaceLink(payloadWorkspaceLink, pending.workspaceLinkTarget)
+              : payloadWorkspaceLink;
+            this.setWorkspaceLink(
+              applyCommandResultToWorkspaceLink({
+                link: targetLink,
+                agentId: pending.agentId,
+                message,
+              }),
+            );
+          }
+          if (pending.deferred) {
             Effect.runFork(Deferred.succeed(pending.deferred, message));
           }
           return connection.agentId;
         }
         const link = this.workspaceLinksById.get(pending.workspaceLinkId);
         if (!link) {
+          if (payloadWorkspaceLink?.id === pending.workspaceLinkId) {
+            this.setWorkspaceLink(
+              applyCommandResultToWorkspaceLink({
+                link: payloadWorkspaceLink,
+                agentId: pending.agentId,
+                message,
+                resumedControl: pending.runtimeCommand === "workspace.resumeControl",
+              }),
+            );
+          }
           if (pending.deferred) {
             Effect.runFork(Deferred.succeed(pending.deferred, message));
           }
           return connection.agentId;
         }
-        const updated: BrowserWorkspaceLink = {
-          ...link,
-          ...(message.tabId !== undefined ? { tabId: message.tabId } : {}),
-          ...(message.windowId !== undefined ? { windowId: message.windowId } : {}),
-          ...(typeof (message.payload as { url?: unknown } | undefined)?.url === "string"
-            ? { url: (message.payload as { url: string }).url }
-            : {}),
-          ...(typeof (message.payload as { title?: unknown } | undefined)?.title === "string"
-            ? { title: (message.payload as { title: string }).title }
-            : {}),
-          tabStatus: "complete",
-          ...(pending.runtimeCommand === "workspace.resumeControl"
-            ? { cdpAttached: true, browserControlState: "deep" as const, deepControlEnabled: true }
-            : {}),
-          lastSeenAt: nowIso(),
-          updatedAt: nowIso(),
-        };
+        const updated = applyCommandResultToWorkspaceLink({
+          link,
+          agentId: pending.agentId,
+          message,
+          resumedControl: pending.runtimeCommand === "workspace.resumeControl",
+        });
         this.setWorkspaceLink(updated);
         if (pending.deferred) {
           Effect.runFork(Deferred.succeed(pending.deferred, message));
@@ -1099,12 +1177,6 @@ export class BrowserAgentRegistry {
     const registry = this;
     return Effect.gen(function* () {
       const link = registry.workspaceLinks.get(workspaceLinkKey(input));
-      if (!link) {
-        return yield* toCommandError({
-          code: "workspace-link-not-found",
-          message: "Open the preview in a browser agent before annotating.",
-        });
-      }
       const agent = yield* registry.selectAgent({
         environmentId: input.environmentId,
         threadId: input.threadId,
@@ -1113,21 +1185,33 @@ export class BrowserAgentRegistry {
           ? { preferredSessionId: options.preferredSessionId }
           : input.preferredAgentId
             ? {}
-            : { preferredAgentId: link.agentId }),
+            : link
+              ? { preferredAgentId: link.agentId }
+              : {}),
       });
       yield* registry.requireAgentPrimitive(agent, "annotation.activate");
       const commandId = makeCommandId("annotate");
       registry.pendingCommands.set(commandId, {
         commandId,
         agentId: agent.id,
-        workspaceLinkId: link.id,
+        ...(link
+          ? { workspaceLinkId: link.id }
+          : {
+              workspaceLinkTarget: { environmentId: input.environmentId, threadId: input.threadId },
+            }),
       });
       yield* registry.sendToAgent(agent.id, {
         type: "browserAgent.command.activateAnnotation",
         commandId,
-        workspaceLink: { ...link, agentId: agent.id, updatedAt: nowIso() },
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        ...(link ? { workspaceLink: { ...link, agentId: agent.id, updatedAt: nowIso() } } : {}),
       });
-      return { commandId, agentId: agent.id, workspaceLink: link };
+      return {
+        commandId,
+        agentId: agent.id,
+        ...(link ? { workspaceLink: link } : {}),
+      };
     });
   }
 
@@ -1554,6 +1638,7 @@ export class BrowserAgentRegistry {
       if (
         link.id === activeLink.id ||
         link.agentId !== activeLink.agentId ||
+        link.browserContextId !== activeLink.browserContextId ||
         link.tabStatus === "closed" ||
         !linksPointToSameTab(link, activeLink)
       ) {

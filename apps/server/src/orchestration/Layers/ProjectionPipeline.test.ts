@@ -2,12 +2,15 @@ import {
   CheckpointRef,
   CommandId,
   CorrelationId,
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   EventId,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
+  WorkspaceActionId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -174,6 +177,290 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 });
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-hierarchy-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("projects first-class workspaces and workspace actions", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-01-01T00:00:00.000Z";
+        const projectId = ProjectId.make("project-hierarchy");
+        const workspaceId = WorkspaceId.make("workspace-hierarchy");
+        const threadId = ThreadId.make("thread-hierarchy");
+        const actionId = WorkspaceActionId.make("action-hierarchy");
+
+        yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.make("evt-hierarchy-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-hierarchy-project"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-hierarchy-project"),
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Hierarchy Project",
+            workspaceRoot: "/tmp/hierarchy-project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "workspace.created",
+          eventId: EventId.make("evt-hierarchy-workspace"),
+          aggregateKind: "workspace",
+          aggregateId: workspaceId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-hierarchy-workspace"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-hierarchy-workspace"),
+          metadata: {},
+          payload: {
+            workspaceId,
+            organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+            projectId,
+            title: "Feature Workspace",
+            cwd: "/tmp/hierarchy-project/.worktrees/feature",
+            branch: "feature/hierarchy",
+            worktreePath: "/tmp/hierarchy-project/.worktrees/feature",
+            baseBranch: "main",
+            mode: "worktree",
+            status: "ready",
+            defaultSubChatId: null,
+            browserPreviewUrl: "http://localhost:5173",
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.make("evt-hierarchy-thread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-hierarchy-thread"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-hierarchy-thread"),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId,
+            workspaceId,
+            title: "Workspace Sub-chat",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "feature/hierarchy",
+            worktreePath: "/tmp/hierarchy-project/.worktrees/feature",
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "workspace-action.upserted",
+          eventId: EventId.make("evt-hierarchy-action"),
+          aggregateKind: "workspace-action",
+          aggregateId: actionId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-hierarchy-action"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-hierarchy-action"),
+          metadata: {},
+          payload: {
+            action: {
+              id: actionId,
+              organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+              projectId,
+              workspaceId,
+              subChatId: null,
+              terminalId: "terminal-1",
+              kind: "script",
+              title: "Run build",
+              status: "running",
+              source: "script",
+              createdAt: now,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+            },
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const workspaceRows = yield* sql<{
+          readonly workspaceId: string;
+          readonly title: string;
+          readonly branch: string | null;
+        }>`
+          SELECT
+            workspace_id AS "workspaceId",
+            title,
+            branch
+          FROM projection_workspaces
+          WHERE workspace_id = ${workspaceId}
+        `;
+        assert.deepEqual(workspaceRows, [
+          {
+            workspaceId,
+            title: "Feature Workspace",
+            branch: "feature/hierarchy",
+          },
+        ]);
+
+        const actionRows = yield* sql<{
+          readonly actionId: string;
+          readonly workspaceId: string;
+          readonly status: string;
+        }>`
+          SELECT
+            action_id AS "actionId",
+            workspace_id AS "workspaceId",
+            status
+          FROM projection_workspace_actions
+          WHERE action_id = ${actionId}
+        `;
+        assert.deepEqual(actionRows, [
+          {
+            actionId,
+            workspaceId,
+            status: "running",
+          },
+        ]);
+
+        const subChatRows = yield* sql<{
+          readonly subChatId: string;
+          readonly workspaceId: string;
+        }>`
+          SELECT
+            sub_chat_id AS "subChatId",
+            workspace_id AS "workspaceId"
+          FROM projection_sub_chats
+          WHERE sub_chat_id = ${threadId}
+        `;
+        assert.deepEqual(subChatRows, [
+          {
+            subChatId: threadId,
+            workspaceId,
+          },
+        ]);
+      }),
+    );
+
+    it.effect("projects title-only workspace metadata updates", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const updatedAt = "2026-01-01T00:05:00.000Z";
+        const projectId = ProjectId.make("project-workspace-rename");
+        const workspaceId = WorkspaceId.make("workspace-rename");
+
+        yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.make("evt-workspace-rename-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-workspace-rename-project"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-workspace-rename-project"),
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Rename Project",
+            workspaceRoot: "/tmp/workspace-rename-project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "workspace.created",
+          eventId: EventId.make("evt-workspace-rename-created"),
+          aggregateKind: "workspace",
+          aggregateId: workspaceId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-workspace-rename-created"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-workspace-rename-created"),
+          metadata: {},
+          payload: {
+            workspaceId,
+            organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+            projectId,
+            title: "Original Workspace",
+            cwd: "/tmp/workspace-rename-project/.worktrees/feature",
+            branch: "feature/rename",
+            worktreePath: "/tmp/workspace-rename-project/.worktrees/feature",
+            baseBranch: "main",
+            mode: "worktree",
+            status: "ready",
+            defaultSubChatId: null,
+            browserPreviewUrl: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "workspace.meta-updated",
+          eventId: EventId.make("evt-workspace-rename-updated"),
+          aggregateKind: "workspace",
+          aggregateId: workspaceId,
+          occurredAt: updatedAt,
+          commandId: CommandId.make("cmd-workspace-rename-updated"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-workspace-rename-updated"),
+          metadata: {},
+          payload: {
+            workspaceId,
+            title: "Renamed Workspace",
+            updatedAt,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const workspaceRows = yield* sql<{
+          readonly title: string;
+          readonly branch: string | null;
+          readonly updatedAt: string;
+        }>`
+          SELECT
+            title,
+            branch,
+            updated_at AS "updatedAt"
+          FROM projection_workspaces
+          WHERE workspace_id = ${workspaceId}
+        `;
+        assert.deepEqual(workspaceRows, [
+          {
+            title: "Renamed Workspace",
+            branch: "feature/rename",
+            updatedAt,
+          },
+        ]);
+      }),
+    );
+  },
+);
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
   "OrchestrationProjectionPipeline",

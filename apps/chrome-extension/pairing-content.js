@@ -7,6 +7,7 @@ const AUTO_CONNECT_RUNTIME_MESSAGE_TYPE = "t3code.browserAgent.autoConnectNow";
 const AUTO_PAIR_PATH = "/browser-agent/auto-pair";
 const BROWSER_AGENT_SESSION_PATH = "/browser-agent/session";
 const PAIRING_CONTENT_RUNTIME_KEY = "__t3codeBrowserAgentPairingContent";
+const PAIRING_CONTENT_DEBUG_PREFIX = "[t3 browser-agent pairing-content]";
 
 globalThis[PAIRING_CONTENT_RUNTIME_KEY]?.dispose?.();
 const listenerDisposers = [];
@@ -21,6 +22,10 @@ globalThis[PAIRING_CONTENT_RUNTIME_KEY] = {
 function addWindowMessageListener(listener) {
   window.addEventListener("message", listener);
   listenerDisposers.push(() => window.removeEventListener("message", listener));
+}
+
+function logPairingContentDebug(event, details = {}) {
+  console.info(`${PAIRING_CONTENT_DEBUG_PREFIX} ${event}`, details);
 }
 
 function parseAutoPairUrl() {
@@ -130,6 +135,7 @@ function scrubPairingParams() {
 }
 
 async function fetchBrowserAgentSession(baseUrl) {
+  logPairingContentDebug("browser-session-fetch-start", { baseUrl });
   const response = await fetch(new URL(BROWSER_AGENT_SESSION_PATH, baseUrl), {
     method: "POST",
     credentials: "include",
@@ -138,7 +144,20 @@ async function fetchBrowserAgentSession(baseUrl) {
     },
   });
   const body = await response.json().catch(() => null);
+  logPairingContentDebug("browser-session-fetch-response", {
+    baseUrl,
+    status: response.status,
+    ok: response.ok,
+    hasSessionId: typeof body?.sessionId === "string" && body.sessionId.length > 0,
+    hasSessionToken: typeof body?.sessionToken === "string" && body.sessionToken.length > 0,
+    error: body?.message ?? body?.error ?? null,
+  });
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(
+        "This browser is not authenticated to this T3 Code host. Open the T3 Code host in this browser, pair or sign in there, then retry Preview.",
+      );
+    }
     throw new Error(
       body?.message ??
         body?.error ??
@@ -154,6 +173,70 @@ async function fetchBrowserAgentSession(baseUrl) {
   return {
     sessionId: body.sessionId,
     sessionToken: body.sessionToken,
+  };
+}
+
+function isRejectedBrowserAgentSessionTokenError(error) {
+  return (
+    typeof error === "string" &&
+    error.toLowerCase().includes("rejected the browser agent session token")
+  );
+}
+
+async function pairWithFreshSessionOnRejectedToken(input) {
+  logPairingContentDebug("runtime-pair-send", {
+    baseUrl: input.baseUrl,
+    hasCredential: Boolean(input.credential),
+    hasSessionToken: Boolean(input.sessionToken),
+    sessionId: input.sessionId ?? null,
+    closeTabAfterPair: input.closeTabAfterPair === true,
+  });
+  const firstResponse = await sendRuntimeMessage({
+    type: PAIR_RUNTIME_MESSAGE_TYPE,
+    baseUrl: input.baseUrl,
+    ...(input.credential ? { credential: input.credential } : {}),
+    ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
+    ...(input.closeTabAfterPair ? { closeTabAfterPair: true } : {}),
+  });
+  logPairingContentDebug("runtime-pair-response", {
+    baseUrl: input.baseUrl,
+    ok: firstResponse?.ok === true,
+    error: firstResponse?.error ?? null,
+    sessionId: input.sessionId ?? null,
+  });
+  if (firstResponse?.ok || !isRejectedBrowserAgentSessionTokenError(firstResponse?.error)) {
+    return {
+      response: firstResponse,
+      sessionId: input.sessionId,
+    };
+  }
+
+  logPairingContentDebug("runtime-pair-token-rejected-retry", {
+    baseUrl: input.baseUrl,
+    sessionId: input.sessionId ?? null,
+  });
+  const freshSession = await fetchBrowserAgentSession(input.baseUrl);
+  logPairingContentDebug("runtime-pair-retry-send", {
+    baseUrl: input.baseUrl,
+    sessionId: freshSession.sessionId,
+    hasSessionToken: freshSession.sessionToken.length > 0,
+  });
+  const retryResponse = await sendRuntimeMessage({
+    type: PAIR_RUNTIME_MESSAGE_TYPE,
+    baseUrl: input.baseUrl,
+    ...(input.credential ? { credential: input.credential } : {}),
+    sessionToken: freshSession.sessionToken,
+    ...(input.closeTabAfterPair ? { closeTabAfterPair: true } : {}),
+  });
+  logPairingContentDebug("runtime-pair-retry-response", {
+    baseUrl: input.baseUrl,
+    ok: retryResponse?.ok === true,
+    error: retryResponse?.error ?? null,
+    sessionId: freshSession.sessionId,
+  });
+  return {
+    response: retryResponse,
+    sessionId: freshSession.sessionId,
   };
 }
 
@@ -206,22 +289,33 @@ async function pairFromUrl() {
 
   scrubPairingParams();
   renderStatus("Pairing T3 Code Browser Agent", "Keep this tab open for a moment.");
+  logPairingContentDebug("setup-url-pair-start", {
+    baseUrl: pairing.baseUrl,
+    hasCredential: Boolean(pairing.credential),
+    hasSessionToken: Boolean(pairing.sessionToken),
+    useBrowserSession: pairing.useBrowserSession,
+    closeTabAfterPair: pairing.closeTabAfterPair,
+  });
   const browserAgentSession = pairing.useBrowserSession
     ? await fetchBrowserAgentSession(pairing.baseUrl)
     : pairing.sessionToken
-      ? { sessionToken: pairing.sessionToken }
+      ? { sessionToken: pairing.sessionToken, sessionId: null }
       : null;
-  const response = await sendRuntimeMessage({
-    type: PAIR_RUNTIME_MESSAGE_TYPE,
+  const { response } = await pairWithFreshSessionOnRejectedToken({
     baseUrl: pairing.baseUrl,
     ...(pairing.credential ? { credential: pairing.credential } : {}),
     ...(browserAgentSession?.sessionToken
       ? { sessionToken: browserAgentSession.sessionToken }
       : {}),
+    ...(browserAgentSession?.sessionId ? { sessionId: browserAgentSession.sessionId } : {}),
     closeTabAfterPair: pairing.closeTabAfterPair,
   });
 
   if (!response?.ok) {
+    logPairingContentDebug("setup-url-pair-failed", {
+      baseUrl: pairing.baseUrl,
+      error: response?.error ?? null,
+    });
     renderStatus(
       "Browser pairing failed",
       response?.error ?? "The T3 Code Browser Agent extension rejected the pairing request.",
@@ -229,6 +323,9 @@ async function pairFromUrl() {
     return;
   }
 
+  logPairingContentDebug("setup-url-pair-complete", {
+    baseUrl: pairing.baseUrl,
+  });
   renderStatus("Browser paired", "Returning to T3 Code.");
 }
 
@@ -242,7 +339,17 @@ addWindowMessageListener((event) => {
     return;
   }
 
+  logPairingContentDebug("window-auto-pair-request", {
+    baseUrl: data.baseUrl ?? null,
+    hasCredential: typeof data.credential === "string" && data.credential.length > 0,
+    hasSessionToken: typeof data.sessionToken === "string" && data.sessionToken.length > 0,
+    useBrowserSession: data.useBrowserSession === true,
+  });
   if (!sameOrigin(window.location.origin, data.baseUrl ?? "")) {
+    logPairingContentDebug("window-auto-pair-rejected-cross-origin", {
+      pageOrigin: window.location.origin,
+      baseUrl: data.baseUrl ?? null,
+    });
     window.postMessage(
       {
         type: AUTO_PAIR_RESULT_TYPE,
@@ -261,22 +368,24 @@ addWindowMessageListener((event) => {
         data.useBrowserSession === true
           ? await fetchBrowserAgentSession(data.baseUrl)
           : typeof data.sessionToken === "string"
-            ? { sessionToken: data.sessionToken }
+            ? { sessionToken: data.sessionToken, sessionId: null }
             : null;
-      const response = await sendRuntimeMessage({
-        type: PAIR_RUNTIME_MESSAGE_TYPE,
+      return await pairWithFreshSessionOnRejectedToken({
         baseUrl: data.baseUrl,
         ...(typeof data.credential === "string" ? { credential: data.credential } : {}),
         ...(browserAgentSession?.sessionToken
           ? { sessionToken: browserAgentSession.sessionToken }
           : {}),
+        ...(browserAgentSession?.sessionId ? { sessionId: browserAgentSession.sessionId } : {}),
       });
-      return {
-        response,
-        sessionId: browserAgentSession?.sessionId,
-      };
     })
     .then((response) => {
+      logPairingContentDebug("window-auto-pair-result", {
+        baseUrl: data.baseUrl ?? null,
+        ok: response.response?.ok === true,
+        sessionId: response.sessionId ?? null,
+        error: response.response?.error ?? null,
+      });
       window.postMessage(
         {
           type: AUTO_PAIR_RESULT_TYPE,
@@ -289,6 +398,10 @@ addWindowMessageListener((event) => {
       );
     })
     .catch((error) => {
+      logPairingContentDebug("window-auto-pair-error", {
+        baseUrl: data.baseUrl ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
       window.postMessage(
         {
           type: AUTO_PAIR_RESULT_TYPE,
@@ -368,6 +481,9 @@ addWindowMessageListener((event) => {
 });
 
 void pairFromUrl().catch((error) => {
+  logPairingContentDebug("setup-url-pair-error", {
+    error: error instanceof Error ? error.message : String(error),
+  });
   scrubPairingParams();
   renderStatus(
     "Browser pairing failed",

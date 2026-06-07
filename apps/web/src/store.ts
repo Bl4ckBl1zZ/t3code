@@ -5,34 +5,49 @@ import type {
   OrchestrationEvent,
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationOrganizationShell,
   OrchestrationProposedPlan,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamEvent,
   OrchestrationSession,
   OrchestrationSessionStatus,
+  OrchestrationSubChatShell,
   OrchestrationThread,
   OrchestrationThreadShell,
   OrchestrationThreadActivity,
+  OrchestrationWorkspaceActionShell,
+  OrchestrationWorkspaceShell,
+  OrganizationId,
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
+  WorkspaceActionId,
+  WorkspaceId,
 } from "@t3tools/contracts";
-import { isProviderDriverKind, ProviderDriverKind } from "@t3tools/contracts";
+import {
+  DEFAULT_LOCAL_ORGANIZATION_ID as DEFAULT_LOCAL_ORGANIZATION_ID_VALUE,
+  isProviderDriverKind,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 import { create } from "zustand";
 import {
   type ChatMessage,
+  type Organization,
   type Project,
   type ProposedPlan,
   type SidebarThreadSummary,
+  type SubChatShell,
   type Thread,
   type ThreadSession,
   type ThreadShell,
   type ThreadTurnState,
   type TurnDiffSummary,
+  type Workspace,
+  type WorkspaceAction,
 } from "./types";
 import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
@@ -40,8 +55,18 @@ import { getThreadFromEnvironmentState } from "./threadDerivation";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
 
 export interface EnvironmentState {
+  organizationIds: OrganizationId[];
+  organizationById: Record<OrganizationId, Organization>;
+  projectIdsByOrganizationId: Record<OrganizationId, ProjectId[]>;
+
   projectIds: ProjectId[];
   projectById: Record<ProjectId, Project>;
+  workspaceIdsByProjectId: Record<ProjectId, WorkspaceId[]>;
+  workspaceById: Record<WorkspaceId, Workspace>;
+  subChatIdsByWorkspaceId: Record<WorkspaceId, ThreadId[]>;
+  subChatShellById: Record<ThreadId, SubChatShell>;
+  workspaceActionIdsByWorkspaceId: Record<WorkspaceId, WorkspaceActionId[]>;
+  workspaceActionById: Record<WorkspaceActionId, WorkspaceAction>;
 
   // TODO(CLIENT-RUNTIME MIGRATION - DO NOT EXPAND THIS WEB-ONLY COPY):
   // Web still stores shell snapshots and thread details in this denormalized
@@ -102,8 +127,17 @@ export interface AppState {
 }
 
 const initialEnvironmentState: EnvironmentState = {
+  organizationIds: [],
+  organizationById: {},
+  projectIdsByOrganizationId: {},
   projectIds: [],
   projectById: {},
+  workspaceIdsByProjectId: {},
+  workspaceById: {},
+  subChatIdsByWorkspaceId: {},
+  subChatShellById: {},
+  workspaceActionIdsByWorkspaceId: {},
+  workspaceActionById: {},
   threadIds: [],
   threadIdsByProjectId: {},
   threadShellById: {},
@@ -131,6 +165,7 @@ const MAX_THREAD_CHECKPOINTS = 500;
 const MAX_THREAD_PROPOSED_PLANS = 200;
 const MAX_THREAD_ACTIVITIES = 500;
 const EMPTY_THREAD_IDS: ThreadId[] = [];
+const EMPTY_WORKSPACE_IDS: WorkspaceId[] = [];
 
 function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -223,6 +258,7 @@ function mapProject(
 ): Project {
   return {
     id: project.id,
+    ...(project.organizationId !== undefined ? { organizationId: project.organizationId } : {}),
     environmentId,
     name: project.title,
     cwd: project.workspaceRoot,
@@ -237,12 +273,73 @@ function mapProject(
   };
 }
 
+function mapOrganization(
+  organization: OrchestrationOrganizationShell,
+  environmentId: EnvironmentId,
+): Organization {
+  return {
+    id: organization.id,
+    environmentId,
+    name: organization.title,
+    createdAt: organization.createdAt,
+    updatedAt: organization.updatedAt,
+  };
+}
+
+function mapWorkspace(
+  workspace: OrchestrationWorkspaceShell,
+  environmentId: EnvironmentId,
+): Workspace {
+  return {
+    id: workspace.id,
+    organizationId: workspace.organizationId,
+    projectId: workspace.projectId,
+    environmentId,
+    title: workspace.title,
+    cwd: workspace.cwd,
+    branch: workspace.branch,
+    worktreePath: workspace.worktreePath,
+    baseBranch: workspace.baseBranch,
+    mode: workspace.mode,
+    status: workspace.status,
+    defaultSubChatId: workspace.defaultSubChatId,
+    browserPreviewUrl: workspace.browserPreviewUrl ?? null,
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+    archivedAt: workspace.archivedAt,
+  };
+}
+
+function mapWorkspaceAction(
+  action: OrchestrationWorkspaceActionShell,
+  environmentId: EnvironmentId,
+): WorkspaceAction {
+  return {
+    id: action.id,
+    organizationId: action.organizationId,
+    projectId: action.projectId,
+    workspaceId: action.workspaceId,
+    environmentId,
+    subChatId: action.subChatId,
+    terminalId: action.terminalId,
+    kind: action.kind,
+    title: action.title,
+    status: action.status,
+    source: action.source,
+    createdAt: action.createdAt,
+    startedAt: action.startedAt,
+    completedAt: action.completedAt,
+    updatedAt: action.updatedAt,
+  };
+}
+
 function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): Thread {
   return {
     id: thread.id,
     environmentId,
     codexThreadId: null,
     projectId: thread.projectId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
     tabGroupId: thread.tabGroupId ?? thread.id,
     tabType: thread.tabType ?? "chat",
     title: thread.title,
@@ -279,6 +376,7 @@ function mapThreadShell(
     environmentId,
     codexThreadId: null,
     projectId: thread.projectId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
     tabGroupId: thread.tabGroupId ?? thread.id,
     tabType: thread.tabType ?? "chat",
     title: thread.title,
@@ -301,6 +399,7 @@ function mapThreadShell(
     id: thread.id,
     environmentId,
     projectId: thread.projectId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
     tabGroupId: thread.tabGroupId ?? thread.id,
     tabType: thread.tabType ?? "chat",
     title: thread.title,
@@ -325,12 +424,24 @@ function mapThreadShell(
   };
 }
 
+function mapSubChatShell(
+  subChat: OrchestrationSubChatShell,
+  environmentId: EnvironmentId,
+): SubChatShell {
+  return {
+    ...mapThreadShell(subChat, environmentId).summary,
+    organizationId: subChat.organizationId,
+    workspaceId: subChat.workspaceId,
+  };
+}
+
 function toThreadShell(thread: Thread): ThreadShell {
   return {
     id: thread.id,
     environmentId: thread.environmentId,
     codexThreadId: thread.codexThreadId,
     projectId: thread.projectId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
     tabGroupId: thread.tabGroupId ?? thread.id,
     tabType: thread.tabType ?? "chat",
     title: thread.title,
@@ -780,6 +891,107 @@ function writeThreadShellState(
   return nextState;
 }
 
+function latestUserMessageAtFromThread(thread: Thread): string | null {
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const message = thread.messages[index];
+    if (message?.role === "user") {
+      return message.createdAt;
+    }
+  }
+  return null;
+}
+
+function sidebarSummaryFromThread(
+  thread: Thread,
+  previous?: SidebarThreadSummary | undefined,
+): SidebarThreadSummary {
+  return {
+    id: thread.id,
+    environmentId: thread.environmentId,
+    projectId: thread.projectId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
+    tabGroupId: thread.tabGroupId ?? thread.id,
+    tabType: thread.tabType ?? "chat",
+    title: thread.title,
+    interactionMode: thread.interactionMode,
+    session: thread.session,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    updatedAt: thread.updatedAt,
+    latestTurn: thread.latestTurn,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    latestUserMessageAt:
+      latestUserMessageAtFromThread(thread) ?? previous?.latestUserMessageAt ?? null,
+    hasPendingApprovals: previous?.hasPendingApprovals ?? false,
+    hasPendingUserInput: previous?.hasPendingUserInput ?? false,
+    hasActionableProposedPlan: previous?.hasActionableProposedPlan ?? false,
+  };
+}
+
+function writeSubChatShellState(state: EnvironmentState, subChat: SubChatShell): EnvironmentState {
+  const previousSubChat = state.subChatShellById[subChat.id];
+  const subChatShellById = {
+    ...state.subChatShellById,
+    [subChat.id]: subChat,
+  };
+  let subChatIdsByWorkspaceId = state.subChatIdsByWorkspaceId;
+
+  if (previousSubChat && previousSubChat.workspaceId !== subChat.workspaceId) {
+    subChatIdsByWorkspaceId = {
+      ...subChatIdsByWorkspaceId,
+      [previousSubChat.workspaceId]: removeId(
+        subChatIdsByWorkspaceId[previousSubChat.workspaceId] ?? [],
+        subChat.id,
+      ),
+    };
+  }
+
+  const currentWorkspaceIds = subChatIdsByWorkspaceId[subChat.workspaceId] ?? [];
+  const nextWorkspaceIds = appendId(currentWorkspaceIds, subChat.id);
+  if (!arraysEqual(currentWorkspaceIds, nextWorkspaceIds)) {
+    subChatIdsByWorkspaceId = {
+      ...subChatIdsByWorkspaceId,
+      [subChat.workspaceId]: nextWorkspaceIds,
+    };
+  }
+
+  return {
+    ...state,
+    subChatShellById,
+    subChatIdsByWorkspaceId,
+  };
+}
+
+function writeOptimisticThreadShellMirror(
+  state: EnvironmentState,
+  thread: Thread,
+): EnvironmentState {
+  const summary = sidebarSummaryFromThread(thread, state.sidebarThreadSummaryById[thread.id]);
+  let nextState = state;
+
+  if (!sidebarThreadSummariesEqual(state.sidebarThreadSummaryById[thread.id], summary)) {
+    nextState = {
+      ...nextState,
+      sidebarThreadSummaryById: {
+        ...nextState.sidebarThreadSummaryById,
+        [thread.id]: summary,
+      },
+    };
+  }
+
+  if (thread.workspaceId === undefined) {
+    return nextState;
+  }
+
+  const workspace = nextState.workspaceById[thread.workspaceId];
+  return writeSubChatShellState(nextState, {
+    ...summary,
+    organizationId: workspace?.organizationId ?? DEFAULT_LOCAL_ORGANIZATION_ID_VALUE,
+    workspaceId: thread.workspaceId,
+  });
+}
+
 function retainThreadScopedRecord<T>(
   record: Record<ThreadId, T>,
   nextThreadIds: ReadonlySet<ThreadId>,
@@ -826,6 +1038,18 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     state.turnDiffSummaryByThreadId;
   const { [threadId]: _removedSidebarSummary, ...sidebarThreadSummaryById } =
     state.sidebarThreadSummaryById;
+  const subChat = state.subChatShellById[threadId];
+  const { [threadId]: _removedSubChat, ...subChatShellById } = state.subChatShellById;
+  const subChatIdsByWorkspaceId =
+    subChat === undefined
+      ? state.subChatIdsByWorkspaceId
+      : {
+          ...state.subChatIdsByWorkspaceId,
+          [subChat.workspaceId]: removeId(
+            state.subChatIdsByWorkspaceId[subChat.workspaceId] ?? [],
+            threadId,
+          ),
+        };
 
   return {
     ...state,
@@ -843,6 +1067,8 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     turnDiffIdsByThreadId,
     turnDiffSummaryByThreadId,
     sidebarThreadSummaryById,
+    subChatShellById,
+    subChatIdsByWorkspaceId,
   };
 }
 
@@ -1063,6 +1289,87 @@ function buildProjectState(
   };
 }
 
+function buildOrganizationState(
+  organizations: ReadonlyArray<Organization>,
+  projects: ReadonlyArray<Project>,
+): Pick<EnvironmentState, "organizationIds" | "organizationById" | "projectIdsByOrganizationId"> {
+  const projectIdsByOrganizationId: Record<OrganizationId, ProjectId[]> = {};
+  for (const project of projects) {
+    if (project.organizationId === undefined) {
+      continue;
+    }
+    projectIdsByOrganizationId[project.organizationId] = [
+      ...(projectIdsByOrganizationId[project.organizationId] ?? []),
+      project.id,
+    ];
+  }
+
+  return {
+    organizationIds: organizations.map((organization) => organization.id),
+    organizationById: Object.fromEntries(
+      organizations.map((organization) => [organization.id, organization] as const),
+    ) as Record<OrganizationId, Organization>,
+    projectIdsByOrganizationId,
+  };
+}
+
+function buildWorkspaceState(
+  workspaces: ReadonlyArray<Workspace>,
+): Pick<EnvironmentState, "workspaceIdsByProjectId" | "workspaceById"> {
+  const workspaceIdsByProjectId: Record<ProjectId, WorkspaceId[]> = {};
+  for (const workspace of workspaces) {
+    workspaceIdsByProjectId[workspace.projectId] = [
+      ...(workspaceIdsByProjectId[workspace.projectId] ?? []),
+      workspace.id,
+    ];
+  }
+
+  return {
+    workspaceIdsByProjectId,
+    workspaceById: Object.fromEntries(
+      workspaces.map((workspace) => [workspace.id, workspace] as const),
+    ) as Record<WorkspaceId, Workspace>,
+  };
+}
+
+function buildSubChatState(
+  subChats: ReadonlyArray<SubChatShell>,
+): Pick<EnvironmentState, "subChatIdsByWorkspaceId" | "subChatShellById"> {
+  const subChatIdsByWorkspaceId: Record<WorkspaceId, ThreadId[]> = {};
+  for (const subChat of subChats) {
+    subChatIdsByWorkspaceId[subChat.workspaceId] = [
+      ...(subChatIdsByWorkspaceId[subChat.workspaceId] ?? []),
+      subChat.id,
+    ];
+  }
+
+  return {
+    subChatIdsByWorkspaceId,
+    subChatShellById: Object.fromEntries(
+      subChats.map((subChat) => [subChat.id, subChat] as const),
+    ) as Record<ThreadId, SubChatShell>,
+  };
+}
+
+function buildWorkspaceActionState(
+  actions: ReadonlyArray<WorkspaceAction>,
+): Pick<EnvironmentState, "workspaceActionIdsByWorkspaceId" | "workspaceActionById"> {
+  const workspaceActionIdsByWorkspaceId: Record<WorkspaceId, WorkspaceActionId[]> = {};
+  for (const action of actions) {
+    workspaceActionIdsByWorkspaceId[action.workspaceId] = [
+      ...(workspaceActionIdsByWorkspaceId[action.workspaceId] ?? []),
+      action.id,
+    ];
+  }
+
+  return {
+    workspaceActionIdsByWorkspaceId,
+    workspaceActionById: Object.fromEntries(
+      actions.map((action) => [action.id, action] as const),
+    ) as Record<WorkspaceActionId, WorkspaceAction>,
+  };
+}
+
 function getStoredEnvironmentState(
   state: AppState,
   environmentId: EnvironmentId,
@@ -1099,11 +1406,27 @@ function syncEnvironmentShellSnapshot(
   snapshot: OrchestrationShellSnapshot,
   environmentId: EnvironmentId,
 ): EnvironmentState {
+  const nextOrganizations = (snapshot.organizations ?? []).map((organization) =>
+    mapOrganization(organization, environmentId),
+  );
   const nextProjects = snapshot.projects.map((project) => mapProject(project, environmentId));
+  const nextWorkspaces = (snapshot.workspaces ?? []).map((workspace) =>
+    mapWorkspace(workspace, environmentId),
+  );
+  const nextSubChats = (snapshot.subChats ?? []).map((subChat) =>
+    mapSubChatShell(subChat, environmentId),
+  );
+  const nextWorkspaceActions = (snapshot.workspaceActions ?? []).map((action) =>
+    mapWorkspaceAction(action, environmentId),
+  );
   const nextThreadIds = new Set(snapshot.threads.map((thread) => thread.id));
   let nextState: EnvironmentState = {
     ...state,
+    ...buildOrganizationState(nextOrganizations, nextProjects),
     ...buildProjectState(nextProjects),
+    ...buildWorkspaceState(nextWorkspaces),
+    ...buildSubChatState(nextSubChats),
+    ...buildWorkspaceActionState(nextWorkspaceActions),
     threadIds: [],
     threadIdsByProjectId: {},
     threadShellById: {},
@@ -1281,6 +1604,9 @@ function applyEnvironmentOrchestrationEvent(
         {
           id: event.payload.threadId,
           projectId: event.payload.projectId,
+          ...(event.payload.workspaceId !== undefined
+            ? { workspaceId: event.payload.workspaceId }
+            : {}),
           tabGroupId: event.payload.tabGroupId ?? event.payload.threadId,
           tabType: event.payload.tabType ?? "chat",
           title: event.payload.title,
@@ -1302,7 +1628,10 @@ function applyEnvironmentOrchestrationEvent(
         },
         environmentId,
       );
-      return writeThreadState(state, nextThread, previousThread);
+      return writeOptimisticThreadShellMirror(
+        writeThreadState(state, nextThread, previousThread),
+        nextThread,
+      );
     }
 
     case "thread.deleted":
@@ -1322,9 +1651,13 @@ function applyEnvironmentOrchestrationEvent(
         updatedAt: event.payload.updatedAt,
       }));
 
-    case "thread.meta-updated":
-      return updateThreadState(state, event.payload.threadId, (thread) => ({
-        ...thread,
+    case "thread.meta-updated": {
+      const currentThread = getThreadFromEnvironmentState(state, event.payload.threadId);
+      if (!currentThread) {
+        return state;
+      }
+      const nextThread: Thread = {
+        ...currentThread,
         ...(event.payload.tabGroupId !== undefined ? { tabGroupId: event.payload.tabGroupId } : {}),
         ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
         ...(event.payload.modelSelection !== undefined
@@ -1335,7 +1668,12 @@ function applyEnvironmentOrchestrationEvent(
           ? { worktreePath: event.payload.worktreePath }
           : {}),
         updatedAt: event.payload.updatedAt,
-      }));
+      };
+      return writeOptimisticThreadShellMirror(
+        writeThreadState(state, nextThread, currentThread),
+        nextThread,
+      );
+    }
 
     case "thread.runtime-mode-set":
       return updateThreadState(state, event.payload.threadId, (thread) => ({
@@ -1478,52 +1816,66 @@ function applyEnvironmentOrchestrationEvent(
         };
       });
 
-    case "thread.session-set":
-      return updateThreadState(state, event.payload.threadId, (thread) => ({
-        ...thread,
+    case "thread.session-set": {
+      const currentThread = getThreadFromEnvironmentState(state, event.payload.threadId);
+      if (!currentThread) {
+        return state;
+      }
+      const nextThread: Thread = {
+        ...currentThread,
         session: mapSession(event.payload.session),
         error: sanitizeThreadErrorMessage(event.payload.session.lastError),
         latestTurn:
           event.payload.session.status === "running" && event.payload.session.activeTurnId !== null
             ? buildLatestTurn({
-                previous: thread.latestTurn,
+                previous: currentThread.latestTurn,
                 turnId: event.payload.session.activeTurnId,
                 state: "running",
                 requestedAt:
-                  thread.latestTurn?.turnId === event.payload.session.activeTurnId
-                    ? thread.latestTurn.requestedAt
+                  currentThread.latestTurn?.turnId === event.payload.session.activeTurnId
+                    ? currentThread.latestTurn.requestedAt
                     : event.payload.session.updatedAt,
                 startedAt:
-                  thread.latestTurn?.turnId === event.payload.session.activeTurnId
-                    ? (thread.latestTurn.startedAt ?? event.payload.session.updatedAt)
+                  currentThread.latestTurn?.turnId === event.payload.session.activeTurnId
+                    ? (currentThread.latestTurn.startedAt ?? event.payload.session.updatedAt)
                     : event.payload.session.updatedAt,
                 completedAt: null,
                 assistantMessageId:
-                  thread.latestTurn?.turnId === event.payload.session.activeTurnId
-                    ? thread.latestTurn.assistantMessageId
+                  currentThread.latestTurn?.turnId === event.payload.session.activeTurnId
+                    ? currentThread.latestTurn.assistantMessageId
                     : null,
-                sourceProposedPlan: thread.pendingSourceProposedPlan,
+                sourceProposedPlan: currentThread.pendingSourceProposedPlan,
               })
-            : thread.latestTurn,
+            : currentThread.latestTurn,
         updatedAt: event.occurredAt,
-      }));
-
-    case "thread.session-stop-requested":
-      return updateThreadState(state, event.payload.threadId, (thread) =>
-        thread.session === null
-          ? thread
-          : {
-              ...thread,
-              session: {
-                ...thread.session,
-                status: "closed",
-                orchestrationStatus: "stopped",
-                activeTurnId: undefined,
-                updatedAt: event.payload.createdAt,
-              },
-              updatedAt: event.occurredAt,
-            },
+      };
+      return writeOptimisticThreadShellMirror(
+        writeThreadState(state, nextThread, currentThread),
+        nextThread,
       );
+    }
+
+    case "thread.session-stop-requested": {
+      const currentThread = getThreadFromEnvironmentState(state, event.payload.threadId);
+      if (!currentThread?.session) {
+        return state;
+      }
+      const nextThread: Thread = {
+        ...currentThread,
+        session: {
+          ...currentThread.session,
+          status: "closed",
+          orchestrationStatus: "stopped",
+          activeTurnId: undefined,
+          updatedAt: event.payload.createdAt,
+        },
+        updatedAt: event.occurredAt,
+      };
+      return writeOptimisticThreadShellMirror(
+        writeThreadState(state, nextThread, currentThread),
+        nextThread,
+      );
+    }
 
     case "thread.proposed-plan-upserted":
       return updateThreadState(state, event.payload.threadId, (thread) => {
@@ -1720,8 +2072,115 @@ function applyEnvironmentShellEvent(
         projectIds: removeId(state.projectIds, event.projectId),
       };
     }
+    case "workspace-upserted": {
+      const workspace = mapWorkspace(event.workspace, environmentId);
+      return {
+        ...state,
+        workspaceById: {
+          ...state.workspaceById,
+          [workspace.id]: workspace,
+        },
+        workspaceIdsByProjectId: {
+          ...state.workspaceIdsByProjectId,
+          [workspace.projectId]: appendId(
+            state.workspaceIdsByProjectId[workspace.projectId] ?? [],
+            workspace.id,
+          ),
+        },
+      };
+    }
+    case "workspace-removed": {
+      const workspace = state.workspaceById[event.workspaceId];
+      if (!workspace) {
+        return state;
+      }
+      const { [event.workspaceId]: _removedWorkspace, ...workspaceById } = state.workspaceById;
+      const workspaceIds = removeId(
+        state.workspaceIdsByProjectId[workspace.projectId] ?? [],
+        event.workspaceId,
+      );
+      return {
+        ...state,
+        workspaceById,
+        workspaceIdsByProjectId: {
+          ...state.workspaceIdsByProjectId,
+          [workspace.projectId]: workspaceIds,
+        },
+      };
+    }
+    case "workspace-action-upserted": {
+      const action = mapWorkspaceAction(event.action, environmentId);
+      return {
+        ...state,
+        workspaceActionById: {
+          ...state.workspaceActionById,
+          [action.id]: action,
+        },
+        workspaceActionIdsByWorkspaceId: {
+          ...state.workspaceActionIdsByWorkspaceId,
+          [action.workspaceId]: appendId(
+            state.workspaceActionIdsByWorkspaceId[action.workspaceId] ?? [],
+            action.id,
+          ),
+        },
+      };
+    }
+    case "workspace-action-removed": {
+      const action = state.workspaceActionById[event.actionId];
+      if (!action) {
+        return state;
+      }
+      const { [event.actionId]: _removedAction, ...workspaceActionById } =
+        state.workspaceActionById;
+      return {
+        ...state,
+        workspaceActionById,
+        workspaceActionIdsByWorkspaceId: {
+          ...state.workspaceActionIdsByWorkspaceId,
+          [action.workspaceId]: removeId(
+            state.workspaceActionIdsByWorkspaceId[action.workspaceId] ?? [],
+            event.actionId,
+          ),
+        },
+      };
+    }
     case "thread-upserted":
       return writeThreadShellState(state, mapThreadShell(event.thread, environmentId));
+    case "sub-chat-upserted": {
+      const subChat = mapSubChatShell(event.subChat, environmentId);
+      return {
+        ...state,
+        subChatShellById: {
+          ...state.subChatShellById,
+          [subChat.id]: subChat,
+        },
+        subChatIdsByWorkspaceId: {
+          ...state.subChatIdsByWorkspaceId,
+          [subChat.workspaceId]: appendId(
+            state.subChatIdsByWorkspaceId[subChat.workspaceId] ?? [],
+            subChat.id,
+          ),
+        },
+      };
+    }
+    case "sub-chat-removed": {
+      const subChat = state.subChatShellById[event.subChatId];
+      if (!subChat) {
+        return state;
+      }
+      const { [event.subChatId]: _removedSubChat, ...subChatShellById } = state.subChatShellById;
+      return {
+        ...state,
+        subChatShellById,
+        subChatIdsByWorkspaceId: {
+          ...state.subChatIdsByWorkspaceId,
+          [subChat.workspaceId]: removeId(
+            state.subChatIdsByWorkspaceId[subChat.workspaceId] ?? [],
+            event.subChatId,
+          ),
+        },
+      };
+    }
     case "thread-removed":
       return removeThreadState(state, event.threadId);
   }
@@ -1826,6 +2285,32 @@ export function selectSidebarThreadsForProjectRefs(
   if (refs.length === 0) return [];
   if (refs.length === 1) return selectSidebarThreadsForProjectRef(state, refs[0]);
   return refs.flatMap((ref) => selectSidebarThreadsForProjectRef(state, ref));
+}
+
+export function selectWorkspacesForProjectRef(
+  state: AppState,
+  ref: ScopedProjectRef | null | undefined,
+): Workspace[] {
+  if (!ref) {
+    return [];
+  }
+
+  const environmentState = selectEnvironmentState(state, ref.environmentId);
+  const workspaceIds =
+    environmentState.workspaceIdsByProjectId[ref.projectId] ?? EMPTY_WORKSPACE_IDS;
+  return workspaceIds.flatMap((workspaceId) => {
+    const workspace = environmentState.workspaceById[workspaceId];
+    return workspace ? [workspace] : [];
+  });
+}
+
+export function selectWorkspacesForProjectRefs(
+  state: AppState,
+  refs: readonly ScopedProjectRef[],
+): Workspace[] {
+  if (refs.length === 0) return [];
+  if (refs.length === 1) return selectWorkspacesForProjectRef(state, refs[0]);
+  return refs.flatMap((ref) => selectWorkspacesForProjectRef(state, ref));
 }
 
 export function selectBootstrapCompleteForActiveEnvironment(state: AppState): boolean {

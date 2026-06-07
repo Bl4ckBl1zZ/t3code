@@ -1,5 +1,5 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
-import type { ScopedThreadRef, ThreadId, ThreadTabType } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadId, ThreadTabType, WorkspaceId } from "@t3tools/contracts";
 
 import type { SidebarThreadSummary, Thread } from "./types";
 
@@ -9,6 +9,7 @@ export interface ThreadContentTab {
   readonly type: ThreadTabType;
   readonly title: string;
   readonly threadRef: ScopedThreadRef;
+  readonly workspaceId?: WorkspaceId | undefined;
   readonly active: boolean;
   readonly createdAt: string;
   readonly updatedAt: string | undefined;
@@ -52,6 +53,7 @@ export function buildThreadContentTabs(input: {
         type: thread.tabType ?? "chat",
         title: thread.title,
         threadRef: scopeThreadRef(thread.environmentId, thread.id),
+        ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
         active:
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === activeThreadKey,
         createdAt: thread.createdAt,
@@ -66,6 +68,7 @@ export function buildThreadContentTabs(input: {
       type: activeThread.tabType ?? "chat",
       title: activeThread.title,
       threadRef: activeThreadRef,
+      ...(activeThread.workspaceId !== undefined ? { workspaceId: activeThread.workspaceId } : {}),
       active: true,
       createdAt: activeThread.createdAt,
       updatedAt: activeThread.updatedAt,

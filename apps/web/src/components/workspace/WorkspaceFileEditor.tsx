@@ -262,10 +262,11 @@ export function WorkspaceFileEditor({ tab, onDirtyChange }: WorkspaceFileEditorP
   const revealInExplorer = useCallback(() => {
     revealFileInExplorer({
       environmentId: tab.environmentId,
+      ...(tab.workspaceId !== undefined ? { workspaceId: tab.workspaceId } : {}),
       cwd: tab.cwd,
       relativePath: tab.relativePath,
     });
-  }, [revealFileInExplorer, tab.cwd, tab.environmentId, tab.relativePath]);
+  }, [revealFileInExplorer, tab.cwd, tab.environmentId, tab.relativePath, tab.workspaceId]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background" data-testid="workspace-file-editor">

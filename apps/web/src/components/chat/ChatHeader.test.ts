@@ -135,32 +135,31 @@ describe("shouldShowPreviewButton", () => {
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
         browserAgentSidebarMode: false,
-        mainActionRunning: true,
+        previewVisible: true,
       }),
     ).toBe(true);
   });
 
-  it("shows when a project preview URL is configured", () => {
+  it("shows when preview discovery is starting", () => {
     expect(
       shouldShowPreviewButton({
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
         browserAgentSidebarMode: false,
-        mainActionRunning: false,
-        projectPreviewUrl: "http://localhost:5173/",
+        previewVisible: true,
       }),
     ).toBe(true);
   });
 
-  it("hides until the main action is running", () => {
+  it("hides when no preview target state is available", () => {
     expect(
       shouldShowPreviewButton({
         activeProjectName: "codething-mvp",
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
         browserAgentSidebarMode: false,
-        mainActionRunning: false,
+        previewVisible: false,
       }),
     ).toBe(false);
   });
@@ -172,7 +171,7 @@ describe("shouldShowPreviewButton", () => {
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
         browserAgentSidebarMode: true,
-        mainActionRunning: true,
+        previewVisible: true,
       }),
     ).toBe(false);
   });
@@ -184,7 +183,7 @@ describe("shouldShowPreviewButton", () => {
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
         browserAgentSidebarMode: false,
-        mainActionRunning: true,
+        previewVisible: true,
       }),
     ).toBe(false);
   });
@@ -196,7 +195,7 @@ describe("shouldShowPreviewButton", () => {
         activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
         primaryEnvironmentId,
         browserAgentSidebarMode: false,
-        mainActionRunning: true,
+        previewVisible: true,
       }),
     ).toBe(false);
   });

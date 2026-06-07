@@ -13,8 +13,10 @@ import type {
   OrchestrationProjectShell,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
+  OrchestrationSubChatShell,
   OrchestrationThread,
   OrchestrationThreadShell,
+  OrchestrationWorkspaceShell,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -155,6 +157,39 @@ export interface ProjectionSnapshotQueryShape {
       readonly includeArchived?: boolean;
     },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read a single workspace shell row by id.
+   */
+  readonly getWorkspaceShellById: (
+    workspaceId: OrchestrationWorkspaceShell["id"],
+    options?: {
+      readonly includeArchived?: boolean;
+    },
+  ) => Effect.Effect<Option.Option<OrchestrationWorkspaceShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read the workspace shell derived from a thread's project/worktree context.
+   *
+   * BACKWARD COMPATIBILITY: Until workspaces have first-class write commands,
+   * this maps legacy thread ownership into the target hierarchy.
+   */
+  readonly getWorkspaceShellByThreadId: (
+    threadId: ThreadId,
+    options?: {
+      readonly includeArchived?: boolean;
+    },
+  ) => Effect.Effect<Option.Option<OrchestrationWorkspaceShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read a thread as a workspace-owned sub-chat shell.
+   */
+  readonly getSubChatShellById: (
+    threadId: ThreadId,
+    options?: {
+      readonly includeArchived?: boolean;
+    },
+  ) => Effect.Effect<Option.Option<OrchestrationSubChatShell>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.

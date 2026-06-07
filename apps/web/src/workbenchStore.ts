@@ -6,7 +6,7 @@ import {
   type WorkbenchTab,
   type WorkbenchTabsState,
 } from "@t3tools/client-runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, WorkspaceId } from "@t3tools/contracts";
 import { create } from "zustand";
 
 interface WorkbenchStoreState {
@@ -15,17 +15,20 @@ interface WorkbenchStoreState {
   readonly explorerRevealRequest: {
     readonly requestId: number;
     readonly environmentId: EnvironmentId;
+    readonly workspaceId?: WorkspaceId | undefined;
     readonly cwd: string;
     readonly relativePath: string;
   } | null;
   readonly openFileTab: (input: {
     readonly environmentId: EnvironmentId;
+    readonly workspaceId?: WorkspaceId | null | undefined;
     readonly cwd: string;
     readonly relativePath: string;
   }) => void;
   readonly setActiveSidebarPanel: (panel: "threads" | "explorer") => void;
   readonly revealFileInExplorer: (input: {
     readonly environmentId: EnvironmentId;
+    readonly workspaceId?: WorkspaceId | null | undefined;
     readonly cwd: string;
     readonly relativePath: string;
   }) => void;
@@ -45,6 +48,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set) => ({
         kind: "file",
         id,
         environmentId: input.environmentId,
+        ...(input.workspaceId != null ? { workspaceId: input.workspaceId } : {}),
         cwd: input.cwd,
         relativePath: input.relativePath,
         title: workbenchTabTitleFromPath(input.relativePath),
@@ -64,6 +68,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set) => ({
       explorerRevealRequest: {
         requestId: (state.explorerRevealRequest?.requestId ?? 0) + 1,
         environmentId: input.environmentId,
+        ...(input.workspaceId != null ? { workspaceId: input.workspaceId } : {}),
         cwd: input.cwd,
         relativePath: input.relativePath,
       },

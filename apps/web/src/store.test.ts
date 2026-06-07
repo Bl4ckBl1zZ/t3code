@@ -1,6 +1,7 @@
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import {
   CheckpointRef,
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   DEFAULT_MODEL,
   EnvironmentId,
   EventId,
@@ -9,6 +10,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  WorkspaceId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -106,10 +108,19 @@ function makeState(thread: Thread): AppState {
     [thread.projectId]: [thread.id],
   };
   const environmentState = {
+    organizationIds: [],
+    organizationById: {},
+    projectIdsByOrganizationId: {},
     projectIds: [projectId],
     projectById: {
       [projectId]: project,
     },
+    workspaceIdsByProjectId: {},
+    workspaceById: {},
+    subChatIdsByWorkspaceId: {},
+    subChatShellById: {},
+    workspaceActionIdsByWorkspaceId: {},
+    workspaceActionById: {},
     threadIds: [thread.id],
     threadIdsByProjectId,
     threadShellById: {
@@ -118,6 +129,9 @@ function makeState(thread: Thread): AppState {
         environmentId: thread.environmentId,
         codexThreadId: thread.codexThreadId,
         projectId: thread.projectId,
+        ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
+        tabGroupId: thread.tabGroupId ?? thread.id,
+        tabType: thread.tabType ?? "chat",
         title: thread.title,
         modelSelection: thread.modelSelection,
         runtimeMode: thread.runtimeMode,
@@ -183,8 +197,17 @@ function makeState(thread: Thread): AppState {
 
 function makeEmptyState(overrides: Partial<AppState & EnvironmentState> = {}): AppState {
   const environmentState: EnvironmentState = {
+    organizationIds: [],
+    organizationById: {},
+    projectIdsByOrganizationId: {},
     projectIds: [],
     projectById: {},
+    workspaceIdsByProjectId: {},
+    workspaceById: {},
+    subChatIdsByWorkspaceId: {},
+    subChatShellById: {},
+    workspaceActionIdsByWorkspaceId: {},
+    workspaceActionById: {},
     threadIds: [],
     threadIdsByProjectId: {},
     threadShellById: {},
@@ -604,6 +627,92 @@ describe("incremental orchestration updates", () => {
     ]);
   });
 
+  it("preserves workspace ownership from thread.created events", () => {
+    const workspaceId = WorkspaceId.make("workspace-live-create");
+    const threadId = ThreadId.make("thread-live-create");
+    const state = makeState(makeThread({ id: ThreadId.make("existing-thread") }));
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.created", {
+        threadId,
+        projectId: ProjectId.make("project-1"),
+        workspaceId,
+        title: "Workspace sub-chat",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-02-27T00:00:01.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(selectThreadByRef(next, scopeThreadRef(localEnvironmentId, threadId))?.workspaceId).toBe(
+      workspaceId,
+    );
+    expect(localEnvironmentStateOf(next).subChatIdsByWorkspaceId[workspaceId]).toEqual([threadId]);
+    expect(localEnvironmentStateOf(next).subChatShellById[threadId]).toMatchObject({
+      id: threadId,
+      organizationId: DEFAULT_LOCAL_ORGANIZATION_ID,
+      workspaceId,
+      title: "Workspace sub-chat",
+    });
+    expect(localEnvironmentStateOf(next).sidebarThreadSummaryById[threadId]?.title).toBe(
+      "Workspace sub-chat",
+    );
+  });
+
+  it("updates optimistic sub-chat shell titles from thread.meta-updated events", () => {
+    const workspaceId = WorkspaceId.make("workspace-live-title");
+    const threadId = ThreadId.make("thread-live-title");
+    const state = applyOrchestrationEvent(
+      makeState(makeThread({ id: ThreadId.make("existing-thread") })),
+      makeEvent("thread.created", {
+        threadId,
+        projectId: ProjectId.make("project-1"),
+        workspaceId,
+        title: "New chat",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-02-27T00:00:01.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.meta-updated", {
+        threadId,
+        title: "Explain preview detection",
+        updatedAt: "2026-02-27T00:00:02.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(selectThreadByRef(next, scopeThreadRef(localEnvironmentId, threadId))?.title).toBe(
+      "Explain preview detection",
+    );
+    expect(localEnvironmentStateOf(next).subChatShellById[threadId]?.title).toBe(
+      "Explain preview detection",
+    );
+    expect(localEnvironmentStateOf(next).sidebarThreadSummaryById[threadId]?.title).toBe(
+      "Explain preview detection",
+    );
+  });
+
   it("updates only the affected thread for message events", () => {
     const thread1 = makeThread({
       id: ThreadId.make("thread-1"),
@@ -779,6 +888,41 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(next)[0]?.session?.status).toBe("running");
     expect(threadsOf(next)[0]?.latestTurn?.state).toBe("completed");
     expect(threadsOf(next)[0]?.messages).toHaveLength(1);
+  });
+
+  it("mirrors running session updates into sidebar summaries", () => {
+    const workspaceId = WorkspaceId.make("workspace-sidebar-session");
+    const thread = makeThread({
+      workspaceId,
+      branch: "Bl4ckBl1zZ/discord-message-payloads",
+      worktreePath: "/tmp/project/worktrees/discord-message-payloads",
+    });
+    const next = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.session-set", {
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.make("turn-sidebar-session"),
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:04.000Z",
+        },
+      }),
+      localEnvironmentId,
+    );
+
+    const environmentState = localEnvironmentStateOf(next);
+    const summary = environmentState.sidebarThreadSummaryById[thread.id];
+    expect(summary?.workspaceId).toBe(workspaceId);
+    expect(summary?.session?.status).toBe("running");
+    expect(summary?.latestTurn).toMatchObject({
+      turnId: TurnId.make("turn-sidebar-session"),
+      state: "running",
+    });
+    expect(environmentState.subChatShellById[thread.id]?.session?.status).toBe("running");
   });
 
   it("does not regress latestTurn when an older turn diff completes late", () => {

@@ -256,6 +256,83 @@ describe("BrowserAgentRegistry", () => {
     expect(hostMessages).toHaveLength(0);
   });
 
+  it("allows annotation activation to resolve a missing link in the extension", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    const messages = connectAgent(registry, sessionId);
+    const connectionId = registry.snapshot().agents[0]?.connectionId;
+    if (!connectionId) {
+      throw new Error("Expected connected browser agent.");
+    }
+
+    const result = await Effect.runPromise(
+      registry.activateAnnotation(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+
+    expect(result.workspaceLink).toBeUndefined();
+    const command = messages[0];
+    expect(command?.type).toBe("browserAgent.command.activateAnnotation");
+    if (!command || command.type !== "browserAgent.command.activateAnnotation") {
+      throw new Error("Expected annotation command.");
+    }
+    expect(command.environmentId).toBe(workspaceInput.environmentId);
+    expect(command.threadId).toBe(workspaceInput.threadId);
+    expect(command.workspaceLink).toBeUndefined();
+
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: result.commandId,
+      ok: true,
+      tabId: 42,
+      windowId: 7,
+      payload: {
+        workspaceLink: {
+          id: "browser-workspace:environment-1:stale-thread",
+          workspaceId: "browser-workspace:environment-1:stale-thread",
+          browserContextId: BrowserAgentContextId.make("default"),
+          agentId: "browser-agent:stale-session",
+          environmentId: workspaceInput.environmentId,
+          threadId: ThreadId.make("stale-thread"),
+          devServerUrl: workspaceInput.devServerUrl,
+          repoName: workspaceInput.repoName,
+          url: workspaceInput.devServerUrl,
+          expectedOrigin: "http://100.105.249.96:3000",
+          title: "Preview",
+          browserLabel: "Chrome",
+          tabStatus: "complete",
+          captureState: "off",
+          controlState: "enabled",
+          browserControlState: "deep",
+          deepControlEnabled: true,
+          cdpAttached: false,
+          role: "primary",
+          purpose: null,
+          owner: { kind: "user" },
+          lifecycle: "persistent",
+          streamState: "off",
+          liveViewSessionId: null,
+          lastSeenAt: null,
+          sidebarWidthPx: 420,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    });
+
+    const snapshot = registry.snapshot();
+    expect(snapshot.workspaceLinks).toHaveLength(1);
+    expect(snapshot.workspaceLinks[0]?.id).toBe("browser-workspace:environment-1:thread-1");
+    expect(snapshot.workspaceLinks[0]?.agentId).toBe("browser-agent:session-host");
+    expect(snapshot.workspaceLinks[0]?.tabId).toBe(42);
+    expect(snapshot.workspaceLinks[0]?.threadId).toBe(workspaceInput.threadId);
+  });
+
   it("creates a thread-scoped browser link and sends the open command", async () => {
     const registry = new BrowserAgentRegistry();
     const sessionId = AuthSessionId.make("session-host");
@@ -506,6 +583,84 @@ describe("BrowserAgentRegistry", () => {
 
     expect(firstLink?.tabStatus).toBe("closed");
     expect(secondLink?.tabStatus).toBe("complete");
+  });
+
+  it("keeps default side-panel links active when provider contexts share a tab identity", async () => {
+    const registry = new BrowserAgentRegistry();
+    const sessionId = AuthSessionId.make("session-host");
+    connectAgent(registry, sessionId);
+    const connectionId = registry.snapshot().agents[0]?.connectionId;
+    if (!connectionId) {
+      throw new Error("Expected connected browser agent.");
+    }
+
+    const primary = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          url: "http://localhost:5173/",
+          repoName: "repo",
+          focus: true,
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: primary.commandId,
+      ok: true,
+      tabId: 42,
+      windowId: 7,
+      payload: {
+        url: "http://localhost:5173/",
+        title: "Preview",
+      },
+    });
+
+    const providerContextId = BrowserAgentContextId.make("codex:provider-thread-1");
+    const agent = await Effect.runPromise(
+      registry.openOrFocusThreadTab(
+        {
+          environmentId: workspaceInput.environmentId,
+          threadId: workspaceInput.threadId,
+          browserContextId: providerContextId,
+          url: "http://localhost:5173/",
+          repoName: "repo",
+          focus: false,
+          role: "agent",
+          owner: { kind: "agent", label: "Agent" },
+          lifecycle: "ephemeral",
+        },
+        { preferredSessionId: sessionId },
+      ),
+    );
+    registry.handleMessage(connectionId, {
+      type: "browserAgent.command.result",
+      commandId: agent.commandId,
+      ok: true,
+      tabId: 42,
+      windowId: 7,
+      payload: {
+        url: "http://localhost:5173/",
+        title: "Preview",
+      },
+    });
+
+    const primaryLink = registry.resolveThreadWorkspaceLink({
+      environmentId: workspaceInput.environmentId,
+      threadId: workspaceInput.threadId,
+    });
+    const agentLink = registry.resolveThreadWorkspaceLink({
+      environmentId: workspaceInput.environmentId,
+      threadId: workspaceInput.threadId,
+      browserContextId: providerContextId,
+    });
+
+    expect(primaryLink?.tabStatus).toBe("complete");
+    expect(primaryLink?.role).toBe("primary");
+    expect(agentLink?.tabStatus).toBe("complete");
+    expect(agentLink?.role).toBe("agent");
   });
 
   it("awaits capture start results and returns the first screenshot payload", async () => {

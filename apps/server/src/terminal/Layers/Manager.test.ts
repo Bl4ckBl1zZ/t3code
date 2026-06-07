@@ -7,6 +7,7 @@ import {
   type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import {
   PROJECT_SCRIPT_ID_ENV,
@@ -655,6 +656,25 @@ it.layer(
 
       assert.equal(startedEvent?.snapshot.worktreePath, firstWorktreePath);
       assert.equal(restartedEvent?.snapshot.worktreePath, secondWorktreePath);
+    }),
+  );
+
+  it.effect("propagates workspace metadata through snapshots and terminal metadata", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      const workspaceId = WorkspaceId.make("workspace-1");
+      const snapshot = yield* manager.open(openInput({ workspaceId }));
+      const metadataEvents = yield* Ref.make<ReadonlyArray<TerminalMetadataStreamEvent>>([]);
+      yield* manager.subscribeMetadata((event) =>
+        Ref.update(metadataEvents, (events) => [...events, event]),
+      );
+
+      const events = yield* Ref.get(metadataEvents);
+      const initialSnapshot = events.find((event) => event.type === "snapshot");
+      const terminal = initialSnapshot?.terminals[0];
+
+      assert.equal(snapshot.workspaceId, workspaceId);
+      assert.equal(terminal?.workspaceId, workspaceId);
     }),
   );
 

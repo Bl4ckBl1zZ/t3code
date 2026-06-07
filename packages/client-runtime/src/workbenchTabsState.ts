@@ -1,10 +1,12 @@
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef, SubChatId, WorkspaceId } from "@t3tools/contracts";
 
 export type WorkbenchTab =
   | {
       readonly kind: "chat";
       readonly id: string;
       readonly threadRef: ScopedThreadRef;
+      readonly workspaceId?: WorkspaceId | undefined;
+      readonly subChatId?: SubChatId | undefined;
       readonly title: string;
       readonly dirty: false;
     }
@@ -12,6 +14,7 @@ export type WorkbenchTab =
       readonly kind: "file";
       readonly id: string;
       readonly environmentId: EnvironmentId;
+      readonly workspaceId?: WorkspaceId | undefined;
       readonly cwd: string;
       readonly relativePath: string;
       readonly title: string;
@@ -21,6 +24,7 @@ export type WorkbenchTab =
       readonly kind: "diff";
       readonly id: string;
       readonly environmentId: EnvironmentId;
+      readonly workspaceId?: WorkspaceId | undefined;
       readonly cwd: string;
       readonly relativePath?: string;
       readonly title: string;
@@ -30,8 +34,17 @@ export type WorkbenchTab =
       readonly kind: "terminal";
       readonly id: string;
       readonly environmentId: EnvironmentId;
+      readonly workspaceId?: WorkspaceId | undefined;
       readonly cwd: string;
       readonly terminalId: string;
+      readonly title: string;
+      readonly dirty: false;
+    }
+  | {
+      readonly kind: "actions";
+      readonly id: string;
+      readonly environmentId: EnvironmentId;
+      readonly workspaceId: WorkspaceId;
       readonly title: string;
       readonly dirty: false;
     };
@@ -59,10 +72,16 @@ export const EMPTY_WORKBENCH_TABS_STATE: WorkbenchTabsState = {
 
 export function workspaceFileTabId(input: {
   readonly environmentId: EnvironmentId;
+  readonly workspaceId?: WorkspaceId | null | undefined;
   readonly cwd: string;
   readonly relativePath: string;
 }): string {
-  return `file:${JSON.stringify([input.environmentId, input.cwd, input.relativePath])}`;
+  return `file:${JSON.stringify([
+    input.environmentId,
+    input.workspaceId ?? null,
+    input.cwd,
+    input.relativePath,
+  ])}`;
 }
 
 export function workbenchTabTitleFromPath(relativePath: string): string {

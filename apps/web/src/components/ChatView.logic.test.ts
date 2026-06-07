@@ -273,6 +273,9 @@ const makeThread = (input?: {
 function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) {
   const projectId = ProjectId.make("project-1");
   const environmentState: EnvironmentState = {
+    organizationIds: [],
+    organizationById: {},
+    projectIdsByOrganizationId: {},
     projectIds: [projectId],
     projectById: {
       [projectId]: {
@@ -289,6 +292,12 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
         scripts: [],
       },
     },
+    workspaceIdsByProjectId: {},
+    workspaceById: {},
+    subChatIdsByWorkspaceId: {},
+    subChatShellById: {},
+    workspaceActionIdsByWorkspaceId: {},
+    workspaceActionById: {},
     threadIds: threads.map((thread) => thread.id),
     threadIdsByProjectId: {
       [projectId]: threads.map((thread) => thread.id),

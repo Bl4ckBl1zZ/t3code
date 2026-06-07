@@ -29,8 +29,20 @@ const makeEntityId = <Brand extends string>(brand: Brand) => {
 
 export const ThreadId = makeEntityId("ThreadId");
 export type ThreadId = typeof ThreadId.Type;
+// BACKWARD COMPATIBILITY: Sub-chat ids intentionally share the legacy thread id
+// brand while the app migrates thread-owned conversation state to sub-chats.
+export const SubChatId = ThreadId;
+export type SubChatId = ThreadId;
 export const ProjectId = makeEntityId("ProjectId");
 export type ProjectId = typeof ProjectId.Type;
+export const OrganizationId = makeEntityId("OrganizationId");
+export type OrganizationId = typeof OrganizationId.Type;
+export const WorkspaceId = makeEntityId("WorkspaceId");
+export type WorkspaceId = typeof WorkspaceId.Type;
+export const WorkspaceActionId = makeEntityId("WorkspaceActionId");
+export type WorkspaceActionId = typeof WorkspaceActionId.Type;
+export const TerminalId = makeEntityId("TerminalId");
+export type TerminalId = typeof TerminalId.Type;
 export const EnvironmentId = makeEntityId("EnvironmentId");
 export type EnvironmentId = typeof EnvironmentId.Type;
 export const CommandId = makeEntityId("CommandId");

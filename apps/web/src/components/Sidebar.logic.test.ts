@@ -3,10 +3,12 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
   buildSidebarProjectFolderEntries,
+  buildSidebarWorkspaceThreadGroups,
   createThreadJumpHintVisibilityController,
   findSidebarProjectFolderForProject,
   getSidebarTopLevelThreadId,
   getSidebarThreadIdsToPrewarm,
+  getSidebarWorkspaceThreadGroupKey,
   getSidebarProjectPhysicalKeys,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -15,6 +17,7 @@ import {
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
+  isSidebarImplicitDefaultWorkspaceGroup,
   isSidebarTopLevelThread,
   moveSidebarProjectAcrossFolders,
   moveSidebarProjectToFolder,
@@ -25,6 +28,7 @@ import {
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
+  resolveGroupedThreadStatusPills,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
@@ -37,6 +41,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
@@ -136,6 +142,155 @@ describe("createThreadJumpHintVisibilityController", () => {
     vi.advanceTimersByTime(THREAD_JUMP_HINT_SHOW_DELAY_MS);
 
     expect(visibilityChanges).toEqual([]);
+  });
+});
+
+describe("buildSidebarWorkspaceThreadGroups", () => {
+  it("groups threads by workspace shells and preserves workspace order", () => {
+    const workspaceA = WorkspaceId.make("workspace-a");
+    const workspaceB = WorkspaceId.make("workspace-b");
+    const workspaceC = WorkspaceId.make("workspace-c");
+    const projectId = ProjectId.make("project-sidebar");
+    const threads = [
+      {
+        environmentId: localEnvironmentId,
+        projectId,
+        workspaceId: workspaceA,
+        branch: null,
+        worktreePath: null,
+        title: "A1",
+      },
+      {
+        environmentId: localEnvironmentId,
+        projectId,
+        workspaceId: workspaceB,
+        branch: "feature/sidebar",
+        worktreePath: "/repo/worktrees/sidebar",
+        title: "B1",
+      },
+      {
+        environmentId: localEnvironmentId,
+        projectId,
+        workspaceId: workspaceA,
+        branch: null,
+        worktreePath: null,
+        title: "A2",
+      },
+    ];
+
+    const groups = buildSidebarWorkspaceThreadGroups({
+      threads,
+      workspaces: [
+        {
+          id: workspaceA,
+          environmentId: localEnvironmentId,
+          projectId,
+          title: "Main workspace",
+          branch: null,
+          worktreePath: null,
+          archivedAt: null,
+        },
+        {
+          id: workspaceB,
+          environmentId: localEnvironmentId,
+          projectId,
+          title: "feature/sidebar",
+          branch: "feature/sidebar",
+          worktreePath: "/repo/worktrees/sidebar",
+          archivedAt: null,
+        },
+        {
+          id: workspaceC,
+          environmentId: localEnvironmentId,
+          projectId,
+          title: "Empty workspace",
+          branch: null,
+          worktreePath: "/repo/worktrees/empty",
+          archivedAt: null,
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.key)).toEqual([
+      `workspace:${localEnvironmentId}:${workspaceA}`,
+      `workspace:${localEnvironmentId}:${workspaceB}`,
+      `workspace:${localEnvironmentId}:${workspaceC}`,
+    ]);
+    expect(groups.map((group) => group.workspaceId)).toEqual([workspaceA, workspaceB, workspaceC]);
+    expect(groups[0]?.title).toBe("Main workspace");
+    expect(groups[0]?.threads.map((thread) => thread.title)).toEqual(["A1", "A2"]);
+    expect(groups[1]?.title).toBe("sidebar");
+    expect(groups[1]?.totalThreadCount).toBe(1);
+    expect(groups[2]?.title).toBe("Empty workspace");
+    expect(groups[2]?.threads).toEqual([]);
+    expect(groups[2]?.totalThreadCount).toBe(0);
+  });
+
+  it("falls back to worktree path when a workspace id is unavailable", () => {
+    const projectId = ProjectId.make("project-sidebar");
+    const groups = buildSidebarWorkspaceThreadGroups({
+      threads: [
+        {
+          environmentId: localEnvironmentId,
+          projectId,
+          branch: null,
+          worktreePath: "/repo/worktrees/review-pass",
+          title: "Review",
+        },
+      ],
+    });
+
+    expect(groups[0]?.key).toBe(
+      `legacy:${localEnvironmentId}:${projectId}:/repo/worktrees/review-pass`,
+    );
+    expect(groups[0]?.title).toBe("review-pass");
+  });
+});
+
+describe("isSidebarImplicitDefaultWorkspaceGroup", () => {
+  it("matches generated main workspace shells", () => {
+    expect(
+      isSidebarImplicitDefaultWorkspaceGroup({
+        workspaceId: WorkspaceId.make("workspace-main"),
+        title: "main",
+        branch: null,
+        worktreePath: null,
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarImplicitDefaultWorkspaceGroup({
+        workspaceId: WorkspaceId.make("workspace-master"),
+        title: "main",
+        branch: "master",
+        worktreePath: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps named or worktree workspace shells visible", () => {
+    expect(
+      isSidebarImplicitDefaultWorkspaceGroup({
+        workspaceId: WorkspaceId.make("workspace-feature"),
+        title: "feature/sidebar",
+        branch: "feature/sidebar",
+        worktreePath: null,
+      }),
+    ).toBe(false);
+    expect(
+      isSidebarImplicitDefaultWorkspaceGroup({
+        workspaceId: WorkspaceId.make("workspace-worktree"),
+        title: "main",
+        branch: "main",
+        worktreePath: "/repo/worktrees/main",
+      }),
+    ).toBe(false);
+    expect(
+      isSidebarImplicitDefaultWorkspaceGroup({
+        title: "main",
+        branch: "main",
+        worktreePath: null,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -574,6 +729,95 @@ describe("isSidebarTopLevelThread", () => {
     expect(getSidebarTopLevelThreadId({ id: childThreadId, tabGroupId: rootThreadId })).toBe(
       rootThreadId,
     );
+  });
+});
+
+describe("resolveGroupedThreadStatusPills", () => {
+  it("promotes a running child sub-chat status to its visible top-level thread group", () => {
+    const rootThreadId = ThreadId.make("thread-root");
+    const childThreadId = ThreadId.make("thread-child");
+    const statuses = resolveGroupedThreadStatusPills({
+      threads: [
+        {
+          id: rootThreadId,
+          tabGroupId: rootThreadId,
+          hasActionableProposedPlan: false,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          interactionMode: "default" as const,
+          latestTurn: null,
+          session: null,
+        },
+        {
+          id: childThreadId,
+          tabGroupId: rootThreadId,
+          hasActionableProposedPlan: false,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          interactionMode: "default" as const,
+          latestTurn: null,
+          session: {
+            provider: ProviderDriverKind.make("codex"),
+            status: "running" as const,
+            activeTurnId: TurnId.make("turn-child"),
+            createdAt: "2026-03-09T10:00:00.000Z",
+            updatedAt: "2026-03-09T10:00:00.000Z",
+            orchestrationStatus: "running" as const,
+          },
+        },
+      ],
+      getGroupKey: getSidebarTopLevelThreadId,
+    });
+
+    expect(statuses.get(rootThreadId)).toMatchObject({ label: "Working", pulse: true });
+  });
+
+  it("promotes a running child sub-chat status to its workspace group", () => {
+    const projectId = ProjectId.make("project-sidebar-status");
+    const workspaceId = WorkspaceId.make("workspace-sidebar-status");
+    const statuses = resolveGroupedThreadStatusPills({
+      threads: [
+        {
+          id: ThreadId.make("thread-root"),
+          environmentId: localEnvironmentId,
+          projectId,
+          workspaceId,
+          worktreePath: "/repo/worktrees/sidebar-status",
+          hasActionableProposedPlan: false,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          interactionMode: "default" as const,
+          latestTurn: null,
+          session: null,
+        },
+        {
+          id: ThreadId.make("thread-child"),
+          environmentId: localEnvironmentId,
+          projectId,
+          workspaceId,
+          worktreePath: "/repo/worktrees/sidebar-status",
+          hasActionableProposedPlan: false,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          interactionMode: "default" as const,
+          latestTurn: null,
+          session: {
+            provider: ProviderDriverKind.make("codex"),
+            status: "running" as const,
+            activeTurnId: TurnId.make("turn-child"),
+            createdAt: "2026-03-09T10:00:00.000Z",
+            updatedAt: "2026-03-09T10:00:00.000Z",
+            orchestrationStatus: "running" as const,
+          },
+        },
+      ],
+      getGroupKey: getSidebarWorkspaceThreadGroupKey,
+    });
+
+    expect(statuses.get(`workspace:${localEnvironmentId}:${workspaceId}`)).toMatchObject({
+      label: "Working",
+      pulse: true,
+    });
   });
 });
 

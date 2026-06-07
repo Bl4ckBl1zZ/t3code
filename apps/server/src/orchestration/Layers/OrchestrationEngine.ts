@@ -3,6 +3,8 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
+  WorkspaceActionId,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -57,8 +59,8 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: OrchestrationEvent["aggregateKind"];
+  readonly aggregateId: ProjectId | WorkspaceId | WorkspaceActionId | ThreadId;
 } {
   switch (command.type) {
     case "project.create":
@@ -67,6 +69,25 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    case "workspace.create":
+    case "workspace.meta.update":
+    case "workspace.archive":
+    case "workspace.unarchive":
+    case "workspace.delete":
+      return {
+        aggregateKind: "workspace",
+        aggregateId: command.workspaceId,
+      };
+    case "workspace-action.upsert":
+      return {
+        aggregateKind: "workspace-action",
+        aggregateId: command.action.id,
+      };
+    case "workspace-action.remove":
+      return {
+        aggregateKind: "workspace-action",
+        aggregateId: command.actionId,
       };
     default:
       return {

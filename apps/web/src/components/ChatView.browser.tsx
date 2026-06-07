@@ -7,6 +7,7 @@ import {
   EnvironmentId,
   type EnvironmentApi,
   type MessageId,
+  type OrganizationId,
   type OrchestrationReadModel,
   type ProjectId,
   ProviderDriverKind,
@@ -14,8 +15,10 @@ import {
   type ServerConfig,
   type TerminalMetadataStreamEvent,
   type ServerLifecycleWelcomePayload,
+  type SubChatId,
   type ThreadId,
   type TurnId,
+  type WorkspaceId,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
@@ -114,12 +117,18 @@ vi.mock("../lib/vcsStatusState", () => {
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const THREAD_TITLE = "Browser test thread";
 const ARCHIVED_SECONDARY_THREAD_ID = "thread-secondary-project-archived" as ThreadId;
+const SIBLING_THREAD_ID = "thread-browser-test-sibling" as ThreadId;
+const ORGANIZATION_ID = "organization-browser-test" as OrganizationId;
+const WORKSPACE_ID = "workspace-browser-test" as WorkspaceId;
 const PROJECT_ID = "project-1" as ProjectId;
 const SECOND_PROJECT_ID = "project-2" as ProjectId;
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const REMOTE_ENVIRONMENT_ID = EnvironmentId.make("environment-remote");
 const THREAD_REF = scopeThreadRef(LOCAL_ENVIRONMENT_ID, THREAD_ID);
 const THREAD_KEY = scopedThreadKey(THREAD_REF);
+const WORKSPACE_TERMINAL_KEY = scopedThreadKey(
+  scopeThreadRef(LOCAL_ENVIRONMENT_ID, `workspace:${WORKSPACE_ID}` as ThreadId),
+);
 const UUID_ROUTE_RE = /^\/draft\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_DRAFT_KEY = `${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`;
 const PROJECT_LOGICAL_KEY = deriveLogicalProjectKeyFromSettings(
@@ -495,6 +504,9 @@ function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
   return {
     id: thread.id,
     projectId: thread.projectId,
+    ...(thread.workspaceId !== undefined ? { workspaceId: thread.workspaceId } : {}),
+    ...(thread.tabGroupId !== undefined ? { tabGroupId: thread.tabGroupId } : {}),
+    ...(thread.tabType !== undefined ? { tabType: thread.tabType } : {}),
     title: thread.title,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
@@ -517,8 +529,10 @@ function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
 function toShellSnapshot(snapshot: OrchestrationReadModel) {
   return {
     snapshotSequence: snapshot.snapshotSequence,
+    ...(snapshot.organizations !== undefined ? { organizations: snapshot.organizations } : {}),
     projects: snapshot.projects.map((project) => ({
       id: project.id,
+      ...(project.organizationId !== undefined ? { organizationId: project.organizationId } : {}),
       title: project.title,
       workspaceRoot: project.workspaceRoot,
       repositoryIdentity: project.repositoryIdentity ?? null,
@@ -527,6 +541,11 @@ function toShellSnapshot(snapshot: OrchestrationReadModel) {
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     })),
+    ...(snapshot.workspaces !== undefined ? { workspaces: snapshot.workspaces } : {}),
+    ...(snapshot.subChats !== undefined ? { subChats: snapshot.subChats } : {}),
+    ...(snapshot.workspaceActions !== undefined
+      ? { workspaceActions: snapshot.workspaceActions }
+      : {}),
     threads: snapshot.threads.map(toShellThread),
     updatedAt: snapshot.updatedAt,
   };
@@ -700,6 +719,90 @@ function withProjectScripts(
     projects: snapshot.projects.map((project) =>
       project.id === PROJECT_ID ? { ...project, scripts: Array.from(scripts) } : project,
     ),
+  };
+}
+
+function withWorkspaceSubChats(snapshot: OrchestrationReadModel): OrchestrationReadModel {
+  const siblingThread = {
+    ...(snapshot.threads[0] ??
+      (() => {
+        throw new Error("Expected a base thread in the snapshot.");
+      })()),
+    id: SIBLING_THREAD_ID,
+    title: "Sibling sub-chat",
+    workspaceId: WORKSPACE_ID,
+    tabGroupId: THREAD_ID,
+    tabType: "chat" as const,
+    messages: [],
+    activities: [],
+    proposedPlans: [],
+    checkpoints: [],
+    session: null,
+  } satisfies OrchestrationReadModel["threads"][number];
+
+  return {
+    ...snapshot,
+    organizations: [
+      {
+        id: ORGANIZATION_ID,
+        title: "Browser Test Org",
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+      },
+    ],
+    projects: snapshot.projects.map((project) =>
+      project.id === PROJECT_ID ? { ...project, organizationId: ORGANIZATION_ID } : project,
+    ),
+    workspaces: [
+      {
+        id: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+        projectId: PROJECT_ID,
+        title: "Browser Test Workspace",
+        cwd: "/repo/project",
+        branch: "main",
+        worktreePath: null,
+        baseBranch: null,
+        mode: "local",
+        status: "ready",
+        defaultSubChatId: THREAD_ID as SubChatId,
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        archivedAt: null,
+      },
+    ],
+    subChats: [
+      {
+        ...toShellThread({
+          ...snapshot.threads[0]!,
+          workspaceId: WORKSPACE_ID,
+          tabGroupId: THREAD_ID,
+          tabType: "chat",
+        }),
+        id: THREAD_ID as SubChatId,
+        workspaceId: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+      },
+      {
+        ...toShellThread(siblingThread),
+        id: SIBLING_THREAD_ID as SubChatId,
+        workspaceId: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+      },
+    ],
+    threads: [
+      ...snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? {
+              ...thread,
+              workspaceId: WORKSPACE_ID,
+              tabGroupId: THREAD_ID,
+              tabType: "chat" as const,
+            }
+          : thread,
+      ),
+      siblingThread,
+    ],
   };
 }
 
@@ -2750,6 +2853,99 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(wsRequests.filter((request) => request._tag === WS_METHODS.terminalOpen)).toHaveLength(
         0,
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps running project script state workspace-scoped across sub-chats", async () => {
+    const terminalId = DEFAULT_TERMINAL_ID;
+    const scripts = [
+      {
+        id: "lint",
+        name: "Lint",
+        command: "bun run lint",
+        icon: "lint",
+        runOnWorktreeCreate: false,
+      },
+    ] satisfies OrchestrationReadModel["projects"][number]["scripts"];
+    const snapshot = withWorkspaceSubChats(
+      withProjectScripts(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-workspace-script-state" as MessageId,
+          targetText: "workspace script state",
+        }),
+        scripts,
+      ),
+    );
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: serverThreadPath(THREAD_ID),
+      configureFixture: (nextFixture) => {
+        nextFixture.terminalMetadataEvents = [
+          {
+            type: "snapshot",
+            terminals: [
+              {
+                threadId: SIBLING_THREAD_ID,
+                workspaceId: WORKSPACE_ID,
+                terminalId,
+                cwd: "/repo/project",
+                worktreePath: null,
+                status: "running",
+                pid: 123,
+                exitCode: null,
+                exitSignal: null,
+                hasRunningSubprocess: true,
+                projectScript: {
+                  projectId: PROJECT_ID,
+                  scriptId: "lint",
+                },
+                label: "bun",
+                updatedAt: isoAt(1_200),
+              },
+            ],
+          },
+        ];
+      },
+    });
+
+    try {
+      const stopButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.title === "Stop Lint",
+          ) as HTMLButtonElement | null,
+        "Unable to find workspace-scoped Stop Lint button.",
+      );
+      stopButton.click();
+
+      await vi.waitFor(
+        () => {
+          const interruptRequest = wsRequests.find(
+            (request) =>
+              request._tag === WS_METHODS.terminalWrite &&
+              request.terminalId === terminalId &&
+              request.data === TERMINAL_INTERRUPT_SEQUENCE,
+          );
+          expect(interruptRequest).toMatchObject({
+            _tag: WS_METHODS.terminalWrite,
+            threadId: SIBLING_THREAD_ID,
+            workspaceId: WORKSPACE_ID,
+            terminalId,
+            data: TERMINAL_INTERRUPT_SEQUENCE,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(wsRequests.filter((request) => request._tag === WS_METHODS.terminalOpen)).toHaveLength(
+        0,
+      );
+      expect(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey[WORKSPACE_TERMINAL_KEY],
+      ).toBeDefined();
     } finally {
       await mounted.cleanup();
     }

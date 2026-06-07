@@ -203,8 +203,10 @@ export function resolvePreviewUrl(input: {
   readonly detectedDevServerUrl: string | null;
   readonly scripts: readonly ProjectScript[] | undefined;
 }): string {
+  // BACKWARD COMPATIBILITY: Keep the legacy helper for explicit/detected URLs,
+  // but do not turn framework defaults into openable Preview targets.
   const projectPreviewUrl = normalizePreviewUrl(input.projectPreviewUrl ?? "");
-  return projectPreviewUrl || input.detectedDevServerUrl || inferPreviewDevServerUrl(input.scripts);
+  return projectPreviewUrl || input.detectedDevServerUrl || "";
 }
 
 export async function resolveReachablePreviewUrl(

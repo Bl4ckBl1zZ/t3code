@@ -76,6 +76,7 @@ describe("orchestration projector", () => {
       {
         id: "thread-1",
         projectId: "project-1",
+        workspaceId: "project-1:primary",
         tabGroupId: "thread-1",
         tabType: "chat",
         title: "demo",
@@ -98,6 +99,9 @@ describe("orchestration projector", () => {
         checkpoints: [],
         session: null,
       },
+    ]);
+    expect(next.subChats?.map((subChat) => [subChat.id, subChat.workspaceId])).toEqual([
+      ["thread-1", "project-1:primary"],
     ]);
   });
 

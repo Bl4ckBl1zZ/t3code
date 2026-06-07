@@ -1,8 +1,10 @@
 import {
+  DEFAULT_LOCAL_ORGANIZATION_ID,
   EventId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  WorkspaceId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -18,6 +20,9 @@ import {
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireWorkspace,
+  requireWorkspaceAbsent,
+  requireWorkspaceAction,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 
@@ -67,6 +72,59 @@ function isThreadDeleteBlockedByActiveSession(
     session !== null &&
     (session.status === "starting" || session.status === "running" || session.activeTurnId !== null)
   );
+}
+
+function isWorkspaceActionActive(
+  action: NonNullable<OrchestrationReadModel["workspaceActions"]>[number],
+): boolean {
+  return action.status === "queued" || action.status === "running" || action.status === "blocked";
+}
+
+function legacyWorkspaceIdForThread(input: {
+  readonly projectId: string;
+  readonly worktreePath: string | null;
+}): WorkspaceId {
+  // BACKWARD COMPATIBILITY: Legacy threads were scoped by project/worktree
+  // before workspaces became first-class aggregates.
+  const workspaceKey =
+    input.worktreePath === null || input.worktreePath.trim().length === 0
+      ? "primary"
+      : `worktree:${Buffer.from(input.worktreePath).toString("base64url")}`;
+  return WorkspaceId.make(`${input.projectId}:${workspaceKey}`);
+}
+
+function workspaceIdForThread(thread: OrchestrationReadModel["threads"][number]): WorkspaceId {
+  return (
+    thread.workspaceId ??
+    legacyWorkspaceIdForThread({
+      projectId: thread.projectId,
+      worktreePath: thread.worktreePath,
+    })
+  );
+}
+
+function workspaceDeleteBlocker(
+  readModel: OrchestrationReadModel,
+  workspaceId: WorkspaceId,
+): string | null {
+  const activeThread = readModel.threads.find(
+    (thread) =>
+      thread.deletedAt === null &&
+      workspaceIdForThread(thread) === workspaceId &&
+      isThreadDeleteBlockedByActiveSession(thread),
+  );
+  if (activeThread) {
+    return `Workspace '${workspaceId}' has active sub-chat '${activeThread.id}' and cannot be archived or deleted until it is stopped.`;
+  }
+
+  const activeAction = readModel.workspaceActions?.find(
+    (action) => action.workspaceId === workspaceId && isWorkspaceActionActive(action),
+  );
+  if (activeAction) {
+    return `Workspace '${workspaceId}' has active action '${activeAction.id}' and cannot be archived or deleted until it is completed or cancelled.`;
+  }
+
+  return null;
 }
 
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
@@ -261,6 +319,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          workspaceId:
+            command.workspaceId ??
+            legacyWorkspaceIdForThread({
+              projectId: command.projectId,
+              worktreePath: command.worktreePath,
+            }),
           tabGroupId,
           tabType: command.tabType ?? "chat",
           title: command.title,
@@ -271,6 +335,260 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "workspace.create": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireWorkspaceAbsent({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (command.defaultSubChatId !== null) {
+        const defaultThread = yield* requireThread({
+          readModel,
+          command,
+          threadId: command.defaultSubChatId,
+        });
+        if (defaultThread.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Default sub-chat '${command.defaultSubChatId}' belongs to a different project.`,
+          });
+        }
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace.created",
+        payload: {
+          workspaceId: command.workspaceId,
+          organizationId:
+            command.organizationId ?? project.organizationId ?? DEFAULT_LOCAL_ORGANIZATION_ID,
+          projectId: command.projectId,
+          title: command.title,
+          cwd: command.cwd,
+          branch: command.branch,
+          worktreePath: command.worktreePath,
+          baseBranch: command.baseBranch,
+          mode: command.mode,
+          status: command.status,
+          defaultSubChatId: command.defaultSubChatId,
+          browserPreviewUrl: command.browserPreviewUrl ?? null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "workspace.meta.update": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (command.defaultSubChatId !== undefined && command.defaultSubChatId !== null) {
+        const defaultThread = yield* requireThread({
+          readModel,
+          command,
+          threadId: command.defaultSubChatId,
+        });
+        if (defaultThread.projectId !== workspace.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Default sub-chat '${command.defaultSubChatId}' belongs to a different project.`,
+          });
+        }
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace.meta-updated",
+        payload: {
+          workspaceId: command.workspaceId,
+          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(command.cwd !== undefined ? { cwd: command.cwd } : {}),
+          ...(command.branch !== undefined ? { branch: command.branch } : {}),
+          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.baseBranch !== undefined ? { baseBranch: command.baseBranch } : {}),
+          ...(command.mode !== undefined ? { mode: command.mode } : {}),
+          ...(command.status !== undefined ? { status: command.status } : {}),
+          ...(command.defaultSubChatId !== undefined
+            ? { defaultSubChatId: command.defaultSubChatId }
+            : {}),
+          ...(command.browserPreviewUrl !== undefined
+            ? { browserPreviewUrl: command.browserPreviewUrl }
+            : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "workspace.archive": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      const blocker = workspaceDeleteBlocker(readModel, command.workspaceId);
+      if (blocker !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: blocker,
+        });
+      }
+      if (workspace.archivedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${command.workspaceId}' is already archived.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace.archived",
+        payload: {
+          workspaceId: command.workspaceId,
+          archivedAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "workspace.unarchive": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (workspace.archivedAt === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${command.workspaceId}' is not archived.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace.unarchived",
+        payload: {
+          workspaceId: command.workspaceId,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "workspace.delete": {
+      yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      const blocker = workspaceDeleteBlocker(readModel, command.workspaceId);
+      if (blocker !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: blocker,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace.deleted",
+        payload: {
+          workspaceId: command.workspaceId,
+          deletedAt: occurredAt,
+        },
+      };
+    }
+
+    case "workspace-action.upsert": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.action.workspaceId,
+      });
+      if (workspace.projectId !== command.action.projectId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace action '${command.action.id}' references project '${command.action.projectId}' but workspace '${workspace.id}' belongs to '${workspace.projectId}'.`,
+        });
+      }
+      if (command.action.subChatId !== null) {
+        const subChat = yield* requireThread({
+          readModel,
+          command,
+          threadId: command.action.subChatId,
+        });
+        if (subChat.projectId !== workspace.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Workspace action sub-chat '${command.action.subChatId}' belongs to a different project.`,
+          });
+        }
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace-action",
+          aggregateId: command.action.id,
+          occurredAt: command.action.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace-action.upserted",
+        payload: {
+          action: command.action,
+        },
+      };
+    }
+
+    case "workspace-action.remove": {
+      yield* requireWorkspaceAction({
+        readModel,
+        command,
+        actionId: command.actionId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "workspace-action",
+          aggregateId: command.actionId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "workspace-action.removed",
+        payload: {
+          actionId: command.actionId,
+          removedAt: occurredAt,
         },
       };
     }
