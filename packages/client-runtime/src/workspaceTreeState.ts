@@ -48,6 +48,22 @@ interface WatchedEntry {
   teardown: () => void;
 }
 
+export interface WorkspaceTreeListOptions {
+  readonly includeHidden?: boolean;
+  readonly includeIgnored?: boolean;
+  readonly limit?: number;
+}
+
+export interface WorkspaceTreeRefreshOptions extends WorkspaceTreeListOptions {
+  readonly force?: boolean;
+}
+
+type MutableWorkspaceTreeListOptions = {
+  includeHidden?: boolean;
+  includeIgnored?: boolean;
+  limit?: number;
+};
+
 export const EMPTY_WORKSPACE_TREE_DIRECTORY_STATE = Object.freeze<WorkspaceTreeDirectoryState>({
   data: null,
   error: null,
@@ -141,9 +157,38 @@ export interface WorkspaceTreeManagerConfig {
 export function createWorkspaceTreeManager(config: WorkspaceTreeManagerConfig) {
   const refreshInFlight = new Map<string, Promise<WorkspaceListDirectoryResult | null>>();
   const refreshTargets = new Map<string, WorkspaceTreeTarget>();
+  const refreshOptionsByKey = new Map<string, WorkspaceTreeListOptions>();
   const watched = new Map<string, WatchedEntry>();
   const cwdWatchers = new Map<string, WatchedEntry>();
   const staleTimeMs = config.staleTimeMs ?? DEFAULT_STALE_TIME_MS;
+
+  function resolveRefreshOptions(
+    targetKey: string,
+    options?: WorkspaceTreeRefreshOptions,
+  ): { readonly listOptions: WorkspaceTreeListOptions; readonly force: boolean } {
+    const current = refreshOptionsByKey.get(targetKey);
+    const next: MutableWorkspaceTreeListOptions = current ? { ...current } : {};
+    let changed = false;
+
+    if (options?.includeHidden !== undefined) {
+      next.includeHidden = options.includeHidden;
+      changed = true;
+    }
+    if (options?.includeIgnored !== undefined) {
+      next.includeIgnored = options.includeIgnored;
+      changed = true;
+    }
+    if (options?.limit !== undefined) {
+      next.limit = options.limit;
+      changed = true;
+    }
+
+    if (changed) {
+      refreshOptionsByKey.set(targetKey, next);
+    }
+
+    return { listOptions: next, force: options?.force === true };
+  }
 
   function setState(targetKey: string, nextState: WorkspaceTreeDirectoryState): void {
     config.getRegistry().set(workspaceTreeDirectoryStateAtom(targetKey), nextState);
@@ -187,22 +232,18 @@ export function createWorkspaceTreeManager(config: WorkspaceTreeManagerConfig) {
 
   function refresh(
     target: WorkspaceTreeTarget,
-    options?: {
-      readonly includeHidden?: boolean;
-      readonly includeIgnored?: boolean;
-      readonly limit?: number;
-      readonly force?: boolean;
-    },
+    options?: WorkspaceTreeRefreshOptions,
   ): Promise<WorkspaceListDirectoryResult | null> {
     const targetKey = getWorkspaceTreeTargetKey(target);
     if (targetKey === null) {
       return Promise.resolve(null);
     }
     refreshTargets.set(targetKey, target);
+    const { listOptions, force } = resolveRefreshOptions(targetKey, options);
 
     const current = getSnapshot(target);
     if (
-      !options?.force &&
+      !force &&
       current.data &&
       current.lastLoadedAt !== null &&
       nowMs() - current.lastLoadedAt < staleTimeMs
@@ -226,9 +267,13 @@ export function createWorkspaceTreeManager(config: WorkspaceTreeManagerConfig) {
       .listDirectory({
         cwd: target.cwd,
         relativePath: normalizeTreeRelativePath(target.relativePath),
-        includeHidden: options?.includeHidden,
-        includeIgnored: options?.includeIgnored,
-        limit: options?.limit ?? 1000,
+        ...(listOptions.includeHidden !== undefined
+          ? { includeHidden: listOptions.includeHidden }
+          : {}),
+        ...(listOptions.includeIgnored !== undefined
+          ? { includeIgnored: listOptions.includeIgnored }
+          : {}),
+        limit: listOptions.limit ?? 1000,
       })
       .then(
         (result) => {
@@ -450,6 +495,7 @@ export function createWorkspaceTreeManager(config: WorkspaceTreeManagerConfig) {
     watched.clear();
     cwdWatchers.clear();
     refreshTargets.clear();
+    refreshOptionsByKey.clear();
     for (const targetKey of knownWorkspaceTreeKeys) {
       setState(targetKey, INITIAL_WORKSPACE_TREE_DIRECTORY_STATE);
     }

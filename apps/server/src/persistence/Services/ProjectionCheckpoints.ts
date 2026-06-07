@@ -28,6 +28,7 @@ export const ProjectionCheckpoint = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
   checkpointRef: CheckpointRef,
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef),
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),

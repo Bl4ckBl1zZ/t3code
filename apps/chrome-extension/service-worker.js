@@ -17,6 +17,7 @@ const DEV_RELOAD_POLL_INTERVAL_MS = 1_500;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 5_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const AGENT_TAB_GROUP_TITLE = "T3 Code Agent";
 const PAIRING_DEBUG_PREFIX = "[t3 browser-agent service-worker]";
 const RUNTIME_PROTOCOL_VERSION = 2;
 const RUNTIME_PRIMITIVES = [
@@ -1469,6 +1470,29 @@ async function findPreviewTab(link) {
   return tabs.find((tab) => tabMatchesWorkspaceLink(tab, link)) ?? null;
 }
 
+async function findClosableThreadTab(link) {
+  if (link?.tabId === undefined || link.windowId === undefined) {
+    return null;
+  }
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(Number(link.tabId));
+  } catch {
+    return null;
+  }
+  if (!linkMatchesTabIdentity(link, tab)) {
+    return null;
+  }
+  const links = await readLinks();
+  const sharedTabLink = links.find(
+    (entry) => entry.id !== link.id && tabsHaveSameIdentity(entry, link),
+  );
+  if (sharedTabLink) {
+    return null;
+  }
+  return tab;
+}
+
 function urlsMatchForNavigation(tabUrl, expectedUrl) {
   if (tabUrl === expectedUrl) {
     return true;
@@ -1546,6 +1570,17 @@ async function ensureGrouped(tabId, repoName, options = {}) {
   } catch (error) {
     console.warn("[T3 Code] failed to group browser-agent tab", error);
   }
+}
+
+function isAgenticWorkspaceLink(link) {
+  return link?.role === "agent" || link?.owner?.kind === "agent" || link?.lifecycle === "ephemeral";
+}
+
+async function ensureAgentWorkGrouped(tabId, link) {
+  if (!isAgenticWorkspaceLink(link)) {
+    return;
+  }
+  await ensureGrouped(tabId, AGENT_TAB_GROUP_TITLE, { collapsed: true });
 }
 
 async function ensureContentScript(tabId) {
@@ -2004,7 +2039,6 @@ async function openOrFocusPreview(command) {
   }
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tab.id, { active: true });
-  await ensureGrouped(tab.id, link.repoName);
   const contentLink = await applyDefaultDeepControl(
     await workspaceLinkForContent(link, tab, {
       sidebarSessionToken: command.sidebarSessionToken,
@@ -2123,7 +2157,7 @@ async function openOrFocusThreadTab(command) {
     await chrome.windows.update(tab.windowId, { focused: true });
     await chrome.tabs.update(tab.id, { active: true });
   }
-  await ensureGrouped(tab.id, link.repoName);
+  await ensureAgentWorkGrouped(tab.id, link);
   if (command.url) {
     tab = await navigateTabToUrl(tab, command.url);
     addDiagnosticLog("info", "Thread tab navigation settled", {
@@ -2203,7 +2237,7 @@ async function detachThreadTab(command) {
 
 async function closeThreadTab(command) {
   const link = await findStoredWorkspaceLink(command.workspaceLinkId);
-  const tab = link ? await findPreviewTab(link).catch(() => null) : null;
+  const tab = link ? await findClosableThreadTab(link).catch(() => null) : null;
   await removeWorkspaceLink(command.workspaceLinkId);
   if (link) {
     sendThreadTabUpdated(link, null, "closed");

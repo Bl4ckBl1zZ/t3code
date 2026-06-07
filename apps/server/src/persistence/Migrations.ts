@@ -49,6 +49,7 @@ import Migration0034 from "./Migrations/034_ProjectionThreadTabGroups.ts";
 import Migration0035 from "./Migrations/035_ProjectionProjectsBrowserPreviewUrl.ts";
 import Migration0036 from "./Migrations/036_RepairAuthAuthorizationScopes.ts";
 import Migration0037 from "./Migrations/037_ProjectionWorkspaceHierarchy.ts";
+import Migration0038 from "./Migrations/038_ProjectionTurnBaselineCheckpointRef.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -97,6 +98,7 @@ export const migrationEntries = [
   [35, "ProjectionProjectsBrowserPreviewUrl", Migration0035],
   [36, "RepairAuthAuthorizationScopes", Migration0036],
   [37, "ProjectionWorkspaceHierarchy", Migration0037],
+  [38, "ProjectionTurnBaselineCheckpointRef", Migration0038],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

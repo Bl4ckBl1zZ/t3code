@@ -360,6 +360,7 @@ export function applyThreadDetailEvent(
         turnId: event.payload.turnId,
         checkpointTurnCount: event.payload.checkpointTurnCount,
         checkpointRef: event.payload.checkpointRef,
+        baselineCheckpointRef: event.payload.baselineCheckpointRef,
         status: event.payload.status,
         files: event.payload.files,
         assistantMessageId: event.payload.assistantMessageId,

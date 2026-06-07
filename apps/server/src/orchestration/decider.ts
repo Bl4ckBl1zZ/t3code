@@ -1063,6 +1063,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           turnId: command.turnId,
           checkpointTurnCount: command.checkpointTurnCount,
           checkpointRef: command.checkpointRef,
+          baselineCheckpointRef: command.baselineCheckpointRef ?? null,
           status: command.status,
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,

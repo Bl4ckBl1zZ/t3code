@@ -246,6 +246,7 @@ function mapTurnDiffSummary(checkpoint: OrchestrationCheckpointSummary): TurnDif
     assistantMessageId: checkpoint.assistantMessageId ?? undefined,
     checkpointTurnCount: checkpoint.checkpointTurnCount,
     checkpointRef: checkpoint.checkpointRef,
+    baselineCheckpointRef: checkpoint.baselineCheckpointRef ?? undefined,
     files: checkpoint.files.map((file) => ({ ...file })),
   };
 }
@@ -1902,6 +1903,7 @@ function applyEnvironmentOrchestrationEvent(
           turnId: event.payload.turnId,
           checkpointTurnCount: event.payload.checkpointTurnCount,
           checkpointRef: event.payload.checkpointRef,
+          baselineCheckpointRef: event.payload.baselineCheckpointRef,
           status: event.payload.status,
           files: event.payload.files,
           assistantMessageId: event.payload.assistantMessageId,

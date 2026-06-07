@@ -1496,6 +1496,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               completedAt: null,
               checkpointTurnCount: null,
               checkpointRef: null,
+              baselineCheckpointRef: null,
               checkpointStatus: null,
               checkpointFiles: [],
             });
@@ -1547,6 +1548,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             completedAt: event.payload.streaming ? null : event.payload.updatedAt,
             checkpointTurnCount: null,
             checkpointRef: null,
+            baselineCheckpointRef: null,
             checkpointStatus: null,
             checkpointFiles: [],
           });
@@ -1584,6 +1586,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             completedAt: event.payload.createdAt,
             checkpointTurnCount: null,
             checkpointRef: null,
+            baselineCheckpointRef: null,
             checkpointStatus: null,
             checkpointFiles: [],
           });
@@ -1609,6 +1612,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               state: nextState,
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
+              baselineCheckpointRef: event.payload.baselineCheckpointRef,
               checkpointStatus: event.payload.status,
               checkpointFiles: event.payload.files,
               startedAt: existingTurn.value.startedAt ?? event.payload.completedAt,
@@ -1630,6 +1634,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             completedAt: event.payload.completedAt,
             checkpointTurnCount: event.payload.checkpointTurnCount,
             checkpointRef: event.payload.checkpointRef,
+            baselineCheckpointRef: event.payload.baselineCheckpointRef,
             checkpointStatus: event.payload.status,
             checkpointFiles: event.payload.files,
           });

@@ -374,6 +374,9 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
   checkpointRef: CheckpointRef,
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
@@ -974,6 +977,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   turnId: TurnId,
   completedAt: IsoDateTime,
   checkpointRef: CheckpointRef,
+  baselineCheckpointRef: Schema.optionalKey(Schema.NullOr(CheckpointRef)),
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.optional(MessageId),
@@ -1275,6 +1279,9 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
   checkpointRef: CheckpointRef,
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
@@ -1514,6 +1521,9 @@ const ProjectionCheckpointRow = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
   checkpointRef: CheckpointRef,
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),

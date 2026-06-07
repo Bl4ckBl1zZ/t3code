@@ -46,6 +46,7 @@ export const ProjectionTurn = Schema.Struct({
   completedAt: Schema.NullOr(IsoDateTime),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
 });
@@ -64,6 +65,7 @@ export const ProjectionTurnById = Schema.Struct({
   completedAt: Schema.NullOr(IsoDateTime),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
 });

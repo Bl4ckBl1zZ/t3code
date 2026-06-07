@@ -446,8 +446,8 @@ export function WorkspaceExplorer({
 }: WorkspaceExplorerProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
   const [selectedPath, setSelectedPath] = useState<string | null>(activeRelativePath);
-  const [includeHidden, setIncludeHidden] = useState(false);
-  const [includeIgnored, setIncludeIgnored] = useState(false);
+  const [includeHidden, setIncludeHidden] = useState(true);
+  const [includeIgnored, setIncludeIgnored] = useState(true);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const previousTargetKeyRef = useRef<string | null>(null);

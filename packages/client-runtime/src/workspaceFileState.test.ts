@@ -131,6 +131,43 @@ describe("createWorkspaceTreeManager", () => {
     expect(manager.getSnapshot(TARGET).data?.entries[0]?.relativePath).toBe("src/b.ts");
   });
 
+  it("reuses latest directory listing options for automatic refreshes", async () => {
+    const listeners = new Set<(event: WorkspaceFileChangeEvent) => void>();
+    const client = {
+      listDirectory: vi.fn(async () => directoryResult("src", [textEntry("src/a.ts")])),
+      subscribeChanges: vi.fn((_input, nextListener) => {
+        listeners.add(nextListener);
+        return () => listeners.delete(nextListener);
+      }),
+    } satisfies WorkspaceTreeClient;
+    const manager = createWorkspaceTreeManager({
+      getRegistry: () => registry,
+      getClient: () => client,
+    });
+
+    await manager.refresh(TARGET, { includeHidden: true, includeIgnored: true, limit: 42 });
+    manager.watch(TARGET);
+
+    for (const listener of listeners) {
+      listener({
+        cwd: "/repo",
+        relativePath: "src/.env",
+        kind: "updated",
+        directoryPath: "src",
+        observedAt: "2026-01-01T00:00:01.000Z",
+      });
+    }
+    await Promise.resolve();
+
+    expect(client.listDirectory).toHaveBeenLastCalledWith({
+      cwd: "/repo",
+      relativePath: "src",
+      includeHidden: true,
+      includeIgnored: true,
+      limit: 42,
+    });
+  });
+
   it("applies optimistic create, rename, and delete results", async () => {
     const client = {
       listDirectory: vi.fn(async () => directoryResult("src", [textEntry("src/a.ts")])),

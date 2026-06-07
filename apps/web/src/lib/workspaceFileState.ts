@@ -80,8 +80,8 @@ export function useWorkspaceDirectory(
       ...(limit !== undefined ? { limit } : {}),
       force: true,
     };
-    const release = workspaceTreeManager.watch(nextTarget);
     void workspaceTreeManager.refresh(nextTarget, refreshOptions);
+    const release = workspaceTreeManager.watch(nextTarget);
     return release;
   }, [environmentId, cwd, relativePath, includeHidden, includeIgnored, limit]);
 

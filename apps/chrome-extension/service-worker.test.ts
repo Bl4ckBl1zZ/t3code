@@ -20,6 +20,13 @@ type ChromeTab = {
   windowId: number;
 };
 
+type ChromeTabGroup = {
+  collapsed?: boolean;
+  color?: string;
+  id: number;
+  title?: string;
+};
+
 type EventMock<T extends (...args: Array<never>) => unknown = (...args: Array<never>) => unknown> =
   {
     addListener: ReturnType<typeof vi.fn>;
@@ -150,6 +157,14 @@ function makeChromeMock(
   const sessionStorage: Record<string, unknown> = {};
   const tabs = [...(input.tabs ?? [])];
   let nextTabId = 100;
+  let nextGroupId = 1;
+  const tabGroups = new Map<number, ChromeTabGroup>();
+  for (const tab of tabs) {
+    if (tab.groupId !== undefined && tab.groupId >= 0 && !tabGroups.has(tab.groupId)) {
+      tabGroups.set(tab.groupId, { id: tab.groupId, title: "group" });
+      nextGroupId = Math.max(nextGroupId, tab.groupId + 1);
+    }
+  }
 
   const actionOnClicked = makeEvent<(tab: ChromeTab) => void>();
   const runtimeOnMessage =
@@ -197,8 +212,24 @@ function makeChromeMock(
       session: makeStorageArea(sessionStorage, storageOnChanged, "session"),
     },
     tabGroups: {
-      get: vi.fn(async (id: number) => ({ id, title: "group" })),
-      update: vi.fn(async () => undefined),
+      get: vi.fn(async (id: number) => {
+        const group = tabGroups.get(id);
+        if (!group) {
+          throw new Error(`No tab group with id ${id}`);
+        }
+        return group;
+      }),
+      update: vi.fn(
+        async (id: number, properties: { collapsed?: boolean; color?: string; title?: string }) => {
+          const group = tabGroups.get(id);
+          if (!group) {
+            throw new Error(`No tab group with id ${id}`);
+          }
+          const updated = { ...group, ...properties };
+          tabGroups.set(id, updated);
+          return updated;
+        },
+      ),
     },
     tabs: {
       create: vi.fn(async (properties: { active?: boolean; url: string; windowId?: number }) => {
@@ -219,7 +250,19 @@ function makeChromeMock(
         }
         return tab;
       }),
-      group: vi.fn(async () => 1),
+      group: vi.fn(async (properties: { groupId?: number; tabIds: Array<number> }) => {
+        const groupId = properties.groupId ?? nextGroupId++;
+        if (!tabGroups.has(groupId)) {
+          tabGroups.set(groupId, { id: groupId });
+        }
+        for (const tabId of properties.tabIds) {
+          const tab = tabs.find((entry) => entry.id === tabId);
+          if (tab) {
+            tab.groupId = groupId;
+          }
+        }
+        return groupId;
+      }),
       onActivated: tabsOnActivated,
       onCreated: tabsOnCreated,
       onRemoved: tabsOnRemoved,
@@ -303,6 +346,109 @@ async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+function makeWorkspaceLink(overrides: Record<string, unknown> = {}) {
+  return {
+    createdAt: "2026-06-07T10:00:00.000Z",
+    devServerUrl: "http://localhost:5173/",
+    environmentId: "env-local",
+    id: "workspace-link-1",
+    repoName: "t3code",
+    threadId: "thread-1",
+    updatedAt: "2026-06-07T10:00:00.000Z",
+    workspaceId: "workspace-1",
+    ...overrides,
+  };
+}
+
+async function waitForBrowserAgentSocket(sentMessages: Array<string>) {
+  await vi.waitFor(() => {
+    expect(sentMessages.some((message) => JSON.parse(message).type === "browserAgent.hello")).toBe(
+      true,
+    );
+  });
+}
+
+it("opens preview-created tabs outside the collapsed agent work group", async () => {
+  const { chrome, tabs } = makeChromeMock();
+  const { context, sentMessages } = loadServiceWorker({ chrome, openLocalControl: true });
+  await waitForBrowserAgentSocket(sentMessages);
+
+  await (
+    context as { handleServerMessage: (rawData: string) => Promise<void> }
+  ).handleServerMessage(
+    JSON.stringify({
+      type: "browserAgent.command.openOrFocusPreview",
+      commandId: "cmd-preview",
+      workspaceLink: makeWorkspaceLink({
+        role: "primary",
+        owner: { kind: "user" },
+        lifecycle: "persistent",
+      }),
+    }),
+  );
+
+  expect(chrome.tabs.create).toHaveBeenCalledWith({
+    active: true,
+    url: "http://localhost:5173/",
+  });
+  expect(chrome.tabs.group).not.toHaveBeenCalled();
+  expect(chrome.tabGroups.update).not.toHaveBeenCalledWith(
+    expect.any(Number),
+    expect.objectContaining({ collapsed: true }),
+  );
+  expect(tabs.at(-1)?.groupId).toBeUndefined();
+});
+
+it("keeps agent-created tabs in one collapsed group", async () => {
+  const { chrome, tabs } = makeChromeMock();
+  const { context, sentMessages } = loadServiceWorker({ chrome, openLocalControl: true });
+  const handleServerMessage = (
+    context as { handleServerMessage: (rawData: string) => Promise<void> }
+  ).handleServerMessage;
+  await waitForBrowserAgentSocket(sentMessages);
+
+  await handleServerMessage(
+    JSON.stringify({
+      type: "browserAgent.command.openOrFocusThreadTab",
+      commandId: "cmd-agent-1",
+      workspaceLink: makeWorkspaceLink({
+        browserContextId: "codex:provider-thread-1",
+        id: "workspace-link-agent-1",
+        role: "agent",
+        owner: { kind: "agent", label: "Agent" },
+        lifecycle: "ephemeral",
+      }),
+      url: "http://localhost:5173/agent-1",
+      focus: false,
+    }),
+  );
+
+  await handleServerMessage(
+    JSON.stringify({
+      type: "browserAgent.command.openOrFocusThreadTab",
+      commandId: "cmd-agent-2",
+      workspaceLink: makeWorkspaceLink({
+        browserContextId: "codex:provider-thread-2",
+        id: "workspace-link-agent-2",
+        role: "agent",
+        owner: { kind: "agent", label: "Agent" },
+        lifecycle: "ephemeral",
+      }),
+      url: "http://localhost:5173/agent-2",
+      focus: false,
+    }),
+  );
+
+  expect(chrome.tabs.group).toHaveBeenNthCalledWith(1, { tabIds: [100] });
+  expect(chrome.tabs.group).toHaveBeenNthCalledWith(2, { groupId: 1, tabIds: [101] });
+  expect(chrome.tabGroups.update).toHaveBeenCalledWith(1, {
+    title: "T3 Code Agent",
+    color: "green",
+  });
+  expect(chrome.tabGroups.update).toHaveBeenCalledWith(1, { collapsed: true });
+  expect(tabs.map((tab) => tab.groupId)).toEqual([1, 1]);
+});
 
 it("opens the linked workspace side panel from the toolbar icon", async () => {
   const tab: ChromeTab = {
@@ -432,6 +578,79 @@ it("preserves default side-panel links when provider contexts claim the same tab
       windowId: 2,
     }),
   ]);
+});
+
+it("does not close a preview tab when closing a shared agent workspace link", async () => {
+  const primaryLink = makeWorkspaceLink({
+    agentId: "browser-agent:session-host",
+    browserContextId: "default",
+    id: "workspace-link-primary",
+    lifecycle: "persistent",
+    owner: { kind: "user" },
+    role: "primary",
+    tabId: 7,
+    url: "http://localhost:5173/dashboard",
+    windowId: 2,
+  });
+  const providerLink = {
+    ...primaryLink,
+    browserContextId: "codex:provider-thread-1",
+    id: "workspace-link-agent",
+    lifecycle: "ephemeral",
+    owner: { kind: "agent", label: "Agent" },
+    role: "agent",
+    updatedAt: "2026-06-07T10:01:00.000Z",
+  };
+  const { chrome, localStorage, tabs } = makeChromeMock({
+    localStorage: {
+      [LINKS_KEY]: [primaryLink, providerLink],
+    },
+    tabs: [
+      {
+        active: true,
+        id: 7,
+        title: "Preview",
+        url: "http://localhost:5173/dashboard",
+        windowId: 2,
+      },
+    ],
+  });
+  const { context, sentMessages } = loadServiceWorker({ chrome, openLocalControl: true });
+  await waitForBrowserAgentSocket(sentMessages);
+  vi.mocked(chrome.tabs.remove).mockClear();
+  vi.mocked(chrome.sidePanel.setOptions).mockClear();
+
+  await (
+    context as { handleServerMessage: (rawData: string) => Promise<void> }
+  ).handleServerMessage(
+    JSON.stringify({
+      type: "browserAgent.command.closeThreadTab",
+      commandId: "cmd-close-agent",
+      workspaceLinkId: "workspace-link-agent",
+    }),
+  );
+
+  expect(chrome.tabs.remove).not.toHaveBeenCalled();
+  expect(tabs).toEqual([
+    expect.objectContaining({
+      id: 7,
+      url: "http://localhost:5173/dashboard",
+    }),
+  ]);
+  expect(localStorage[LINKS_KEY]).toEqual([
+    expect.objectContaining({
+      browserContextId: "default",
+      id: "workspace-link-primary",
+      role: "primary",
+      tabId: 7,
+      windowId: 2,
+    }),
+  ]);
+  expect(chrome.sidePanel.setOptions).toHaveBeenCalledWith({
+    enabled: true,
+    path: SIDE_PANEL_PATH,
+    tabId: 7,
+  });
 });
 
 it("opens the normal T3 app tab from the toolbar icon when the current page is unlinked", async () => {

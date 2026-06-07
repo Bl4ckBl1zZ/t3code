@@ -27,6 +27,7 @@ function makeCheckpoint(
     files: [],
     assistantMessageId: MessageId.make(`msg-${input.checkpointTurnCount}`),
     ...input,
+    baselineCheckpointRef: input.baselineCheckpointRef ?? null,
   };
 }
 

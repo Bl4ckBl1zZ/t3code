@@ -85,6 +85,7 @@ export interface TurnDiffSummary {
   status?: string | undefined;
   files: TurnDiffFileChange[];
   checkpointRef?: CheckpointRef | undefined;
+  baselineCheckpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
   checkpointTurnCount?: number | undefined;
 }
