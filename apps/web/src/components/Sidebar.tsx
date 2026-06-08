@@ -10,6 +10,7 @@ import {
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
+  TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -159,6 +160,7 @@ import {
   getSidebarThreadIdsToPrewarm,
   getSidebarTopLevelThreadId,
   buildSidebarWorkspaceThreadGroups,
+  countRunningProjectScriptSessions,
   getSidebarWorkspaceThreadGroupKey,
   buildSidebarProjectFolderEntries,
   findSidebarProjectFolderForProject,
@@ -217,6 +219,7 @@ import {
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
 import { WorkspaceExplorer } from "./workspace/WorkspaceExplorer";
 import { useWorkbenchStore } from "../workbenchStore";
+import { useKnownTerminalSessions } from "../terminalSessionState";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -449,6 +452,47 @@ const SidebarWorkspacePrIndicator = memo(function SidebarWorkspacePrIndicator({
   );
 });
 
+const SidebarWorkspaceScriptIndicator = memo(function SidebarWorkspaceScriptIndicator({
+  group,
+}: {
+  group: SidebarWorkspaceRowGroup;
+}) {
+  const representativeThread = group.threads[0] ?? null;
+  const workspaceScoped = group.workspaceId !== undefined;
+  const terminalSessions = useKnownTerminalSessions({
+    environmentId: workspaceScoped || representativeThread ? group.environmentId : null,
+    workspaceId: workspaceScoped ? group.workspaceId : null,
+    threadId: workspaceScoped ? null : (representativeThread?.id ?? null),
+  });
+  const runningScriptSessionCount = countRunningProjectScriptSessions(terminalSessions);
+
+  if (runningScriptSessionCount === 0) {
+    return null;
+  }
+
+  const label =
+    runningScriptSessionCount === 1
+      ? "Workspace script running"
+      : `${runningScriptSessionCount} workspace scripts running`;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label={label}
+            className="inline-flex size-3.5 shrink-0 items-center justify-center text-teal-600 dark:text-teal-300/90"
+          />
+        }
+      >
+        <TerminalIcon className="size-3 animate-pulse" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
+  );
+});
+
 interface SidebarProjectThreadListProps {
   projectKey: string;
   projectExpanded: boolean;
@@ -663,6 +707,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                     projectCwd={projectCwd}
                     openPrLink={openPrLink}
                   />
+                  <SidebarWorkspaceScriptIndicator group={group} />
                   {workspaceStatus ? <ThreadStatusLabel status={workspaceStatus} compact /> : null}
                   {renamingWorkspaceKey === group.key ? (
                     <input
@@ -2452,35 +2497,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           onKeyDown={handleProjectButtonKeyDown}
           onContextMenu={handleProjectButtonContextMenu}
         >
-          {!hasVisibleWorkspaceRows && projectStatus ? (
-            <span
-              aria-hidden="true"
-              title={projectStatus.label}
-              className={`-ml-0.5 relative inline-flex size-3.5 shrink-0 items-center justify-center ${projectStatus.colorClass}`}
-            >
-              <span
-                className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                  projectStatus.pulse ? "animate-pulse" : ""
-                }`}
-              />
-            </span>
-          ) : !hasVisibleWorkspaceRows ? (
-            <span aria-hidden="true" className="-ml-0.5 size-3.5 shrink-0" />
-          ) : !projectExpanded && projectStatus ? (
-            <span
-              aria-hidden="true"
-              title={projectStatus.label}
-              className={`-ml-0.5 relative inline-flex size-3.5 shrink-0 items-center justify-center ${projectStatus.colorClass}`}
-            >
-              <span
-                className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                  projectStatus.pulse ? "animate-pulse" : ""
-                }`}
-              />
-            </span>
-          ) : (
-            <span aria-hidden="true" className="-ml-0.5 size-3.5 shrink-0" />
-          )}
           <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className="truncate text-xs font-medium text-foreground/90">
@@ -2492,6 +2508,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               </span>
             ) : null}
           </span>
+          {(!hasVisibleWorkspaceRows || !projectExpanded) && projectStatus ? (
+            <span
+              aria-hidden="true"
+              title={projectStatus.label}
+              className={`relative inline-flex size-3.5 shrink-0 items-center justify-center ${projectStatus.colorClass}`}
+            >
+              <span
+                className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
+                  projectStatus.pulse ? "animate-pulse" : ""
+                }`}
+              />
+            </span>
+          ) : null}
         </SidebarMenuButton>
         {/* Environment badge – visible by default, shifting left when a repo update action is pinned. */}
         {project.environmentPresence === "remote-only" && (
@@ -3070,7 +3099,6 @@ const SidebarProjectFolderRow = memo(function SidebarProjectFolderRow(
           onClick={handleFolderClick}
           onContextMenu={handleFolderContextMenu}
         >
-          <span aria-hidden="true" className="-ml-0.5 size-3.5 shrink-0" />
           <ProjectFavicon
             environmentId={folderEntry.iconProject.environmentId}
             cwd={folderEntry.iconProject.cwd}

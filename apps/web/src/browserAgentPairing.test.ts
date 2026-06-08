@@ -299,7 +299,7 @@ describe("browser agent pairing", () => {
       useBrowserSession: true,
     });
     expect(pairRequest).not.toHaveProperty("sessionToken");
-    expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
+    expect(client.browserAgents.list).toHaveBeenCalledTimes(2);
   });
 
   it("does not mint a browser-agent token through the authenticated RPC connection", async () => {
@@ -367,7 +367,7 @@ describe("browser agent pairing", () => {
       useBrowserSession: true,
     });
     expect(pairRequest).not.toHaveProperty("sessionToken");
-    expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
+    expect(client.browserAgents.list).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to browser-host setup when browser-session pairing is rejected", async () => {
@@ -654,6 +654,7 @@ describe("browser agent pairing", () => {
       }),
       "https://desktop.tail.ts.net",
     );
+    expect(windowStub.setTimeout).toHaveBeenCalledWith(expect.any(Function), 750);
     expect(client.browserAgents.list).toHaveBeenCalledTimes(1);
   });
 
@@ -719,6 +720,7 @@ describe("browser agent pairing", () => {
     expect(
       new URLSearchParams(setupUrl.hash.slice(1)).get("t3BrowserAgentSessionToken"),
     ).toBeNull();
+    expect(windowStub.setTimeout).toHaveBeenCalledWith(expect.any(Function), 8_000);
   });
 
   it("detects the no-agent RPC failure", () => {

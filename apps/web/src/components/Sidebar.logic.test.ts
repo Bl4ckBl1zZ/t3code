@@ -4,6 +4,7 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import {
   buildSidebarProjectFolderEntries,
   buildSidebarWorkspaceThreadGroups,
+  countRunningProjectScriptSessions,
   createThreadJumpHintVisibilityController,
   findSidebarProjectFolderForProject,
   getSidebarTopLevelThreadId,
@@ -818,6 +819,49 @@ describe("resolveGroupedThreadStatusPills", () => {
       label: "Working",
       pulse: true,
     });
+  });
+});
+
+describe("countRunningProjectScriptSessions", () => {
+  it("counts only running terminal sessions with project script metadata", () => {
+    expect(
+      countRunningProjectScriptSessions([
+        {
+          state: {
+            hasRunningSubprocess: true,
+            summary: {
+              projectScript: {
+                projectId: ProjectId.make("project-script"),
+                scriptId: "dev",
+              },
+            },
+          },
+        },
+        {
+          state: {
+            hasRunningSubprocess: false,
+            summary: {
+              projectScript: {
+                projectId: ProjectId.make("project-script"),
+                scriptId: "build",
+              },
+            },
+          },
+        },
+        {
+          state: {
+            hasRunningSubprocess: true,
+            summary: {},
+          },
+        },
+        {
+          state: {
+            hasRunningSubprocess: true,
+            summary: null,
+          },
+        },
+      ]),
+    ).toBe(1);
   });
 });
 

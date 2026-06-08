@@ -21,6 +21,7 @@ const AUTO_CONNECT_RESULT_TYPE = "t3code.browserAgent.autoConnect.result";
 const AUTO_PAIR_CONNECT_TIMEOUT_MS = 12_000;
 const AUTO_PAIR_STRICT_SESSION_TIMEOUT_MS = 2_000;
 const AUTO_PAIR_CONTENT_SCRIPT_TIMEOUT_MS = 8_000;
+const AUTO_PAIR_CONTENT_SCRIPT_CONNECTED_FALLBACK_TIMEOUT_MS = 750;
 const AUTO_CONNECT_CONTENT_SCRIPT_TIMEOUT_MS = 1_500;
 const AUTO_PAIR_POLL_INTERVAL_MS = 250;
 const BROWSER_AGENT_PAIRING_DEBUG_PREFIX = "[t3 browser-agent pairing]";
@@ -605,11 +606,28 @@ export async function autoPairBrowserAgent(
   });
 
   if (sameOriginAsCurrentPage(baseUrl)) {
+    const fallbackSnapshot = await client.browserAgents.list().catch(() => null);
+    const fallbackSelection = fallbackSnapshot
+      ? selectPreviewAgentFromSnapshot(fallbackSnapshot, null)
+      : null;
+    if (fallbackSelection && fallbackSnapshot) {
+      logBrowserAgentPairingDebug("auto-pair-existing-agent-before-content-script", {
+        baseUrl,
+        contentScriptTimeoutMs: AUTO_PAIR_CONTENT_SCRIPT_CONNECTED_FALLBACK_TIMEOUT_MS,
+        fallbackAgentId: fallbackSelection.agent.id,
+        fallbackSessionId: fallbackSelection.agent.sessionId ?? null,
+        fallbackKind: fallbackSelection.kind,
+        snapshot: summarizeBrowserAgentSnapshot(fallbackSnapshot),
+      });
+    }
     let pairResult: AutoPairContentScriptResult | null = null;
     try {
       pairResult = await requestContentScriptPair({
         baseUrl,
         useBrowserSession: true,
+        ...(fallbackSelection
+          ? { timeoutMs: AUTO_PAIR_CONTENT_SCRIPT_CONNECTED_FALLBACK_TIMEOUT_MS }
+          : {}),
       });
     } catch (error) {
       logBrowserAgentPairingDebug("auto-pair-browser-session-pair-failed", {
@@ -624,10 +642,6 @@ export async function autoPairBrowserAgent(
       });
     }
     if (!pairResult) {
-      const fallbackSnapshot = await client.browserAgents.list().catch(() => null);
-      const fallbackSelection = fallbackSnapshot
-        ? selectPreviewAgentFromSnapshot(fallbackSnapshot, null)
-        : null;
       if (fallbackSelection) {
         logAutoPairSelection({
           baseUrl,

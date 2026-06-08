@@ -58,6 +58,14 @@ type SidebarWorkspaceThread = Pick<
   SidebarThreadSummary,
   "branch" | "environmentId" | "projectId" | "workspaceId" | "worktreePath"
 >;
+type SidebarTerminalSessionForScriptStatus = {
+  readonly state: {
+    readonly hasRunningSubprocess: boolean;
+    readonly summary: {
+      readonly projectScript?: unknown;
+    } | null;
+  };
+};
 
 export interface SidebarWorkspaceShell {
   readonly id: NonNullable<SidebarWorkspaceThread["workspaceId"]>;
@@ -79,6 +87,15 @@ export interface SidebarWorkspaceThreadGroup<TThread extends SidebarWorkspaceThr
   readonly worktreePath: string | null;
   readonly threads: readonly TThread[];
   readonly totalThreadCount: number;
+}
+
+export function countRunningProjectScriptSessions(
+  sessions: readonly SidebarTerminalSessionForScriptStatus[],
+): number {
+  return sessions.filter(
+    (session) =>
+      session.state.hasRunningSubprocess && session.state.summary?.projectScript !== undefined,
+  ).length;
 }
 
 export interface SidebarExplorerTarget {
