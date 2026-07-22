@@ -19,6 +19,11 @@
 - When creating pull requests from this workspace, target `origin` / `Bl4ckBl1zZ/t3code` unless the user explicitly asks for `upstream` / `pingdotgg/t3code`.
 - Never infer the parent fork as the pull request target.
 
+## Fork Automation
+
+- `.github/workflows/macos-arm64.yml` is the only active GitHub Actions build. It produces Apple-silicon DMG/ZIP artifacts on `main`, publishes them for `v*` tags, and pins desktop update checks to `Bl4ckBl1zZ/t3code`; do not add x64, Windows, Linux, mobile, npm, relay, or hosted-web release jobs unless explicitly requested.
+- Keep `origin` pointed at `Bl4ckBl1zZ/t3code` and `upstream` pointed at `pingdotgg/t3code`. Hourly upstream integration must preserve fork commits, stop on conflicts, and never force-push.
+
 ## Product Overview
 
 Update this section as the product evolves. Keep feature names, descriptions, and branding current.
