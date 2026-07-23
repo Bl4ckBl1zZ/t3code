@@ -82,19 +82,18 @@ The relay deploys through Alchemy:
 vp run --filter t3code-relay deploy
 ```
 
-The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
-connectivity, and relay tracing resources. Copy [`infra/relay/.env.example`](./.env.example) to
-`infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
-file from the relay directory. Runtime secrets include Clerk and APNs credentials. Production adopts
-the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
-the production-owned zones.
+The stack provisions the Cloudflare Worker and queues, managed endpoint resources, Hyperdrive
+connectivity, and relay tracing resources. PostgreSQL is provider-neutral and supplied through the
+secret `DATABASE_URL`; the database must already exist and accept TLS connections. Copy
+[`infra/relay/.env.example`](./.env.example) to `infra/relay/.env` and fill in the deployment-specific
+values before deploying. Alchemy loads that file from the relay directory. Runtime secrets include
+Clerk and APNs credentials. Production adopts the configured API and tunnel DNS zones as retained
+Cloudflare resources. Personal stages reference the production-owned zones.
 
-The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
-stable and nightly clients. Every other stage references that database and provisions an isolated
-PlanetScale branch and runtime role for local development, so deploy `prod` before creating
-developer stages:
+Apply the checked-in database migrations before deploying infrastructure:
 
 ```sh
+vp run --filter t3code-relay migrate
 vp run --filter t3code-relay deploy -- --stage prod
 vp run --filter t3code-relay deploy -- --env-file .env.local
 ```
@@ -123,14 +122,15 @@ deploy personal non-production stages locally with any stage name other than `pr
 The repository must define these Actions variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
 - `AXIOM_ORG_ID`
 
 The repository must define these Actions secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
+- `DATABASE_URL`
+- `DATABASE_MIGRATION_URL` with a localhost URL for the CI `cloudflared access tcp` listener
+- `DATABASE_ACCESS_CLIENT_ID` and `DATABASE_ACCESS_CLIENT_SECRET` when Hyperdrive connects through
+  a Cloudflare Tunnel protected by Access
 - `AXIOM_TOKEN`
 
 The `production` GitHub environment must define these Actions variables:
@@ -138,6 +138,9 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
+- `DATABASE_TUNNEL_HOSTNAME` for CI migrations through Cloudflare Access
+- `DATABASE_CA_CERTIFICATE_ID` when PostgreSQL uses a private certificate authority; Hyperdrive
+  then uses `verify-full`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -151,11 +154,12 @@ The `production` GitHub environment must define these Actions secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
-derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
-and hosted web builds.
+The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;
+they are not bound into the relay Worker. The database password is stored in Cloudflare Hyperdrive
+and is not bound directly into the relay Worker. The production deployment uses an Axiom personal
+access token, so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the
+production relay's derived public URL and Clerk publishable key from the same environment for
+downstream desktop, CLI, and hosted web builds.
 
 See:
 

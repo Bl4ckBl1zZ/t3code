@@ -23,7 +23,6 @@ jobs:
       name: production
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      PLANETSCALE_ORGANIZATION: ${{ vars.PLANETSCALE_ORGANIZATION }}
       AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
@@ -34,6 +33,8 @@ jobs:
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
+      DATABASE_CA_CERTIFICATE_ID: ${{ vars.DATABASE_CA_CERTIFICATE_ID }}
+      DATABASE_TUNNEL_HOSTNAME: ${{ vars.DATABASE_TUNNEL_HOSTNAME }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
@@ -46,13 +47,58 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Install cloudflared
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p --mode=0755 /usr/share/keyrings
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg |
+            sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" |
+            sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes cloudflared
+
+      - name: Migrate production relay database
+        shell: bash
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.DATABASE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.DATABASE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          cloudflared access tcp \
+            --hostname "$DATABASE_TUNNEL_HOSTNAME" \
+            --url 127.0.0.1:15433 \
+            --log-level warn &
+          proxy_pid=$!
+          trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if nc -z 127.0.0.1 15433; then
+              break
+            fi
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+              echo "cloudflared stopped before the database proxy became ready." >&2
+              exit 1
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              echo "Timed out waiting for the database proxy." >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          vp run --filter t3code-relay migrate
+
       - name: Deploy production relay stage
         id: deploy
         run: vp run --filter t3code-relay deploy --stage prod --yes --github-output
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          PLANETSCALE_API_TOKEN_ID: ${{ secrets.PLANETSCALE_API_TOKEN_ID }}
-          PLANETSCALE_API_TOKEN: ${{ secrets.PLANETSCALE_API_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_ACCESS_CLIENT_ID: ${{ secrets.DATABASE_ACCESS_CLIENT_ID }}
+          DATABASE_ACCESS_CLIENT_SECRET: ${{ secrets.DATABASE_ACCESS_CLIENT_SECRET }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}

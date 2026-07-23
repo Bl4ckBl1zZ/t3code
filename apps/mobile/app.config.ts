@@ -12,7 +12,28 @@ const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
+const managedIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
+const managedIosAppGroupIdentifier = repoEnv.T3CODE_IOS_APP_GROUP_ID?.trim();
+const managedIosAppleTeamId = repoEnv.T3CODE_IOS_APPLE_TEAM_ID?.trim();
+const managedIosProvisioningProfile = repoEnv.T3CODE_IOS_PROVISIONING_PROFILE?.trim();
+const managedIosWidgetsProvisioningProfile =
+  repoEnv.T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE?.trim();
+const isIosManualSigningEnabled =
+  Boolean(managedIosProvisioningProfile) || Boolean(managedIosWidgetsProvisioningProfile);
+const isIosSharingExtensionEnabled =
+  !isIosPersonalTeamBuild && repoEnv.T3CODE_IOS_SHARING_EXTENSION !== "0";
+const isIosAssociatedDomainsEnabled =
+  !isIosPersonalTeamBuild && repoEnv.T3CODE_IOS_ASSOCIATED_DOMAINS !== "0";
+const iosNotificationsMode =
+  repoEnv.T3CODE_IOS_APNS_ENVIRONMENT === "sandbox"
+    ? "development"
+    : APP_VARIANT === "development"
+      ? "development"
+      : "production";
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const IOS_APP_GROUP_IDENTIFIER_PATTERN = /^group\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const IOS_APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const IOS_DEPLOYMENT_TARGET = "18.0";
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 
@@ -23,6 +44,36 @@ if (
 ) {
   throw new Error(
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
+  );
+}
+
+if (managedIosBundleIdentifier && !IOS_BUNDLE_IDENTIFIER_PATTERN.test(managedIosBundleIdentifier)) {
+  throw new Error(
+    "T3CODE_IOS_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code.",
+  );
+}
+
+if (
+  managedIosAppGroupIdentifier &&
+  !IOS_APP_GROUP_IDENTIFIER_PATTERN.test(managedIosAppGroupIdentifier)
+) {
+  throw new Error(
+    "T3CODE_IOS_APP_GROUP_ID must be an App Group identifier such as group.com.example.t3code.",
+  );
+}
+
+if (managedIosAppleTeamId && !IOS_APPLE_TEAM_ID_PATTERN.test(managedIosAppleTeamId)) {
+  throw new Error("T3CODE_IOS_APPLE_TEAM_ID must be a 10-character Apple Team ID.");
+}
+
+if (
+  isIosManualSigningEnabled &&
+  (!managedIosAppleTeamId ||
+    !managedIosProvisioningProfile ||
+    !managedIosWidgetsProvisioningProfile)
+) {
+  throw new Error(
+    "Manual iOS signing requires T3CODE_IOS_APPLE_TEAM_ID, T3CODE_IOS_PROVISIONING_PROFILE, and T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE.",
   );
 }
 
@@ -100,7 +151,8 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 const variant = VARIANT_CONFIG[APP_VARIANT];
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
-  : variant.iosBundleIdentifier;
+  : (managedIosBundleIdentifier ?? variant.iosBundleIdentifier);
+const iosAppGroupIdentifier = managedIosAppGroupIdentifier ?? `group.${iosBundleIdentifier}`;
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
@@ -112,7 +164,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-widgets",
   {
     bundleIdentifier: `${iosBundleIdentifier}.widgets`,
-    groupIdentifier: `group.${iosBundleIdentifier}`,
+    groupIdentifier: iosAppGroupIdentifier,
     enablePushNotifications: true,
     // Agent activity can update many times an hour; without the
     // frequent-updates entitlement iOS throttles the update budget sooner.
@@ -135,9 +187,9 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       // Personal Teams cannot sign App Groups or extension targets. Keep the
       // reduced-capability local build usable while release builds expose the
       // real system share target.
-      enabled: !isIosPersonalTeamBuild,
+      enabled: isIosSharingExtensionEnabled,
       extensionBundleIdentifier: `${iosBundleIdentifier}.sharing`,
-      appGroupId: `group.${iosBundleIdentifier}`,
+      appGroupId: iosAppGroupIdentifier,
       activationRule: {
         supportsText: true,
         supportsWebUrlWithMaxCount: 1,
@@ -150,6 +202,29 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       multipleShareMimeTypes: ["image/*"],
     },
   },
+];
+
+const notificationsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
+  "expo-notifications",
+  {
+    icon: variant.assets.androidNotificationIcon,
+    color: variant.assets.androidNotificationColor,
+    mode: iosNotificationsMode,
+  },
+];
+
+const manualSigningPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
+  "./plugins/withIosManualSigning.cjs",
+  {
+    appleTeamId: managedIosAppleTeamId!,
+    appProfileSpecifier: managedIosProvisioningProfile!,
+    widgetProfileSpecifier: managedIosWidgetsProvisioningProfile!,
+  },
+];
+
+const widgetLogoPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
+  "./plugins/withWidgetLogoAsset.cjs",
+  { deploymentTarget: IOS_DEPLOYMENT_TARGET },
 ];
 
 // These aliases match the fonts' PostScript names on iOS. Register the same
@@ -185,11 +260,15 @@ const config: ExpoConfig = {
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    appleTeamId: managedIosAppleTeamId ?? "ARK85ZXQ4Z",
+    ...(isIosAssociatedDomainsEnabled
+      ? {
+          associatedDomains: [
+            `applinks:${variant.relyingParty}`,
+            `webcredentials:${variant.relyingParty}`,
+          ],
+        }
+      : {}),
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
@@ -243,17 +322,10 @@ const config: ExpoConfig = {
     ],
     "expo-secure-store",
     "expo-sqlite",
-    ...(isIosPersonalTeamBuild
+    ...(isIosPersonalTeamBuild || !isIosSharingExtensionEnabled
       ? [sharingPlugin]
       : ["./plugins/withShareExtensionDisplayName.cjs", sharingPlugin]),
-    [
-      "expo-notifications",
-      {
-        icon: variant.assets.androidNotificationIcon,
-        color: variant.assets.androidNotificationColor,
-        mode: APP_VARIANT === "development" ? "development" : "production",
-      },
-    ],
+    ...(!isIosPersonalTeamBuild ? [notificationsPlugin] : []),
     // appleSignIn must be gated here: withoutIosPersonalTeamCapabilities.cjs runs before
     // plugins earlier in this array, so it cannot strip the entitlement Clerk would add.
     ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild }],
@@ -296,7 +368,7 @@ const config: ExpoConfig = {
       "expo-build-properties",
       {
         ios: {
-          deploymentTarget: "18.0",
+          deploymentTarget: IOS_DEPLOYMENT_TARGET,
           // AppCheckCore 11.3+ includes Swift and needs module maps for these Objective-C dependencies.
           extraPods: [
             { name: "GoogleUtilities", modular_headers: true },
@@ -306,12 +378,29 @@ const config: ExpoConfig = {
       },
     ],
     "./plugins/withIosCocoaPodsUuidCache.cjs",
+    [
+      "./plugins/withIosExpoConfigEnvironment.cjs",
+      {
+        environment: {
+          APP_VARIANT,
+          T3CODE_IOS_PERSONAL_TEAM: isIosPersonalTeamBuild ? "1" : "0",
+          T3CODE_IOS_BUNDLE_ID: iosBundleIdentifier,
+          T3CODE_IOS_APP_GROUP_ID: iosAppGroupIdentifier,
+          T3CODE_IOS_APPLE_TEAM_ID: managedIosAppleTeamId ?? "ARK85ZXQ4Z",
+          T3CODE_IOS_APNS_ENVIRONMENT:
+            iosNotificationsMode === "development" ? "sandbox" : "production",
+          T3CODE_IOS_ASSOCIATED_DOMAINS: isIosAssociatedDomainsEnabled ? "1" : "0",
+          T3CODE_IOS_SHARING_EXTENSION: isIosSharingExtensionEnabled ? "1" : "0",
+        },
+      },
+    ],
+    ...(isIosManualSigningEnabled ? [manualSigningPlugin] : []),
     // Must be listed BEFORE expo-widgets: same-type mods run last-registered-
     // first, so registering earlier makes this plugin's mods run AFTER
     // expo-widgets' — its dangerous mod wipes ios/ExpoWidgetsTarget/ (which
     // would delete the asset catalog) and its xcodeproj mod creates the widget
     // target (which must exist before the compile phase can be attached).
-    ...(!isIosPersonalTeamBuild ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
+    ...(!isIosPersonalTeamBuild ? [widgetLogoPlugin, widgetsPlugin] : []),
     "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
@@ -323,6 +412,7 @@ const config: ExpoConfig = {
   extra: {
     appVariant: APP_VARIANT,
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
+    iosSharingExtensionEnabled: isIosSharingExtensionEnabled,
     relay: {
       url: repoEnv.T3CODE_RELAY_URL ?? null,
     },

@@ -45,7 +45,10 @@ function receiveSharingEnabled(): boolean {
   if (Platform.OS !== "ios") {
     return false;
   }
-  return Constants.expoConfig?.extra?.iosPersonalTeamBuild !== true;
+  return (
+    Constants.expoConfig?.extra?.iosPersonalTeamBuild !== true &&
+    Constants.expoConfig?.extra?.iosSharingExtensionEnabled !== false
+  );
 }
 
 async function resolvedPayloadsForImages(): Promise<ReadonlyArray<ResolvedSharePayload>> {

@@ -5,6 +5,7 @@
   "scripts": {
     "deploy": "node -- scripts/deploy.ts",
     "destroy": "alchemy destroy",
+    "migrate": "node -- scripts/migrate.ts",
     "test": "vp test run",
     "typecheck": "tsgo --noEmit"
   },

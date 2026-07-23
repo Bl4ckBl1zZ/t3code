@@ -35,7 +35,8 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DEFAULT_DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_APP_ID_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -588,6 +589,25 @@ export interface MacPasskeySigningConfiguration {
   readonly provisioningProfilePath: string;
 }
 
+export class InvalidDesktopAppIdError extends Schema.TaggedErrorClass<InvalidDesktopAppIdError>()(
+  "InvalidDesktopAppIdError",
+  {
+    appId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `T3CODE_DESKTOP_APP_ID '${this.appId}' must be a reverse-DNS application identifier.`;
+  }
+}
+
+export function resolveDesktopAppId(value: string | undefined): string {
+  const appId = value?.trim() || DEFAULT_DESKTOP_APP_ID;
+  if (!DESKTOP_APP_ID_PATTERN.test(appId)) {
+    throw new InvalidDesktopAppIdError({ appId });
+  }
+  return appId;
+}
+
 export const InvalidMacPasskeyRpDomainReason = Schema.Literals([
   "empty",
   "scheme-not-allowed",
@@ -718,6 +738,7 @@ function normalizePasskeyRpDomain(value: string): string {
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
 ): MacPasskeySigningConfiguration {
+  const appId = resolveDesktopAppId(env.T3CODE_DESKTOP_APP_ID);
   const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
     throw new InvalidAppleTeamIdError({ teamId });
@@ -752,7 +773,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -1385,9 +1406,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
+  appId = DEFAULT_DESKTOP_APP_ID,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    appId,
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     directories: {
@@ -1426,6 +1448,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      hardenedRuntime: signed,
+      notarize: signed,
       protocols: [
         {
           name: "T3 Code",
@@ -1435,6 +1459,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
+            entitlementsInherit: macPasskeySigning.entitlementsPath,
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
         : {}),
@@ -1577,6 +1602,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const workspaceOverrides = workspaceConfig.overrides ?? {};
   const workspacePatchedDependencies = workspaceConfig.patchedDependencies ?? {};
   const workspaceAllowBuilds = workspaceConfig.allowBuilds ?? {};
+  const repoEnv = loadRepoEnv({ repoRoot });
+  const desktopAppId = resolveDesktopAppId(repoEnv.T3CODE_DESKTOP_APP_ID);
 
   const platformConfig = PLATFORM_CONFIG[options.platform];
   if (!platformConfig) {
@@ -1704,7 +1731,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(repoEnv),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -1776,6 +1803,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
+      desktopAppId,
     ),
     dependencies: stageDependencies,
     devDependencies: {

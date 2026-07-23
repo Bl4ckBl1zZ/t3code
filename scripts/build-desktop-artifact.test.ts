@@ -14,6 +14,7 @@ import {
   createStagePatchedDependencies,
   createBuildConfig,
   DESKTOP_ASAR_UNPACK,
+  InvalidDesktopAppIdError,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -28,6 +29,7 @@ import {
   resolveFffNativeDependencies,
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
+  resolveDesktopAppId,
   resolveDesktopProductName,
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
@@ -362,6 +364,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it("uses a fork-specific desktop application identifier for packaging and entitlements", () => {
+    assert.equal(resolveDesktopAppId(undefined), "com.t3tools.t3code");
+    assert.equal(resolveDesktopAppId(" com.t3code.dev "), "com.t3code.dev");
+
+    const configuration = resolveMacPasskeySigningConfiguration({
+      T3CODE_DESKTOP_APP_ID: "com.t3code.dev",
+      T3CODE_APPLE_TEAM_ID: "ABC1234567",
+      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+    });
+    assert.equal(configuration.appId, "com.t3code.dev");
+    assert.include(
+      renderMacPasskeyEntitlements(configuration),
+      "<string>ABC1234567.com.t3code.dev</string>",
+    );
+
+    assert.throws(() => resolveDesktopAppId("not a bundle id"), InvalidDesktopAppIdError);
+  });
+
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",
@@ -464,14 +485,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("adds passkey entitlements and both renderer protocols to signed macOS builds", () =>
     Effect.gen(function* () {
-      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
-        entitlementsPath: "/tmp/entitlements.mac.plist",
-        provisioningProfilePath: "/tmp/t3code.provisionprofile",
-      });
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        true,
+        false,
+        undefined,
+        {
+          entitlementsPath: "/tmp/entitlements.mac.plist",
+          provisioningProfilePath: "/tmp/t3code.provisionprofile",
+        },
+        "com.t3code.dev",
+      );
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "com.t3code.dev");
+      assert.equal(mac.hardenedRuntime, true);
+      assert.equal(mac.notarize, true);
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.deepStrictEqual(mac.protocols, [
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },

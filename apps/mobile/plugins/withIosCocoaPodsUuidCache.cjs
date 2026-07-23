@@ -3,7 +3,20 @@ const path = require("node:path");
 
 const { withDangerousMod } = require("expo/config-plugins");
 
+const DEPLOYMENT_TARGET_MARKER = "# t3code: align CocoaPods targets with the app deployment target";
 const MARKER = "# t3code: repair cached CocoaPods UUID allocation before SPM integration";
+const DEPLOYMENT_TARGET_REPAIR = `${DEPLOYMENT_TARGET_MARKER}
+    minimum_ios_version = podfile_properties['ios.deploymentTarget'] || '16.4'
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |build_configuration|
+        deployment_target = build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if deployment_target.nil? || Gem::Version.new(deployment_target) < Gem::Version.new(minimum_ios_version)
+          build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios_version
+        end
+      end
+    end
+`;
+
 const UUID_REPAIR = `${MARKER}
     pods_project = installer.pods_project
     existing_uuids = pods_project.objects.map(&:uuid)
@@ -32,7 +45,7 @@ module.exports = function withIosCocoaPodsUuidCache(config) {
       const podfilePath = path.join(nextConfig.modRequest.platformProjectRoot, "Podfile");
       const podfile = fs.readFileSync(podfilePath, "utf8");
 
-      if (podfile.includes(MARKER)) {
+      if (podfile.includes(MARKER) && podfile.includes(DEPLOYMENT_TARGET_MARKER)) {
         return nextConfig;
       }
 
@@ -41,9 +54,14 @@ module.exports = function withIosCocoaPodsUuidCache(config) {
         throw new Error("Unable to repair CocoaPods UUID allocation: post_install is missing.");
       }
 
+      const repairs = [
+        ...(podfile.includes(DEPLOYMENT_TARGET_MARKER) ? [] : [DEPLOYMENT_TARGET_REPAIR]),
+        ...(podfile.includes(MARKER) ? [] : [UUID_REPAIR]),
+      ].join("\n");
+
       fs.writeFileSync(
         podfilePath,
-        podfile.replace(postInstallStart, `${postInstallStart}${UUID_REPAIR}`),
+        podfile.replace(postInstallStart, `${postInstallStart}${repairs}`),
         "utf8",
       );
       return nextConfig;

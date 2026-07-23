@@ -63,6 +63,48 @@ function withAssetWiring(config) {
   });
 }
 
-module.exports = function withWidgetLogoAsset(config) {
-  return withAssetWiring(withAssetFiles(config));
+function stripComments(section) {
+  return Object.fromEntries(
+    Object.entries(section ?? {}).filter(([key]) => !key.endsWith("_comment")),
+  );
+}
+
+function findByName(section, name) {
+  return Object.entries(stripComments(section)).find(([, value]) => value?.name === name) ?? null;
+}
+
+function withWidgetBuildSettings(config, { deploymentTarget, marketingVersion }) {
+  return withXcodeProject(config, (cfg) => {
+    const objects = cfg.modResults.hash.project.objects;
+    const targetEntry = findByName(objects.PBXNativeTarget, TARGET_NAME);
+    if (!targetEntry) {
+      throw new Error(
+        `${TARGET_NAME} Xcode target was not generated. Register withWidgetLogoAsset before expo-widgets.`,
+      );
+    }
+    const configurationList = stripComments(objects.XCConfigurationList)[
+      targetEntry[1].buildConfigurationList
+    ];
+    if (!configurationList) {
+      throw new Error(`Could not find build configurations for ${TARGET_NAME}.`);
+    }
+    const buildConfigurations = stripComments(objects.XCBuildConfiguration);
+    for (const reference of configurationList.buildConfigurations ?? []) {
+      const buildConfiguration = buildConfigurations[reference.value];
+      if (buildConfiguration?.buildSettings) {
+        buildConfiguration.buildSettings.IPHONEOS_DEPLOYMENT_TARGET = deploymentTarget;
+        buildConfiguration.buildSettings.MARKETING_VERSION = marketingVersion;
+      }
+    }
+    return cfg;
+  });
+}
+
+module.exports = function withWidgetLogoAsset(config, options = {}) {
+  const deploymentTarget = options.deploymentTarget ?? "18.0";
+  const marketingVersion = config.version ?? "1.0";
+  return withWidgetBuildSettings(withAssetWiring(withAssetFiles(config)), {
+    deploymentTarget,
+    marketingVersion,
+  });
 };

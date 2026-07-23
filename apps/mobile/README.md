@@ -58,6 +58,30 @@ T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code \
 vp run ios:release
 ```
 
+For a managed development profile that includes push notifications and widgets, keep Personal Team
+mode off and supply the registered identifiers explicitly:
+
+```bash
+APP_VARIANT=production \
+T3CODE_IOS_BUNDLE_ID=com.example.t3code.dev \
+T3CODE_IOS_APP_GROUP_ID=group.com.example.t3code.dev \
+T3CODE_IOS_APPLE_TEAM_ID=ABCDE12345 \
+T3CODE_IOS_APNS_ENVIRONMENT=sandbox \
+T3CODE_IOS_ASSOCIATED_DOMAINS=0 \
+T3CODE_IOS_SHARING_EXTENSION=0 \
+vp run ios:release
+```
+
+Set `T3CODE_IOS_ASSOCIATED_DOMAINS=0` only when the main provisioning profile does not include the
+Associated Domains capability.
+
+Set `T3CODE_IOS_SHARING_EXTENSION=1` only after provisioning the separate
+`<bundle-identifier>.sharing` extension.
+
+For a local development archive with manually downloaded profiles, also set
+`T3CODE_IOS_PROVISIONING_PROFILE` and `T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE` to the main app and
+widget profile names. Both require `T3CODE_IOS_APPLE_TEAM_ID`.
+
 Build and run the local iOS preview app:
 
 ```bash
