@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  existingRelayHyperdriveBinding,
   parseRelayDatabaseUrl,
   RelayDatabaseUrlError,
-  resolveRelayHyperdriveTls,
 } from "./dbConfig.ts";
 
 describe("parseRelayDatabaseUrl", () => {
@@ -38,16 +38,22 @@ describe("parseRelayDatabaseUrl", () => {
     expect(() => parseRelayDatabaseUrl(value)).toThrow(RelayDatabaseUrlError);
   });
 
-  it("requires WebPKI TLS when no private CA is configured", () => {
-    expect(resolveRelayHyperdriveTls(undefined)).toEqual({
-      sslmode: "require",
-    });
-  });
+  it("describes an existing Workers VPC Hyperdrive binding", () => {
+    const connection = parseRelayDatabaseUrl(
+      "postgresql://relay:secret@db.internal:5432/t3coderelay",
+    );
 
-  it("uses verify-full with the configured private CA", () => {
-    expect(resolveRelayHyperdriveTls("ca-certificate-id")).toEqual({
-      caCertificateId: "ca-certificate-id",
-      sslmode: "verify-full",
+    expect(existingRelayHyperdriveBinding("hyperdrive-id", connection)).toEqual({
+      hyperdriveId: "hyperdrive-id",
+      devOrigin: {
+        scheme: "postgresql",
+        host: "db.internal",
+        port: 5432,
+        database: "t3coderelay",
+        user: "relay",
+        password: "secret",
+        sslmode: "require",
+      },
     });
   });
 });

@@ -6,4 +6,5 @@ args = ["--yes", "xcodebuildmcp@2.6.2", "mcp"]
 startup_timeout_sec = 20.0
 
 [mcp_servers.xcodebuildmcp.env]
+DEVELOPER_DIR = "/Applications/Xcode-beta.app/Contents/Developer"
 XCODEBUILDMCP_ENABLED_WORKFLOWS = "simulator,ui-automation,debugging,logging"

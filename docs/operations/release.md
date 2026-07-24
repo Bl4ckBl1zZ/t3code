@@ -43,20 +43,22 @@ GitHub Actions environment before building desktop, CLI, or hosted web artifacts
 Required repository variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
-- `AXIOM_ORG_ID`
+- `DATABASE_HYPERDRIVE_ID`
 
 Required repository secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
-- `AXIOM_TOKEN`
+- `CLOUDFLARE_RUNTIME_API_TOKEN`
+- `DATABASE_URL`
+- `DATABASE_MIGRATION_URL`
+- `DATABASE_ACCESS_CLIENT_ID`
+- `DATABASE_ACCESS_CLIENT_SECRET`
 
 Required `production` environment variables:
 
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
+- `DATABASE_TUNNEL_HOSTNAME`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -75,12 +77,13 @@ Required `production` environment secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The `prod` stage owns the retained PlanetScale
-database. Local personal stages provision isolated branches from it and are never deployed by CI.
-Production adopts the configured relay API and tunnel DNS zones as retained Cloudflare resources.
-Personal stages reference the production-owned zones.
+`CLOUDFLARE_API_TOKEN` is consumed by Alchemy while provisioning relay stages.
+`CLOUDFLARE_RUNTIME_API_TOKEN` is bound into the Worker and must be limited to Cloudflare Tunnel Edit
+for the relay account plus DNS Edit for the managed endpoint zone. The production database is a
+provider-neutral PostgreSQL instance reached by Hyperdrive through a Workers VPC service and
+Cloudflare Tunnel. Cloudflare Worker logs provide initial operational diagnostics without an
+external tracing account. Production adopts the configured relay API and tunnel DNS zones as
+retained Cloudflare resources. Personal stages reference the production-owned zones.
 
 Developers deploy personal stages locally rather than through pull-request automation:
 

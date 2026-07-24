@@ -42,19 +42,22 @@ deployments.
 
 For a hosted relay deployment, copy `infra/relay/.env.example` to `infra/relay/.env`. The relay
 deployment reads `RELAY_DOMAIN`, `RELAY_API_ZONE_NAME`, `RELAY_TUNNEL_ZONE_NAME`,
-`DATABASE_TUNNEL_HOSTNAME`, `DATABASE_CA_CERTIFICATE_ID`, `CLERK_PUBLISHABLE_KEY`, and
-`CLERK_JWT_AUDIENCE` through Effect `Config`. There are no checked-in
-deployment defaults.
+`CLOUDFLARE_ACCOUNT_ID`, `DATABASE_HYPERDRIVE_ID`, `CLERK_PUBLISHABLE_KEY`, and
+`CLERK_JWT_AUDIENCE` through Effect `Config`. There are no checked-in deployment defaults.
 `vp run --filter t3code-relay deploy` invokes Alchemy from the relay directory, so Alchemy loads
 `infra/relay/.env`. After a successful deployment, the wrapper updates the repository-root `.env`
 with the deployed HTTPS relay URL. The relay still requires
-`CLERK_SECRET_KEY` as an Alchemy secret. Never put `CLERK_SECRET_KEY` in a client application
-environment or commit it to the repository.
+`CLERK_SECRET_KEY` and the least-privilege `CLOUDFLARE_RUNTIME_API_TOKEN` as Worker secrets. The
+Cloudflare runtime token must grant Cloudflare Tunnel Edit for the relay account and DNS Edit only
+for `RELAY_TUNNEL_ZONE_NAME`. Never put either secret in a client application environment or commit
+it to the repository.
 
 The relay uses an existing provider-neutral PostgreSQL database configured through `DATABASE_URL`.
-CI opens an authenticated Cloudflare Access TCP listener and supplies `DATABASE_MIGRATION_URL`;
-local operators may omit it and run `vp run --filter t3code-relay migrate` with `DATABASE_URL`
-instead. Apply the checked-in schema migrations before deploying a relay stage.
+For a private Dokploy database, the Worker reaches the existing Hyperdrive configuration through a
+Workers VPC service backed by Cloudflare Tunnel; the database does not need a public port. CI may use
+a separate authenticated Cloudflare Access TCP route and `DATABASE_MIGRATION_URL`, while local
+operators may omit it and run `vp run --filter t3code-relay migrate` with a temporarily reachable
+`DATABASE_URL`. Apply the checked-in schema migrations before deploying a relay stage.
 
 ## Headless CLI OAuth Application
 
