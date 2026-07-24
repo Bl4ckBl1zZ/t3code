@@ -572,6 +572,47 @@ describe("ApnsDeliveries", () => {
     },
   );
 
+  it.effect("queues a running phase update inside the throttle window after connecting", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const connectingAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      activities: [
+        {
+          ...aggregate.activities[0]!,
+          phase: "starting",
+          status: "Connecting",
+        },
+      ],
+    };
+    const connectingAggregateJson = JSON.stringify(connectingAggregate);
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          last_aggregate_json: connectingAggregateJson,
+          last_live_activity_delivery_at: "1970-01-01T00:00:04.000Z",
+        },
+        aggregate,
+        nowMs: 5_000,
+      });
+
+      expect(result?.kind).toBe("live_activity_update");
+      expect(queuedJobs).toMatchObject([
+        {
+          payload: {
+            kind: "live_activity_update",
+            aggregate: {
+              activities: [{ phase: "running", status: "Working" }],
+            },
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(makeLayer({ attempts, queuedJobs })));
+  });
+
   it.effect(
     "throttles updates for changed aggregates with stable counts and no pending attention",
     () => {

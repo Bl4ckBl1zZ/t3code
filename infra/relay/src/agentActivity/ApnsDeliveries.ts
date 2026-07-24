@@ -146,6 +146,20 @@ function aggregateNeedsAttention(aggregate: RelayAgentActivityAggregateState): b
   );
 }
 
+function aggregateHasPhaseTransition(
+  previousAggregate: RelayAgentActivityAggregateState,
+  nextAggregate: RelayAgentActivityAggregateState,
+): boolean {
+  const previousPhaseByActivity = new Map(
+    previousAggregate.activities.map((row) => [`${row.environmentId}\0${row.threadId}`, row.phase]),
+  );
+  return nextAggregate.activities.some(
+    (row) =>
+      previousPhaseByActivity.get(`${row.environmentId}\0${row.threadId}`) !== undefined &&
+      previousPhaseByActivity.get(`${row.environmentId}\0${row.threadId}`) !== row.phase,
+  );
+}
+
 function isAttentionPhase(phase: string): boolean {
   return phase === "waiting_for_approval" || phase === "waiting_for_input";
 }
@@ -301,6 +315,13 @@ function shouldUpdateLiveActivity(input: {
     return false;
   }
   if (input.previousAggregate.activeCount !== input.nextAggregate.activeCount) {
+    return true;
+  }
+  // Lifecycle transitions are the primary information on the card. In
+  // particular, Connecting -> Working normally happens within a few seconds;
+  // throttling it without a trailing retry leaves the card on Connecting for
+  // the whole run.
+  if (aggregateHasPhaseTransition(input.previousAggregate, input.nextAggregate)) {
     return true;
   }
   if (aggregateNeedsAttention(input.nextAggregate)) {
