@@ -7,14 +7,18 @@ export interface RelayDatabaseConnection {
   readonly password: string;
 }
 
-export type RelayHyperdriveTls =
-  | {
-      readonly sslmode: "require";
-    }
-  | {
-      readonly caCertificateId: string;
-      readonly sslmode: "verify-full";
-    };
+export interface ExistingRelayHyperdriveBinding {
+  readonly hyperdriveId: string;
+  readonly devOrigin: {
+    readonly scheme: RelayDatabaseConnection["scheme"];
+    readonly host: string;
+    readonly port: number;
+    readonly database: string;
+    readonly user: string;
+    readonly password: string;
+    readonly sslmode: "require";
+  };
+}
 
 export class RelayDatabaseUrlError extends Error {
   override readonly name = "RelayDatabaseUrlError";
@@ -67,11 +71,20 @@ export function parseRelayDatabaseUrl(value: string): RelayDatabaseConnection {
   };
 }
 
-export function resolveRelayHyperdriveTls(caCertificateId: string | undefined): RelayHyperdriveTls {
-  return caCertificateId === undefined
-    ? { sslmode: "require" }
-    : {
-        caCertificateId,
-        sslmode: "verify-full",
-      };
+export function existingRelayHyperdriveBinding(
+  hyperdriveId: string,
+  connection: RelayDatabaseConnection,
+): ExistingRelayHyperdriveBinding {
+  return {
+    hyperdriveId,
+    devOrigin: {
+      scheme: connection.scheme,
+      host: connection.host,
+      port: connection.port,
+      database: connection.database,
+      user: connection.user,
+      password: connection.password,
+      sslmode: "require",
+    },
+  };
 }

@@ -22,7 +22,7 @@ The relay currently owns:
 - Listing linked environments and registered mobile devices for an account.
 - Registering mobile notification preferences and APNs tokens.
 - Receiving published agent activity and delivering notifications or Live Activity updates.
-- Persisting relay state and exposing relay-specific traces for diagnostics.
+- Persisting relay state and emitting structured Worker logs for diagnostics.
 
 The environment server and relay have separate credentials and trust boundaries. Read
 [Environment Authentication Profile](../../docs/environment-auth.md) before changing token,
@@ -82,13 +82,19 @@ The relay deploys through Alchemy:
 vp run --filter t3code-relay deploy
 ```
 
-The stack provisions the Cloudflare Worker and queues, managed endpoint resources, Hyperdrive
-connectivity, and relay tracing resources. PostgreSQL is provider-neutral and supplied through the
-secret `DATABASE_URL`; the database must already exist and accept TLS connections. Copy
+The stack provisions the Cloudflare Worker and queues plus managed endpoint resources. PostgreSQL is
+provider-neutral and supplied through the secret `DATABASE_URL`; the database must already exist,
+accept TLS connections, and be connected to the existing Hyperdrive configuration identified by
+`DATABASE_HYPERDRIVE_ID`. For private Dokploy databases, use a Workers VPC service backed by
+Cloudflare Tunnel and keep the database's public port closed. The Worker also needs one
+least-privilege `CLOUDFLARE_RUNTIME_API_TOKEN` with **Cloudflare Tunnel: Edit** on the relay account
+and **DNS: Edit** on `RELAY_TUNNEL_ZONE_NAME`; it uses that credential only when provisioning and
+removing managed environment endpoints. Copy
 [`infra/relay/.env.example`](./.env.example) to `infra/relay/.env` and fill in the deployment-specific
 values before deploying. Alchemy loads that file from the relay directory. Runtime secrets include
-Clerk and APNs credentials. Production adopts the configured API and tunnel DNS zones as retained
-Cloudflare resources. Personal stages reference the production-owned zones.
+the scoped Cloudflare token, Clerk, and APNs credentials. Production adopts the configured API and
+tunnel DNS zones as retained Cloudflare resources. Personal stages reference the production-owned
+zones.
 
 Apply the checked-in database migrations before deploying infrastructure:
 
@@ -122,16 +128,14 @@ deploy personal non-production stages locally with any stage name other than `pr
 The repository must define these Actions variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `AXIOM_ORG_ID`
+- `DATABASE_HYPERDRIVE_ID`
 
 The repository must define these Actions secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_RUNTIME_API_TOKEN`
 - `DATABASE_URL`
 - `DATABASE_MIGRATION_URL` with a localhost URL for the CI `cloudflared access tcp` listener
-- `DATABASE_ACCESS_CLIENT_ID` and `DATABASE_ACCESS_CLIENT_SECRET` when Hyperdrive connects through
-  a Cloudflare Tunnel protected by Access
-- `AXIOM_TOKEN`
 
 The `production` GitHub environment must define these Actions variables:
 
@@ -139,8 +143,6 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
 - `DATABASE_TUNNEL_HOSTNAME` for CI migrations through Cloudflare Access
-- `DATABASE_CA_CERTIFICATE_ID` when PostgreSQL uses a private certificate authority; Hyperdrive
-  then uses `verify-full`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -154,17 +156,18 @@ The `production` GitHub environment must define these Actions secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;
-they are not bound into the relay Worker. The database password is stored in Cloudflare Hyperdrive
-and is not bound directly into the relay Worker. The production deployment uses an Axiom personal
-access token, so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the
-production relay's derived public URL and Clerk publishable key from the same environment for
-downstream desktop, CLI, and hosted web builds.
+`CLOUDFLARE_API_TOKEN` is consumed only by Alchemy while provisioning relay stages.
+`CLOUDFLARE_RUNTIME_API_TOKEN` is bound into the Worker with the narrow account/zone permissions
+described above. The database password is stored in Cloudflare Hyperdrive and is not bound directly
+into the relay Worker. The relay uses Cloudflare Worker logs for initial operational diagnostics and
+does not require an external tracing account. The release workflow reads the production relay's
+derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
+and hosted web builds.
 
 See:
 
 - [T3 Connect Clerk Setup](../../docs/cloud/t3-connect-clerk.md) for Clerk keys, JWT templates, and waitlist
   setup.
-- [Relay Observability](../../docs/relay-observability.md) for deployment tracing and diagnostics.
+- [Relay Observability](../../docs/operations/relay-observability.md) for deployment diagnostics.
 - [T3 Connect Architecture Overview](../../docs/cloud/t3-code-connect-auth-flow.html) for the full link,
   connect, endpoint, and notification flows.

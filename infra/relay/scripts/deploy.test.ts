@@ -1,8 +1,4 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 
 import {
   hasDeployChanges,
@@ -18,10 +14,7 @@ import {
 
 describe("RelayDeployError", () => {
   it("reports the incomplete state source, stage, and missing fields", () => {
-    const missingFields = missingRelayPublicConfigFields({
-      url: "https://relay.example.test",
-      mobileTracingUrl: "https://api.axiom.co/v1/traces",
-    });
+    const missingFields = missingRelayPublicConfigFields({});
     const error = new RelayDeployError({
       source: "alchemy_state",
       stage: "production",
@@ -31,16 +24,10 @@ describe("RelayDeployError", () => {
     expect(error).toMatchObject({
       source: "alchemy_state",
       stage: "production",
-      missingFields: [
-        "mobileTracingDataset",
-        "mobileTracingToken",
-        "clientTracingUrl",
-        "clientTracingDataset",
-        "clientTracingToken",
-      ],
+      missingFields: ["url"],
     });
     expect(error.message).toBe(
-      "Relay deploy output from 'alchemy_state' for stage 'production' is missing required public config fields: mobileTracingDataset, mobileTracingToken, clientTracingUrl, clientTracingDataset, clientTracingToken",
+      "Relay deploy output from 'alchemy_state' for stage 'production' is missing required public config fields: url",
     );
   });
 
@@ -109,30 +96,15 @@ describe("reconcileRootEnvRelayUrl", () => {
 describe("reconcileRootEnvPublicConfig", () => {
   const config = {
     relayUrl: "https://relay.example.test",
-    mobileTracingUrl: "https://api.axiom.co/v1/traces",
-    mobileTracingDataset: "t3-code-mobile-traces-dev",
-    mobileTracingToken: "xaat-public-ingest",
-    clientTracingUrl: "https://api.axiom.co/v1/traces",
-    clientTracingDataset: "t3-code-relay-client-traces-dev",
-    clientTracingToken: "xaat-relay-client-ingest",
   } as const;
 
-  it("adds the complete local client config", () => {
+  it("adds the relay URL without tracing configuration", () => {
     expect(reconcileRootEnvPublicConfig("", config)).toBe(
-      [
-        "T3CODE_RELAY_URL=https://relay.example.test",
-        "T3CODE_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_MOBILE_OTLP_TRACES_DATASET=t3-code-mobile-traces-dev",
-        "T3CODE_MOBILE_OTLP_TRACES_TOKEN=xaat-public-ingest",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET=t3-code-relay-client-traces-dev",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-relay-client-ingest",
-        "",
-      ].join("\n"),
+      "T3CODE_RELAY_URL=https://relay.example.test\n",
     );
   });
 
-  it("replaces stale values while preserving unrelated entries", () => {
+  it("removes stale tracing values while preserving unrelated entries", () => {
     expect(
       reconcileRootEnvPublicConfig(
         [
@@ -152,12 +124,6 @@ describe("reconcileRootEnvPublicConfig", () => {
       [
         "T3CODE_CLERK_PUBLISHABLE_KEY=pk_test_example",
         "T3CODE_RELAY_URL=https://relay.example.test",
-        "T3CODE_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_MOBILE_OTLP_TRACES_DATASET=t3-code-mobile-traces-dev",
-        "T3CODE_MOBILE_OTLP_TRACES_TOKEN=xaat-public-ingest",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET=t3-code-relay-client-traces-dev",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-relay-client-ingest",
         "",
       ].join("\n"),
     );
@@ -177,71 +143,23 @@ describe("serializeGithubOutput", () => {
 });
 
 describe("serializeRelayClientTracingEnvironment", () => {
-  it("serializes tracing config for downstream GITHUB_ENV loading", () => {
+  it("writes an empty compatibility artifact when tracing is disabled", () => {
     expect(
       serializeRelayClientTracingEnvironment({
         relayUrl: "https://relay.example.test",
-        mobileTracingUrl: "https://api.axiom.co/v1/traces",
-        mobileTracingDataset: "mobile",
-        mobileTracingToken: "mobile-token",
-        clientTracingUrl: "https://api.axiom.co/v1/traces",
-        clientTracingDataset: "relay",
-        clientTracingToken: "client-token",
       }),
-    ).toBe(
-      [
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET=relay",
-        "T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=client-token",
-        "",
-      ].join("\n"),
-    );
+    ).toBe("");
   });
 });
 
-describe("release workflow tracing config propagation", () => {
-  it.effect("uses an artifact instead of a masked cross-job token output", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const workflowPath = yield* path.fromFileUrl(
-        new URL("../../../.github/workflows/release.yml", import.meta.url),
-      );
-      const workflow = yield* fileSystem.readFileString(workflowPath);
-
-      expect(workflow).not.toContain("client_tracing_token:");
-      expect(workflow).not.toContain("needs.relay_public_config.outputs.client_tracing_token");
-      expect(workflow).toContain('--github-env-file "$RUNNER_TEMP/relay-client-tracing.env"');
-      expect(workflow).toContain("name: relay-client-tracing-config");
-      expect(workflow).toContain('cat "$config_path" >> "$GITHUB_ENV"');
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-});
-
 describe("publicConfigFromOutput", () => {
-  it("reads the complete public tracing config from persisted Alchemy output", () => {
-    expect(
-      publicConfigFromOutput({
-        url: "https://relay.example.test",
-        mobileTracingUrl: "https://api.axiom.co/v1/traces",
-        mobileTracingDataset: "mobile",
-        mobileTracingToken: "mobile-token",
-        clientTracingUrl: "https://api.axiom.co/v1/traces",
-        clientTracingDataset: "relay",
-        clientTracingToken: "client-token",
-      }),
-    ).toEqual({
+  it("reads the relay URL without tracing output", () => {
+    expect(publicConfigFromOutput({ url: "https://relay.example.test" })).toEqual({
       relayUrl: "https://relay.example.test",
-      mobileTracingUrl: "https://api.axiom.co/v1/traces",
-      mobileTracingDataset: "mobile",
-      mobileTracingToken: "mobile-token",
-      clientTracingUrl: "https://api.axiom.co/v1/traces",
-      clientTracingDataset: "relay",
-      clientTracingToken: "client-token",
     });
   });
 
   it("rejects incomplete stack output", () => {
-    expect(publicConfigFromOutput({ url: "https://relay.example.test" })).toBeNull();
+    expect(publicConfigFromOutput({})).toBeNull();
   });
 });

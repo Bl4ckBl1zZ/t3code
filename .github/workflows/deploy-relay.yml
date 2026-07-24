@@ -25,7 +25,7 @@ jobs:
       name: production
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
+      DATABASE_HYPERDRIVE_ID: ${{ vars.DATABASE_HYPERDRIVE_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
@@ -35,7 +35,6 @@ jobs:
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
-      DATABASE_CA_CERTIFICATE_ID: ${{ vars.DATABASE_CA_CERTIFICATE_ID }}
       DATABASE_TUNNEL_HOSTNAME: ${{ vars.DATABASE_TUNNEL_HOSTNAME }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
@@ -98,10 +97,8 @@ jobs:
         run: vp run --filter t3code-relay deploy --stage prod --yes --github-output
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_RUNTIME_API_TOKEN: ${{ secrets.CLOUDFLARE_RUNTIME_API_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DATABASE_ACCESS_CLIENT_ID: ${{ secrets.DATABASE_ACCESS_CLIENT_ID }}
-          DATABASE_ACCESS_CLIENT_SECRET: ${{ secrets.DATABASE_ACCESS_CLIENT_SECRET }}
-          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
 

@@ -360,9 +360,9 @@ flowchart LR
     CF["Cloudflare tunnel + DNS APIs"]
   end
 
-  DB["PlanetScale Postgres<br/>prod database + stage branches"]
+  DB["Dokploy Postgres<br/>production database"]
   APNs["Apple Push Notification service"]
-  Traces["Axiom OTLP traces"]
+  Logs["Cloudflare Worker logs"]
 
   subgraph Local["Linked T3 environment"]
     Env["Environment server<br/>local auth authority"]
@@ -379,7 +379,7 @@ flowchart LR
   Mobile --> Clerk
   CLI -->|"PKCE authorization code flow"| Clerk
   Worker --> Hyperdrive --> DB
-  Worker --> Traces
+  Worker --> Logs
   Worker --> CF
   Worker --> Queue --> APNs
   Worker --> Endpoint
@@ -1010,17 +1010,14 @@ sequenceDiagram
           <h2>Relay Infrastructure</h2>
           <ul>
             <li>Cloudflare Worker for the hosted relay HTTP API.</li>
-            <li>PlanetScale Postgres database named <code>t3coderelay</code>.</li>
-            <li>
-              Production uses the shared database; non-production stages use database branches.
-            </li>
+            <li>Provider-neutral PostgreSQL database named <code>t3coderelay</code> on Dokploy.</li>
             <li>
               Cloudflare Hyperdrive with caching disabled and a constrained origin connection limit.
             </li>
             <li>Cloudflare tunnel and DNS bindings for managed endpoint reconciliation.</li>
             <li>Cloudflare APNs delivery queue plus dead-letter queue.</li>
             <li>A five-minute cron job that prunes expired DPoP replay rows.</li>
-            <li>Axiom OTLP trace dataset, scoped ingest token, and recent-spans view per stage.</li>
+            <li>Cloudflare Worker logs for initial relay diagnostics.</li>
           </ul>
         </article>
       </section>

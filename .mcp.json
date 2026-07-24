@@ -4,6 +4,7 @@
       "command": "npx",
       "args": ["--yes", "xcodebuildmcp@2.6.2", "mcp"],
       "env": {
+        "DEVELOPER_DIR": "/Applications/Xcode-beta.app/Contents/Developer",
         "XCODEBUILDMCP_ENABLED_WORKFLOWS": "simulator,ui-automation,debugging,logging"
       }
     }

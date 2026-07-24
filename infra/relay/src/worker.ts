@@ -1,11 +1,14 @@
+import type * as CloudflareRuntime from "@cloudflare/workers-types";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
+import { Self as ResourceSelf } from "alchemy/Self";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -33,7 +36,6 @@ import {
   withoutCapturedParentSpan,
 } from "./http/Api.ts";
 import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./zone.ts";
-import { makeRelayTraceLayer, RelayObservability } from "./observability.ts";
 import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
 import * as Devices from "./agentActivity/Devices.ts";
@@ -89,20 +91,21 @@ const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
 const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
   bytes: 32,
 });
+const relayHyperdriveBindingName = "RELAY_HYPERDRIVE";
 
 export default class Api extends Cloudflare.Worker<Api>()(
   "Api",
-  RelayDeploymentConfig.pipe(
-    Effect.map(({ relayPublicDomain }) => ({
+  Effect.gen(function* () {
+    const { relayPublicDomain } = yield* RelayDeploymentConfig;
+    return {
       main: import.meta.filename,
       compatibility: {
         date: "2026-05-22",
         flags: ["nodejs_compat"],
       },
       domain: relayPublicDomain,
-    })),
-    Effect.orDie,
-  ),
+    };
+  }).pipe(Effect.orDie),
   Effect.gen(function* () {
     //
     // 1. Provision Infrastructure for the Worker to use
@@ -114,7 +117,23 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
-    const observability = yield* RelayObservability;
+    const hyperdrive = yield* RelayDb.RelayHyperdriveBinding;
+    const worker = yield* ResourceSelf<Cloudflare.Worker>(
+      "Cloudflare.Worker",
+    ) as unknown as Effect.Effect<Cloudflare.Worker>;
+
+    yield* worker.bind(relayHyperdriveBindingName, {
+      bindings: [
+        {
+          type: "hyperdrive",
+          name: relayHyperdriveBindingName,
+          id: hyperdrive.hyperdriveId,
+        },
+      ],
+      hyperdrives: {
+        [hyperdrive.hyperdriveId]: hyperdrive.devOrigin,
+      },
+    });
 
     //
     // 2. Create bindings
@@ -130,24 +149,36 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
     const apnsDeliveryQueueSender = yield* Cloudflare.QueueBinding.bind(apnsDeliveryQueue);
 
-    const axiomDatasetName = yield* observability.traces.name;
-    const axiomIngestToken = yield* observability.workerIngestToken.token;
-    const axiomTracesEndpoint = yield* observability.traces.otelTracesEndpoint;
-
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
+    const cloudflareAccountId = yield* Config.nonEmptyString("CLOUDFLARE_ACCOUNT_ID");
+    const cloudflareRuntimeApiToken = yield* Config.redacted("CLOUDFLARE_RUNTIME_API_TOKEN");
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
-    const hyperdrive = yield* Cloudflare.Hyperdrive.bind(yield* RelayDb.RelayHyperdrive);
-    const db = yield* Drizzle.postgres(hyperdrive.connectionString);
+    const workerEnvironment = yield* Cloudflare.WorkerEnvironment;
+    const hyperdriveConnectionString = Effect.sync(() =>
+      Redacted.make(
+        (workerEnvironment as Record<string, CloudflareRuntime.Hyperdrive>)[
+          relayHyperdriveBindingName
+        ]!.connectionString,
+      ),
+    );
+    const db = yield* Drizzle.postgres(hyperdriveConnectionString);
 
-    const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
     // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
     yield* yield* relayApiZone.zoneId;
-    const managedEndpointDnsBinding = yield* Cloudflare.DnsReadWrite.bind(managedEndpointZone);
+    const managedEndpointZoneId = yield* yield* managedEndpointZone.zoneId;
     const managedEndpointZoneName = yield* managedEndpointZone.name;
+    const managedEndpointTunnelBinding = Cloudflare.readWriteClient({
+      value: Effect.succeed(cloudflareRuntimeApiToken),
+      accountId: Effect.succeed(cloudflareAccountId),
+    });
+    const managedEndpointDnsBinding = Cloudflare.dnsReadWriteClient(
+      { value: Effect.succeed(cloudflareRuntimeApiToken) },
+      Effect.succeed(managedEndpointZoneId),
+    );
 
     //
     // 3. Runtime layers and app construction
@@ -174,14 +205,6 @@ export default class Api extends Cloudflare.Worker<Api>()(
         managedEndpointNamespace: stage,
       });
     });
-
-    const relayTraceLayer = Layer.unwrap(
-      Effect.all({
-        tracesDatasetName: axiomDatasetName,
-        tracesEndpoint: axiomTracesEndpoint,
-        ingestToken: axiomIngestToken,
-      }).pipe(Effect.map(makeRelayTraceLayer)),
-    );
 
     const runtimeLayer = Layer.empty.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
@@ -272,19 +295,16 @@ export default class Api extends Cloudflare.Worker<Api>()(
     ).pipe(
       HttpRouter.toHttpEffect,
       withoutCapturedParentSpan,
-      Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, relayTraceLayer)),
+      Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, Layer.empty)),
     );
 
     return { fetch };
   }).pipe(
     Effect.provide(
       Layer.empty.pipe(
-        Layer.provideMerge(Cloudflare.HyperdriveBindingLive),
         Layer.provideMerge(Cloudflare.CronEventSourceLive),
         Layer.provideMerge(Cloudflare.QueueBindingLive),
         Layer.provideMerge(Cloudflare.QueueEventSourceLive),
-        Layer.provideMerge(Cloudflare.TunnelReadWriteLive),
-        Layer.provideMerge(Cloudflare.DnsReadWriteLive),
       ),
     ),
   ),
