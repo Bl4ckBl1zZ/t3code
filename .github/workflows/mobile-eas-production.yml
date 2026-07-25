@@ -33,7 +33,7 @@ on:
 jobs:
   production:
     name: EAS Production ${{ inputs.mode }}
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     timeout-minutes: 30
     permissions:
       contents: read

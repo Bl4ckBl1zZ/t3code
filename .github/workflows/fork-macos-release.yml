@@ -21,7 +21,7 @@ concurrency:
 jobs:
   credentials:
     name: Check macOS release credentials
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     environment:
       name: production
     outputs:

@@ -70,7 +70,7 @@ jobs:
   android:
     name: Android phone, 7-inch tablet, and 10-inch tablet
     if: inputs.platform == 'all' || inputs.platform == 'android'
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     timeout-minutes: 60
     env:
       T3_SHOWCASE_ANDROID_ABI: x86_64

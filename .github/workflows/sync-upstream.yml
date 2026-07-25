@@ -16,7 +16,7 @@ concurrency:
 jobs:
   sync:
     name: Merge upstream main
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     steps:
       - name: Checkout fork
         uses: actions/checkout@v6

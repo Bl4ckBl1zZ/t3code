@@ -16,7 +16,7 @@ concurrency:
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -49,7 +49,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -91,7 +91,7 @@ jobs:
 
   release_smoke:
     name: Release Smoke
-    runs-on: ubuntu-24.04
+    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     timeout-minutes: 15
     steps:
       - name: Checkout
