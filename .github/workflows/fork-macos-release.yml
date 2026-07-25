@@ -16,11 +16,61 @@ permissions:
 
 concurrency:
   group: fork-macos-arm64-release
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
+  credentials:
+    name: Check macOS release credentials
+    runs-on: ubuntu-24.04
+    environment:
+      name: production
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    env:
+      T3CODE_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+      CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+    steps:
+      - id: check
+        name: Check credentials
+        shell: bash
+        run: |
+          required=(
+            T3CODE_APPLE_TEAM_ID
+            T3CODE_CLERK_PASSKEY_RP_DOMAINS
+            CSC_LINK
+            CSC_KEY_PASSWORD
+            APPLE_API_KEY
+            APPLE_API_KEY_ID
+            APPLE_API_ISSUER
+            MACOS_PROVISIONING_PROFILE_BASE64
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### macOS release skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Add these production credentials to enable signed releases:" >> "$GITHUB_STEP_SUMMARY"
+            printf -- '- `%s`\n' "${missing[@]}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build downloadable macOS ARM64 app
+    needs: credentials
+    if: needs.credentials.outputs.ready == 'true'
     runs-on: macos-15
     timeout-minutes: 35
     environment:
