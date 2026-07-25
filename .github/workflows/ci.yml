@@ -88,11 +88,12 @@ jobs:
 
       - name: Test
         run: |
+          vp_entrypoint="$(realpath node_modules/vite-plus/bin/vp)"
           runuser --user t3ci -- env \
             CI=true \
             PATH="$PATH" \
             TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
-            ./node_modules/.bin/vp run test
+            node "$vp_entrypoint" run test
 
       - name: Restore workspace ownership
         if: always()
