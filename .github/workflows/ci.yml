@@ -52,6 +52,9 @@ jobs:
           grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
           grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
 
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
+
   test:
     name: Test
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
@@ -120,26 +123,3 @@ jobs:
 
       - name: Lint mobile native sources
         run: vp run lint:mobile
-
-  release_smoke:
-    name: Release Smoke
-    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
