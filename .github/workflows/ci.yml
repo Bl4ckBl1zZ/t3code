@@ -75,8 +75,25 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
+      - name: Prepare Halifax test environment
+        run: |
+          if ! id -u t3ci >/dev/null 2>&1; then
+            useradd --create-home --shell /bin/bash t3ci
+          fi
+          install -d --owner t3ci --group t3ci "$GITHUB_WORKSPACE/.ci-tmp"
+          chown -R t3ci:t3ci "$GITHUB_WORKSPACE"
+
       - name: Test
-        run: vp run test
+        run: |
+          runuser --user t3ci -- env \
+            CI=true \
+            PATH="$PATH" \
+            TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
+            ./node_modules/.bin/vp run test
+
+      - name: Restore workspace ownership
+        if: always()
+        run: chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
