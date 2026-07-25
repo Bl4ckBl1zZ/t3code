@@ -84,6 +84,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -192,6 +197,11 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -269,6 +279,11 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -351,6 +366,11 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -624,6 +644,11 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -680,6 +705,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -801,6 +831,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -925,6 +960,11 @@ jobs:
           echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
           echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -984,6 +1024,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
