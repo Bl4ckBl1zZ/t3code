@@ -317,7 +317,11 @@ describe("Hermes transport session import policy", () => {
           "already_imported",
         ]);
         expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(3);
-        expect(commands.filter((command) => command.type === "thread.settle")).toHaveLength(1);
+        const settles = commands.filter((command) => command.type === "thread.settle");
+        expect(settles).toHaveLength(1);
+        // Settled imports carry the upstream started_at, not the import time,
+        // so sidebar age labels stay historical.
+        expect(settles[0]).toMatchObject({ settledAt: expect.stringMatching(/^\d{4}-/) });
         expect(bindings).toEqual(new Set(["discord-recent", "telegram-old"]));
         expect(forgedProjectError.message).toContain("this environment's T3 Work project");
 

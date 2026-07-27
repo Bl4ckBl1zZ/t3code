@@ -3257,7 +3257,28 @@ export function makeHermesServeAdapterV2(
               state.binding,
               history,
             );
+            // History rows lacking a message_id get digest-derived ids that
+            // never match the ids of live-streamed T3 messages, so merging
+            // them blindly duplicates every turn's text. Skip history rows
+            // whose content is already represented by a live message,
+            // consuming one live occurrence per skipped row so repeated
+            // identical messages still hydrate proportionally.
+            const hydratedIds = new Set(hydrated.messages.map((message) => String(message.id)));
+            const liveTextBudget = new Map<string, number>();
+            for (const message of state.messages.values()) {
+              if (hydratedIds.has(String(message.id))) continue;
+              const key = `${message.role}\n${message.text}`;
+              liveTextBudget.set(key, (liveTextBudget.get(key) ?? 0) + 1);
+            }
             for (const message of hydrated.messages) {
+              if (!state.messages.has(String(message.id))) {
+                const key = `${message.role}\n${message.text}`;
+                const budget = liveTextBudget.get(key) ?? 0;
+                if (budget > 0) {
+                  liveTextBudget.set(key, budget - 1);
+                  continue;
+                }
+              }
               state.messages.set(String(message.id), message);
             }
             for (const item of hydrated.turnItems) {

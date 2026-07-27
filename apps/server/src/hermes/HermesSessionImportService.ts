@@ -464,6 +464,7 @@ export const make = Effect.gen(function* () {
               type: "thread.settle",
               commandId: CommandId.make(`command:${row.importId}:classify-settled`),
               threadId,
+              ...(startedAt === undefined ? {} : { settledAt: DateTime.formatIso(startedAt) }),
             });
           }
           const binding = yield* repository.getByStoredIdentity({

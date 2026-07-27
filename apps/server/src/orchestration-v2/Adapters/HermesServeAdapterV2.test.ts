@@ -806,6 +806,37 @@ describe("HermesServeAdapterV2", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("does not duplicate live-streamed text when history lacks message ids", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "response", status: "complete" }),
+        );
+        fake.history = {
+          count: 2,
+          messages: [
+            { role: "user", text: "hello Hermes" },
+            { role: "assistant", text: "response" },
+          ],
+        };
+
+        const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+        const assistantRows = snapshot.messages.filter(
+          (message) => message.role === "assistant" && message.text === "response",
+        );
+        assert.equal(assistantRows.length, 1);
+      }).pipe(Effect.provide(TestLayer)),
+    ),
+  );
+
   it.effect("fails a fork with a typed error when session.branch.latest is not advertised", () =>
     Effect.scoped(
       Effect.gen(function* () {
