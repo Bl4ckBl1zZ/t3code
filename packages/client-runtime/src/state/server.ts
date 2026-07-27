@@ -307,6 +307,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:hermes-cron",
       tag: WS_METHODS.hermesCronList,
     }),
+    hermesSkills: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:hermes-skills",
+      tag: WS_METHODS.hermesSkillsList,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -386,6 +390,18 @@ export function createServerEnvironmentAtoms<R, E>(
     mutateHermesCron: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:hermes-cron:mutate",
       tag: WS_METHODS.hermesCronMutate,
+    }),
+    searchHermesSkills: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hermes-skills:search",
+      tag: WS_METHODS.hermesSkillsSearch,
+    }),
+    inspectHermesSkill: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hermes-skills:inspect",
+      tag: WS_METHODS.hermesSkillsInspect,
+    }),
+    reloadHermesSkills: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hermes-skills:reload",
+      tag: WS_METHODS.hermesSkillsReload,
     }),
   };
 }

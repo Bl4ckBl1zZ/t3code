@@ -25,6 +25,7 @@ import {
   layer as HermesSessionBindingRepositoryLayer,
 } from "./hermes/HermesSessionBindingRepository.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
+import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -307,6 +308,10 @@ const HermesCronWithServerSettingsLayerLive = HermesCron.layer.pipe(
   Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
 );
 
+const HermesSkillsWithServerSettingsLayerLive = HermesSkills.layer.pipe(
+  Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+);
+
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   Layer.provideMerge(ProviderEventLoggersLive),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
@@ -316,6 +321,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(HermesCronWithServerSettingsLayerLive),
+  Layer.provideMerge(HermesSkillsWithServerSettingsLayerLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),

@@ -18,6 +18,7 @@ import { Route as SettingsSourceControlRouteImport } from './routes/settings.sou
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
+import { Route as SettingsHermesSkillsRouteImport } from './routes/settings.hermes-skills'
 import { Route as SettingsHermesCronRouteImport } from './routes/settings.hermes-cron'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
@@ -70,6 +71,11 @@ const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   id: '/keybindings',
   path: '/keybindings',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsHermesSkillsRoute = SettingsHermesSkillsRouteImport.update({
+  id: '/hermes-skills',
+  path: '/hermes-skills',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsHermesCronRoute = SettingsHermesCronRouteImport.update({
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/hermes-cron': typeof SettingsHermesCronRoute
+  '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -149,6 +156,7 @@ export interface FileRoutesByTo {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/hermes-cron': typeof SettingsHermesCronRoute
+  '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -170,6 +178,7 @@ export interface FileRoutesById {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/hermes-cron': typeof SettingsHermesCronRoute
+  '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -192,6 +201,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/hermes-cron'
+    | '/settings/hermes-skills'
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -210,6 +220,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/hermes-cron'
+    | '/settings/hermes-skills'
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/hermes-cron'
+    | '/settings/hermes-skills'
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -310,6 +322,13 @@ declare module '@tanstack/react-router' {
       path: '/keybindings'
       fullPath: '/settings/keybindings'
       preLoaderRoute: typeof SettingsKeybindingsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/hermes-skills': {
+      id: '/settings/hermes-skills'
+      path: '/hermes-skills'
+      fullPath: '/settings/hermes-skills'
+      preLoaderRoute: typeof SettingsHermesSkillsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/hermes-cron': {
@@ -399,6 +418,7 @@ interface SettingsRouteChildren {
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsHermesCronRoute: typeof SettingsHermesCronRoute
+  SettingsHermesSkillsRoute: typeof SettingsHermesSkillsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
@@ -412,6 +432,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHermesCronRoute: SettingsHermesCronRoute,
+  SettingsHermesSkillsRoute: SettingsHermesSkillsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,

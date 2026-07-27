@@ -75,6 +75,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
+import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as HermesSessionImport from "./hermes/HermesSessionImportService.ts";
 import {
   archivedShellStreamItemFromSnapshot,
@@ -344,6 +345,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.scheduledTasksRunNow, AuthOrchestrationOperateScope],
   [WS_METHODS.hermesCronList, AuthOrchestrationReadScope],
   [WS_METHODS.hermesCronMutate, AuthOrchestrationOperateScope],
+  [WS_METHODS.hermesSkillsList, AuthOrchestrationReadScope],
+  [WS_METHODS.hermesSkillsSearch, AuthOrchestrationReadScope],
+  [WS_METHODS.hermesSkillsInspect, AuthOrchestrationReadScope],
+  [WS_METHODS.hermesSkillsReload, AuthOrchestrationOperateScope],
   [WS_METHODS.hermesSessionsDiscover, AuthOrchestrationReadScope],
   [WS_METHODS.hermesSessionsImport, AuthOrchestrationOperateScope],
   [WS_METHODS.hermesHistoryReset, AuthOrchestrationOperateScope],
@@ -486,6 +491,7 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const hermesCron = yield* HermesCron.HermesCron;
+      const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
       const projectService = yield* ProjectService.ProjectService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
@@ -1274,6 +1280,22 @@ const makeWsRpcLayer = (
         [WS_METHODS.hermesCronMutate]: (input) =>
           observeRpcEffect(WS_METHODS.hermesCronMutate, hermesCron.mutate(input), {
             "rpc.aggregate": "hermesCron",
+          }),
+        [WS_METHODS.hermesSkillsList]: (_input) =>
+          observeRpcEffect(WS_METHODS.hermesSkillsList, hermesSkills.list(), {
+            "rpc.aggregate": "hermesSkills",
+          }),
+        [WS_METHODS.hermesSkillsSearch]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesSkillsSearch, hermesSkills.search(input), {
+            "rpc.aggregate": "hermesSkills",
+          }),
+        [WS_METHODS.hermesSkillsInspect]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesSkillsInspect, hermesSkills.inspect(input), {
+            "rpc.aggregate": "hermesSkills",
+          }),
+        [WS_METHODS.hermesSkillsReload]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesSkillsReload, hermesSkills.reload(input), {
+            "rpc.aggregate": "hermesSkills",
           }),
         [WS_METHODS.hermesSessionsDiscover]: (input) =>
           observeRpcEffect(WS_METHODS.hermesSessionsDiscover, hermesSessions.discover(input), {

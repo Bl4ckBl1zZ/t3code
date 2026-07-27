@@ -168,6 +168,17 @@ import {
   HermesCronMutationResponse,
 } from "./hermesGateway.ts";
 import {
+  HermesSkillsError,
+  HermesSkillsInspectInput,
+  HermesSkillsInspectResult,
+  HermesSkillsListInput,
+  HermesSkillsListResult,
+  HermesSkillsReloadInput,
+  HermesSkillsReloadResponse,
+  HermesSkillsSearchInput,
+  HermesSkillsSearchResult,
+} from "./hermesSkills.ts";
+import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
@@ -268,6 +279,10 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   hermesCronList: "hermesCron.list",
   hermesCronMutate: "hermesCron.mutate",
+  hermesSkillsList: "hermesSkills.list",
+  hermesSkillsSearch: "hermesSkills.search",
+  hermesSkillsInspect: "hermesSkills.inspect",
+  hermesSkillsReload: "hermesSkills.reload",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -843,6 +858,30 @@ export const WsHermesCronMutateRpc = Rpc.make(WS_METHODS.hermesCronMutate, {
   error: Schema.Union([HermesCronError, EnvironmentAuthorizationError]),
 });
 
+export const WsHermesSkillsListRpc = Rpc.make(WS_METHODS.hermesSkillsList, {
+  payload: HermesSkillsListInput,
+  success: HermesSkillsListResult,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSkillsSearchRpc = Rpc.make(WS_METHODS.hermesSkillsSearch, {
+  payload: HermesSkillsSearchInput,
+  success: HermesSkillsSearchResult,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSkillsInspectRpc = Rpc.make(WS_METHODS.hermesSkillsInspect, {
+  payload: HermesSkillsInspectInput,
+  success: HermesSkillsInspectResult,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSkillsReloadRpc = Rpc.make(WS_METHODS.hermesSkillsReload, {
+  payload: HermesSkillsReloadInput,
+  success: HermesSkillsReloadResponse,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -876,6 +915,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsHermesCronListRpc,
   WsHermesCronMutateRpc,
+  WsHermesSkillsListRpc,
+  WsHermesSkillsSearchRpc,
+  WsHermesSkillsInspectRpc,
+  WsHermesSkillsReloadRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,

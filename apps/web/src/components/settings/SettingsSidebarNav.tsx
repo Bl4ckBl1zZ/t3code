@@ -7,6 +7,7 @@ import {
   Clock3Icon,
   FlaskConicalIcon,
   GitBranchIcon,
+  GraduationCapIcon,
   KeyboardIcon,
   Link2Icon,
   Settings2Icon,
@@ -30,6 +31,7 @@ export type SettingsSectionPath =
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/hermes-cron"
+  | "/settings/hermes-skills"
   | "/settings/source-control"
   | "/settings/connections"
   | "/settings/beta"
@@ -45,6 +47,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Schedule Tasks", to: "/settings/scheduled-tasks", icon: CalendarClockIcon },
   { label: "T3 Work", to: "/settings/hermes-cron", icon: Clock3Icon },
+  { label: "Hermes Skills", to: "/settings/hermes-skills", icon: GraduationCapIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
   { label: "Beta", to: "/settings/beta", icon: FlaskConicalIcon },
