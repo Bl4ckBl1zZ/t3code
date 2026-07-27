@@ -343,6 +343,15 @@ const METHOD_CAPABILITIES: Readonly<Record<string, string>> = {
 
 const SOCKET_OPEN = 1;
 
+function readyVersionFields(
+  payload: HermesGatewayReadyEvent["params"]["payload"],
+): Pick<HermesGatewayCompatibility, "serverVersion" | "revision"> {
+  return {
+    ...(payload.server_version === undefined ? {} : { serverVersion: payload.server_version }),
+    ...(payload.revision === undefined ? {} : { revision: payload.revision }),
+  };
+}
+
 export function classifyHermesGatewayReady(
   event: HermesGatewayReadyEvent,
 ): HermesGatewayCompatibility {
@@ -365,12 +374,7 @@ export function classifyHermesGatewayReady(
       capabilities,
       inventory: advertised ?? null,
       reason: "Gateway did not advertise a negotiated protocol version.",
-      ...(event.params.payload.server_version === undefined
-        ? {}
-        : { serverVersion: event.params.payload.server_version }),
-      ...(event.params.payload.revision === undefined
-        ? {}
-        : { revision: event.params.payload.revision }),
+      ...readyVersionFields(event.params.payload),
     };
   }
   if (protocol.major !== HERMES_GATEWAY_SUPPORTED_PROTOCOL_MAJOR) {
@@ -380,12 +384,7 @@ export function classifyHermesGatewayReady(
       capabilities,
       inventory: advertised ?? null,
       reason: `Unsupported Hermes gateway protocol major ${protocol.major}.`,
-      ...(event.params.payload.server_version === undefined
-        ? {}
-        : { serverVersion: event.params.payload.server_version }),
-      ...(event.params.payload.revision === undefined
-        ? {}
-        : { revision: event.params.payload.revision }),
+      ...readyVersionFields(event.params.payload),
     };
   }
   return {
@@ -394,12 +393,7 @@ export function classifyHermesGatewayReady(
     capabilities,
     inventory: advertised ?? null,
     reason: `Hermes gateway protocol ${protocol.major}.${protocol.minor} is supported.`,
-    ...(event.params.payload.server_version === undefined
-      ? {}
-      : { serverVersion: event.params.payload.server_version }),
-    ...(event.params.payload.revision === undefined
-      ? {}
-      : { revision: event.params.payload.revision }),
+    ...readyVersionFields(event.params.payload),
   };
 }
 
@@ -1558,13 +1552,20 @@ function defaultSocketFactory(endpoint: string): HermesGatewaySocket {
   return new WebSocket(endpoint) as unknown as HermesGatewaySocket;
 }
 
+const compiledResultDecoders = new WeakMap<Schema.Top, (value: unknown) => unknown>();
+
 function decodeResult<S extends Schema.Top>(
   schema: S,
   value: unknown,
   method: string,
 ): Schema.Schema.Type<S> {
+  let decode = compiledResultDecoders.get(schema);
+  if (decode === undefined) {
+    decode = Schema.decodeUnknownSync(schema as never);
+    compiledResultDecoders.set(schema, decode);
+  }
   try {
-    return Schema.decodeUnknownSync(schema as never)(value) as Schema.Schema.Type<S>;
+    return decode(value) as Schema.Schema.Type<S>;
   } catch {
     throw new HermesGatewayProtocolError(`Hermes gateway returned malformed ${method} result.`);
   }

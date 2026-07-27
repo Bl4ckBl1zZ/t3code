@@ -1,6 +1,5 @@
 import {
   HermesCronError,
-  HermesSettings,
   type HermesCronCapabilities,
   type HermesCronExecution,
   type HermesCronJob,
@@ -19,7 +18,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   HermesGatewayClient,
@@ -27,6 +25,11 @@ import {
   type HermesGatewayMutationOptions,
   type HermesGatewayReadOptions,
 } from "./HermesGatewayClient.ts";
+import {
+  hermesManageActionInventory,
+  resolveHermesProviderConnections,
+  type HermesProviderConnection,
+} from "./HermesProviderDirectory.ts";
 
 interface HermesCronGatewayClient {
   readonly compatibility: HermesGatewayCompatibility | undefined;
@@ -42,13 +45,7 @@ interface HermesCronGatewayClient {
   close(): void;
 }
 
-interface HermesCronProviderConfig {
-  readonly providerInstanceId: string;
-  readonly displayName: string;
-  readonly profileKey: string;
-  readonly endpoint: string;
-  readonly token: string;
-}
+type HermesCronProviderConfig = HermesProviderConnection;
 
 export interface HermesCronOptions {
   readonly clientFactory?: (input: {
@@ -68,7 +65,6 @@ export class HermesCron extends Context.Service<HermesCron, HermesCronShape>()(
   "t3/hermes/HermesCron",
 ) {}
 
-const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 const isHermesCronError = Schema.is(HermesCronError);
 const digest = (value: unknown): string =>
   NodeCrypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -82,25 +78,11 @@ const string = (value: unknown): string | undefined =>
 const stringOrNumber = (value: unknown): string | number | undefined =>
   typeof value === "string" || typeof value === "number" ? value : undefined;
 
-function actionInventory(compatibility: HermesGatewayCompatibility): ReadonlySet<string> {
-  const actions = new Set<string>();
-  const inventory = record(compatibility.inventory);
-  const manage = record(inventory?.["cron.manage"]);
-  const candidates = [manage?.actions, manage?.operations];
-  for (const candidate of candidates) {
-    if (!Array.isArray(candidate)) continue;
-    for (const action of candidate) {
-      if (typeof action === "string") actions.add(action.toLowerCase());
-    }
-  }
-  return actions;
-}
-
 export function projectHermesCronCapabilities(
   compatibility: HermesGatewayCompatibility,
 ): HermesCronCapabilities {
   const capabilities = new Set(compatibility.capabilities);
-  const actions = actionInventory(compatibility);
+  const actions = hermesManageActionInventory(compatibility, "cron.manage");
   const supports = (operation: string, ...aliases: ReadonlyArray<string>) =>
     aliases.some((capability) => capabilities.has(capability)) ||
     actions.has(operation) ||
@@ -259,20 +241,6 @@ const unavailableProjection = (
   diagnostics: [diagnostic],
 });
 
-const tokenFromEnvironment = (
-  environment: ReadonlyArray<{
-    readonly name: string;
-    readonly value: string;
-    readonly sensitive: boolean;
-  }>,
-) =>
-  environment.find(
-    (variable) =>
-      variable.name === "HERMES_GATEWAY_TOKEN" &&
-      variable.sensitive &&
-      variable.value.trim().length > 0,
-  )?.value;
-
 function mutationCapability(
   capabilities: HermesCronCapabilities,
   operation: HermesCronMutationInput["operation"],
@@ -335,56 +303,18 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
           }),
       ),
     );
-    const instances = deriveProviderInstanceConfigMap(settings);
-    const ready: HermesCronProviderConfig[] = [];
-    const unavailable: HermesCronProviderProjection[] = [];
-    for (const [providerInstanceId, instance] of Object.entries(instances)) {
-      if (instance.driver !== "hermes") continue;
-      let config: HermesSettings;
-      try {
-        config = decodeHermesSettings(instance.config ?? {});
-      } catch {
-        unavailable.push(
-          unavailableProjection(
-            providerInstanceId,
-            instance.displayName ?? providerInstanceId,
-            "unknown",
-            "Hermes provider settings are invalid.",
-          ),
-        );
-        continue;
-      }
-      const displayName = instance.displayName ?? providerInstanceId;
-      const token = tokenFromEnvironment(instance.environment ?? []);
-      if (instance.enabled !== true || !settings.enableHermes) {
-        unavailable.push(
-          unavailableProjection(
-            providerInstanceId,
-            displayName,
-            config.profileKey,
-            "Hermes is disabled.",
-          ),
-        );
-      } else if (!config.endpoint || !token) {
-        unavailable.push(
-          unavailableProjection(
-            providerInstanceId,
-            displayName,
-            config.profileKey,
-            "Hermes gateway endpoint or sensitive token is not configured.",
-          ),
-        );
-      } else {
-        ready.push({
-          providerInstanceId,
-          displayName,
-          profileKey: config.profileKey,
-          endpoint: config.endpoint,
-          token,
-        });
-      }
-    }
-    return { ready, unavailable };
+    const directory = resolveHermesProviderConnections(settings);
+    return {
+      ready: directory.ready,
+      unavailable: directory.unavailable.map((provider) =>
+        unavailableProjection(
+          provider.providerInstanceId,
+          provider.displayName,
+          provider.profileKey,
+          provider.diagnostic,
+        ),
+      ),
+    };
   });
 
   const loadProvider = Effect.fn("HermesCron.loadProvider")(function* (

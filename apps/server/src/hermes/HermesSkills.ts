@@ -1,5 +1,4 @@
 import {
-  HermesSettings,
   HermesSkillsError,
   type HermesGatewayCompatibility,
   type HermesGatewaySkillsInspectResult,
@@ -22,7 +21,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   HermesGatewayClient,
@@ -31,6 +29,11 @@ import {
   type HermesGatewayMutationOptions,
   type HermesGatewayReadOptions,
 } from "./HermesGatewayClient.ts";
+import {
+  hermesManageActionInventory,
+  resolveHermesProviderConnections,
+  type HermesProviderConnection,
+} from "./HermesProviderDirectory.ts";
 
 interface HermesSkillsGatewayClient {
   readonly compatibility: HermesGatewayCompatibility | undefined;
@@ -53,13 +56,7 @@ interface HermesSkillsGatewayClient {
   close(): void;
 }
 
-interface HermesSkillsProviderConfig {
-  readonly providerInstanceId: string;
-  readonly displayName: string;
-  readonly profileKey: string;
-  readonly endpoint: string;
-  readonly token: string;
-}
+type HermesSkillsProviderConfig = HermesProviderConnection;
 
 export interface HermesSkillsOptions {
   readonly clientFactory?: (input: {
@@ -85,14 +82,6 @@ export class HermesSkills extends Context.Service<HermesSkills, HermesSkillsShap
   "t3/hermes/HermesSkills",
 ) {}
 
-const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
-const decodedHermesSettings = (config: unknown): HermesSettings | null => {
-  try {
-    return decodeHermesSettings(config);
-  } catch {
-    return null;
-  }
-};
 const isHermesSkillsError = Schema.is(HermesSkillsError);
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -101,20 +90,6 @@ const record = (value: unknown): Record<string, unknown> | undefined =>
     : undefined;
 const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
-
-function skillsActionInventory(compatibility: HermesGatewayCompatibility): ReadonlySet<string> {
-  const actions = new Set<string>();
-  const inventory = record(compatibility.inventory);
-  const manage = record(inventory?.["skills.manage"]);
-  const candidates = [manage?.actions, manage?.operations];
-  for (const candidate of candidates) {
-    if (!Array.isArray(candidate)) continue;
-    for (const action of candidate) {
-      if (typeof action === "string") actions.add(action.toLowerCase());
-    }
-  }
-  return actions;
-}
 
 /**
  * Skills readiness comes only from the negotiated capability inventory. A
@@ -128,7 +103,7 @@ export function projectHermesSkillsCapabilities(
     return { inventory: false, search: false, inspect: false, reload: false };
   }
   const capabilities = new Set(compatibility.capabilities);
-  const actions = skillsActionInventory(compatibility);
+  const actions = hermesManageActionInventory(compatibility, "skills.manage");
   const manage = capabilities.has("skills.manage");
   const supports = (action: string) => manage && (actions.size === 0 || actions.has(action));
   return {
@@ -175,20 +150,6 @@ const unavailableProjection = (
   diagnostics: [diagnostic],
 });
 
-const tokenFromEnvironment = (
-  environment: ReadonlyArray<{
-    readonly name: string;
-    readonly value: string;
-    readonly sensitive: boolean;
-  }>,
-) =>
-  environment.find(
-    (variable) =>
-      variable.name === "HERMES_GATEWAY_TOKEN" &&
-      variable.sensitive &&
-      variable.value.trim().length > 0,
-  )?.value;
-
 export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
   options: HermesSkillsOptions = {},
 ) {
@@ -208,54 +169,18 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
           }),
       ),
     );
-    const instances = deriveProviderInstanceConfigMap(settings);
-    const ready: HermesSkillsProviderConfig[] = [];
-    const unavailable: HermesSkillsProviderProjection[] = [];
-    for (const [providerInstanceId, instance] of Object.entries(instances)) {
-      if (instance.driver !== "hermes") continue;
-      const config = decodedHermesSettings(instance.config ?? {});
-      if (config === null) {
-        unavailable.push(
-          unavailableProjection(
-            providerInstanceId,
-            instance.displayName ?? providerInstanceId,
-            "unknown",
-            "Hermes provider settings are invalid.",
-          ),
-        );
-        continue;
-      }
-      const displayName = instance.displayName ?? providerInstanceId;
-      const token = tokenFromEnvironment(instance.environment ?? []);
-      if (instance.enabled !== true || !settings.enableHermes) {
-        unavailable.push(
-          unavailableProjection(
-            providerInstanceId,
-            displayName,
-            config.profileKey,
-            "Hermes is disabled.",
-          ),
-        );
-      } else if (!config.endpoint || !token) {
-        unavailable.push(
-          unavailableProjection(
-            providerInstanceId,
-            displayName,
-            config.profileKey,
-            "Hermes gateway endpoint or sensitive token is not configured.",
-          ),
-        );
-      } else {
-        ready.push({
-          providerInstanceId,
-          displayName,
-          profileKey: config.profileKey,
-          endpoint: config.endpoint,
-          token,
-        });
-      }
-    }
-    return { ready, unavailable };
+    const directory = resolveHermesProviderConnections(settings);
+    return {
+      ready: directory.ready,
+      unavailable: directory.unavailable.map((provider) =>
+        unavailableProjection(
+          provider.providerInstanceId,
+          provider.displayName,
+          provider.profileKey,
+          provider.diagnostic,
+        ),
+      ),
+    };
   });
 
   const blockedProjection = (
