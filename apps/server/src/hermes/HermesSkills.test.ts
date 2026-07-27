@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
+import { HermesGatewayMutationsBlockedError } from "./HermesGatewayClient.ts";
 import {
   makeHermesSkills,
   projectHermesSkillEntry,
@@ -206,6 +207,21 @@ describe("HermesSkills service", () => {
         total: 3,
         output: "Reloaded",
       });
+    }).pipe(Effect.provide(settingsLayer)),
+  );
+
+  it.effect("maps blocked gateway writes to mutations_blocked instead of indeterminate", () =>
+    Effect.gen(function* () {
+      const skills = yield* makeHermesSkills({
+        clientFactory: () =>
+          makeClient(supportedCompatibility, {
+            reloadSkills: () => Promise.reject(new HermesGatewayMutationsBlockedError(["op-old"])),
+          }),
+      });
+      const failure = yield* skills
+        .reload({ providerInstanceId: "hermes_main", operationId: "op-1" })
+        .pipe(Effect.flip);
+      expect(failure.code).toBe("mutations_blocked");
     }).pipe(Effect.provide(settingsLayer)),
   );
 

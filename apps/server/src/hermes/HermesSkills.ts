@@ -316,10 +316,16 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
       },
       catch: (cause) => {
         if (isHermesSkillsError(cause)) return cause;
-        if (
-          cause instanceof HermesGatewayMutationIndeterminateError ||
-          cause instanceof HermesGatewayMutationsBlockedError
-        ) {
+        if (cause instanceof HermesGatewayMutationsBlockedError) {
+          return new HermesSkillsError({
+            code: "mutations_blocked",
+            providerInstanceId: config.providerInstanceId,
+            operation,
+            message:
+              "Hermes gateway writes are blocked by an unresolved mutation; retry after it is reconciled.",
+          });
+        }
+        if (cause instanceof HermesGatewayMutationIndeterminateError) {
           return new HermesSkillsError({
             code: "indeterminate",
             providerInstanceId: config.providerInstanceId,

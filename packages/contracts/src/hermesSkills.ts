@@ -122,6 +122,7 @@ export class HermesSkillsError extends Schema.TaggedErrorClass<HermesSkillsError
       "unsupported_operation",
       "invalid_input",
       "gateway_error",
+      "mutations_blocked",
       "indeterminate",
     ]),
     message: Schema.String,

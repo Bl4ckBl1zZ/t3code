@@ -823,6 +823,23 @@ describe("HermesGatewayClient recovery", () => {
     client.close();
   });
 
+  it("transitions to disconnected when the socket factory throws", async () => {
+    const client = new HermesGatewayClient({
+      endpoint: "ws://127.0.0.1:9119/api/ws",
+      authToken: "private-token",
+      socketFactory: () => {
+        throw new Error("socket construction refused");
+      },
+      reconnect: { maxAttempts: 0 },
+    });
+    const states: Array<string> = [];
+    client.onHealthChange((snapshot) => states.push(snapshot.state));
+
+    await expect(client.connect()).rejects.toThrow("socket construction refused");
+    expect(states).toContain("disconnected");
+    client.close();
+  });
+
   it("queues reconnect-time reads and permits a known-unsent mutation retry", async () => {
     const factory = new FakeSocketFactory();
     const { client, socket } = await openClient(factory, {

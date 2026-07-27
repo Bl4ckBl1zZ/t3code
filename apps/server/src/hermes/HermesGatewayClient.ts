@@ -1071,7 +1071,15 @@ export class HermesGatewayClient {
       throw new HermesGatewayConnectionError("Hermes gateway client closed.");
     }
     const generation = ++this.connectionGeneration;
-    const socket = this.socketFactory(this.endpoint);
+    let socket: HermesGatewaySocket;
+    try {
+      socket = this.socketFactory(this.endpoint);
+    } catch (error) {
+      this.setState("disconnected", attempt);
+      throw error instanceof Error
+        ? error
+        : new HermesGatewayConnectionError("Hermes gateway socket creation failed.");
+    }
     this.socket = socket;
 
     const opened = new Promise<void>((resolve, reject) => {
