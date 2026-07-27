@@ -402,6 +402,10 @@ interface ActiveHermesTurn {
   providerTurn: OrchestrationV2ProviderTurn | null;
   assistantNativeId: string | null;
   assistantText: string;
+  // Set when assistantText came from a full-message snapshot (start/interim)
+  // so a subsequent delta stream, which re-streams the message from its
+  // beginning, replaces the snapshot instead of appending to it.
+  assistantSnapshotPending: boolean;
   assistantStartedAt: DateTime.Utc | null;
   reasoningText: string;
   reasoningStartedAt: DateTime.Utc | null;
@@ -2069,13 +2073,20 @@ export function makeHermesServeAdapterV2(
             active.assistantNativeId =
               eventMessageId(event) ?? active.assistantNativeId ?? active.operationId;
             const text = eventText(event);
-            if (text) active.assistantText = text;
+            if (text) {
+              active.assistantText = text;
+              active.assistantSnapshotPending = true;
+            }
             yield* messageArtifacts(state, active, false);
             return;
           }
           case "message.delta": {
             active.assistantNativeId =
               eventMessageId(event) ?? active.assistantNativeId ?? active.operationId;
+            if (active.assistantSnapshotPending) {
+              active.assistantText = "";
+              active.assistantSnapshotPending = false;
+            }
             active.assistantText += eventText(event);
             yield* messageArtifacts(state, active, false);
             return;
@@ -2092,6 +2103,7 @@ export function makeHermesServeAdapterV2(
                 ? text
                 : `${active.assistantText}${text}`;
             }
+            active.assistantSnapshotPending = true;
             yield* messageArtifacts(state, active, false);
             return;
           }
@@ -2100,7 +2112,7 @@ export function makeHermesServeAdapterV2(
             active.assistantNativeId =
               eventMessageId(event) ?? active.assistantNativeId ?? active.operationId;
             const text = eventText(event);
-            if (text && text !== active.assistantText) {
+            if (text && text !== active.assistantText && !active.assistantText.endsWith(text)) {
               active.assistantText = text.startsWith(active.assistantText)
                 ? text
                 : `${active.assistantText}${text}`;
@@ -3039,6 +3051,7 @@ export function makeHermesServeAdapterV2(
               providerTurn: null,
               assistantNativeId: null,
               assistantText: "",
+              assistantSnapshotPending: false,
               assistantStartedAt: null,
               reasoningText: "",
               reasoningStartedAt: null,

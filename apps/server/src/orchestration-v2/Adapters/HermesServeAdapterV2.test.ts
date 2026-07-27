@@ -1426,6 +1426,8 @@ describe("HermesServeAdapterV2", () => {
         const interim = "Spawned the subagent; I'll report its answer when it returns.";
         yield* Effect.promise(() => fake.emit("message.interim", { text: interim }));
         yield* Effect.promise(() => fake.emit("message.interim", { text: interim }));
+        // Deltas re-stream the message from the beginning after a snapshot.
+        yield* Effect.promise(() => fake.emit("message.delta", { text: interim }));
         yield* Effect.promise(() => fake.emit("message.complete", { text: interim }));
 
         const projected = yield* runtime.events.pipe(
