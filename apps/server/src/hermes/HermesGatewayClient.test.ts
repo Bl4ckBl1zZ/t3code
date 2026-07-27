@@ -852,6 +852,7 @@ describe("HermesGatewayClient recovery", () => {
     });
 
     await expect(client.connect()).rejects.toThrow("Timed out opening gateway connection.");
+    expect(client.health.state).toBe("disconnected");
     client.close();
   });
 

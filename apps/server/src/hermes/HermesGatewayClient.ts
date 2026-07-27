@@ -1151,6 +1151,12 @@ export class HermesGatewayClient {
           ? error
           : new HermesGatewayConnectionError("Hermes gateway handshake failed."),
       );
+      if (generation === this.connectionGeneration && !this.manuallyClosed) {
+        this.connectionGeneration += 1;
+        if (this.stateValue === "connecting" || this.stateValue === "ready") {
+          this.handleConnectionFailure();
+        }
+      }
       throw error;
     }
   }
@@ -1433,7 +1439,11 @@ export class HermesGatewayClient {
     this.socket = undefined;
     this.rejectReady(new HermesGatewayConnectionError("Hermes gateway disconnected."));
     if (this.manuallyClosed || this.stateValue === "closed") return;
+    this.handleConnectionFailure();
+  }
 
+  private handleConnectionFailure(): void {
+    this.socket = undefined;
     for (const pending of this.pending.values()) {
       this.clearPendingResources(pending);
       if (pending.operation === "read" && pending.retryOnReconnect) {
