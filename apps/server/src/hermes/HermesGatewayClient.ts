@@ -199,6 +199,7 @@ export interface HermesGatewayClientOptions {
   readonly socketFactory?: HermesGatewaySocketFactory;
   readonly requestTimeoutMs?: number;
   readonly readyTimeoutMs?: number;
+  readonly openTimeoutMs?: number;
   readonly reconnect?: {
     readonly maxAttempts?: number;
     readonly baseDelayMs?: number;
@@ -407,6 +408,7 @@ export class HermesGatewayClient {
   private readonly socketFactory: HermesGatewaySocketFactory;
   private readonly requestTimeoutMs: number;
   private readonly readyTimeoutMs: number;
+  private readonly openTimeoutMs: number;
   private readonly maxReconnectAttempts: number;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
@@ -441,6 +443,7 @@ export class HermesGatewayClient {
     this.socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.requestTimeoutMs = positive(options.requestTimeoutMs, 15_000);
     this.readyTimeoutMs = positive(options.readyTimeoutMs, 10_000);
+    this.openTimeoutMs = positive(options.openTimeoutMs, 10_000);
     this.maxReconnectAttempts = nonNegative(options.reconnect?.maxAttempts, 3);
     this.reconnectBaseDelayMs = positive(options.reconnect?.baseDelayMs, 100);
     this.reconnectMaxDelayMs = positive(options.reconnect?.maxDelayMs, 2_000);
@@ -1075,7 +1078,7 @@ export class HermesGatewayClient {
     try {
       socket = this.socketFactory(this.endpoint);
     } catch (error) {
-      this.setState("disconnected", attempt);
+      if (!reconnect) this.setState("disconnected", attempt);
       throw error instanceof Error
         ? error
         : new HermesGatewayConnectionError("Hermes gateway socket creation failed.");
@@ -1083,15 +1086,32 @@ export class HermesGatewayClient {
     this.socket = socket;
 
     const opened = new Promise<void>((resolve, reject) => {
-      socket.addEventListener("open", () => resolve(), { once: true });
+      const timer = setTimeout(
+        () => reject(new HermesGatewayConnectionError("Timed out opening gateway connection.")),
+        this.openTimeoutMs,
+      );
+      socket.addEventListener(
+        "open",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
       socket.addEventListener(
         "error",
-        () => reject(new HermesGatewayConnectionError("Hermes gateway connection failed.")),
+        () => {
+          clearTimeout(timer);
+          reject(new HermesGatewayConnectionError("Hermes gateway connection failed."));
+        },
         { once: true },
       );
       socket.addEventListener(
         "close",
-        () => reject(new HermesGatewayConnectionError("Hermes gateway connection closed.")),
+        () => {
+          clearTimeout(timer);
+          reject(new HermesGatewayConnectionError("Hermes gateway connection closed."));
+        },
         { once: true },
       );
     });

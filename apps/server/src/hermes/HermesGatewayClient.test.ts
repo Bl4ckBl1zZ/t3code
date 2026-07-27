@@ -832,11 +832,26 @@ describe("HermesGatewayClient recovery", () => {
       },
       reconnect: { maxAttempts: 0 },
     });
-    const states: Array<string> = [];
-    client.onHealthChange((snapshot) => states.push(snapshot.state));
-
     await expect(client.connect()).rejects.toThrow("socket construction refused");
-    expect(states).toContain("disconnected");
+    expect(client.health.state).toBe("disconnected");
+    client.close();
+  });
+
+  it("rejects connect when the socket never emits open", async () => {
+    const client = new HermesGatewayClient({
+      endpoint: "ws://127.0.0.1:9119/api/ws",
+      authToken: "private-token",
+      socketFactory: () => ({
+        readyState: 0,
+        addEventListener: () => {},
+        send: () => {},
+        close: () => {},
+      }),
+      reconnect: { maxAttempts: 0 },
+      openTimeoutMs: 5,
+    });
+
+    await expect(client.connect()).rejects.toThrow("Timed out opening gateway connection.");
     client.close();
   });
 
