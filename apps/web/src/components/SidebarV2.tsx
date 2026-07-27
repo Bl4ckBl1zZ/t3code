@@ -739,9 +739,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     [onSnooze, threadRef],
   );
   const handleTogglePinClick = useCallback(
-    (event: ReactMouseEvent) => {
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
+      // A clicked button keeps focus, and the hover-action cluster stays
+      // visible via focus-within; drop focus so it fades with the pointer.
+      event.currentTarget.blur();
       onTogglePin(threadRef);
     },
     [onTogglePin, threadRef],
