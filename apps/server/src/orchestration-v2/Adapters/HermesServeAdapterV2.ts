@@ -1030,6 +1030,9 @@ export function makeHermesServeAdapterV2(
             detail: `Hermes mutation ${intent.operationId} is already terminal (${intent.state})`,
           });
         }
+        if (!client.hasCapability("mutation.stable_ids")) {
+          return { mutation_status: "admitted" } as const;
+        }
         return yield* gatewayEffect(() =>
           client.reconcileMutation(intent.operationId, hermesWireMutationId(intent.operationId)),
         );
@@ -2102,6 +2105,11 @@ export function makeHermesServeAdapterV2(
         return acquired.value;
       });
 
+      const readTitleState = Effect.fnUntraced(function* (liveSessionId: string) {
+        if (!client.hasCapability("session.title")) return undefined;
+        return yield* gatewayEffect(() => client.readSessionTitle({ session_id: liveSessionId }));
+      });
+
       const ensureSessionMcp = Effect.fnUntraced(function* (
         liveSessionId: string,
         threadId: ProviderAdapterV2EnsureThreadInput["threadId"],
@@ -2334,9 +2342,7 @@ export function makeHermesServeAdapterV2(
             profile: options.settings.profileKey,
           }),
         );
-        const titleState = yield* gatewayEffect(() =>
-          client.readSessionTitle({ session_id: resumed.session_id }),
-        );
+        const titleState = yield* readTitleState(resumed.session_id);
         const recoveredWork =
           resumed.running ||
           hasRecoveredWork(resumed.inflight) ||
@@ -2509,9 +2515,7 @@ export function makeHermesServeAdapterV2(
             profile: options.settings.profileKey,
           }),
         );
-        const titleState = yield* gatewayEffect(() =>
-          client.readSessionTitle({ session_id: created.session_id }),
-        );
+        const titleState = yield* readTitleState(created.session_id);
         return yield* registerState(
           loaded.value,
           created.session_id,
@@ -2670,6 +2674,7 @@ export function makeHermesServeAdapterV2(
             alignStateProviderThread(state, turnInput.providerThread);
             const projectedTitle = turnInput.appThread.title.trim();
             if (
+              client.hasCapability("session.title") &&
               projectedTitle &&
               projectedTitle !== state.title &&
               (turnInput.appThread.titleRevision ?? state.titleRevision) === state.titleRevision
@@ -3263,9 +3268,7 @@ export function makeHermesServeAdapterV2(
                 profile: options.settings.profileKey,
               }),
             );
-            const titleState = yield* gatewayEffect(() =>
-              client.readSessionTitle({ session_id: branched.session_id }),
-            );
+            const titleState = yield* readTitleState(branched.session_id);
             const child = yield* registerState(
               childBinding.value,
               branched.session_id,

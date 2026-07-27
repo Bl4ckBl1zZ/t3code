@@ -98,6 +98,8 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
   }> = [];
   readonly mcpReplacements: Array<HermesGatewaySessionMcpParams> = [];
   readonly mcpRevocations: Array<string> = [];
+  readonly titleReads: Array<string> = [];
+  readonly titleUpdates: Array<string> = [];
   mcpReplacementResult: {
     readonly scopeSessionId?: string;
     readonly serverName?: string;
@@ -236,7 +238,8 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     return this.history;
   }
 
-  async readSessionTitle() {
+  async readSessionTitle(params: { readonly session_id: string }) {
+    this.titleReads.push(params.session_id);
     return {
       session_key: "stored-session-1",
       title: "Hermes session",
@@ -246,6 +249,7 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
   }
 
   async updateSessionTitle(params: { readonly title: string }) {
+    this.titleUpdates.push(params.title);
     if (this.titleError) throw this.titleError;
     return {
       session_key: "stored-session-1",
@@ -631,6 +635,108 @@ describe("HermesServeAdapterV2", () => {
 
         assert.equal(exit._tag, "Failure");
         assert.equal(fake.mcpReplacements.length, 1);
+      }).pipe(Effect.provide(TestLayer)),
+    ),
+  );
+
+  it.effect("creates and prompts without optional session.title and session_mcp capabilities", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        McpProviderSession.setMcpProviderSession({
+          credentialId: "credential-hermes-degraded",
+          environmentId: EnvironmentId.make("environment-hermes-test"),
+          threadId,
+          providerSessionId: "mcp-provider-session-hermes-degraded",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer scoped-hermes-token",
+          capabilities: ["orchestration"],
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+        );
+        const runtime = yield* makeRuntime(fake, true, undefined, true);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "response", status: "complete" }),
+        );
+
+        assert.equal(fake.creates.length, 1);
+        assert.equal(fake.prompts.length, 1);
+        assert.deepEqual(fake.titleReads, []);
+        assert.deepEqual(fake.titleUpdates, []);
+        assert.deepEqual(fake.mcpReplacements, []);
+        assert.deepEqual(fake.mcpRevocations, []);
+        assert.isFalse(runtime.providerSession.capabilities.tools.supportsMcpTools);
+      }).pipe(Effect.provide(TestLayer)),
+    ),
+  );
+
+  it.effect("resumes and prompts without optional session.title and session_mcp capabilities", () =>
+    Effect.gen(function* () {
+      const createFake = new FakeHermesGatewayClient();
+      const createdThread = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(createFake);
+          return yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }),
+      );
+      const resumeFake = new FakeHermesGatewayClient();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(resumeFake, true, undefined, true);
+          const resumed = yield* runtime.resumeThread({
+            providerThread: createdThread,
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(turnInput(resumed));
+          yield* Effect.promise(() =>
+            resumeFake.emit(
+              "message.complete",
+              { text: "response", status: "complete" },
+              {
+                sessionId: "live-resume-1",
+              },
+            ),
+          );
+
+          assert.equal(resumeFake.resumes.length, 1);
+          assert.equal(resumeFake.prompts.length, 1);
+          assert.deepEqual(resumeFake.titleReads, []);
+          assert.deepEqual(resumeFake.titleUpdates, []);
+          assert.deepEqual(resumeFake.mcpReplacements, []);
+        }),
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("fails a fork with a typed error when session.branch.latest is not advertised", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        const exit = yield* Effect.exit(
+          runtime.forkThread({
+            sourceProviderThread: providerThread,
+            targetThreadId: ThreadId.make("thread:hermes-test:fork"),
+          }),
+        );
+
+        assert.equal(exit._tag, "Failure");
       }).pipe(Effect.provide(TestLayer)),
     ),
   );
@@ -1526,6 +1632,10 @@ describe("HermesServeAdapterV2", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const fake = new FakeHermesGatewayClient();
+        fake.compatibility = {
+          ...compatibility,
+          capabilities: [...compatibility.capabilities, "session.title"],
+        };
         fake.titleError = new HermesGatewayRpcError(4022, "session.title", "fatal");
         const runtime = yield* makeRuntime(fake);
         const providerThread = yield* runtime.ensureThread({
