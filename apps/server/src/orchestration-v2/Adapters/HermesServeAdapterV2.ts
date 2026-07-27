@@ -2073,11 +2073,25 @@ export function makeHermesServeAdapterV2(
             yield* messageArtifacts(state, active, false);
             return;
           }
-          case "message.delta":
-          case "message.interim": {
+          case "message.delta": {
             active.assistantNativeId =
               eventMessageId(event) ?? active.assistantNativeId ?? active.operationId;
             active.assistantText += eventText(event);
+            yield* messageArtifacts(state, active, false);
+            return;
+          }
+          case "message.interim": {
+            active.assistantNativeId =
+              eventMessageId(event) ?? active.assistantNativeId ?? active.operationId;
+            // Interim events carry a full message snapshot, not a delta:
+            // merge instead of appending so a repeated snapshot (e.g. the
+            // delegation acknowledgement) is not duplicated.
+            const text = eventText(event);
+            if (text && text !== active.assistantText) {
+              active.assistantText = text.startsWith(active.assistantText)
+                ? text
+                : `${active.assistantText}${text}`;
+            }
             yield* messageArtifacts(state, active, false);
             return;
           }

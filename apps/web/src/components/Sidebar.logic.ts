@@ -180,7 +180,9 @@ export function isThreadVisibleInSidebarWorkspace(
  * visible there. Otherwise, leaving a thread that belongs to the other
  * workspace open would strand the user on stale content, so the switch
  * falls back to the target workspace's new-chat composer. Routes that are
- * already workspace-neutral (drafts, the index composer) stay put.
+ * already workspace-neutral (the index composer) stay put, but a draft
+ * composer pinned to the other workspace's project (e.g. a Hermes Work
+ * draft) is not neutral and also routes to the target composer.
  */
 export type WorkspaceSwitchNavigation =
   | { kind: "remembered-thread"; threadKey: string }
@@ -191,6 +193,7 @@ export function resolveWorkspaceSwitchNavigation(input: {
   nextWorkspace: SidebarWorkspace;
   rememberedThreadKey: string | undefined;
   routeThreadKey: string | null;
+  routeDraftWorkspace?: SidebarWorkspace | null;
   threads: readonly (Pick<
     SidebarThreadSummary,
     "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
@@ -212,7 +215,12 @@ export function resolveWorkspaceSwitchNavigation(input: {
   if (input.rememberedThreadKey !== undefined && isVisible(input.rememberedThreadKey)) {
     return { kind: "remembered-thread", threadKey: input.rememberedThreadKey };
   }
-  if (input.routeThreadKey === null || isVisible(input.routeThreadKey)) {
+  if (input.routeThreadKey === null) {
+    return input.routeDraftWorkspace != null && input.routeDraftWorkspace !== input.nextWorkspace
+      ? { kind: "new-chat" }
+      : { kind: "stay" };
+  }
+  if (isVisible(input.routeThreadKey)) {
     return { kind: "stay" };
   }
   return { kind: "new-chat" };

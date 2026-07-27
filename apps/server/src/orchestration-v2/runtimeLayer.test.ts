@@ -659,6 +659,24 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       yield* orchestrator.dispatch({
         type: "thread.unsettle",
+        commandId: CommandId.make("runtime-layer-lifecycle-unsettle-historical"),
+        threadId,
+        reason: "user",
+      });
+      const historicalSettledAt = "2025-11-02T03:04:05.000Z";
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-layer-lifecycle-settle-historical"),
+        threadId,
+        settledAt: historicalSettledAt,
+      });
+      const historicalProjection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNotNull(historicalProjection.thread.settledAt);
+      assert.equal(DateTime.formatIso(historicalProjection.thread.settledAt!), historicalSettledAt);
+      assert.equal(DateTime.formatIso(historicalProjection.thread.updatedAt), historicalSettledAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
         commandId: CommandId.make("runtime-layer-lifecycle-unsettle"),
         threadId,
         reason: "user",

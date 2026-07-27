@@ -1045,12 +1045,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return { ...thread, deletedAt: thread.deletedAt ?? now, updatedAt: now };
         case "thread.settle": {
           const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
+          // Historical settles (provider imports) supply their own settledAt
+          // so imported threads sort and age by when the work actually ended.
+          const settledAt =
+            command.settledAt !== undefined
+              ? Option.getOrElse(DateTime.make(command.settledAt), () => now)
+              : now;
           return {
             ...thread,
             settledOverride: "settled",
-            settledAt: alreadySettled ? thread.settledAt : now,
+            settledAt: alreadySettled ? thread.settledAt : settledAt,
             pinnedAt: null,
-            updatedAt: alreadySettled ? thread.updatedAt : now,
+            updatedAt: alreadySettled ? thread.updatedAt : settledAt,
           };
         }
         case "thread.unsettle": {

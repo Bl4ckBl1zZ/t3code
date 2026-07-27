@@ -1996,10 +1996,25 @@ export default function SidebarV2() {
     (nextWorkspace: SidebarWorkspace) => {
       if (nextWorkspace === workspace) return;
       setWorkspace(nextWorkspace);
+      // A draft composer is only workspace-neutral when its project does not
+      // pin it to one side: a draft on the Hermes backing project is a Work
+      // composer and must not stay open when switching to Code.
+      const routeDraftWorkspace = (() => {
+        const target = routeTargetRef.current;
+        if (target?.kind !== "draft") return null;
+        const draft = useComposerDraftStore.getState().getDraftSession(target.draftId);
+        if (draft === null) return null;
+        return hermesBackingProject !== null &&
+          draft.environmentId === hermesBackingProject.environmentId &&
+          draft.projectId === hermesBackingProject.id
+          ? ("work" as const)
+          : ("code" as const);
+      })();
       const navigation = resolveWorkspaceSwitchNavigation({
         nextWorkspace,
         rememberedThreadKey: workspaceRoutes[nextWorkspace],
         routeThreadKey,
+        routeDraftWorkspace,
         threads: threads.map((thread) => ({
           ...thread,
           threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -2028,6 +2043,7 @@ export default function SidebarV2() {
       }
     },
     [
+      hermesBackingProject,
       navigateToThread,
       openWorkComposer,
       providerDriverKindByInstance,

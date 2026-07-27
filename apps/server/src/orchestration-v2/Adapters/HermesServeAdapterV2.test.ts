@@ -1411,6 +1411,36 @@ describe("HermesServeAdapterV2", () => {
       ).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("does not duplicate repeated interim message snapshots", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+
+        const interim = "Spawned the subagent; I'll report its answer when it returns.";
+        yield* Effect.promise(() => fake.emit("message.interim", { text: interim }));
+        yield* Effect.promise(() => fake.emit("message.interim", { text: interim }));
+        yield* Effect.promise(() => fake.emit("message.complete", { text: interim }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const messages = [...projected].filter((event) => event.type === "message.updated");
+        assert.equal(
+          messages.at(-1)?.type === "message.updated" ? messages.at(-1)!.message.text : "",
+          interim,
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("turns completed assistant MEDIA output into attachments without exposing paths", () =>
     Effect.scoped(
       Effect.gen(function* () {

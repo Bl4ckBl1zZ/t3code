@@ -590,6 +590,39 @@ describe("resolveWorkspaceSwitchNavigation", () => {
       }),
     ).toEqual({ kind: "stay" });
   });
+
+  it("routes to the target composer when the open draft belongs to the other workspace", () => {
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "code",
+        rememberedThreadKey: undefined,
+        routeThreadKey: null,
+        routeDraftWorkspace: "work",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "new-chat" });
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "work",
+        rememberedThreadKey: undefined,
+        routeThreadKey: null,
+        routeDraftWorkspace: "code",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "new-chat" });
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "code",
+        rememberedThreadKey: undefined,
+        routeThreadKey: null,
+        routeDraftWorkspace: "code",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "stay" });
+  });
 });
 
 function makeLatestRun(overrides?: {

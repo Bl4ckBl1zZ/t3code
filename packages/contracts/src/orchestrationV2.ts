@@ -1856,6 +1856,9 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    // Historical settle time supplied by provider imports so imported
+    // threads keep their upstream age instead of the import wall-clock.
+    settledAt: Schema.optional(IsoDateTime),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsettle"),
