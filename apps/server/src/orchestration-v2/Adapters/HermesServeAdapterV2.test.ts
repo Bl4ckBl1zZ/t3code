@@ -1070,6 +1070,167 @@ describe("HermesServeAdapterV2", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("leaves the inherited boundary unrecorded while imported history reads empty", () =>
+    Effect.gen(function* () {
+      const createFake = new FakeHermesGatewayClient();
+      const createdThread = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(createFake);
+          return yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }),
+      );
+      const repository = yield* HermesSessionBindingRepository;
+      const now = "2026-07-26T12:00:00.000Z";
+      const imported = yield* repository.prepareSessionImport({
+        importId: "hermes-import:test-empty-boundary",
+        providerInstanceId: String(instanceId),
+        profileKey: "real-profile",
+        projectId: String(threadId),
+        importKind: "session",
+        storedSessionKey: "stored-session-1",
+        threadId: String(threadId),
+        now,
+      });
+      yield* repository.transitionSessionImport({
+        importId: imported.importId,
+        from: "prepared",
+        to: "thread_created",
+        now,
+      });
+      yield* repository.transitionSessionImport({
+        importId: imported.importId,
+        from: "thread_created",
+        to: "completed",
+        now,
+      });
+
+      const fake = new FakeHermesGatewayClient();
+      fake.history = { count: 0, messages: [] };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(fake);
+          const resumed = yield* runtime.resumeThread({
+            providerThread: createdThread,
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const empty = yield* runtime.readThreadSnapshot({ providerThread: resumed });
+          assert.deepEqual(empty.messages, []);
+
+          fake.history = {
+            count: 2,
+            messages: [
+              { message_id: "late-user", role: "user", text: "[maria] late history" },
+              { message_id: "late-assistant", role: "assistant", text: "Recovered." },
+            ],
+          };
+          const hydratedLater = yield* runtime.readThreadSnapshot({ providerThread: resumed });
+          assert.deepEqual(
+            hydratedLater.messages.map((message) => [message.role, message.text]),
+            [
+              ["user", "late history"],
+              ["assistant", "Recovered."],
+            ],
+          );
+        }),
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("resolves MEDIA output inside rehydrated imported tool activities", () =>
+    Effect.gen(function* () {
+      const createFake = new FakeHermesGatewayClient();
+      const createdThread = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(createFake);
+          return yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }),
+      );
+      const repository = yield* HermesSessionBindingRepository;
+      const now = "2026-07-26T12:00:00.000Z";
+      const imported = yield* repository.prepareSessionImport({
+        importId: "hermes-import:test-tool-media",
+        providerInstanceId: String(instanceId),
+        profileKey: "real-profile",
+        projectId: String(threadId),
+        importKind: "session",
+        storedSessionKey: "stored-session-1",
+        threadId: String(threadId),
+        now,
+      });
+      yield* repository.transitionSessionImport({
+        importId: imported.importId,
+        from: "prepared",
+        to: "thread_created",
+        now,
+      });
+      yield* repository.transitionSessionImport({
+        importId: imported.importId,
+        from: "thread_created",
+        to: "completed",
+        now,
+      });
+
+      const mediaPath = "/Users/maria/.hermes/cache/images/tool-render.png";
+      const fake = new FakeHermesGatewayClient();
+      fake.history = {
+        count: 3,
+        messages: [
+          { message_id: "m-user", role: "user", text: "render it" },
+          {
+            message_id: "m-assistant",
+            role: "assistant",
+            text: "",
+            tool_calls: [
+              {
+                id: "call-render",
+                function: { name: "render_chart", arguments: "{}" },
+              },
+            ],
+          },
+          {
+            message_id: "m-tool",
+            role: "tool",
+            tool_call_id: "call-render",
+            text: `rendered\nMEDIA:${mediaPath}`,
+          },
+        ],
+      };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(fake, true, undefined, false, ({ sourcePath }) =>
+            Effect.succeed(
+              sourcePath === mediaPath
+                ? {
+                    type: "image" as const,
+                    id: ChatAttachmentId.make("hermes-tool-media"),
+                    name: "tool-render.png",
+                    mimeType: "image/png",
+                    sizeBytes: 64,
+                  }
+                : null,
+            ),
+          );
+          const resumed = yield* runtime.resumeThread({
+            providerThread: createdThread,
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const snapshot = yield* runtime.readThreadSnapshot({ providerThread: resumed });
+          const tool = snapshot.turnItems?.find((item) => item.type === "dynamic_tool");
+          assert.isDefined(tool);
+          if (tool?.type === "dynamic_tool") {
+            assert.notInclude(tool.output ?? "", "MEDIA:");
+            assert.include(tool.output ?? "", "rendered");
+            assert.include(tool.output ?? "", "[Attachment: tool-render.png]");
+          }
+        }),
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("uploads image attachments to Hermes before submitting the prompt", () =>
     Effect.scoped(
       Effect.gen(function* () {

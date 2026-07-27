@@ -175,13 +175,18 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId) {
       const binding = yield* repository.getByThreadId(String(threadId));
       if (Option.isNone(binding) || Option.isNone(orchestrator)) return;
-      yield* orchestrator.value.hydrateProviderThreadSnapshot({
-        threadId,
-        providerInstanceId: ProviderInstanceId.make(binding.value.providerInstanceId),
-      });
+      // Hydration is retried because a transient gateway failure here would
+      // otherwise leave a completed import with no projected transcript —
+      // unrecoverable once the upstream session vanishes.
+      yield* orchestrator.value
+        .hydrateProviderThreadSnapshot({
+          threadId,
+          providerInstanceId: ProviderInstanceId.make(binding.value.providerInstanceId),
+        })
+        .pipe(Effect.retry({ times: 3 }));
     },
     Effect.catchCause((cause) =>
-      Effect.logWarning("Unable to hydrate imported Hermes thread history", {
+      Effect.logError("Unable to hydrate imported Hermes thread history", {
         cause,
       }),
     ),

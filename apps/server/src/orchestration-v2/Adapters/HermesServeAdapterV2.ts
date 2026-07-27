@@ -2283,21 +2283,52 @@ export function makeHermesServeAdapterV2(
           projectId: binding.projectId,
           storedSessionKey: binding.storedSessionKey,
         });
-        // The inherited boundary is recorded once, on first hydration, so
-        // imported-transcript normalization and activity rehydration only
-        // ever apply to the history that existed at import time. Native T3
-        // messages appended afterwards are left untouched.
+        // The inherited boundary is recorded once, on the first hydration
+        // that actually observes history, so imported-transcript
+        // normalization and activity rehydration only ever apply to the
+        // history that existed at import time. An empty read leaves the
+        // boundary unrecorded — history may simply not be readable yet — so
+        // a later full history still hydrates. Native T3 messages appended
+        // after the boundary are left untouched.
         const inheritedCount = Option.isSome(imported)
           ? (imported.value.inheritedMessageCount ??
-            (yield* options.repository.setSessionImportInheritedCount({
-              importId: imported.value.importId,
-              inheritedMessageCount: history.messages.length,
-              now: DateTime.formatIso(yield* DateTime.now),
-            })))
+            (history.messages.length === 0
+              ? 0
+              : yield* options.repository.setSessionImportInheritedCount({
+                  importId: imported.value.importId,
+                  inheritedMessageCount: history.messages.length,
+                  now: DateTime.formatIso(yield* DateTime.now),
+                })))
           : 0;
         const inherited = history.messages.slice(0, inheritedCount);
         const hydration = hydrateImportedHermesActivities(inherited);
-        const turnItems = importedActivityTurnItems(threadId, binding, hydration.activities);
+        // Rehydrated tool outputs come from raw history rows, so they may
+        // still carry Hermes' MEDIA: output protocol. Resolve it to durable
+        // attachment markers the same way visible transcript rows do.
+        const normalizedActivities = yield* Effect.forEach(
+          hydration.activities,
+          Effect.fnUntraced(function* (activity) {
+            if (!("output" in activity) || activity.output === undefined) return activity;
+            const normalized = yield* normalizeHermesHistoryMessage({
+              role: "tool",
+              text: activity.output,
+              resolveMedia: (media, index) =>
+                options.resolveHistoryMedia?.({
+                  sourcePath: media.path,
+                  expectedKind: media.kind,
+                  threadId: String(threadId),
+                  stableKey: `${binding.providerInstanceId}:${binding.profileKey}:${binding.storedSessionKey}:${activity.key}:${index}`,
+                }) ?? Effect.succeed(null),
+            });
+            const markers = normalized.attachments.map(
+              (attachment) => `[Attachment: ${attachment.name}]`,
+            );
+            const output = [normalized.text, ...markers].filter(Boolean).join("\n\n");
+            return { ...activity, output };
+          }),
+          { concurrency: 1 },
+        );
+        const turnItems = importedActivityTurnItems(threadId, binding, normalizedActivities);
         const messages = yield* Effect.forEach(
           history.messages,
           Effect.fnUntraced(function* (message, ordinal) {
