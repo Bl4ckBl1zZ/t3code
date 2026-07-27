@@ -57,6 +57,7 @@ import * as EnvironmentConnector from "./environments/EnvironmentConnector.ts";
 import * as EnvironmentLinker from "./environments/EnvironmentLinker.ts";
 import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublishSignatures.ts";
 import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
+import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
 
 const webcryptoLayer = Layer.succeed(
@@ -228,7 +229,13 @@ export default class Api extends Cloudflare.Worker<Api>()(
       Layer.provideMerge(AgentActivityRows.layer),
       Layer.provideMerge(Devices.layer),
       Layer.provideMerge(EnvironmentCredentials.layer),
-      Layer.provideMerge(Layer.mergeAll(EnvironmentLinks.layer, ManagedEndpointAllocations.layer)),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          EnvironmentLinks.layer,
+          ManagedEndpointAllocations.layer,
+          ManagedTunnelLimits.layer,
+        ),
+      ),
       Layer.provideMerge(LiveActivities.layer),
       Layer.provideMerge(DeliveryAttempts.layer),
       Layer.provideMerge(RelayTokens.layer),
