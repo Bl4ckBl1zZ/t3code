@@ -484,9 +484,17 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
           const result = await client.manageCron(mutationParams(input), {
             operationId: input.operationId,
           });
-          const inventory = await client.listCronJobs();
+          const inventory = await client.listCronJobs().catch(() => null);
           return {
-            provider: projectProvider({ config, compatibility, result: inventory }),
+            provider: inventory
+              ? projectProvider({ config, compatibility, result: inventory })
+              : unavailableProjection(
+                  config.providerInstanceId,
+                  config.displayName,
+                  config.profileKey,
+                  "Cron mutation succeeded, but the follow-up cron inventory refresh failed.",
+                  "error",
+                ),
             upstreamJobId: result.job_id ?? result.job?.id ?? null,
             upstreamRunId: result.run_id ?? null,
           };

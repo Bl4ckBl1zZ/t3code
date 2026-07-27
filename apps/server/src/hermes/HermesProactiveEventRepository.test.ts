@@ -327,4 +327,71 @@ memory("HermesProactiveEventRepository", (it) => {
         assert.isTrue(Option.isNone(exhausted));
       }),
   );
+
+  it.effect("rejects outbox commits from a worker whose lease has expired", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 45 });
+      const repository = yield* HermesProactiveEventRepository;
+      const source = yield* registerReady(repository, "profile:lease-expiry");
+      yield* repository.ingestPage({
+        sourceId: source.sourceId,
+        expectedCursor: null,
+        nextCursor: "cursor:1",
+        gatewayRevision: "future-revision",
+        protocolMajor: 1,
+        protocolMinor: 1,
+        receivedAt: T0,
+        events: [event()],
+      });
+
+      const claimed = yield* repository.claimNotification({
+        workerId: "worker:expired",
+        now: T0,
+        leaseExpiresAt: T1,
+      });
+      assert.isTrue(Option.isSome(claimed));
+      if (Option.isNone(claimed)) return;
+
+      assert.isFalse(
+        yield* repository.deliverInApp({
+          outboxId: claimed.value.outboxId,
+          workerId: "worker:expired",
+          now: T2,
+        }),
+      );
+      assert.isFalse(
+        yield* repository.retryNotification({
+          outboxId: claimed.value.outboxId,
+          workerId: "worker:expired",
+          now: T2,
+          availableAt: T3,
+          errorCode: "lease_expired",
+        }),
+      );
+      assert.isFalse(
+        yield* repository.deadLetterNotification({
+          outboxId: claimed.value.outboxId,
+          workerId: "worker:expired",
+          now: T2,
+          errorCode: "lease_expired",
+        }),
+      );
+
+      const reclaimed = yield* repository.claimNotification({
+        workerId: "worker:fresh",
+        now: T2,
+        leaseExpiresAt: T3,
+      });
+      assert.isTrue(Option.isSome(reclaimed));
+      if (Option.isNone(reclaimed)) return;
+      assert.strictEqual(reclaimed.value.outboxId, claimed.value.outboxId);
+      assert.isTrue(
+        yield* repository.deliverInApp({
+          outboxId: reclaimed.value.outboxId,
+          workerId: "worker:fresh",
+          now: T2,
+        }),
+      );
+    }),
+  );
 });

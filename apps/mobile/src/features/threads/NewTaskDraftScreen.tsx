@@ -247,14 +247,19 @@ export function NewTaskDraftScreen(props: {
     if (initializedWorkDraftRef.current === flow.draftKey) {
       return;
     }
+    const requestedModelKey = `${props.initialModelSelection.instanceId}:${props.initialModelSelection.model}`;
+    // Model options load asynchronously; selecting an absent key is a no-op,
+    // so the draft only counts as initialized once the option is selectable.
+    if (!flow.modelOptions.some((option) => option.key === requestedModelKey)) {
+      return;
+    }
     initializedWorkDraftRef.current = flow.draftKey;
     clearComposerDraftContent(flow.draftKey);
-    flow.setSelectedModelKey(
-      `${props.initialModelSelection.instanceId}:${props.initialModelSelection.model}`,
-    );
+    flow.setSelectedModelKey(requestedModelKey);
   }, [
     flow.draftKey,
     flow.draftScope,
+    flow.modelOptions,
     flow.setSelectedModelKey,
     isWorkConversation,
     props.initialModelSelection,

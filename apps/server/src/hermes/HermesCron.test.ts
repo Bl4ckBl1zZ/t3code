@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vite-plus/test";
+import {
+  ProviderInstanceConfigMap,
+  type HermesGatewayCompatibility,
+  type HermesGatewayCronListResult,
+  type HermesGatewayCronMutationResult,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-import { projectHermesCronCapabilities, projectHermesCronJob } from "./HermesCron.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import {
+  makeHermesCron,
+  projectHermesCronCapabilities,
+  projectHermesCronJob,
+} from "./HermesCron.ts";
+
+const decodeProviderInstanceConfigMap = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
 
 describe("HermesCron projection", () => {
   it("keeps pinned legacy gateways limited to evidenced operations", () => {
@@ -98,4 +113,80 @@ describe("HermesCron projection", () => {
     expect(first.identityStrength).toBe("missing");
     expect(first.identity).toBe(second.identity);
   });
+});
+
+describe("HermesCron mutate", () => {
+  const compatibility: HermesGatewayCompatibility = {
+    status: "supported",
+    protocol: { major: 1, minor: 2 },
+    inventory: {
+      "cron.read": "supported",
+      "cron.manage": { operations: ["add", "remove", "update", "pause", "resume", "run"] },
+    },
+    capabilities: ["cron.read", "cron.manage"],
+    reason: "supported",
+  };
+
+  const settingsLayer = ServerSettings.layerTest({
+    enableHermes: true,
+    providerInstances: decodeProviderInstanceConfigMap({
+      hermes_main: {
+        driver: "hermes",
+        displayName: "Hermes",
+        enabled: true,
+        environment: [{ name: "HERMES_GATEWAY_TOKEN", value: "token-1", sensitive: true }],
+        config: { enabled: true, endpoint: "ws://127.0.0.1:9119/api/ws", profileKey: "work" },
+      },
+    }),
+  });
+
+  const runMutation = (listCronJobs: () => Promise<HermesGatewayCronListResult>) =>
+    Effect.gen(function* () {
+      const cron = yield* makeHermesCron({
+        clientFactory: () => ({
+          compatibility,
+          connect: () => Promise.resolve(compatibility),
+          hasCapability: () => true,
+          listCronJobs,
+          manageCron: () =>
+            Promise.resolve({
+              success: true,
+              job_id: "job-1",
+              run_id: "run-1",
+            } satisfies HermesGatewayCronMutationResult),
+          close: () => {},
+        }),
+      });
+      return yield* cron.mutate({
+        providerInstanceId: "hermes_main",
+        operation: "create",
+        operationId: "op-1",
+        name: "Daily check",
+        schedule: "0 9 * * *",
+        prompt: "Check status",
+      });
+    }).pipe(Effect.provide(settingsLayer));
+
+  it.effect("returns the confirmed mutation when the follow-up inventory refresh fails", () =>
+    Effect.gen(function* () {
+      const response = yield* runMutation(() => Promise.reject(new Error("refresh failed")));
+      expect(response.upstreamJobId).toBe("job-1");
+      expect(response.upstreamRunId).toBe("run-1");
+      expect(response.provider.status).toBe("error");
+      expect(response.provider.diagnostics).toContain(
+        "Cron mutation succeeded, but the follow-up cron inventory refresh failed.",
+      );
+    }),
+  );
+
+  it.effect("projects the refreshed inventory when the follow-up read succeeds", () =>
+    Effect.gen(function* () {
+      const response = yield* runMutation(() =>
+        Promise.resolve({ success: true, jobs: [{ id: "job-1", name: "Daily check" }] }),
+      );
+      expect(response.upstreamJobId).toBe("job-1");
+      expect(response.provider.status).toBe("ready");
+      expect(response.provider.jobs.map((job) => job.id)).toEqual(["job-1"]);
+    }),
+  );
 });

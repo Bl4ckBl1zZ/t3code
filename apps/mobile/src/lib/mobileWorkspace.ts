@@ -93,15 +93,6 @@ export function resolveHermesConversationTarget(input: {
     if (input.requiredEnvironmentId !== null && environmentId !== input.requiredEnvironmentId) {
       continue;
     }
-    const provider = config.providers.find(
-      (candidate) =>
-        candidate.driver === "hermes" &&
-        candidate.enabled &&
-        candidate.installed &&
-        candidate.status === "ready" &&
-        isProviderAvailable(candidate),
-    );
-    if (!provider) continue;
     const workDirectory = config.t3WorkDirectory;
     const project =
       workDirectory === undefined
@@ -111,18 +102,30 @@ export function resolveHermesConversationTarget(input: {
               candidate.environmentId === environmentId &&
               candidate.workspaceRoot === workDirectory,
           );
-    const model =
-      provider.models.find((candidate) => candidate.slug === "default") ??
-      provider.models.find((candidate) => candidate.isDefault === true) ??
-      provider.models[0];
-    if (!project || !model) continue;
-    return {
-      project,
-      modelSelection: {
-        instanceId: provider.instanceId,
-        model: model.slug,
-      },
-    };
+    if (!project) continue;
+    for (const provider of config.providers) {
+      if (
+        provider.driver !== "hermes" ||
+        !provider.enabled ||
+        !provider.installed ||
+        provider.status !== "ready" ||
+        !isProviderAvailable(provider)
+      ) {
+        continue;
+      }
+      const model =
+        provider.models.find((candidate) => candidate.slug === "default") ??
+        provider.models.find((candidate) => candidate.isDefault === true) ??
+        provider.models[0];
+      if (!model) continue;
+      return {
+        project,
+        modelSelection: {
+          instanceId: provider.instanceId,
+          model: model.slug,
+        },
+      };
+    }
   }
   return null;
 }

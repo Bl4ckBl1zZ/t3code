@@ -285,12 +285,19 @@ function outboxFromRow(row: OutboxRow) {
   });
 }
 
-function repositoryError(operation: string, cause: unknown) {
+const isRepositoryError = Schema.is(HermesProactiveEventRepositoryError);
+
+function repositoryError(operation: string, detail: string, cause?: unknown) {
   return new HermesProactiveEventRepositoryError({
     operation,
-    detail: cause instanceof Error ? cause.message : String(cause),
-    cause,
+    detail,
+    ...(cause === undefined ? {} : { cause }),
   });
+}
+
+function mapRepositoryError(operation: string, detail: string) {
+  return (cause: unknown): HermesProactiveEventRepositoryError =>
+    isRepositoryError(cause) ? cause : repositoryError(operation, detail, cause);
 }
 
 export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient.SqlClient> =
@@ -371,10 +378,14 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
             return yield* repositoryError("registerSource", "Source disappeared after upsert.");
           }
           return source.value;
-        }).pipe(Effect.mapError((cause) => repositoryError("registerSource", cause)));
+        }).pipe(
+          Effect.mapError(mapRepositoryError("registerSource", "Could not register the source.")),
+        );
 
       const getSource: HermesProactiveEventRepositoryShape["getSource"] = (sourceId) =>
-        loadSource(sourceId).pipe(Effect.mapError((cause) => repositoryError("getSource", cause)));
+        loadSource(sourceId).pipe(
+          Effect.mapError(mapRepositoryError("getSource", "Could not load the source.")),
+        );
 
       const ingestPage: HermesProactiveEventRepositoryShape["ingestPage"] = (input) =>
         sql
@@ -519,7 +530,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
               } as const;
             }),
           )
-          .pipe(Effect.mapError((cause) => repositoryError("ingestPage", cause)));
+          .pipe(Effect.mapError(mapRepositoryError("ingestPage", "Could not ingest the page.")));
 
       const claimNotification: HermesProactiveEventRepositoryShape["claimNotification"] = (input) =>
         sql
@@ -566,7 +577,11 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
               return row === undefined ? Option.none() : Option.some(yield* outboxFromRow(row));
             }),
           )
-          .pipe(Effect.mapError((cause) => repositoryError("claimNotification", cause)));
+          .pipe(
+            Effect.mapError(
+              mapRepositoryError("claimNotification", "Could not claim a notification."),
+            ),
+          );
 
       const deliverInApp: HermesProactiveEventRepositoryShape["deliverInApp"] = (input) =>
         sql
@@ -654,12 +669,17 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
               WHERE outbox_id = ${input.outboxId}
                 AND state = 'processing'
                 AND lease_owner = ${input.workerId}
+                AND lease_expires_at > ${input.now}
               RETURNING outbox_id
             `;
               return delivered.length === 1;
             }),
           )
-          .pipe(Effect.mapError((cause) => repositoryError("deliverInApp", cause)));
+          .pipe(
+            Effect.mapError(
+              mapRepositoryError("deliverInApp", "Could not deliver the notification."),
+            ),
+          );
 
       const retryNotification: HermesProactiveEventRepositoryShape["retryNotification"] = (input) =>
         sql<{ outbox_id: string }>`
@@ -673,10 +693,11 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
         WHERE outbox_id = ${input.outboxId}
           AND state = 'processing'
           AND lease_owner = ${input.workerId}
+          AND lease_expires_at > ${input.now}
         RETURNING outbox_id
       `.pipe(
           Effect.map((rows) => rows.length === 1),
-          Effect.mapError((cause) => repositoryError("retryNotification", cause)),
+          Effect.mapError(mapRepositoryError("retryNotification", "Could not schedule the retry.")),
         );
 
       const deadLetterNotification: HermesProactiveEventRepositoryShape["deadLetterNotification"] =
@@ -691,10 +712,16 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
         WHERE outbox_id = ${input.outboxId}
           AND state = 'processing'
           AND lease_owner = ${input.workerId}
+          AND lease_expires_at > ${input.now}
         RETURNING outbox_id
       `.pipe(
             Effect.map((rows) => rows.length === 1),
-            Effect.mapError((cause) => repositoryError("deadLetterNotification", cause)),
+            Effect.mapError(
+              mapRepositoryError(
+                "deadLetterNotification",
+                "Could not dead-letter the notification.",
+              ),
+            ),
           );
 
       const listWorkItems: HermesProactiveEventRepositoryShape["listWorkItems"] = () =>
@@ -722,7 +749,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
               { concurrency: 1 },
             ),
           ),
-          Effect.mapError((cause) => repositoryError("listWorkItems", cause)),
+          Effect.mapError(mapRepositoryError("listWorkItems", "Could not list work items.")),
         );
 
       const listInAppNotifications: HermesProactiveEventRepositoryShape["listInAppNotifications"] =
@@ -751,7 +778,9 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
                 { concurrency: 1 },
               ),
             ),
-            Effect.mapError((cause) => repositoryError("listInAppNotifications", cause)),
+            Effect.mapError(
+              mapRepositoryError("listInAppNotifications", "Could not list in-app notifications."),
+            ),
           );
 
       return HermesProactiveEventRepository.of({

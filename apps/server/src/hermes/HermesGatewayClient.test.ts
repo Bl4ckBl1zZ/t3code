@@ -555,6 +555,52 @@ describe("HermesGatewayClient protocol and ordering", () => {
     client.close();
   });
 
+  it("degrades cron.read when the cron list read is unimplemented", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory);
+    const listing = client.listCronJobs();
+    const frame = sentFrames(socket).at(-1)!;
+    socket.receive({
+      jsonrpc: "2.0",
+      id: frame.id,
+      error: { code: -32601, message: "method not found" },
+    });
+    await expect(listing).rejects.toMatchObject({ code: -32601 });
+    expect(client.hasCapability("cron.read")).toBe(false);
+    expect(client.hasCapability("cron.manage")).toBe(true);
+    await expect(client.listCronJobs()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    client.close();
+  });
+
+  it("dispatches events to remaining listeners when one listener fails", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory);
+    const observed: string[] = [];
+    client.onEvent(() => {
+      throw new Error("listener failure");
+    });
+    client.onEvent(async () => {
+      await Promise.reject(new Error("async listener failure"));
+    });
+    client.onEvent((event) => {
+      observed.push(`${event.sessionSequence}:${event.frame.params.type}`);
+    });
+
+    socket.receive({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.delta", session_id: "session-1", payload: { text: "one" } },
+    });
+    socket.receive({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.complete", session_id: "session-1", payload: { text: "two" } },
+    });
+    await eventually(() => observed.length === 2);
+    expect(observed).toEqual(["1:message.delta", "2:message.complete"]);
+    client.close();
+  });
+
   it("exposes typed H4 session and prompt helpers", async () => {
     const factory = new FakeSocketFactory();
     const { client, socket } = await openClient(factory);
@@ -847,11 +893,60 @@ describe("HermesGatewayClient recovery", () => {
       method: "mutation.status",
       params: { mutation_id: "prompt-recovery-mutation" },
     });
+    const health: Array<{ writesBlocked: boolean; indeterminateMutationCount: number }> = [];
+    client.onHealthChange((snapshot) =>
+      health.push({
+        writesBlocked: snapshot.writesBlocked,
+        indeterminateMutationCount: snapshot.indeterminateMutationCount,
+      }),
+    );
+    expect(health.at(-1)).toEqual({ writesBlocked: true, indeterminateMutationCount: 1 });
     socket.receive(success(frame.id, { mutation_status: "completed" }));
 
     await expect(reconciliation).resolves.toEqual({ mutation_status: "completed" });
     expect(client.mutationRecord("prompt-recovery-operation")).toBeUndefined();
     expect(client.writesBlocked).toBe(false);
+    expect(health.at(-1)).toEqual({ writesBlocked: false, indeterminateMutationCount: 0 });
+    client.close();
+  });
+
+  it("keeps the local fence for a mutation reconciled as still admitted", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {}, stableMutationReady);
+    const prompt = client.submitPrompt(
+      { session_id: "session-1", text: "private" },
+      {
+        operationId: "prompt-admitted-operation",
+        mutationId: "prompt-admitted-mutation",
+      },
+    );
+    let frame = sentFrames(socket).at(-1)!;
+    socket.receive(
+      success(frame.id, {
+        mutation_id: "prompt-admitted-mutation",
+        mutation_status: "indeterminate",
+        run_id: "run-admitted",
+        replayed: true,
+      }),
+    );
+    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
+
+    const reconciliation = client.reconcileMutation(
+      "prompt-admitted-operation",
+      "prompt-admitted-mutation",
+    );
+    frame = sentFrames(socket).at(-1)!;
+    socket.receive(success(frame.id, { mutation_status: "admitted" }));
+    await expect(reconciliation).resolves.toEqual({ mutation_status: "admitted" });
+
+    expect(client.mutationRecord("prompt-admitted-operation")?.state).toBe("pending");
+    expect(client.writesBlocked).toBe(false);
+    await expect(
+      client.submitPrompt(
+        { session_id: "session-1", text: "must not race" },
+        { operationId: "prompt-admitted-operation" },
+      ),
+    ).rejects.toThrow("already been used");
     client.close();
   });
 
@@ -1062,10 +1157,12 @@ describe("HermesGatewayClient recovery", () => {
         },
         onDisconnected: ({ reconnecting }) => {
           callbacks.push(`disconnected:${reconnecting}`);
+          return Promise.reject(new Error("supervisor disconnect failure"));
         },
         onReconnectExhausted: ({ attempts }) => {
           callbacks.push(`exhausted:${attempts}`);
           exhausted();
+          return Promise.reject(new Error("supervisor exhausted failure"));
         },
       },
       socketFactory: (endpoint) => {

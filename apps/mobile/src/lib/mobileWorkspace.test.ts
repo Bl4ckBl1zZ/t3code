@@ -163,6 +163,38 @@ describe("mobile workspace routing", () => {
     });
   });
 
+  it("falls back to a later ready Hermes provider when the first has no models", () => {
+    const backingProject = project("project:t3-work", "/private/t3-work");
+    const modellessInstanceId = ProviderInstanceId.make("hermes-modelless");
+    const config = serverConfig();
+    const configs = new Map([
+      [
+        environmentId,
+        {
+          ...config,
+          providers: [
+            { ...config.providers[0], instanceId: modellessInstanceId, models: [] },
+            ...config.providers,
+          ],
+        } as ServerConfig,
+      ],
+    ]);
+
+    expect(
+      resolveHermesConversationTarget({
+        projects: [backingProject],
+        serverConfigs: configs,
+        requiredEnvironmentId: null,
+      }),
+    ).toEqual({
+      project: backingProject,
+      modelSelection: {
+        instanceId: hermesInstanceId,
+        model: "default",
+      },
+    });
+  });
+
   it("does not attach Work conversations to an arbitrary project while setup is incomplete", () => {
     expect(
       resolveHermesConversationTarget({

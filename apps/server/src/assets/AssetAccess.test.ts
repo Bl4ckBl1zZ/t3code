@@ -106,7 +106,6 @@ describe("AssetAccess", () => {
       const config = yield* ServerConfig.ServerConfig;
       const artifactPath = path.join(config.browserArtifactsDir, "browser-recording-demo.webm");
       yield* fileSystem.writeFileString(artifactPath, "webm-bytes");
-      const canonicalArtifactPath = yield* fileSystem.realPath(artifactPath);
       yield* fileSystem.writeFileString(
         path.join(config.browserArtifactsDir, "notes.txt"),
         "not media",
@@ -117,10 +116,13 @@ describe("AssetAccess", () => {
       });
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const token = suffix.slice(0, suffix.indexOf("/"));
-      expect(yield* resolveAsset(token, "browser-recording-demo.webm")).toEqual({
-        kind: "file",
-        path: canonicalArtifactPath,
-      });
+      const resolved = yield* resolveAsset(token, "browser-recording-demo.webm");
+      expect(resolved?.kind).toBe("open-file");
+      if (resolved?.kind !== "open-file") throw new Error("expected an opened browser artifact");
+      expect(resolved.file.name).toBe("browser-recording-demo.webm");
+      expect(yield* Effect.promise(() => new Response(resolved.file.stream()).text())).toBe(
+        "webm-bytes",
+      );
 
       expect(
         (yield* issueAssetUrl({

@@ -112,6 +112,14 @@ const RESERVED_TRANSPORT_LABELS = new Set([
   "warning",
 ]);
 
+function expandHomePrefix(path: string): string {
+  return path === "~"
+    ? NodeOS.homedir()
+    : path.startsWith(`~${NodePath.sep}`)
+      ? NodePath.join(NodeOS.homedir(), path.slice(2))
+      : path;
+}
+
 function mediaKind(label: string): HermesHistoryMediaKind {
   const normalized = label.toLowerCase();
   if (normalized.includes("image")) return "image";
@@ -235,7 +243,8 @@ function stripTransportSenderPrefix(text: string): string {
     label === undefined ||
     (!/\p{L}/u.test(label) && !label.includes("|")) ||
     /[:'"{}\r\n]/u.test(label) ||
-    RESERVED_TRANSPORT_LABELS.has(label.toLowerCase())
+    RESERVED_TRANSPORT_LABELS.has(label.toLowerCase()) ||
+    (match[0].endsWith("\n") && !label.includes("|"))
   ) {
     return text;
   }
@@ -416,7 +425,9 @@ export function hermesHistoryMediaRoots(input: {
   readonly extraRoots?: ReadonlyArray<string> | undefined;
 }): ReadonlyArray<string> {
   const defaultHome = NodePath.join(NodeOS.homedir(), ".hermes");
-  const configuredHome = NodePath.resolve(input.hermesHome?.trim() || defaultHome);
+  const configuredHome = NodePath.resolve(
+    expandHomePrefix(input.hermesHome?.trim() || defaultHome),
+  );
   const homes = new Set([configuredHome]);
   if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(input.profileKey) && input.profileKey !== "default") {
     homes.add(NodePath.join(configuredHome, "profiles", input.profileKey));
@@ -441,12 +452,7 @@ export function hermesHistoryMediaRoots(input: {
   // extension point. Deliberately do not trust general user output locations
   // or the entire Hermes home/cache tree.
   for (const root of input.extraRoots ?? []) {
-    const expanded =
-      root === "~"
-        ? NodeOS.homedir()
-        : root.startsWith(`~${NodePath.sep}`)
-          ? NodePath.join(NodeOS.homedir(), root.slice(2))
-          : root;
+    const expanded = expandHomePrefix(root);
     if (NodePath.isAbsolute(expanded)) roots.push(NodePath.resolve(expanded));
   }
   return [...new Set(roots)];
@@ -464,12 +470,7 @@ export const persistHermesHistoryMedia = Effect.fn("persistHermesHistoryMedia")(
 
   return yield* Effect.tryPromise({
     try: async () => {
-      const expandedSourcePath =
-        input.sourcePath === "~"
-          ? NodeOS.homedir()
-          : input.sourcePath.startsWith(`~${NodePath.sep}`)
-            ? NodePath.join(NodeOS.homedir(), input.sourcePath.slice(2))
-            : input.sourcePath;
+      const expandedSourcePath = expandHomePrefix(input.sourcePath);
       if (!NodePath.isAbsolute(expandedSourcePath)) return null;
       const resolvedSourcePath = NodePath.resolve(expandedSourcePath);
       const configuredRoots = input.approvedRoots.map((root) => NodePath.resolve(root));

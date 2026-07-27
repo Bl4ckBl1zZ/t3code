@@ -49,6 +49,12 @@ describe("Hermes imported history normalization", () => {
         text: "[maria|transport-user-id]\nfirst line\nsecond line",
       }).text,
     ).toBe("first line\nsecond line");
+    expect(
+      parseHermesHistoryText({
+        role: "user",
+        text: "[Summary]\nfirst line\nsecond line",
+      }).text,
+    ).toBe("[Summary]\nfirst line\nsecond line");
   });
 
   it("extracts upstream MEDIA directives from labeled assistant output", () => {
@@ -133,6 +139,16 @@ describe("Hermes imported history normalization", () => {
     expect(roots).not.toContain(NodePath.join(NodeOS.homedir(), "Desktop"));
     expect(roots).not.toContain(NodePath.join(NodeOS.homedir(), "Documents"));
     expect(roots).not.toContain(NodePath.join(NodeOS.homedir(), "Downloads"));
+  });
+
+  it("expands a tilde-prefixed hermes home into the user home directory", () => {
+    const roots = hermesHistoryMediaRoots({
+      hermesHome: `~${NodePath.sep}.hermes`,
+      profileKey: "default",
+    });
+
+    expect(roots).toContain(NodePath.join(NodeOS.homedir(), ".hermes", "cache", "images"));
+    expect(roots).not.toContain(NodePath.resolve(`~${NodePath.sep}.hermes`, "cache", "images"));
   });
 
   effectIt.effect(

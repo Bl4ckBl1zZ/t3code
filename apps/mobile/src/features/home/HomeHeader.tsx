@@ -347,7 +347,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, props.workspace]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
@@ -368,6 +368,33 @@ function IosHomeHeader(props: HomeHeaderProps) {
           unstable_headerToolbarItems:
             Platform.OS === "ios"
               ? () => [
+                  {
+                    type: "menu" as const,
+                    label: `T3 ${props.workspace === "work" ? "Work" : "Code"}`,
+                    accessibilityLabel: `Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`,
+                    icon: { type: "sfSymbol", name: "chevron.up.chevron.down" } as const,
+                    identifier: "home-workspace",
+                    sharesBackground: false,
+                    variant: "plain" as const,
+                    menu: {
+                      items: [
+                        {
+                          type: "action" as const,
+                          label: "T3 Work",
+                          description: "Create, learn, and explore",
+                          onPress: () => props.onWorkspaceChange("work"),
+                          state: props.workspace === "work" ? ("on" as const) : undefined,
+                        },
+                        {
+                          type: "action" as const,
+                          label: "T3 Code",
+                          description: "Build, debug, and ship",
+                          onPress: () => props.onWorkspaceChange("code"),
+                          state: props.workspace === "code" ? ("on" as const) : undefined,
+                        },
+                      ],
+                    },
+                  },
                   createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
                     composeSystemImageName: "square.and.pencil",
@@ -503,31 +530,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
           />
         </NativeHeaderToolbar>
       )}
-      {Platform.OS === "ios" ? (
-        <NativeHeaderToolbar placement="bottom">
-          <NativeHeaderToolbar.Menu
-            accessibilityLabel={`Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`}
-            icon="chevron.up.chevron.down"
-            title={`T3 ${props.workspace === "work" ? "Work" : "Code"}`}
-            separateBackground
-          >
-            <NativeHeaderToolbar.MenuAction
-              isOn={props.workspace === "work"}
-              onPress={() => props.onWorkspaceChange("work")}
-              subtitle="Create, learn, and explore"
-            >
-              <NativeHeaderToolbar.Label>T3 Work</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
-            <NativeHeaderToolbar.MenuAction
-              isOn={props.workspace === "code"}
-              onPress={() => props.onWorkspaceChange("code")}
-              subtitle="Build, debug, and ship"
-            >
-              <NativeHeaderToolbar.Label>T3 Code</NativeHeaderToolbar.Label>
-            </NativeHeaderToolbar.MenuAction>
-          </NativeHeaderToolbar.Menu>
-        </NativeHeaderToolbar>
-      ) : null}
     </>
   );
 }

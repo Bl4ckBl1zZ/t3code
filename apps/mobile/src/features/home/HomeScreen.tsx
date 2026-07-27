@@ -739,7 +739,11 @@ export function HomeScreen(props: HomeScreenProps) {
       </View>
     ) : null;
 
-  if (!hasAnyThreads && props.workspace === "code") {
+  const catalogNotReady =
+    props.catalogState.isLoadingConnections ||
+    !props.catalogState.hasConnections ||
+    !props.catalogState.hasLoadedShellSnapshot;
+  if (!hasAnyThreads && (props.workspace === "code" || catalogNotReady)) {
     return (
       <View
         className="flex-1 items-center justify-center bg-screen px-8"

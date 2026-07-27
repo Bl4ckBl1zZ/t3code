@@ -223,6 +223,7 @@ interface PendingRequest {
   readonly operation: "read" | "mutation";
   readonly operationId: string | undefined;
   readonly mutationId: string | undefined;
+  readonly requiredCapability: string | undefined;
   readonly retryOnReconnect: boolean;
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
@@ -517,11 +518,13 @@ export class HermesGatewayClient {
     params: HermesGatewayUnknownRecord,
     options: HermesGatewayReadOptions = {},
   ): Promise<unknown> {
-    this.requireCapability(options.requiredCapability ?? METHOD_CAPABILITIES[method]);
+    const requiredCapability = options.requiredCapability ?? METHOD_CAPABILITIES[method];
+    this.requireCapability(requiredCapability);
     return this.sendRequest(method, params, {
       operation: "read",
       operationId: undefined,
       mutationId: undefined,
+      requiredCapability,
       signal: options.signal,
       retryOnReconnect: options.retryOnReconnect ?? true,
       timeoutMs: positive(options.timeoutMs, this.requestTimeoutMs),
@@ -542,7 +545,8 @@ export class HermesGatewayClient {
     options: HermesGatewayMutationOptions,
     decode: (value: unknown) => Result,
   ): Promise<Result> {
-    this.requireCapability(options.requiredCapability ?? METHOD_CAPABILITIES[method]);
+    const requiredCapability = options.requiredCapability ?? METHOD_CAPABILITIES[method];
+    this.requireCapability(requiredCapability);
     const blocked = this.indeterminateOperationIds();
     if (blocked.length > 0) {
       throw new HermesGatewayMutationsBlockedError(blocked);
@@ -584,6 +588,7 @@ export class HermesGatewayClient {
         operation: "mutation",
         operationId: options.operationId,
         mutationId: options.mutationId,
+        requiredCapability,
         signal: options.signal,
         retryOnReconnect: false,
         timeoutMs: positive(options.timeoutMs, this.requestTimeoutMs),
@@ -867,8 +872,15 @@ export class HermesGatewayClient {
         state: "indeterminate",
         mutationId: existing?.mutationId ?? operationId,
       });
+    } else if (outcome.mutation_status === "completed") {
+      if (this.mutations.delete(operationId)) this.emitHealth();
     } else {
-      this.mutations.delete(operationId);
+      this.setMutation({
+        operationId,
+        method: existing?.method ?? "unknown",
+        state: "pending",
+        mutationId: existing?.mutationId ?? operationId,
+      });
     }
     return outcome;
   }
@@ -1117,7 +1129,7 @@ export class HermesGatewayClient {
 
     if ("error" in response) {
       const disposition = response.error.data?.disposition;
-      const capability = METHOD_CAPABILITIES[pending.method];
+      const capability = pending.requiredCapability ?? METHOD_CAPABILITIES[pending.method];
       if (response.error.code === -32601 && capability && this.capabilities.delete(capability)) {
         this.logger?.({
           type: "protocol",
@@ -1176,7 +1188,11 @@ export class HermesGatewayClient {
       .catch(() => undefined)
       .then(async () => {
         for (const listener of this.eventListeners) {
-          await listener(ordered);
+          try {
+            await listener(ordered);
+          } catch {
+            // A failing observer must not block the remaining listeners.
+          }
         }
       });
   }
@@ -1188,6 +1204,7 @@ export class HermesGatewayClient {
       readonly operation: "read" | "mutation";
       readonly operationId: string | undefined;
       readonly mutationId: string | undefined;
+      readonly requiredCapability: string | undefined;
       readonly signal: AbortSignal | undefined;
       readonly retryOnReconnect: boolean;
       readonly timeoutMs: number;
@@ -1228,6 +1245,7 @@ export class HermesGatewayClient {
         operation: options.operation,
         operationId: options.operationId,
         mutationId: options.mutationId,
+        requiredCapability: options.requiredCapability,
         retryOnReconnect: options.retryOnReconnect,
         resolve,
         reject,
@@ -1337,13 +1355,17 @@ export class HermesGatewayClient {
 
     const reconnecting = this.maxReconnectAttempts > 0;
     this.setState(reconnecting ? "reconnecting" : "disconnected", 0);
-    void this.supervisor?.onDisconnected?.({
-      reconnecting,
-      pendingReads: [...this.pending.values()].filter(
-        (pending) => pending.operation === "read" && pending.awaitingReconnect,
-      ).length,
-      indeterminateMutations: this.indeterminateOperationIds(),
-    });
+    void Promise.resolve()
+      .then(() =>
+        this.supervisor?.onDisconnected?.({
+          reconnecting,
+          pendingReads: [...this.pending.values()].filter(
+            (pending) => pending.operation === "read" && pending.awaitingReconnect,
+          ).length,
+          indeterminateMutations: this.indeterminateOperationIds(),
+        }),
+      )
+      .catch(() => undefined);
     if (reconnecting && !this.reconnectTask) {
       this.reconnectTask = this.reconnectLoop().finally(() => {
         this.reconnectTask = undefined;
@@ -1372,9 +1394,13 @@ export class HermesGatewayClient {
     }
     this.setState("disconnected", this.maxReconnectAttempts);
     this.rejectPendingReads(lastError);
-    await this.supervisor?.onReconnectExhausted?.({
-      attempts: this.maxReconnectAttempts,
-    });
+    try {
+      await this.supervisor?.onReconnectExhausted?.({
+        attempts: this.maxReconnectAttempts,
+      });
+    } catch {
+      // Supervisor failures must not become unhandled rejections.
+    }
   }
 
   private replayPendingReads(): void {
