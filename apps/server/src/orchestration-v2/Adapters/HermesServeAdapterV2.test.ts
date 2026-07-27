@@ -50,6 +50,7 @@ import { IdAllocatorV2, layer as IdAllocatorV2Layer } from "../IdAllocator.ts";
 import type { ProviderAdapterV2TurnInput } from "../ProviderAdapter.ts";
 import {
   diagnoseHermesMcpIntegration,
+  HermesImportedSessionUnavailableError,
   HermesProviderCapabilitiesV2,
   hermesWireMutationId,
   makeHermesServeAdapterV2,
@@ -141,6 +142,7 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
   readonly reconciliations: Array<string> = [];
   readonly reconciliationMutationIds: Array<string> = [];
   createError: Error | null = null;
+  resumeError: Error | null = null;
   titleError: Error | null = null;
   promptError: Error | null = null;
   promptResult: HermesGatewayPromptSubmitResult | null = null;
@@ -183,6 +185,7 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
   ): Promise<HermesGatewaySessionResumeResult> {
     this.resumes.push({ params, options });
+    if (this.resumeError) throw this.resumeError;
     return {
       session_id: "live-resume-1",
       resumed: params.session_id,
@@ -553,6 +556,91 @@ describe("HermesServeAdapterV2", () => {
           fake.creates[0]!.options.mutationId,
           hermesWireMutationId(fake.creates[0]!.options.operationId),
         );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "resumes an imported binding against its stored profile with historical timestamps",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = new FakeHermesGatewayClient();
+          fake.history = { count: 1, messages: [{ role: "user", text: "imported hello" }] };
+          const repository = yield* HermesSessionBindingRepository;
+          yield* repository.createBinding({
+            bindingId: "hermes-binding:test-imported",
+            providerInstanceId: String(instanceId),
+            profileKey: "imported-profile",
+            projectId: String(projectId),
+            storedSessionKey: "stored-imported-1",
+            threadId: String(threadId),
+            protocolClassification: "supported",
+            protocolMajor: 1,
+            protocolMinor: 0,
+            capabilities: [],
+            reconciliationCursor: null,
+            reconciliationFingerprint: null,
+            now: "2020-01-01T00:00:00.000Z",
+          });
+          const runtime = yield* makeRuntime(fake);
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+
+          assert.lengthOf(fake.creates, 0);
+          assert.equal(fake.resumes[0]!.params.session_id, "stored-imported-1");
+          assert.equal(fake.resumes[0]!.params.profile, "imported-profile");
+          const message = snapshot.messages.find((entry) => entry.text === "imported hello");
+          assert.isDefined(message);
+          assert.equal(
+            DateTime.toEpochMillis(message!.createdAt),
+            Date.parse("2020-01-01T00:00:00.000Z"),
+          );
+        }),
+      ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("degrades a vanished imported session into a typed read-only resume error", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.resumeError = new HermesGatewayRpcError(4007, "session.resume", "fatal");
+        const repository = yield* HermesSessionBindingRepository;
+        yield* repository.createBinding({
+          bindingId: "hermes-binding:test-vanished",
+          providerInstanceId: String(instanceId),
+          profileKey: "imported-profile",
+          projectId: String(projectId),
+          storedSessionKey: "stored-vanished-1",
+          threadId: String(threadId),
+          protocolClassification: "supported",
+          protocolMajor: 1,
+          protocolMinor: 0,
+          capabilities: [],
+          reconciliationCursor: null,
+          reconciliationFingerprint: null,
+          now: "2020-01-01T00:00:00.000Z",
+        });
+        const runtime = yield* makeRuntime(fake);
+
+        const error = yield* Effect.flip(
+          runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          }),
+        );
+
+        assert.equal(error._tag, "ProviderAdapterEnsureThreadError");
+        assert.instanceOf(error.cause, HermesImportedSessionUnavailableError);
+        const unavailable = error.cause as HermesImportedSessionUnavailableError;
+        assert.include(unavailable.message, "4007");
+        assert.include(unavailable.message, "read-only");
+        assert.include(unavailable.message, "stored-vanished-1");
       }),
     ).pipe(Effect.provide(TestLayer)),
   );

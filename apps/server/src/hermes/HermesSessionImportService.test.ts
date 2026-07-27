@@ -7,6 +7,7 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -544,6 +545,148 @@ describe("Hermes transport session import policy", () => {
       expect(result.mainThreadId).not.toBeNull();
       expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(1);
     }),
+  );
+
+  effectIt.effect(
+    "propagates upstream started_at into imported thread timestamps and hydrates at import time",
+    () =>
+      Effect.gen(function* () {
+        const providerInstanceId = ProviderInstanceId.make("hermes-work-timestamps");
+        const profileKey = "private-work";
+        const startedAtSeconds = -3600;
+        const imports = new Map<string, HermesSessionImport>();
+        const boundThreadIds = new Set<string>();
+        const bindingNows: string[] = [];
+        const commands: OrchestrationV2Command[] = [];
+        const hydrated: ThreadId[] = [];
+
+        const repository = {
+          getSessionImportByStoredIdentity: () => Effect.succeed(Option.none()),
+          prepareSessionImport: (input: {
+            readonly importId: string;
+            readonly providerInstanceId: string;
+            readonly profileKey: string;
+            readonly projectId: string;
+            readonly importKind: "session" | "main";
+            readonly storedSessionKey: string | null;
+            readonly threadId: string;
+            readonly now: string;
+          }) =>
+            Effect.sync(() => {
+              const row: HermesSessionImport = {
+                importId: input.importId,
+                providerInstanceId: input.providerInstanceId,
+                profileKey: input.profileKey,
+                projectId: input.projectId,
+                importKind: input.importKind,
+                storedSessionKey: input.storedSessionKey,
+                threadId: input.threadId,
+                state: "prepared",
+                createdAt: input.now,
+                updatedAt: input.now,
+              };
+              imports.set(row.importId, row);
+              return row;
+            }),
+          transitionSessionImport: () => Effect.succeed(true),
+          getMainSessionImport: () => Effect.succeed(Option.none()),
+          getByStoredIdentity: () => Effect.succeed(Option.none()),
+          getByThreadId: (threadId: string) =>
+            Effect.succeed(
+              boundThreadIds.has(threadId)
+                ? Option.some({
+                    providerInstanceId: String(providerInstanceId),
+                  })
+                : Option.none(),
+            ),
+          createBinding: (input: { readonly threadId: string; readonly now: string }) =>
+            Effect.sync(() => {
+              boundThreadIds.add(input.threadId);
+              bindingNows.push(input.now);
+              return true;
+            }),
+        } as unknown as HermesSessionBindingRepository["Service"];
+        const registry = ProviderInstanceRegistry.of({
+          getInstance: () =>
+            Effect.succeed({
+              driverKind: ProviderDriverKind.make("hermes"),
+              hermesSessionCatalog: {
+                profileKey,
+                importEnabled: true,
+                list: () =>
+                  Effect.succeed({
+                    providerInstanceId,
+                    profileKey,
+                    compatibility: {
+                      status: "supported",
+                      protocol: { major: 1, minor: 0 },
+                      capabilities: ["profile.import", "session.lifecycle"],
+                      inventory: ["profile.import", "session.lifecycle"],
+                      reason: "test negotiation",
+                    },
+                    sessions: [
+                      {
+                        id: "discord-hour-old",
+                        title: "Hour-old Discord",
+                        preview: "",
+                        started_at: startedAtSeconds,
+                        message_count: 2,
+                        source: "discord",
+                      },
+                    ],
+                  }),
+              },
+            } as never),
+          listInstances: Effect.succeed([]),
+          listUnavailable: Effect.succeed([]),
+          streamChanges: Stream.empty,
+          subscribeChanges: Effect.never,
+        });
+        const threadManagement = {
+          dispatch: (command: OrchestrationV2Command) =>
+            Effect.sync(() => {
+              commands.push(command);
+              return {} as never;
+            }),
+        } as unknown as ThreadManagementService["Service"];
+        const orchestrator = {
+          hydrateProviderThreadSnapshot: (input: { readonly threadId: ThreadId }) =>
+            Effect.sync(() => {
+              hydrated.push(input.threadId);
+            }),
+        } as unknown as OrchestratorV2["Service"];
+
+        const service = yield* make.pipe(
+          Effect.provideService(ProviderInstanceRegistry, registry),
+          Effect.provideService(HermesSessionBindingRepository, repository),
+          Effect.provideService(ThreadManagementService, threadManagement),
+          Effect.provideService(OrchestratorV2, orchestrator),
+          Effect.provideService(
+            ProjectService,
+            testProjectService(ProjectId.make("internal-work-backing")),
+          ),
+          Effect.provideService(ServerConfig, testServerConfig),
+        );
+
+        const result = yield* service.importSessions({
+          providerInstanceId,
+          backingProjectId: ProjectId.make("internal-work-backing"),
+          selection: { type: "all" },
+          activeWithinDays: 7,
+          ensureMain: false,
+        });
+
+        const expectedStartedAt = DateTime.makeUnsafe(startedAtSeconds * 1_000);
+        const creates = commands.filter(
+          (command): command is Extract<OrchestrationV2Command, { type: "thread.create" }> =>
+            command.type === "thread.create",
+        );
+        expect(creates).toHaveLength(1);
+        expect(creates[0]!.createdAt).toEqual(expectedStartedAt);
+        expect(bindingNows).toEqual([DateTime.formatIso(expectedStartedAt)]);
+        expect(hydrated).toEqual(result.imported.map((item) => item.threadId));
+        expect(hydrated).toHaveLength(1);
+      }),
   );
 
   effectIt.effect(

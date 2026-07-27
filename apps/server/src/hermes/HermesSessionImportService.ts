@@ -314,6 +314,7 @@ export const make = Effect.gen(function* () {
       readonly projectId: ProjectId;
       readonly title: string;
       readonly isMain: boolean;
+      readonly createdAt?: DateTime.Utc;
     }) {
       if (input.row.state !== "prepared") return;
       yield* threads.dispatch({
@@ -332,6 +333,7 @@ export const make = Effect.gen(function* () {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
       });
       if (input.isMain) {
         yield* threads.dispatch({
@@ -442,11 +444,16 @@ export const make = Effect.gen(function* () {
         });
         const threadId = ThreadId.make(row.threadId);
         const wasCompleted = row.state === "completed";
+        // session.list has no last_active; started_at is the only upstream
+        // timestamp and becomes the imported thread's historical time.
+        const startedAt =
+          session.started_at !== 0 ? DateTime.makeUnsafe(session.started_at * 1_000) : undefined;
         yield* createThreadForImport({
           row,
           projectId: backingProject.id,
           title: session.title || session.preview || "Hermes session",
           isMain: false,
+          ...(startedAt === undefined ? {} : { createdAt: startedAt }),
         });
         if (row.state === "prepared") {
           row = { ...row, state: "thread_created", updatedAt: now };
@@ -478,7 +485,9 @@ export const make = Effect.gen(function* () {
               capabilities: snapshot.compatibility.capabilities,
               reconciliationCursor: null,
               reconciliationFingerprint: null,
-              now: DateTime.formatIso(yield* DateTime.now),
+              // Imported bindings carry the upstream started_at so projected
+              // history timestamps stay historical rather than import time.
+              now: DateTime.formatIso(startedAt ?? (yield* DateTime.now)),
             });
             if (!created) {
               return yield* new HermesSessionsError({
@@ -493,6 +502,7 @@ export const make = Effect.gen(function* () {
             to: "completed",
             now: DateTime.formatIso(yield* DateTime.now),
           });
+          yield* hydrateThread(threadId);
         }
         return {
           storedSessionId: session.id,

@@ -477,6 +477,40 @@ it.layer(LegacyImportTestLayer)("OrchestrationV2 legacy import", (it) => {
 });
 
 it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
+  it.effect("honors an explicit historical createdAt on thread.create for imported threads", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-imported-created-at-thread");
+      const importedAt = DateTime.makeUnsafe("2020-06-01T12:00:00.000Z");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "system",
+        creationSource: "provider",
+        commandId: CommandId.make("runtime-layer-imported-created-at"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-imported-created-at-project"),
+        title: "Imported thread with historical time",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: importedAt,
+      });
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(
+        DateTime.toEpochMillis(projection.thread.createdAt),
+        DateTime.toEpochMillis(importedAt),
+      );
+      assert.equal(
+        DateTime.toEpochMillis(projection.thread.updatedAt),
+        DateTime.toEpochMillis(importedAt),
+      );
+    }),
+  );
+
   it.effect("hydrates provider history once and remains idempotent across retries and reopen", () =>
     Effect.gen(function* () {
       hydrationSnapshotReads = 0;
@@ -513,6 +547,12 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         ["Existing Hermes question", "Existing Hermes answer"],
       );
       assert.equal(retry.projection.messages.length, 2);
+      assert.equal(
+        DateTime.toEpochMillis(retry.projection.thread.updatedAt),
+        Math.max(
+          ...retry.projection.messages.map((message) => DateTime.toEpochMillis(message.updatedAt)),
+        ),
+      );
       assert.equal(retry.snapshotSequence, first.snapshotSequence);
 
       const providerSessionId = retry.projection.providerThreads[0]?.providerSessionId;

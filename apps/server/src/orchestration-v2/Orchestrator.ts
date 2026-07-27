@@ -840,7 +840,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.driver": command.modelSelection.instanceId,
     });
 
-    const now = yield* DateTime.now;
+    const now = command.createdAt ?? (yield* DateTime.now);
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
       createdBy: command.createdBy,
@@ -5741,7 +5741,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return;
         }
 
-        const occurredAt = yield* DateTime.now;
+        // Hydrated snapshots carry the provider's historical message
+        // timestamps; stamping hydration time here would mark imported
+        // threads as active "now".
+        const latestSnapshotAt = missingMessages.reduce<DateTime.Utc | undefined>(
+          (latest, message) =>
+            latest === undefined ? message.updatedAt : DateTime.max(latest, message.updatedAt),
+          undefined,
+        );
+        const occurredAt = latestSnapshotAt ?? (yield* DateTime.now);
         const events: Array<OrchestrationV2DomainEvent> = [];
         if (projectedProviderThread === undefined) {
           events.push({

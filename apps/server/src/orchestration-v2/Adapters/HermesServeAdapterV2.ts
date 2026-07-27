@@ -62,6 +62,7 @@ import {
 import {
   HermesGatewayClient,
   HermesGatewayMutationIndeterminateError,
+  HermesGatewayRpcError,
   type HermesGatewayMutationOptions,
   type HermesGatewayOrderedEvent,
 } from "../../hermes/HermesGatewayClient.ts";
@@ -476,6 +477,32 @@ class HermesGatewayCallError extends Schema.TaggedErrorClass<HermesGatewayCallEr
   },
 ) {}
 const isHermesGatewayCallError = Schema.is(HermesGatewayCallError);
+
+/**
+ * The Hermes gateway no longer stores the durable session behind an imported
+ * binding (session.resume error 4007). The imported transcript that T3
+ * projected at import time remains readable; only live resumption is gone.
+ */
+export class HermesImportedSessionUnavailableError extends Schema.TaggedErrorClass<HermesImportedSessionUnavailableError>()(
+  "HermesImportedSessionUnavailableError",
+  {
+    storedSessionKey: Schema.String,
+    profileKey: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Hermes no longer stores session ${this.storedSessionKey} in profile ${this.profileKey} (session.resume reported 4007: session not found). The imported conversation stays available read-only in T3.`;
+  }
+}
+
+const HERMES_SESSION_NOT_FOUND_CODE = 4007;
+
+const isStoredSessionNotFound = (cause: unknown): boolean =>
+  isHermesGatewayCallError(cause) &&
+  cause.cause instanceof HermesGatewayRpcError &&
+  cause.cause.method === "session.resume" &&
+  cause.cause.code === HERMES_SESSION_NOT_FOUND_CODE;
 const isProviderAdapterRuntimeRequestResponseError = Schema.is(
   ProviderAdapterRuntimeRequestResponseError,
 );
@@ -2303,43 +2330,57 @@ export function makeHermesServeAdapterV2(
           operationId,
           mutationKind: "session_resume",
           method: "session.resume",
-          payloadDigest: stableDigest(binding.storedSessionKey, options.settings.profileKey),
+          payloadDigest: stableDigest(binding.storedSessionKey, binding.profileKey),
         });
+        // The durable session key lives in the profile database the binding
+        // was discovered under, so resume targets the binding's profile.
         const resumeParams = {
           session_id: binding.storedSessionKey,
-          profile: options.settings.profileKey,
+          profile: binding.profileKey,
           source: "t3-code",
           close_on_disconnect: false,
         } satisfies HermesGatewaySessionResumeParams;
-        const resumed = prepared.replay
-          ? yield* gatewayEffect(() =>
-              client.resumeSession(resumeParams, mutationOptions(operationId)),
-            ).pipe(
-              Effect.tap(() =>
-                transitionIntent(
-                  temporaryState,
-                  operationId,
-                  prepared.intentState,
-                  prepared.intentState === "admitted" ? "confirmed" : "reconciled",
+        const resumed = yield* (
+          prepared.replay
+            ? gatewayEffect(() =>
+                client.resumeSession(resumeParams, mutationOptions(operationId)),
+              ).pipe(
+                Effect.tap(() =>
+                  transitionIntent(
+                    temporaryState,
+                    operationId,
+                    prepared.intentState,
+                    prepared.intentState === "admitted" ? "confirmed" : "reconciled",
+                  ),
                 ),
-              ),
-            )
-          : yield* settleMutation(temporaryState, operationId, () =>
-              client.resumeSession(resumeParams, mutationOptions(operationId)),
-            );
+              )
+            : settleMutation(temporaryState, operationId, () =>
+                client.resumeSession(resumeParams, mutationOptions(operationId)),
+              )
+        ).pipe(
+          Effect.mapError((cause) =>
+            isStoredSessionNotFound(cause)
+              ? new HermesImportedSessionUnavailableError({
+                  storedSessionKey: binding.storedSessionKey,
+                  profileKey: binding.profileKey,
+                  cause,
+                })
+              : cause,
+          ),
+        );
         // Hermes revokes an ephemeral MCP lease as part of session.resume.
         mcpCredentialByLiveSession.delete(resumed.session_id);
         yield* ensureSessionMcp(resumed.session_id, threadInput.threadId);
         const authoritativeStatus = yield* gatewayEffect(() =>
           client.readSessionStatus({
             session_id: resumed.session_id,
-            profile: options.settings.profileKey,
+            profile: binding.profileKey,
           }),
         );
         const history = yield* gatewayEffect(() =>
           client.readSessionHistory({
             session_id: resumed.session_id,
-            profile: options.settings.profileKey,
+            profile: binding.profileKey,
           }),
         );
         const titleState = yield* readTitleState(resumed.session_id);
@@ -3096,13 +3137,13 @@ export function makeHermesServeAdapterV2(
             yield* gatewayEffect(() =>
               client.readSessionStatus({
                 session_id: state.liveSessionId,
-                profile: options.settings.profileKey,
+                profile: state.binding.profileKey,
               }),
             );
             const history = yield* gatewayEffect(() =>
               client.readSessionHistory({
                 session_id: state.liveSessionId,
-                profile: options.settings.profileKey,
+                profile: state.binding.profileKey,
               }),
             );
             const messages = yield* historyMessages(
