@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type ModelSelection } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -72,6 +72,8 @@ export function NewTaskDraftScreen(props: {
   readonly pendingTaskId?: string;
   /** Durable native share inbox item to merge into this project draft. */
   readonly incomingShareId?: string;
+  readonly workspace?: "work" | "code";
+  readonly initialModelSelection?: ModelSelection;
 }) {
   const projects = useProjects();
   const createProjectThread = useCreateProjectThread();
@@ -110,6 +112,7 @@ export function NewTaskDraftScreen(props: {
   const shareImportMountedRef = useRef(true);
   const latestDraftKeyRef = useRef(flow.draftKey);
   const latestIncomingShareIdRef = useRef(props.incomingShareId);
+  const isWorkConversation = props.workspace === "work";
   latestDraftKeyRef.current = flow.draftKey;
   latestIncomingShareIdRef.current = props.incomingShareId;
   const isImportingShare = importingShareKey !== null;
@@ -226,6 +229,36 @@ export function NewTaskDraftScreen(props: {
   // A new navigation to this mounted screen delivers a fresh initialProjectRef
   // reference — treat it as a new request and let it apply again.
   const lastInitialProjectRefRef = useRef(props.initialProjectRef);
+  const initializedWorkDraftRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    flow.setDraftScope(isWorkConversation ? "work" : "project");
+  }, [flow.setDraftScope, isWorkConversation]);
+
+  useEffect(() => {
+    if (
+      !isWorkConversation ||
+      flow.draftScope !== "work" ||
+      !flow.draftKey ||
+      !props.initialModelSelection
+    ) {
+      return;
+    }
+    if (initializedWorkDraftRef.current === flow.draftKey) {
+      return;
+    }
+    initializedWorkDraftRef.current = flow.draftKey;
+    clearComposerDraftContent(flow.draftKey);
+    flow.setSelectedModelKey(
+      `${props.initialModelSelection.instanceId}:${props.initialModelSelection.model}`,
+    );
+  }, [
+    flow.draftKey,
+    flow.draftScope,
+    flow.setSelectedModelKey,
+    isWorkConversation,
+    props.initialModelSelection,
+  ]);
 
   useEffect(() => {
     // Pending-task editing owns project selection (and must not fall through
@@ -304,8 +337,10 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     loadedBranchesProjectKeyRef.current = projectKey;
-    void flow.loadBranches();
-  }, [flow.loadBranches, selectedProject]);
+    if (!isWorkConversation) {
+      void flow.loadBranches();
+    }
+  }, [flow.loadBranches, isWorkConversation, selectedProject]);
 
   useEffect(() => {
     const shareId = props.incomingShareId;
@@ -860,7 +895,7 @@ export function NewTaskDraftScreen(props: {
     // finds no work and ends the card within seconds.
     armAgentAwarenessLiveActivityForLocalWork({
       threadTitle: deriveThreadTitleFromPrompt(initialMessageText),
-      projectTitle: selectedProject.title,
+      projectTitle: isWorkConversation ? "Hermes" : selectedProject.title,
     });
     const result = await createProjectThread({
       project: selectedProject,
@@ -869,6 +904,7 @@ export function NewTaskDraftScreen(props: {
       branch: selectedBranchName,
       worktreePath: workspaceMode === "worktree" ? null : selectedWorktreePath,
       startFromOrigin,
+      prepareWorkspace: isWorkConversation ? false : undefined,
       runtimeMode,
       interactionMode,
       initialMessageText,
@@ -956,7 +992,11 @@ export function NewTaskDraftScreen(props: {
       onFocus={() => setIsComposerFocused(true)}
       onBlur={() => setIsComposerFocused(false)}
       onPasteImages={(uris) => void handleNativePasteImages(uris)}
-      placeholder={`Describe a coding task in ${selectedProject.title}`}
+      placeholder={
+        isWorkConversation
+          ? "Ask Hermes anything"
+          : `Describe a coding task in ${selectedProject.title}`
+      }
       // Same collapsed centering as ThreadComposer: native vertical gravity
       // in a pill-height box.
       singleLineCentered={!isExpanded}
@@ -1017,24 +1057,36 @@ export function NewTaskDraftScreen(props: {
           label={selectedEnvironmentLabel}
         />
       </ControlPillMenu>
-      <ControlPillMenu
-        actions={workspaceMenuActions}
-        onPressAction={({ nativeEvent }) => handleWorkspaceMenuAction(nativeEvent.event)}
-      >
-        <ComposerToolbarTrigger
-          accessibilityLabel="Workspace"
-          disabled={isIncomingShareTransferPending}
-          icon="point.topleft.down.curvedto.point.bottomright.up"
-          label={workspaceLabel}
-        />
-      </ControlPillMenu>
+      {isWorkConversation ? null : (
+        <ControlPillMenu
+          actions={workspaceMenuActions}
+          onPressAction={({ nativeEvent }) => handleWorkspaceMenuAction(nativeEvent.event)}
+        >
+          <ComposerToolbarTrigger
+            accessibilityLabel="Workspace"
+            disabled={isIncomingShareTransferPending}
+            icon="point.topleft.down.curvedto.point.bottomright.up"
+            label={workspaceLabel}
+          />
+        </ControlPillMenu>
+      )}
     </>
   );
 
   const startButton = (
     <ComposerToolbarButton
       accessibilityLabel={
-        flow.submitting ? "Starting task" : environmentConnected ? "Start task" : "Queue task"
+        flow.submitting
+          ? isWorkConversation
+            ? "Starting conversation"
+            : "Starting task"
+          : environmentConnected
+            ? isWorkConversation
+              ? "Start conversation"
+              : "Start task"
+            : isWorkConversation
+              ? "Queue conversation"
+              : "Queue task"
       }
       icon={environmentConnected ? "arrow.up" : "tray.and.arrow.up"}
       onPress={() => void handleStart()}
@@ -1051,7 +1103,10 @@ export function NewTaskDraftScreen(props: {
     return (
       <View className="flex-1 bg-screen">
         <NativeStackScreenOptions options={{ headerShown: false }} />
-        <AndroidScreenHeader title="New Thread" onBack={() => navigation.goBack()} />
+        <AndroidScreenHeader
+          title={isWorkConversation ? "New Hermes conversation" : "New Thread"}
+          onBack={() => navigation.goBack()}
+        />
 
         <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
           <View className="flex-1" />
@@ -1126,7 +1181,9 @@ export function NewTaskDraftScreen(props: {
 
   return (
     <View className="flex-1 bg-sheet">
-      <NativeStackScreenOptions options={{ title: selectedProject.title }} />
+      <NativeStackScreenOptions
+        options={{ title: isWorkConversation ? "Hermes" : selectedProject.title }}
+      />
 
       <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
         <View className="min-h-0 flex-1 px-5 pt-2">{promptEditor}</View>

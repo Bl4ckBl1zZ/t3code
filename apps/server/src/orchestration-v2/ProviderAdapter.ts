@@ -78,6 +78,14 @@ export const ProviderAdapterV2Event = Schema.Union([
     appThread: OrchestrationV2AppThread,
   }),
   Schema.Struct({
+    type: Schema.Literal("app_thread.title_reconciled"),
+    driver: ProviderDriverKind,
+    threadId: ThreadId,
+    title: Schema.String,
+    revision: Schema.Number,
+    origin: Schema.String,
+  }),
+  Schema.Struct({
     type: Schema.Literal("provider_session.updated"),
     driver: ProviderDriverKind,
     providerSession: OrchestrationV2ProviderSession,

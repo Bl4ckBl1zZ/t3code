@@ -1,0 +1,520 @@
+import {
+  HermesCronError,
+  HermesSettings,
+  type HermesCronCapabilities,
+  type HermesCronExecution,
+  type HermesCronJob,
+  type HermesCronListResult,
+  type HermesCronMutationInput,
+  type HermesCronMutationResponse,
+  type HermesCronProviderProjection,
+  type HermesGatewayCompatibility,
+  type HermesGatewayCronJob,
+  type HermesGatewayCronListResult,
+  type HermesGatewayCronMutationResult,
+} from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+
+import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import {
+  HermesGatewayClient,
+  HermesGatewayMutationIndeterminateError,
+  type HermesGatewayMutationOptions,
+  type HermesGatewayReadOptions,
+} from "./HermesGatewayClient.ts";
+
+interface HermesCronGatewayClient {
+  readonly compatibility: HermesGatewayCompatibility | undefined;
+  connect(): Promise<HermesGatewayCompatibility>;
+  hasCapability(capability: string): boolean;
+  listCronJobs(
+    options?: Omit<HermesGatewayReadOptions, "requiredCapability">,
+  ): Promise<HermesGatewayCronListResult>;
+  manageCron(
+    params: Record<string, unknown>,
+    options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
+  ): Promise<HermesGatewayCronMutationResult>;
+  close(): void;
+}
+
+interface HermesCronProviderConfig {
+  readonly providerInstanceId: string;
+  readonly displayName: string;
+  readonly profileKey: string;
+  readonly endpoint: string;
+  readonly token: string;
+}
+
+export interface HermesCronOptions {
+  readonly clientFactory?: (input: {
+    readonly endpoint: string;
+    readonly authToken: string;
+  }) => HermesCronGatewayClient;
+}
+
+export interface HermesCronShape {
+  readonly list: () => Effect.Effect<HermesCronListResult, HermesCronError>;
+  readonly mutate: (
+    input: HermesCronMutationInput,
+  ) => Effect.Effect<HermesCronMutationResponse, HermesCronError>;
+}
+
+export class HermesCron extends Context.Service<HermesCron, HermesCronShape>()(
+  "t3/hermes/HermesCron",
+) {}
+
+const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
+const isHermesCronError = Schema.is(HermesCronError);
+const digest = (value: unknown): string =>
+  NodeCrypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+const string = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+const stringOrNumber = (value: unknown): string | number | undefined =>
+  typeof value === "string" || typeof value === "number" ? value : undefined;
+
+function actionInventory(compatibility: HermesGatewayCompatibility): ReadonlySet<string> {
+  const actions = new Set<string>();
+  const inventory = record(compatibility.inventory);
+  const manage = record(inventory?.["cron.manage"]);
+  const candidates = [manage?.actions, manage?.operations];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    for (const action of candidate) {
+      if (typeof action === "string") actions.add(action.toLowerCase());
+    }
+  }
+  return actions;
+}
+
+export function projectHermesCronCapabilities(
+  compatibility: HermesGatewayCompatibility,
+): HermesCronCapabilities {
+  const capabilities = new Set(compatibility.capabilities);
+  const actions = actionInventory(compatibility);
+  const supports = (operation: string, ...aliases: ReadonlyArray<string>) =>
+    aliases.some((capability) => capabilities.has(capability)) ||
+    actions.has(operation) ||
+    aliases.some((alias) => actions.has(alias.replace(/^cron[._]/u, "")));
+  const legacy = compatibility.status === "legacy";
+  return {
+    inventory: legacy || capabilities.has("cron.read"),
+    create: legacy || capabilities.has("cron.manage") || supports("add", "cron.create"),
+    edit: supports("update", "cron.update", "cron.edit"),
+    pause: supports("pause", "cron.pause"),
+    resume: supports("resume", "cron.resume"),
+    delete: legacy || capabilities.has("cron.manage") || supports("remove", "cron.delete"),
+    runNow: supports("run", "cron.run_now", "cron.run-now"),
+  };
+}
+
+function projectExecution(
+  input: {
+    readonly providerInstanceId: string;
+    readonly profileKey: string;
+    readonly jobIdentity: string;
+  },
+  value: unknown,
+): HermesCronExecution | null {
+  const row = record(value);
+  if (!row) return null;
+  const upstreamRunId = string(row.run_id) ?? string(row.id) ?? null;
+  const upstreamCursor = stringOrNumber(row.cursor) ?? stringOrNumber(row.sequence) ?? null;
+  const startedAt =
+    stringOrNumber(row.started_at) ??
+    stringOrNumber(row.startedAt) ??
+    stringOrNumber(row.created_at) ??
+    null;
+  const completedAt =
+    stringOrNumber(row.completed_at) ??
+    stringOrNumber(row.completedAt) ??
+    stringOrNumber(row.finished_at) ??
+    null;
+  const status = string(row.status) ?? null;
+  const stableFields = {
+    jobIdentity: input.jobIdentity,
+    upstreamRunId,
+    upstreamCursor,
+    startedAt,
+    completedAt,
+    status,
+  };
+  return {
+    dedupeKey: upstreamRunId
+      ? `hermes-run:${upstreamRunId}`
+      : `hermes-derived:${digest(stableFields)}`,
+    status,
+    startedAt,
+    completedAt,
+    provenance: {
+      scheduler: "hermes",
+      providerInstanceId: input.providerInstanceId,
+      profileKey: input.profileKey,
+      jobIdentity: input.jobIdentity,
+      upstreamRunId,
+      upstreamCursor,
+      identityStrength: upstreamRunId || upstreamCursor !== null ? "upstream" : "derived",
+    },
+  };
+}
+
+export function projectHermesCronJob(
+  providerInstanceId: string,
+  profileKey: string,
+  job: HermesGatewayCronJob,
+  ordinal: number,
+): HermesCronJob {
+  const id = job.id?.trim() || null;
+  const name = job.name?.trim() || null;
+  const identity = id ?? name ?? `unaddressable:${digest([job.schedule, job.prompt, ordinal])}`;
+  const executionRows = job.executions ?? job.runs ?? job.history ?? [];
+  const deduped = new Map<string, HermesCronExecution>();
+  for (const value of executionRows) {
+    const projected = projectExecution(
+      { providerInstanceId, profileKey, jobIdentity: identity },
+      value,
+    );
+    if (projected) deduped.set(projected.dedupeKey, projected);
+  }
+  return {
+    identity,
+    identityStrength: id ? "id" : name ? "name" : "missing",
+    id,
+    name,
+    schedule: job.schedule ?? null,
+    prompt: job.prompt ?? null,
+    enabled: job.enabled ?? (job.paused === undefined ? null : !job.paused),
+    nextRunAt: job.next_run_at ?? null,
+    lastRunAt: job.last_run_at ?? null,
+    executions: [...deduped.values()],
+  };
+}
+
+function projectProvider(input: {
+  readonly config: HermesCronProviderConfig;
+  readonly compatibility: HermesGatewayCompatibility;
+  readonly result: HermesGatewayCronListResult;
+}): HermesCronProviderProjection {
+  const diagnostics: string[] = [];
+  const jobs = input.result.jobs.map((job, index) =>
+    projectHermesCronJob(input.config.providerInstanceId, input.config.profileKey, job, index),
+  );
+  const missingIdentity = jobs.filter((job) => job.identityStrength === "missing").length;
+  if (missingIdentity > 0) {
+    diagnostics.push(
+      `${missingIdentity} cron job(s) have no upstream id or name and cannot be safely mutated.`,
+    );
+  }
+  if (!jobs.some((job) => job.executions.some((run) => run.provenance.upstreamCursor !== null))) {
+    diagnostics.push("Hermes does not expose a durable global cron execution cursor.");
+  }
+  if (input.compatibility.status === "legacy") {
+    diagnostics.push(
+      "Gateway capabilities are not negotiated; only pinned list/add/remove operations are enabled.",
+    );
+  }
+  return {
+    providerInstanceId: input.config.providerInstanceId,
+    displayName: input.config.displayName,
+    profileKey: input.config.profileKey,
+    status: "ready",
+    protocolClassification: input.compatibility.status,
+    capabilities: projectHermesCronCapabilities(input.compatibility),
+    jobs,
+    diagnostics,
+  };
+}
+
+const unavailableProjection = (
+  providerInstanceId: string,
+  displayName: string,
+  profileKey: string,
+  diagnostic: string,
+  status: "unavailable" | "error" = "unavailable",
+): HermesCronProviderProjection => ({
+  providerInstanceId,
+  displayName,
+  profileKey,
+  status,
+  protocolClassification: null,
+  capabilities: {
+    inventory: false,
+    create: false,
+    edit: false,
+    pause: false,
+    resume: false,
+    delete: false,
+    runNow: false,
+  },
+  jobs: [],
+  diagnostics: [diagnostic],
+});
+
+const tokenFromEnvironment = (
+  environment: ReadonlyArray<{
+    readonly name: string;
+    readonly value: string;
+    readonly sensitive: boolean;
+  }>,
+) =>
+  environment.find(
+    (variable) =>
+      variable.name === "HERMES_GATEWAY_TOKEN" &&
+      variable.sensitive &&
+      variable.value.trim().length > 0,
+  )?.value;
+
+function mutationCapability(
+  capabilities: HermesCronCapabilities,
+  operation: HermesCronMutationInput["operation"],
+): boolean {
+  switch (operation) {
+    case "create":
+      return capabilities.create;
+    case "edit":
+      return capabilities.edit;
+    case "pause":
+      return capabilities.pause;
+    case "resume":
+      return capabilities.resume;
+    case "delete":
+      return capabilities.delete;
+    case "run_now":
+      return capabilities.runNow;
+  }
+}
+
+function mutationParams(input: HermesCronMutationInput): Record<string, unknown> {
+  switch (input.operation) {
+    case "create":
+      return { action: "add", name: input.name, schedule: input.schedule, prompt: input.prompt };
+    case "edit":
+      return {
+        action: "update",
+        name: input.jobIdentity,
+        ...(input.name === undefined ? {} : { new_name: input.name }),
+        ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
+        ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+      };
+    case "pause":
+      return { action: "pause", name: input.jobIdentity };
+    case "resume":
+      return { action: "resume", name: input.jobIdentity };
+    case "delete":
+      return { action: "remove", name: input.jobIdentity };
+    case "run_now":
+      return { action: "run", name: input.jobIdentity };
+  }
+}
+
+export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
+  options: HermesCronOptions = {},
+) {
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const clientFactory =
+    options.clientFactory ??
+    ((input: { readonly endpoint: string; readonly authToken: string }) =>
+      new HermesGatewayClient(input));
+
+  const configuredProviders = Effect.fn("HermesCron.configuredProviders")(function* () {
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.mapError(
+        () =>
+          new HermesCronError({
+            code: "gateway_error",
+            message: "Could not read Hermes provider settings.",
+          }),
+      ),
+    );
+    const instances = deriveProviderInstanceConfigMap(settings);
+    const ready: HermesCronProviderConfig[] = [];
+    const unavailable: HermesCronProviderProjection[] = [];
+    for (const [providerInstanceId, instance] of Object.entries(instances)) {
+      if (instance.driver !== "hermes") continue;
+      let config: HermesSettings;
+      try {
+        config = decodeHermesSettings(instance.config ?? {});
+      } catch {
+        unavailable.push(
+          unavailableProjection(
+            providerInstanceId,
+            instance.displayName ?? providerInstanceId,
+            "unknown",
+            "Hermes provider settings are invalid.",
+          ),
+        );
+        continue;
+      }
+      const displayName = instance.displayName ?? providerInstanceId;
+      const token = tokenFromEnvironment(instance.environment ?? []);
+      if (instance.enabled !== true || !settings.enableHermes) {
+        unavailable.push(
+          unavailableProjection(
+            providerInstanceId,
+            displayName,
+            config.profileKey,
+            "Hermes is disabled.",
+          ),
+        );
+      } else if (!config.endpoint || !token) {
+        unavailable.push(
+          unavailableProjection(
+            providerInstanceId,
+            displayName,
+            config.profileKey,
+            "Hermes gateway endpoint or sensitive token is not configured.",
+          ),
+        );
+      } else {
+        ready.push({
+          providerInstanceId,
+          displayName,
+          profileKey: config.profileKey,
+          endpoint: config.endpoint,
+          token,
+        });
+      }
+    }
+    return { ready, unavailable };
+  });
+
+  const loadProvider = Effect.fn("HermesCron.loadProvider")(function* (
+    config: HermesCronProviderConfig,
+  ) {
+    const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
+    return yield* Effect.tryPromise({
+      try: async () => {
+        try {
+          const compatibility = await client.connect();
+          const capabilities = projectHermesCronCapabilities(compatibility);
+          if (!capabilities.inventory) {
+            return unavailableProjection(
+              config.providerInstanceId,
+              config.displayName,
+              config.profileKey,
+              "Gateway does not advertise cron.read.",
+            );
+          }
+          const result = await client.listCronJobs();
+          return projectProvider({ config, compatibility, result });
+        } finally {
+          client.close();
+        }
+      },
+      catch: () =>
+        new HermesCronError({
+          code: "gateway_error",
+          providerInstanceId: config.providerInstanceId,
+          message: "Could not read native Hermes cron inventory.",
+        }),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          unavailableProjection(
+            config.providerInstanceId,
+            config.displayName,
+            config.profileKey,
+            error.message,
+            "error",
+          ),
+        ),
+      ),
+    );
+  });
+
+  const list: HermesCronShape["list"] = Effect.fn("HermesCron.list")(function* () {
+    const configured = yield* configuredProviders();
+    const available = yield* Effect.forEach(configured.ready, loadProvider, { concurrency: 4 });
+    return { providers: [...available, ...configured.unavailable] };
+  });
+
+  const mutate: HermesCronShape["mutate"] = Effect.fn("HermesCron.mutate")(function* (input) {
+    if (
+      !input.operationId.trim() ||
+      (input.operation === "create" &&
+        (!input.name?.trim() || !input.schedule?.trim() || !input.prompt?.trim())) ||
+      (input.operation !== "create" && !input.jobIdentity?.trim())
+    ) {
+      return yield* new HermesCronError({
+        code: "invalid_input",
+        providerInstanceId: input.providerInstanceId,
+        operation: input.operation,
+        message: "Cron mutation is missing required identity or job fields.",
+      });
+    }
+    const configured = yield* configuredProviders();
+    const config = configured.ready.find(
+      (candidate) => candidate.providerInstanceId === input.providerInstanceId,
+    );
+    if (!config) {
+      const known = configured.unavailable.some(
+        (candidate) => candidate.providerInstanceId === input.providerInstanceId,
+      );
+      return yield* new HermesCronError({
+        code: known ? "provider_unavailable" : "provider_not_found",
+        providerInstanceId: input.providerInstanceId,
+        operation: input.operation,
+        message: known ? "Hermes provider is unavailable." : "Hermes provider was not found.",
+      });
+    }
+
+    const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
+    return yield* Effect.tryPromise({
+      try: async () => {
+        try {
+          const compatibility = await client.connect();
+          const capabilities = projectHermesCronCapabilities(compatibility);
+          if (!mutationCapability(capabilities, input.operation)) {
+            throw new HermesCronError({
+              code: "unsupported_operation",
+              providerInstanceId: input.providerInstanceId,
+              operation: input.operation,
+              message: `Hermes gateway does not support cron ${input.operation}.`,
+            });
+          }
+          const result = await client.manageCron(mutationParams(input), {
+            operationId: input.operationId,
+          });
+          const inventory = await client.listCronJobs();
+          return {
+            provider: projectProvider({ config, compatibility, result: inventory }),
+            upstreamJobId: result.job_id ?? result.job?.id ?? null,
+            upstreamRunId: result.run_id ?? null,
+          };
+        } finally {
+          client.close();
+        }
+      },
+      catch: (cause) => {
+        if (isHermesCronError(cause)) return cause;
+        if (cause instanceof HermesGatewayMutationIndeterminateError) {
+          return new HermesCronError({
+            code: "indeterminate",
+            providerInstanceId: input.providerInstanceId,
+            operation: input.operation,
+            message: "Hermes cron mutation outcome is indeterminate; automatic replay is disabled.",
+          });
+        }
+        return new HermesCronError({
+          code: "gateway_error",
+          providerInstanceId: input.providerInstanceId,
+          operation: input.operation,
+          message: "Hermes cron gateway operation failed.",
+        });
+      },
+    });
+  });
+
+  return HermesCron.of({ list, mutate });
+});
+
+export const layer = Layer.effect(HermesCron, makeHermesCron());

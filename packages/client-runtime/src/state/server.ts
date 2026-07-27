@@ -303,6 +303,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    hermesCron: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:hermes-cron",
+      tag: WS_METHODS.hermesCronList,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -378,6 +382,10 @@ export function createServerEnvironmentAtoms<R, E>(
     runScheduledTaskNow: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:run-now",
       tag: WS_METHODS.scheduledTasksRunNow,
+    }),
+    mutateHermesCron: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hermes-cron:mutate",
+      tag: WS_METHODS.hermesCronMutate,
     }),
   };
 }

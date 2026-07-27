@@ -1,5 +1,10 @@
 import * as React from "react";
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type {
+  ContextMenuItem,
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -108,6 +113,98 @@ export function filterSidebarV2VisibleThreads<
       !isSidebarSubagentThread(thread) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
+}
+
+/**
+ * Threads eligible for the left sidebar's lifecycle buckets.
+ *
+ * Subagent child threads are backing storage for delegated work, not
+ * top-level conversations. They remain discoverable through the parent
+ * thread's relationship/details panel, but never enter active, snoozed, or
+ * settled sidebar lists.
+ */
+export function isSidebarLifecycleThread(
+  thread: Pick<SidebarThreadSummary, "archivedAt" | "lineage">,
+): boolean {
+  return thread.archivedAt === null && !isSidebarSubagentThread(thread);
+}
+
+export type SidebarWorkspace = "work" | "code";
+
+export function sidebarProviderInstanceKey(
+  environmentId: EnvironmentId,
+  providerInstanceId: ProviderInstanceId,
+): string {
+  return `${environmentId}\u0000${providerInstanceId}`;
+}
+
+/**
+ * Applies the selected workspace to the sidebar lifecycle lists.
+ *
+ * Provider instance ids are user-configurable, so Hermes membership comes
+ * from the environment's provider metadata. The literal `hermes` fallback is
+ * only for cached historical shells whose server config has not loaded yet.
+ */
+export function isThreadVisibleInSidebarWorkspace(
+  thread: Pick<
+    SidebarThreadSummary,
+    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
+  >,
+  workspace: SidebarWorkspace,
+  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
+): boolean {
+  if (!isSidebarLifecycleThread(thread)) return false;
+  if (workspace === "code") return true;
+
+  const driverKind = providerDriverKindByInstance.get(
+    sidebarProviderInstanceKey(thread.environmentId, thread.providerInstanceId),
+  );
+  return (
+    driverKind === "hermes" || (driverKind === undefined && thread.providerInstanceId === "hermes")
+  );
+}
+
+export function isHermesSidebarThread(
+  thread: Pick<SidebarThreadSummary, "environmentId" | "providerInstanceId">,
+  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
+): boolean {
+  const driverKind = providerDriverKindByInstance.get(
+    sidebarProviderInstanceKey(thread.environmentId, thread.providerInstanceId),
+  );
+  return (
+    driverKind === "hermes" || (driverKind === undefined && thread.providerInstanceId === "hermes")
+  );
+}
+
+export type WorkInboxActiveSection = "main" | "needs-you" | "active";
+
+export function workInboxActiveSection(
+  thread: Pick<
+    SidebarThreadSummary,
+    "hasPendingApprovals" | "hasPendingUserInput" | "workInboxRole"
+  >,
+): WorkInboxActiveSection {
+  if (thread.workInboxRole === "main") return "main";
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "needs-you";
+  return "active";
+}
+
+export function canPinWorkInboxThread(input: {
+  thread: Pick<
+    SidebarThreadSummary,
+    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId" | "workInboxRole"
+  >;
+  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
+  isSnoozed: boolean;
+  isSettled: boolean;
+}): boolean {
+  return (
+    input.thread.workInboxRole !== "main" &&
+    isSidebarLifecycleThread(input.thread) &&
+    isHermesSidebarThread(input.thread, input.providerDriverKindByInstance) &&
+    !input.isSnoozed &&
+    !input.isSettled
   );
 }
 
@@ -494,12 +591,15 @@ export function firstValidTimestamp(
 // approval) is carried by each card's edge strip, not by position.
 export function sortThreadsForSidebarV2<
   T extends { readonly id: string; readonly createdAt: string },
->(threads: readonly T[]): T[] {
-  return [...threads].toSorted(
-    (left, right) =>
+>(threads: readonly T[], isPinned: (thread: T) => boolean = () => false): T[] {
+  return [...threads].toSorted((left, right) => {
+    const pinOrder = Number(isPinned(right)) - Number(isPinned(left));
+    return (
+      pinOrder ||
       parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
-  );
+      left.id.localeCompare(right.id)
+    );
+  });
 }
 
 type SettledTimestampInput = Pick<

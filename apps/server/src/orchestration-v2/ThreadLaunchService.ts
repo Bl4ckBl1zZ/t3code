@@ -61,6 +61,7 @@ export interface ThreadLaunchInput {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
+  readonly prepareWorkspace?: boolean;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
@@ -491,7 +492,10 @@ export const make = Effect.gen(function* () {
               text: input.initialMessage.text,
               attachments: input.initialMessage.attachments,
               modelSelection: input.modelSelection,
-              dispatchMode: { type: "defer_start" },
+              dispatchMode:
+                input.prepareWorkspace === false
+                  ? { type: "start_immediately" }
+                  : { type: "defer_start" },
               createdBy: input.createdBy,
               creationSource: input.creationSource,
             })
@@ -515,7 +519,9 @@ export const make = Effect.gen(function* () {
         const runIsPreparing =
           runId !== null &&
           projection.runs.some((run) => run.id === runId && run.status === "preparing");
-        const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
+        const shouldSchedule =
+          input.prepareWorkspace !== false &&
+          (runId === null ? Option.isNone(launchReceipt) : runIsPreparing);
         if (shouldSchedule) {
           const ownsPreparation = yield* reservePreparation(input.commandId);
           if (ownsPreparation) {

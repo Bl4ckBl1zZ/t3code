@@ -1,5 +1,6 @@
 import {
   ProviderDriverKind,
+  type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProjectedTurnItem,
@@ -43,6 +44,18 @@ export const PROVIDER_OPTIONS: Array<{
     pickerSidebarBadge: "new",
   },
   { value: ProviderDriverKind.make("grok"), label: "Grok", available: true },
+  {
+    value: ProviderDriverKind.make("hermes"),
+    label: "Hermes",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
+  {
+    value: ProviderDriverKind.make("openclaw"),
+    label: "OpenClaw",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
 ];
 
 export type WorkLogToolLifecycleStatus =
@@ -158,6 +171,16 @@ export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolea
     !workEntryIndicatesToolFailure(entry) &&
     !workEntryIndicatesToolSuccess(entry)
   );
+}
+
+/**
+ * Provider-neutral V2 items are committed timeline rows, including while a
+ * tool is still running. Legacy work-log entries may use a neutral row as a
+ * transient placeholder, so retain the old filtering behavior only for those
+ * unprojected entries.
+ */
+export function workLogEntryIsVisible(entry: WorkLogEntry): boolean {
+  return entry.projectedItem !== undefined || !workEntryIndicatesToolNeutralStatus(entry);
 }
 
 export function formatDuration(durationMs: number): string {
@@ -477,11 +500,18 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
 
 /**
  * Builds the web timeline in the exact order committed by `visibleTurnItems`.
- * Committed rows are presented directly from their projected item. Optimistic
- * messages are the only client-owned entries appended to that sequence.
+ * Committed rows are presented directly from their projected item. Durable
+ * provider messages without turn-item identities are merged chronologically,
+ * then optimistic client-owned messages are appended.
  */
 export function deriveTimelineEntriesFromVisibleTurnItems(input: {
   readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+  /**
+   * Provider-owned history can be materialized as durable messages before the
+   * provider has turn-item identities for it. Include those orphan messages
+   * without duplicating messages that already have visible turn items.
+   */
+  readonly projectionMessages?: ReadonlyArray<OrchestrationV2ConversationMessage>;
   readonly optimisticMessages: ReadonlyArray<ChatMessage>;
   readonly attachmentUrlById?: ReadonlyMap<string, string>;
   readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
@@ -587,6 +617,46 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
       entry: projectedWorkEntry(row),
       ...attemptMetadata,
     });
+  }
+
+  for (const projectedMessage of input.projectionMessages ?? []) {
+    if (committedMessageIds.has(projectedMessage.id) || projectedMessage.role === "system") {
+      continue;
+    }
+    const message: ChatMessage = {
+      id: projectedMessage.id,
+      role: projectedMessage.role,
+      text: projectedMessage.text,
+      ...(projectedMessage.attachments.length > 0
+        ? {
+            attachments: projectedMessage.attachments.map((attachment) => {
+              const previewUrl = input.attachmentUrlById?.get(attachment.id);
+              return previewUrl ? { ...attachment, previewUrl } : attachment;
+            }),
+          }
+        : {}),
+      runId: projectedMessage.runId,
+      streaming: projectedMessage.streaming,
+      createdBy: projectedMessage.createdBy,
+      creationSource: projectedMessage.creationSource,
+      createdAt: DateTime.formatIso(projectedMessage.createdAt),
+      updatedAt: DateTime.formatIso(projectedMessage.updatedAt),
+    };
+    const entry: TimelineEntry = {
+      id: message.id,
+      kind: "message",
+      createdAt: message.createdAt,
+      message,
+    };
+    const insertionIndex = entries.findIndex(
+      (candidate) => Date.parse(candidate.createdAt) > Date.parse(entry.createdAt),
+    );
+    if (insertionIndex === -1) {
+      entries.push(entry);
+    } else {
+      entries.splice(insertionIndex, 0, entry);
+    }
+    committedMessageIds.add(message.id);
   }
 
   for (const message of input.optimisticMessages) {

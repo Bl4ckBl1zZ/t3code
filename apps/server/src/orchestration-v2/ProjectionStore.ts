@@ -190,6 +190,21 @@ export function applyToProjection(
         ...base,
         thread: event.payload,
       };
+    case "thread.title-reconciled": {
+      const currentRevision = projection.thread.titleRevision ?? 0;
+      if (event.payload.revision <= currentRevision) {
+        return projection;
+      }
+      return {
+        ...base,
+        thread: {
+          ...base.thread,
+          title: event.payload.title,
+          titleRevision: event.payload.revision,
+          titleOrigin: event.payload.origin,
+        },
+      };
+    }
     case "run.created":
     case "run.updated":
       return withLocalVisibleTurnItems({
@@ -938,6 +953,8 @@ function shellFromState(input: {
     id: input.state.thread.id,
     projectId: input.state.thread.projectId,
     title: input.state.thread.title,
+    titleRevision: input.state.thread.titleRevision,
+    titleOrigin: input.state.thread.titleOrigin,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,
     runtimeMode: input.state.thread.runtimeMode,
@@ -979,6 +996,9 @@ function shellFromState(input: {
     archivedAt: input.state.thread.archivedAt,
     settledOverride: input.state.thread.settledOverride,
     settledAt: input.state.thread.settledAt,
+    pinnedAt: input.state.thread.pinnedAt ?? null,
+    workInboxRole: input.state.thread.workInboxRole ?? null,
+    timelineClearedAt: input.state.thread.timelineClearedAt ?? null,
     snoozedUntil: input.state.thread.snoozedUntil ?? null,
     snoozedAt: input.state.thread.snoozedAt ?? null,
     deletedAt: input.state.thread.deletedAt,
@@ -1053,6 +1073,35 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 archived_at = excluded.archived_at,
                 deleted_at = excluded.deleted_at,
                 payload_json = excluded.payload_json
+            `;
+            break;
+          }
+          case "thread.title-reconciled": {
+            const rows = yield* sql<PayloadRow>`
+              SELECT payload_json
+              FROM orchestration_v2_projection_threads
+              WHERE thread_id = ${event.threadId}
+              LIMIT 1
+            `;
+            const row = rows[0];
+            if (row === undefined) break;
+            const thread = yield* decodeThreadPayload(row.payload_json);
+            if (event.payload.revision <= (thread.titleRevision ?? 0)) break;
+            const updatedThread = {
+              ...thread,
+              title: event.payload.title,
+              titleRevision: event.payload.revision,
+              titleOrigin: event.payload.origin,
+              updatedAt: event.occurredAt,
+            };
+            const payloadJson = yield* encodeThreadPayload(updatedThread);
+            yield* sql`
+              UPDATE orchestration_v2_projection_threads
+              SET
+                title = ${event.payload.title},
+                updated_at = ${stringField(parseEncodedPayload(payloadJson), "updatedAt")},
+                payload_json = ${payloadJson}
+              WHERE thread_id = ${event.threadId}
             `;
             break;
           }
@@ -1778,7 +1827,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.runtime-mode-updated" &&
           event.type !== "thread.interaction-mode-updated" &&
           event.type !== "thread.model-selection-updated" &&
-          event.type !== "thread.provider-switched"
+          event.type !== "thread.provider-switched" &&
+          event.type !== "thread.title-reconciled"
         ) {
           const rows = yield* sql<PayloadRow>`
             SELECT payload_json

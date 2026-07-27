@@ -1,6 +1,7 @@
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
+  AssetBrowserArtifactNotFoundError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
@@ -16,8 +17,10 @@ import {
 import {
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
+  isWorkspaceVideoPreviewPath,
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
+  WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import * as Clock from "effect/Clock";
@@ -47,6 +50,7 @@ const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PREVIEW_ASSET_EXTENSIONS = new Set([
   ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   ...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
+  ...WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
   ".css",
   ".js",
   ".mjs",
@@ -75,6 +79,12 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("browser-artifact"),
+    fileName: Schema.String,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -119,6 +129,55 @@ const optionOnNotFound = <A, R>(
         error.reason._tag === "NotFound" ? Effect.succeed(Option.none<A>()) : Effect.fail(error),
     }),
   );
+
+function normalizeBrowserArtifactFileName(fileName: string): string | null {
+  const trimmed = fileName.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed.includes("/") ||
+    trimmed.includes("\\") ||
+    trimmed.includes("\0") ||
+    trimmed.startsWith(".")
+  ) {
+    return null;
+  }
+  if (!isWorkspaceImagePreviewPath(trimmed) && !isWorkspaceVideoPreviewPath(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+const resolveBrowserArtifactPath = Effect.fn("AssetAccess.resolveBrowserArtifactPath")(function* (
+  browserArtifactsDir: string,
+  fileName: string,
+) {
+  const normalizedFileName = normalizeBrowserArtifactFileName(fileName);
+  if (normalizedFileName === null) return null;
+
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const canonicalRoot = yield* fileSystem.realPath(browserArtifactsDir).pipe(
+    Effect.map((value): string | null => value),
+    Effect.orElseSucceed(() => null),
+  );
+  const canonicalFile = yield* fileSystem
+    .realPath(path.join(browserArtifactsDir, normalizedFileName))
+    .pipe(
+      Effect.map((value): string | null => value),
+      Effect.orElseSucceed(() => null),
+    );
+  if (canonicalRoot === null || canonicalFile === null) return null;
+
+  const relative = path.relative(canonicalRoot, canonicalFile);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+  const info = yield* fileSystem.stat(canonicalFile).pipe(
+    Effect.map((value) => Option.some(value)),
+    Effect.orElseSucceed(() => Option.none()),
+  );
+  return Option.isSome(info) && info.value.type === "File" ? canonicalFile : null;
+});
 
 const resolveCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWorkspaceFile")(
   function* (input: { readonly workspaceRoot: string; readonly relativePath: string }) {
@@ -234,21 +293,23 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
-      claims = isWorkspaceImagePreviewPath(resolved.relativePath)
-        ? {
-            version: 1,
-            kind: "workspace-file-exact",
-            workspaceRoot: canonicalWorkspaceRoot,
-            relativePath: resolved.relativePath,
-            expiresAt,
-          }
-        : {
-            version: 1,
-            kind: "workspace-file",
-            workspaceRoot: canonicalWorkspaceRoot,
-            baseRelativePath: path.dirname(resolved.relativePath),
-            expiresAt,
-          };
+      claims =
+        isWorkspaceImagePreviewPath(resolved.relativePath) ||
+        isWorkspaceVideoPreviewPath(resolved.relativePath)
+          ? {
+              version: 1,
+              kind: "workspace-file-exact",
+              workspaceRoot: canonicalWorkspaceRoot,
+              relativePath: resolved.relativePath,
+              expiresAt,
+            }
+          : {
+              version: 1,
+              kind: "workspace-file",
+              workspaceRoot: canonicalWorkspaceRoot,
+              baseRelativePath: path.dirname(resolved.relativePath),
+              expiresAt,
+            };
       fileName = path.basename(resolved.relativePath);
       break;
     }
@@ -270,6 +331,27 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         expiresAt,
       };
       fileName = path.basename(attachmentPath);
+      break;
+    }
+    case "browser-artifact": {
+      const config = yield* ServerConfig.ServerConfig;
+      const artifactFileName = normalizeBrowserArtifactFileName(input.resource.fileName);
+      const artifactPath =
+        artifactFileName === null
+          ? null
+          : yield* resolveBrowserArtifactPath(config.browserArtifactsDir, artifactFileName);
+      if (artifactFileName === null || artifactPath === null) {
+        return yield* new AssetBrowserArtifactNotFoundError({
+          resource: input.resource,
+        });
+      }
+      claims = {
+        version: 1,
+        kind: "browser-artifact",
+        fileName: artifactFileName,
+        expiresAt,
+      };
+      fileName = artifactFileName;
       break;
     }
     case "project-favicon": {
@@ -385,6 +467,19 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     );
     return Option.isSome(info) && info.value.type === "File"
       ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
+      : null;
+  }
+
+  if (claims.kind === "browser-artifact") {
+    const config = yield* ServerConfig.ServerConfig;
+    const artifactFileName = normalizeBrowserArtifactFileName(claims.fileName);
+    if (!artifactFileName) return null;
+    const artifactPath = yield* resolveBrowserArtifactPath(
+      config.browserArtifactsDir,
+      artifactFileName,
+    );
+    return artifactPath !== null
+      ? ({ kind: "file", path: artifactPath } satisfies ResolvedAsset)
       : null;
   }
 

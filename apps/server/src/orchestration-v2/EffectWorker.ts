@@ -49,8 +49,22 @@ export function isNonRetryableProviderTurnControlFailure(
   );
 }
 
+export function isNonRetryableProviderTurnStartPrerequisiteFailure(
+  effectType: string,
+  errorText: string,
+): boolean {
+  return (
+    (effectType === "provider-turn.start" || effectType === "provider-turn.restart") &&
+    (/CheckpointBaselineCaptureError/iu.test(errorText) ||
+      /Failed to capture checkpoint baseline/iu.test(errorText))
+  );
+}
+
 export interface OrchestrationEffectExecutorV2Shape {
   readonly execute: (
+    effect: OrchestrationEffectV2,
+  ) => Effect.Effect<void, OrchestrationEffectExecutionError>;
+  readonly handlePermanentFailure?: (
     effect: OrchestrationEffectV2,
   ) => Effect.Effect<void, OrchestrationEffectExecutionError>;
 }
@@ -280,6 +294,29 @@ export const executorLayer: Layer.Layer<
             );
         }
       },
+      handlePermanentFailure: (effect) => {
+        switch (effect.request.type) {
+          case "provider-turn.start":
+          case "provider-turn.restart":
+            return providerTurnStart
+              .failPermanently({
+                threadId: effect.threadId,
+                runId: effect.request.runId,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
+          default:
+            return Effect.void;
+        }
+      },
     });
   }),
 );
@@ -375,19 +412,38 @@ export const layerWithOptions = (
         }
 
         const error = Cause.pretty(exit.cause);
-        const nonRetryable = isNonRetryableProviderTurnControlFailure(effect.request.type, error);
+        const ignorableControlFailure = isNonRetryableProviderTurnControlFailure(
+          effect.request.type,
+          error,
+        );
+        const nonRetryableStartFailure = isNonRetryableProviderTurnStartPrerequisiteFailure(
+          effect.request.type,
+          error,
+        );
+        const exhausted = !ignorableControlFailure && effect.attemptCount >= maxAttempts;
+        const permanentFailure = nonRetryableStartFailure || exhausted;
         yield* Effect.logWarning("Orchestration effect execution failed", {
           effectId: effect.id,
           effectType: effect.request.type,
           attemptCount: effect.attemptCount,
-          nonRetryable,
+          nonRetryable: ignorableControlFailure || nonRetryableStartFailure,
           error,
         });
+        if (permanentFailure && executor.handlePermanentFailure !== undefined) {
+          yield* executor.handlePermanentFailure(effect).pipe(
+            Effect.catchCause(() =>
+              Effect.logError("Failed to project permanent orchestration effect failure", {
+                effectId: effect.id,
+                effectType: effect.request.type,
+              }),
+            ),
+          );
+        }
         // Prefer succeed for terminal interrupt races so the outbox does not
         // keep a failed interrupt around; fail only when we must not retry.
-        const updated = nonRetryable
+        const updated = ignorableControlFailure
           ? yield* outbox.succeed({ effectId: effect.id, workerId })
-          : effect.attemptCount >= maxAttempts
+          : permanentFailure
             ? yield* outbox.fail({ effectId: effect.id, workerId, error })
             : yield* outbox.retry({
                 effectId: effect.id,

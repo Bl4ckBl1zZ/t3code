@@ -8,6 +8,7 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  type OrchestrationV2ConversationMessage,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2RunAttempt,
@@ -22,11 +23,181 @@ import {
   findLatestProposedPlan,
   isLatestRunSettled,
   type TimelineEntry,
+  workLogEntryIsVisible,
 } from "./session-logic";
 import { makeThreadProjectionFixture } from "./test-fixtures";
 import type { ChatMessage } from "./types";
 
 describe("V2 session presentation", () => {
+  it("renders provider-hydrated messages that do not have turn-item identities", () => {
+    const threadId = ThreadId.make("thread-hermes-imported-history");
+    const userAt = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");
+    const assistantAt = DateTime.makeUnsafe("2026-07-25T12:00:01.000Z");
+    const userMessageId = MessageId.make("message-hermes-history-user");
+    const assistantMessageId = MessageId.make("message-hermes-history-assistant");
+    const attachmentId = "thread-hermes-imported-history-00000000-0000-0000-0000-000000000001";
+    const projectionMessages: ReadonlyArray<OrchestrationV2ConversationMessage> = [
+      {
+        id: userMessageId,
+        threadId,
+        runId: null,
+        nodeId: null,
+        role: "user",
+        text: "Existing question",
+        attachments: [
+          {
+            type: "image",
+            id: attachmentId,
+            name: "img_fixture.webp",
+            mimeType: "image/webp",
+            sizeBytes: 12,
+          },
+        ],
+        streaming: false,
+        createdBy: "user",
+        creationSource: "provider",
+        createdAt: userAt,
+        updatedAt: userAt,
+      },
+      {
+        id: assistantMessageId,
+        threadId,
+        runId: null,
+        nodeId: null,
+        role: "assistant",
+        text: "Existing answer",
+        attachments: [],
+        streaming: false,
+        createdBy: "agent",
+        creationSource: "provider",
+        createdAt: assistantAt,
+        updatedAt: assistantAt,
+      },
+    ];
+    const assistantItem = {
+      id: TurnItemId.make("item-hermes-history-assistant"),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed" as const,
+      title: null,
+      startedAt: assistantAt,
+      completedAt: assistantAt,
+      updatedAt: assistantAt,
+      type: "assistant_message" as const,
+      messageId: assistantMessageId,
+      text: "Existing answer",
+      streaming: false,
+    } satisfies OrchestrationV2TurnItem;
+    const visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [
+      {
+        position: 0,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: assistantItem.id,
+        item: assistantItem,
+      },
+    ];
+
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems,
+      projectionMessages,
+      optimisticMessages: [],
+      attachmentUrlById: new Map([[attachmentId, "/assets/imported-image"]]),
+    });
+
+    expect(
+      entries.flatMap((entry) =>
+        entry.kind === "message" ? [[entry.message.role, entry.message.text]] : [],
+      ),
+    ).toEqual([
+      ["user", "Existing question"],
+      ["assistant", "Existing answer"],
+    ]);
+    expect(
+      entries.find((entry) => entry.kind === "message" && entry.message.id === userMessageId),
+    ).toMatchObject({
+      message: {
+        attachments: [
+          {
+            id: attachmentId,
+            previewUrl: "/assets/imported-image",
+          },
+        ],
+      },
+    });
+  });
+
+  it("keeps projected V2 tool calls visible throughout their lifecycle", () => {
+    const now = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");
+    const threadId = ThreadId.make("thread-hermes-tools");
+    const statuses = ["running", "completed", "failed"] as const;
+    const visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = statuses.map(
+      (status, position) => {
+        const item = {
+          id: TurnItemId.make(`tool-${status}`),
+          threadId,
+          runId: RunId.make("run-hermes-tools"),
+          nodeId: NodeId.make(`node-${status}`),
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: position,
+          status,
+          title: null,
+          startedAt: now,
+          completedAt: status === "running" ? null : now,
+          updatedAt: now,
+          type: "dynamic_tool" as const,
+          toolName: "browser.search",
+          input: { query: status },
+          ...(status === "running" ? {} : { output: { status } }),
+        } satisfies OrchestrationV2TurnItem;
+        return {
+          position,
+          visibility: "local" as const,
+          sourceThreadId: threadId,
+          sourceItemId: item.id,
+          item,
+        };
+      },
+    );
+
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems,
+      optimisticMessages: [],
+    });
+    const workEntries = entries.flatMap((entry) => (entry.kind === "work" ? [entry.entry] : []));
+
+    expect(workEntries.map((entry) => entry.toolLifecycleStatus)).toEqual([
+      "inProgress",
+      "completed",
+      "failed",
+    ]);
+    expect(workEntries.every(workLogEntryIsVisible)).toBe(true);
+    expect(workEntries.map((entry) => entry.toolData)).toEqual([
+      { input: { query: "running" }, output: undefined },
+      { input: { query: "completed" }, output: { status: "completed" } },
+      { input: { query: "failed" }, output: { status: "failed" } },
+    ]);
+
+    expect(
+      workLogEntryIsVisible({
+        id: "legacy-placeholder",
+        createdAt: "2026-07-25T12:00:00.000Z",
+        label: "Tool call",
+        tone: "tool",
+        toolLifecycleStatus: "inProgress",
+      }),
+    ).toBe(false);
+  });
+
   it("uses run status as the settlement boundary", () => {
     const runId = RunId.make("run-1");
     expect(
