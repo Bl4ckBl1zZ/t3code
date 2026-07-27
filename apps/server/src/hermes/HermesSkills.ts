@@ -114,6 +114,22 @@ export function projectHermesSkillsCapabilities(
   };
 }
 
+/**
+ * `skills.manage list` responses are either a flat entry array or a
+ * category -> entries map; flatten the map shape into one entry list.
+ */
+export function flattenHermesGatewaySkillsList(
+  skills: ReadonlyArray<unknown> | Readonly<Record<string, unknown>>,
+): ReadonlyArray<unknown> {
+  if (Array.isArray(skills)) return skills;
+  const flattened: unknown[] = [];
+  for (const values of Object.values(skills)) {
+    if (Array.isArray(values)) flattened.push(...values);
+    else flattened.push(values);
+  }
+  return flattened;
+}
+
 export function projectHermesSkillEntry(value: unknown): HermesSkillEntry | null {
   if (typeof value === "string") {
     return value.length > 0 ? { name: value, description: null } : null;
@@ -222,13 +238,14 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
           const blocked = blockedProjection(config, compatibility);
           if (blocked) return blocked;
           const result = await client.listSkills();
+          const entries = flattenHermesGatewaySkillsList(result.skills);
           const skills: HermesSkillEntry[] = [];
-          for (const value of result.skills) {
+          for (const value of entries) {
             const entry = projectHermesSkillEntry(value);
             if (entry) skills.push(entry);
           }
           const diagnostics: string[] = [];
-          const dropped = result.skills.length - skills.length;
+          const dropped = entries.length - skills.length;
           if (dropped > 0) {
             diagnostics.push(`${dropped} skill entr(ies) have no usable name and were omitted.`);
           }

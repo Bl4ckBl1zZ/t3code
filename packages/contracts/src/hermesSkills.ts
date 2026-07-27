@@ -8,7 +8,12 @@ import { HermesGatewayCompatibilityStatus } from "./hermesGateway.ts";
  * skill inventory; these values are projections, never local state.
  */
 export const HermesGatewaySkillsListResult = Schema.Struct({
-  skills: Schema.Array(Schema.Unknown),
+  // Hermes returns either a flat entry array or a category -> entries map
+  // (`{"skills": {category: [names...]}}`); accept both wire shapes.
+  skills: Schema.Union([
+    Schema.Array(Schema.Unknown),
+    Schema.Record(Schema.String, Schema.Unknown),
+  ]),
 });
 export type HermesGatewaySkillsListResult = typeof HermesGatewaySkillsListResult.Type;
 

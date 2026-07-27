@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as ServerSettings from "../serverSettings.ts";
 import { HermesGatewayMutationsBlockedError } from "./HermesGatewayClient.ts";
 import {
+  flattenHermesGatewaySkillsList,
   makeHermesSkills,
   projectHermesSkillEntry,
   projectHermesSkillsCapabilities,
@@ -71,6 +72,20 @@ describe("HermesSkills projection", () => {
     expect(projectHermesSkillEntry({ description: "unnamed" })).toBeNull();
     expect(projectHermesSkillEntry(42)).toBeNull();
   });
+
+  it("flattens category-map list responses and passes arrays through", () => {
+    expect(
+      flattenHermesGatewaySkillsList({
+        coding: ["git", "notes"],
+        research: ["web"],
+        odd: "solo",
+      }),
+    ).toEqual(["git", "notes", "web", "solo"]);
+    expect(flattenHermesGatewaySkillsList(["git", { name: "notes" }])).toEqual([
+      "git",
+      { name: "notes" },
+    ]);
+  });
 });
 
 describe("HermesSkills service", () => {
@@ -106,6 +121,31 @@ describe("HermesSkills service", () => {
     close: () => {},
     ...overrides,
   });
+
+  it.effect("lists skills from a category-map response", () =>
+    Effect.gen(function* () {
+      const skills = yield* makeHermesSkills({
+        clientFactory: () =>
+          makeClient(supportedCompatibility, {
+            listSkills: () =>
+              Promise.resolve({ skills: { coding: ["git", "notes"], research: ["web"] } }),
+          }),
+      });
+      const result = yield* skills.list();
+      const main = result.providers.find(
+        (candidate) => candidate.providerInstanceId === "hermes_main",
+      );
+      expect(main).toMatchObject({
+        status: "ready",
+        skills: [
+          { name: "git", description: null },
+          { name: "notes", description: null },
+          { name: "web", description: null },
+        ],
+      });
+      expect(main?.diagnostics).toEqual([]);
+    }).pipe(Effect.provide(settingsLayer)),
+  );
 
   it.effect("lists installed skills for a negotiated gateway", () =>
     Effect.gen(function* () {
