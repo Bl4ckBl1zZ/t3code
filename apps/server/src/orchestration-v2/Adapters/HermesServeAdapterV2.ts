@@ -2103,7 +2103,7 @@ export function makeHermesServeAdapterV2(
                 ? text
                 : `${active.assistantText}${text}`;
             }
-            active.assistantSnapshotPending = true;
+            if (text) active.assistantSnapshotPending = true;
             yield* messageArtifacts(state, active, false);
             return;
           }

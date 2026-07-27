@@ -612,10 +612,27 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           ...(reasoningResult.status === "fulfilled" ? { reasoning: reasoningResult.value } : {}),
           ...(fastResult.status === "fulfilled" ? { fast: fastResult.value } : {}),
         };
-        inventoryWarning =
-          commandsResult.status === "fulfilled"
-            ? commandsResult.value.warning?.trim() || undefined
-            : "Hermes command probing is unavailable; using the built-in command catalog.";
+        const probeWarnings: Array<string> = [];
+        if (commandsResult.status === "fulfilled") {
+          const warning = commandsResult.value.warning?.trim();
+          if (warning) probeWarnings.push(warning);
+        } else {
+          probeWarnings.push(
+            "Hermes command probing is unavailable; using the built-in command catalog.",
+          );
+        }
+        if (modelsResult.status === "rejected") {
+          probeWarnings.push(
+            "Hermes model options probing is unavailable; using the built-in model catalog.",
+          );
+        }
+        if (reasoningResult.status === "rejected") {
+          probeWarnings.push("Hermes reasoning configuration could not be read.");
+        }
+        if (fastResult.status === "rejected") {
+          probeWarnings.push("Hermes fast-mode configuration could not be read.");
+        }
+        inventoryWarning = probeWarnings.length > 0 ? probeWarnings.join(" ") : undefined;
         return currentSnapshot();
       });
 

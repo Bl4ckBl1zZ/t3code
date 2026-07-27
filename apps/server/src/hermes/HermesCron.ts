@@ -96,20 +96,29 @@ export function projectHermesCronCapabilities(
     };
   }
   const capabilities = new Set(compatibility.capabilities);
-  const actions = hermesManageActionInventory(compatibility, "cron.manage");
-  const supports = (operation: string, ...aliases: ReadonlyArray<string>) =>
-    aliases.some((capability) => capabilities.has(capability)) ||
-    actions.has(operation) ||
-    aliases.some((alias) => actions.has(alias.replace(/^cron[._]/u, "")));
-  const legacy = compatibility.status === "legacy";
+  // The gateway client only accepts cron.read for list and cron.manage for
+  // mutations, so the projection must not enable operations from granular
+  // aliases or legacy status that the client would reject.
+  const manage = capabilities.has("cron.manage");
+  const inventoried = hermesManageActionInventory(compatibility, "cron.manage");
+  // Pinned legacy gateways have no negotiated action inventory; only the
+  // evidenced list/add/remove operations are enabled for them.
+  const actions =
+    inventoried.size > 0
+      ? inventoried
+      : compatibility.status === "legacy"
+        ? new Set(["add", "remove"])
+        : inventoried;
+  const allows = (...names: ReadonlyArray<string>) =>
+    manage && (actions.size === 0 || names.some((name) => actions.has(name)));
   return {
-    inventory: legacy || capabilities.has("cron.read"),
-    create: legacy || capabilities.has("cron.manage") || supports("add", "cron.create"),
-    edit: supports("update", "cron.update", "cron.edit"),
-    pause: supports("pause", "cron.pause"),
-    resume: supports("resume", "cron.resume"),
-    delete: legacy || capabilities.has("cron.manage") || supports("remove", "cron.delete"),
-    runNow: supports("run", "cron.run_now", "cron.run-now"),
+    inventory: capabilities.has("cron.read"),
+    create: allows("add", "create"),
+    edit: allows("update", "edit"),
+    pause: allows("pause"),
+    resume: allows("resume"),
+    delete: allows("remove", "delete"),
+    runNow: allows("run", "run_now", "run-now"),
   };
 }
 

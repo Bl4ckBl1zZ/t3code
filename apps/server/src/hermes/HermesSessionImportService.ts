@@ -151,7 +151,7 @@ function asHistoryResetError(cause: unknown): HermesSessionsError {
 }
 
 export interface HermesSessionImportServiceShape {
-  readonly hydrateThread: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly hydrateThread: (threadId: ThreadId) => Effect.Effect<boolean>;
   readonly discover: (
     input: HermesSessionDiscoveryInput,
   ) => Effect.Effect<HermesSessionDiscoveryResult, HermesSessionsError>;
@@ -173,8 +173,9 @@ export const make = Effect.gen(function* () {
 
   const hydrateThread = Effect.fn("HermesSessionImportService.hydrateThread")(
     function* (threadId: ThreadId) {
+      if (Option.isNone(orchestrator)) return true;
       const binding = yield* repository.getByThreadId(String(threadId));
-      if (Option.isNone(binding) || Option.isNone(orchestrator)) return;
+      if (Option.isNone(binding)) return true;
       // Hydration is retried because a transient gateway failure here would
       // otherwise leave a completed import with no projected transcript —
       // unrecoverable once the upstream session vanishes.
@@ -184,11 +185,12 @@ export const make = Effect.gen(function* () {
           providerInstanceId: ProviderInstanceId.make(binding.value.providerInstanceId),
         })
         .pipe(Effect.retry({ times: 3 }));
+      return true;
     },
     Effect.catchCause((cause) =>
       Effect.logError("Unable to hydrate imported Hermes thread history", {
         cause,
-      }),
+      }).pipe(Effect.as(false)),
     ),
   );
 
@@ -502,13 +504,18 @@ export const make = Effect.gen(function* () {
               });
             }
           }
-          yield* repository.transitionSessionImport({
-            importId: row.importId,
-            from: "thread_created",
-            to: "completed",
-            now: DateTime.formatIso(yield* DateTime.now),
-          });
-          yield* hydrateThread(threadId);
+          // Complete the ledger row only once history is projected; a failed
+          // hydrate stays in thread_created so re-importing retries it instead
+          // of leaving a completed import with an empty transcript.
+          const hydrated = yield* hydrateThread(threadId);
+          if (hydrated) {
+            yield* repository.transitionSessionImport({
+              importId: row.importId,
+              from: "thread_created",
+              to: "completed",
+              now: DateTime.formatIso(yield* DateTime.now),
+            });
+          }
         }
         return {
           storedSessionId: session.id,

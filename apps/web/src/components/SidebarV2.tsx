@@ -2004,9 +2004,14 @@ export default function SidebarV2() {
         if (target?.kind !== "draft") return null;
         const draft = useComposerDraftStore.getState().getDraftSession(target.draftId);
         if (draft === null) return null;
-        return hermesBackingProject !== null &&
-          draft.environmentId === hermesBackingProject.environmentId &&
-          draft.projectId === hermesBackingProject.id
+        const draftProject =
+          projects.find(
+            (project) =>
+              project.environmentId === draft.environmentId && project.id === draft.projectId,
+          ) ?? null;
+        // Unknown project (still loading) stays neutral rather than guessing.
+        if (draftProject === null) return null;
+        return isT3WorkBackingProject(draftProject, serverConfigs)
           ? ("work" as const)
           : ("code" as const);
       })();
@@ -2043,11 +2048,12 @@ export default function SidebarV2() {
       }
     },
     [
-      hermesBackingProject,
       navigateToThread,
       openWorkComposer,
+      projects,
       providerDriverKindByInstance,
       routeThreadKey,
+      serverConfigs,
       router,
       setWorkspace,
       threads,

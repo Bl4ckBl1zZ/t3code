@@ -65,6 +65,12 @@ function IndexDraftLanding() {
     if (mostRecentProject === null || startingRef.current) {
       return;
     }
+    // Until the environment's server config arrives, the Work-backing check
+    // above cannot classify this project; starting the draft now could latch
+    // onto the T3 Work project. The effect re-runs once configs load.
+    if (!serverConfigs.has(mostRecentProject.environmentId)) {
+      return;
+    }
     startingRef.current = true;
     void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
       replace: true,
@@ -72,7 +78,7 @@ function IndexDraftLanding() {
       startingRef.current = false;
       setStartState((state) => ({ ...state, failed: true }));
     });
-  }, [handleNewThread, mostRecentProject, startState.retryRequest]);
+  }, [handleNewThread, mostRecentProject, serverConfigs, startState.retryRequest]);
 
   if (!bootstrapped) {
     return null;
