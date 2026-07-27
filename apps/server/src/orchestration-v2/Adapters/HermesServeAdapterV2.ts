@@ -67,6 +67,11 @@ import {
   type HermesGatewayOrderedEvent,
 } from "../../hermes/HermesGatewayClient.ts";
 import {
+  hydrateImportedHermesActivities,
+  normalizeImportedHermesUserText,
+  type HermesImportedActivity,
+} from "../../hermes/HermesImportHydration.ts";
+import {
   hermesHistoryMediaRoots,
   normalizeHermesHistoryMessage,
   parseHermesHistoryText,
@@ -437,6 +442,7 @@ interface HermesThreadState {
   ownershipLost: boolean;
   readonly turns: Map<string, OrchestrationV2ProviderTurn>;
   readonly messages: Map<string, OrchestrationV2ConversationMessage>;
+  readonly importedTurnItems: Map<string, OrchestrationV2TurnItem>;
   readonly runtimeRequests: Map<string, OrchestrationV2RuntimeRequest>;
 }
 
@@ -2187,6 +2193,84 @@ export function makeHermesServeAdapterV2(
         mcpCredentialByLiveSession.set(liveSessionId, credentialIdentity);
       });
 
+      const importedActivityTurnItems = (
+        threadId: ProviderAdapterV2EnsureThreadInput["threadId"],
+        binding: HermesSessionBinding,
+        activities: ReadonlyArray<HermesImportedActivity>,
+      ): ReadonlyArray<OrchestrationV2TurnItem> => {
+        const createdAt = DateTime.makeUnsafe(binding.createdAt);
+        return activities.map((activity, index): OrchestrationV2TurnItem => {
+          const nativeItemId = `hermes-import:${binding.providerInstanceId}:${binding.profileKey}:${binding.storedSessionKey}:${activity.key}`;
+          // Imported history carries no timestamps, so activities share the
+          // ordinal-offset clock used for hydrated messages: they interleave
+          // deterministically with the surrounding transcript.
+          const at = DateTime.add(createdAt, { milliseconds: activity.ordinal });
+          const base = {
+            id: options.idAllocator.derive.turnItemFromProviderItem({
+              driver: HERMES_PROVIDER,
+              nativeItemId,
+            }),
+            threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: providerRef(nativeItemId, "weak"),
+            parentItemId: null,
+            ordinal: index,
+            startedAt: at,
+            completedAt: at,
+            updatedAt: at,
+          };
+          switch (activity.kind) {
+            case "reasoning":
+              return {
+                ...base,
+                status: "completed",
+                title: null,
+                type: "reasoning",
+                text: activity.text,
+                streaming: false,
+              };
+            case "command_execution":
+              return {
+                ...base,
+                status: activity.status,
+                title: activity.title,
+                type: "command_execution",
+                input: activity.input,
+                ...(activity.output === undefined ? {} : { output: activity.output }),
+              };
+            case "file_change":
+              return {
+                ...base,
+                status: activity.status,
+                title: activity.title,
+                type: "file_change",
+                fileName: activity.fileName,
+              };
+            case "web_search":
+              return {
+                ...base,
+                status: activity.status,
+                title: activity.title,
+                type: "web_search",
+                patterns: activity.patterns,
+              };
+            case "dynamic_tool":
+              return {
+                ...base,
+                status: activity.status,
+                title: activity.title,
+                type: "dynamic_tool",
+                toolName: activity.toolName,
+                input: activity.input,
+                ...(activity.output === undefined ? {} : { output: activity.output }),
+              };
+          }
+        });
+      };
+
       const historyMessages = Effect.fnUntraced(function* (
         threadId: ProviderAdapterV2EnsureThreadInput["threadId"],
         binding: HermesSessionBinding,
@@ -2199,10 +2283,30 @@ export function makeHermesServeAdapterV2(
           projectId: binding.projectId,
           storedSessionKey: binding.storedSessionKey,
         });
-        return yield* Effect.forEach(
+        // The inherited boundary is recorded once, on first hydration, so
+        // imported-transcript normalization and activity rehydration only
+        // ever apply to the history that existed at import time. Native T3
+        // messages appended afterwards are left untouched.
+        const inheritedCount = Option.isSome(imported)
+          ? (imported.value.inheritedMessageCount ??
+            (yield* options.repository.setSessionImportInheritedCount({
+              importId: imported.value.importId,
+              inheritedMessageCount: history.messages.length,
+              now: DateTime.formatIso(yield* DateTime.now),
+            })))
+          : 0;
+        const inherited = history.messages.slice(0, inheritedCount);
+        const hydration = hydrateImportedHermesActivities(inherited);
+        const turnItems = importedActivityTurnItems(threadId, binding, hydration.activities);
+        const messages = yield* Effect.forEach(
           history.messages,
           Effect.fnUntraced(function* (message, ordinal) {
-            const text = message.text ?? "";
+            if (ordinal < inheritedCount && hydration.hiddenOrdinals.has(ordinal)) return [];
+            const rawText = message.text ?? "";
+            const text =
+              ordinal < inheritedCount && message.role === "user"
+                ? normalizeImportedHermesUserText(rawText)
+                : rawText;
             if (!text) return [];
             const nativeId =
               message.message_id ??
@@ -2218,7 +2322,7 @@ export function makeHermesServeAdapterV2(
             // every assistant/tool history message may contain Hermes' native
             // MEDIA: output protocol (including sessions created in T3 Work).
             const normalized =
-              Option.isSome(imported) || message.role === "assistant" || message.role === "tool"
+              ordinal < inheritedCount || message.role === "assistant" || message.role === "tool"
                 ? yield* normalizeHermesHistoryMessage({
                     role: message.role,
                     text,
@@ -2256,7 +2360,8 @@ export function makeHermesServeAdapterV2(
             ];
           }),
           { concurrency: 1 },
-        ).pipe(Effect.map((messages) => messages.flat()));
+        ).pipe(Effect.map((rows) => rows.flat()));
+        return { messages, turnItems };
       });
 
       const registerState = Effect.fnUntraced(function* (
@@ -2290,7 +2395,7 @@ export function makeHermesServeAdapterV2(
           createdAt: now,
           updatedAt: now,
         };
-        const messages = yield* historyMessages(appThreadId, binding, history);
+        const hydrated = yield* historyMessages(appThreadId, binding, history);
         const state: HermesThreadState = {
           binding,
           liveSessionId,
@@ -2302,7 +2407,8 @@ export function makeHermesServeAdapterV2(
           externalRunActive,
           ownershipLost: false,
           turns: new Map(),
-          messages: new Map(messages.map((message) => [String(message.id), message])),
+          messages: new Map(hydrated.messages.map((message) => [String(message.id), message])),
+          importedTurnItems: new Map(hydrated.turnItems.map((item) => [String(item.id), item])),
           runtimeRequests: new Map(),
         };
         statesByProviderThread.set(String(providerThread.id), state);
@@ -3146,19 +3252,23 @@ export function makeHermesServeAdapterV2(
                 profile: state.binding.profileKey,
               }),
             );
-            const messages = yield* historyMessages(
+            const hydrated = yield* historyMessages(
               state.providerThread.appThreadId ?? input.threadId,
               state.binding,
               history,
             );
-            for (const message of messages) {
+            for (const message of hydrated.messages) {
               state.messages.set(String(message.id), message);
+            }
+            for (const item of hydrated.turnItems) {
+              state.importedTurnItems.set(String(item.id), item);
             }
             return {
               providerThread: state.providerThread,
               providerTurns: [...state.turns.values()],
               messages: [...state.messages.values()],
               runtimeRequests: [...state.runtimeRequests.values()],
+              turnItems: [...state.importedTurnItems.values()],
             };
           }).pipe(
             Effect.mapError(

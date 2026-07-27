@@ -98,6 +98,8 @@ const UnavailableHermesSessionBindingRepository = HermesSessionBindingRepository
   renewOwnerLease: () => unavailableHermesRepositoryOperation("renewOwnerLease"),
   releaseOwnerLease: () => unavailableHermesRepositoryOperation("releaseOwnerLease"),
   prepareMutationIntent: () => unavailableHermesRepositoryOperation("prepareMutationIntent"),
+  setSessionImportInheritedCount: () =>
+    unavailableHermesRepositoryOperation("setSessionImportInheritedCount"),
   prepareSessionCreateIntent: () =>
     unavailableHermesRepositoryOperation("prepareSessionCreateIntent"),
   transitionSessionCreateIntent: () =>

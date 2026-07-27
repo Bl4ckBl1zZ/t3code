@@ -190,6 +190,7 @@ describe("Hermes transport session import policy", () => {
               if (existing) return existing;
               const row: HermesSessionImport = {
                 ...input,
+                inheritedMessageCount: null,
                 state: "prepared",
                 createdAt: input.now,
                 updatedAt: input.now,
@@ -461,6 +462,7 @@ describe("Hermes transport session import policy", () => {
           Effect.sync(() => {
             const row: HermesSessionImport = {
               ...input,
+              inheritedMessageCount: null,
               state: "prepared",
               createdAt: input.now,
               updatedAt: input.now,
@@ -581,6 +583,7 @@ describe("Hermes transport session import policy", () => {
                 importKind: input.importKind,
                 storedSessionKey: input.storedSessionKey,
                 threadId: input.threadId,
+                inheritedMessageCount: null,
                 state: "prepared",
                 createdAt: input.now,
                 updatedAt: input.now,

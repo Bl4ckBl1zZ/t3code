@@ -408,6 +408,49 @@ memory("HermesSessionBindingRepository", (it) => {
   );
 });
 
+it.effect("records the inherited history boundary once and preserves it afterwards", () =>
+  Effect.gen(function* () {
+    yield* runMigrations({ toMigrationInclusive: 49 });
+    const repository = yield* HermesSessionBindingRepository;
+
+    const prepared = yield* repository.prepareSessionImport({
+      importId: "import:session:boundary",
+      providerInstanceId: "hermes-local",
+      profileKey: "profile:default",
+      projectId: "project:1",
+      importKind: "session",
+      storedSessionKey: "stored:boundary",
+      threadId: "thread:boundary",
+      now: T0,
+    });
+    assert.strictEqual(prepared.inheritedMessageCount, null);
+
+    const recorded = yield* repository.setSessionImportInheritedCount({
+      importId: prepared.importId,
+      inheritedMessageCount: 7,
+      now: T1,
+    });
+    assert.strictEqual(recorded, 7);
+
+    // A later hydration seeing a longer history must not move the boundary.
+    const preserved = yield* repository.setSessionImportInheritedCount({
+      importId: prepared.importId,
+      inheritedMessageCount: 12,
+      now: T2,
+    });
+    assert.strictEqual(preserved, 7);
+
+    const reread = yield* repository.getSessionImportByStoredIdentity({
+      providerInstanceId: "hermes-local",
+      profileKey: "profile:default",
+      projectId: "project:1",
+      storedSessionKey: "stored:boundary",
+    });
+    assert.isTrue(Option.isSome(reread));
+    if (Option.isSome(reread)) assert.strictEqual(reread.value.inheritedMessageCount, 7);
+  }).pipe(Effect.provide(testLayer(NodeSqliteClient.layerMemory())), Effect.scoped),
+);
+
 it.effect("persists ambiguous mutation recovery across a file-backed SQLite restart", () => {
   const directory = NodeFS.mkdtempSync(
     NodePath.join(NodeOS.tmpdir(), "t3-hermes-session-binding-"),

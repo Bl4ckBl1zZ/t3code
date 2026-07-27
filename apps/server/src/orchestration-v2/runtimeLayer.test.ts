@@ -11,6 +11,7 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -159,6 +160,27 @@ const orchestrationAdapter = {
               },
             ],
             runtimeRequests: [],
+            turnItems: [
+              {
+                id: TurnItemId.make("turn-item:hydrated:command"),
+                threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "completed",
+                title: "git status",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: DateTime.add(now, { milliseconds: 1 }),
+                type: "command_execution",
+                input: "git status",
+                output: "clean",
+              },
+            ],
           };
         }),
       rollbackThread: () => Effect.die("unused rollbackThread"),
@@ -553,6 +575,10 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
           ...retry.projection.messages.map((message) => DateTime.toEpochMillis(message.updatedAt)),
         ),
       );
+      assert.deepEqual(
+        retry.projection.turnItems.map((item) => String(item.id)),
+        ["turn-item:hydrated:command"],
+      );
       assert.equal(retry.snapshotSequence, first.snapshotSequence);
 
       const providerSessionId = retry.projection.providerThreads[0]?.providerSessionId;
@@ -567,6 +593,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         reopened.messages.map((message) => message.id),
         [MessageId.make("message:hydrated:user"), MessageId.make("message:hydrated:assistant")],
       );
+      assert.equal(reopened.turnItems.length, 1);
     }),
   );
 

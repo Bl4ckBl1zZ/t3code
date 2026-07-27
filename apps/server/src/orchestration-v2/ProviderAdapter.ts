@@ -431,6 +431,12 @@ export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
   readonly runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest>;
+  /**
+   * Durable activities rehydrated from provider history (imported tool
+   * calls/results, historical reasoning). Hydration appends any items missing
+   * from the app projection.
+   */
+  readonly turnItems?: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly providerPayload?: unknown;
 }
 

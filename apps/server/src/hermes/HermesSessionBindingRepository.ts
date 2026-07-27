@@ -76,6 +76,7 @@ export const HermesSessionImport = Schema.Struct({
   storedSessionKey: Schema.NullOr(Schema.String),
   threadId: Schema.String,
   state: Schema.Literals(["prepared", "thread_created", "completed"]),
+  inheritedMessageCount: Schema.NullOr(Schema.Number),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });
@@ -318,6 +319,16 @@ export interface HermesSessionBindingRepositoryShape {
     readonly to: "thread_created" | "completed";
     readonly now: string;
   }) => Effect.Effect<boolean, HermesSessionBindingRepositoryError>;
+  /**
+   * Records the inherited-history boundary exactly once. Later hydrations of
+   * the same import keep the original boundary so native T3 messages appended
+   * after the import never receive imported-transcript normalization.
+   */
+  readonly setSessionImportInheritedCount: (input: {
+    readonly importId: string;
+    readonly inheritedMessageCount: number;
+    readonly now: string;
+  }) => Effect.Effect<number, HermesSessionBindingRepositoryError>;
   readonly listHistoryThreadIds: (
     scope: HermesHistoryScope,
   ) => Effect.Effect<ReadonlyArray<string>, HermesSessionBindingRepositoryError>;
@@ -387,6 +398,7 @@ interface ImportRow {
   readonly stored_session_key: string | null;
   readonly thread_id: string;
   readonly state: string;
+  readonly inherited_message_count: number | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -480,6 +492,7 @@ const importFromRow = Effect.fn("HermesSessionBindingRepository.importFromRow")(
     storedSessionKey: row.stored_session_key,
     threadId: row.thread_id,
     state: row.state,
+    inheritedMessageCount: row.inherited_message_count ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -1257,6 +1270,48 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  const setSessionImportInheritedCount = Effect.fn(
+    "HermesSessionBindingRepository.setSessionImportInheritedCount",
+  )(
+    function* (input: {
+      readonly importId: string;
+      readonly inheritedMessageCount: number;
+      readonly now: string;
+    }) {
+      if (!Number.isSafeInteger(input.inheritedMessageCount) || input.inheritedMessageCount < 0) {
+        return yield* repositoryError(
+          "setSessionImportInheritedCount",
+          "Inherited message count must be a non-negative integer.",
+        );
+      }
+      yield* sql`
+        UPDATE hermes_session_imports
+        SET inherited_message_count = ${input.inheritedMessageCount}, updated_at = ${input.now}
+        WHERE import_id = ${input.importId}
+          AND inherited_message_count IS NULL
+      `;
+      const rows = yield* sql<{ readonly inherited_message_count: number | null }>`
+        SELECT inherited_message_count
+        FROM hermes_session_imports
+        WHERE import_id = ${input.importId}
+      `;
+      const recorded = rows[0]?.inherited_message_count;
+      if (recorded === null || recorded === undefined) {
+        return yield* repositoryError(
+          "setSessionImportInheritedCount",
+          "Import row was missing while recording the inherited boundary.",
+        );
+      }
+      return recorded;
+    },
+    Effect.mapError(
+      mapRepositoryError(
+        "setSessionImportInheritedCount",
+        "Could not record the inherited-history boundary.",
+      ),
+    ),
+  );
+
   const listHistoryThreadIds = Effect.fn("HermesSessionBindingRepository.listHistoryThreadIds")(
     function* (scope: HermesHistoryScope) {
       const rows = yield* sql<{ readonly thread_id: string }>`
@@ -1352,6 +1407,7 @@ export const make = Effect.gen(function* () {
     getSessionImportByStoredIdentity,
     getMainSessionImport,
     transitionSessionImport,
+    setSessionImportInheritedCount,
     listHistoryThreadIds,
     clearHistoryRecords,
   });

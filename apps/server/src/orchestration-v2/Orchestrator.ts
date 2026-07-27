@@ -5734,19 +5734,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const missingMessages = snapshot.messages.filter(
           (message) => !projectedMessageIds.has(String(message.id)),
         );
+        const projectedTurnItemIds = new Set(current.turnItems.map((item) => String(item.id)));
+        const missingTurnItems = (snapshot.turnItems ?? []).filter(
+          (item) => !projectedTurnItemIds.has(String(item.id)),
+        );
         const projectedProviderThread = current.providerThreads.find(
           (candidate) => candidate.id === snapshot.providerThread.id,
         );
-        if (projectedProviderThread !== undefined && missingMessages.length === 0) {
+        if (
+          projectedProviderThread !== undefined &&
+          missingMessages.length === 0 &&
+          missingTurnItems.length === 0
+        ) {
           return;
         }
 
         // Hydrated snapshots carry the provider's historical message
         // timestamps; stamping hydration time here would mark imported
         // threads as active "now".
-        const latestSnapshotAt = missingMessages.reduce<DateTime.Utc | undefined>(
-          (latest, message) =>
-            latest === undefined ? message.updatedAt : DateTime.max(latest, message.updatedAt),
+        const latestSnapshotAt = [...missingMessages, ...missingTurnItems].reduce<
+          DateTime.Utc | undefined
+        >(
+          (latest, entity) =>
+            latest === undefined ? entity.updatedAt : DateTime.max(latest, entity.updatedAt),
           undefined,
         );
         const occurredAt = latestSnapshotAt ?? (yield* DateTime.now);
@@ -5773,6 +5783,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             driver: adapter.driver,
             occurredAt,
             payload: message,
+          });
+        }
+        for (const turnItem of missingTurnItems) {
+          events.push({
+            id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
+            type: "turn-item.updated",
+            threadId,
+            ...(turnItem.runId === null ? {} : { runId: turnItem.runId }),
+            ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
+            providerInstanceId: modelSelection.instanceId,
+            driver: adapter.driver,
+            occurredAt,
+            payload: turnItem,
           });
         }
         if (events.length > 0) {
