@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 
 import * as RelayDb from "./src/db.ts";
 import { ManagedEndpointZone, RelayApiZone } from "./src/zone.ts";
-import Api from "./src/worker.ts";
+import ApiLive, { Api } from "./src/worker.ts";
 
 export default Alchemy.Stack(
   "T3CodeRelay",
@@ -30,5 +30,5 @@ export default Alchemy.Stack(
       relayApiZoneId: relayApiZone.zoneId,
       managedEndpointZoneId: managedEndpointZone.zoneId,
     };
-  }),
+  }).pipe(Effect.provide(ApiLive)),
 );
