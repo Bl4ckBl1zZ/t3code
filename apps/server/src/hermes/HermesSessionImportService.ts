@@ -1,6 +1,5 @@
 import {
   CommandId,
-  type HermesGatewayCompatibility,
   type HermesDiscoveredSession,
   type HermesHistoryResetInput,
   type HermesHistoryResetResult,
@@ -30,10 +29,14 @@ import {
   HermesSessionBindingRepository,
   type HermesSessionImport,
 } from "./HermesSessionBindingRepository.ts";
-import type { HermesSessionCatalogSnapshot } from "./HermesSessionCatalog.ts";
+import {
+  hermesImportCapabilityError,
+  type HermesSessionCatalogSnapshot,
+} from "./HermesSessionCatalog.ts";
+
+export { hermesImportCapabilityError } from "./HermesSessionCatalog.ts";
 
 const HERMES = ProviderDriverKind.make("hermes");
-const HERMES_IMPORT_REQUIRED_CAPABILITIES = ["profile.import", "session.lifecycle"] as const;
 const MAX_DISCOVERY_LIMIT = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const HERMES_IMPORT_UNSETTLED_WINDOW_MS = 72 * 60 * 60 * 1_000;
@@ -91,25 +94,6 @@ export function isHermesSessionWithinImportAge(
   nowMillis: number,
 ): boolean {
   return startedAtSeconds * 1_000 >= nowMillis - activeWithinDays * DAY_MS;
-}
-
-export function hermesImportCapabilityError(
-  compatibility: HermesGatewayCompatibility,
-): string | null {
-  const available = new Set(compatibility.capabilities);
-  const missing = HERMES_IMPORT_REQUIRED_CAPABILITIES.filter(
-    (capability) => !available.has(capability),
-  );
-  if (
-    compatibility.status === "supported" &&
-    compatibility.inventory !== null &&
-    missing.length === 0
-  ) {
-    return null;
-  }
-  return compatibility.status === "legacy" || compatibility.inventory === null
-    ? "Hermes import requires an evidence-backed negotiated capability inventory."
-    : `Hermes import is unavailable because the gateway did not advertise: ${missing.join(", ")}.`;
 }
 
 export const HERMES_SESSION_IMPORT_CAPABILITIES: HermesSessionImportCapabilities = {

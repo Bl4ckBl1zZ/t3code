@@ -5,8 +5,33 @@ import {
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
+import { assessHermesConnectionSecurity } from "./HermesConnectionSecurity.ts";
 import { HermesGatewayClient } from "./HermesGatewayClient.ts";
+
+const HERMES_IMPORT_REQUIRED_CAPABILITIES = ["profile.import", "session.lifecycle"] as const;
+
+const isHermesSessionsError = Schema.is(HermesSessionsError);
+
+export function hermesImportCapabilityError(
+  compatibility: HermesGatewayCompatibility,
+): string | null {
+  const available = new Set(compatibility.capabilities);
+  const missing = HERMES_IMPORT_REQUIRED_CAPABILITIES.filter(
+    (capability) => !available.has(capability),
+  );
+  if (
+    compatibility.status === "supported" &&
+    compatibility.inventory !== null &&
+    missing.length === 0
+  ) {
+    return null;
+  }
+  return compatibility.status === "legacy" || compatibility.inventory === null
+    ? "Hermes import requires an evidence-backed negotiated capability inventory."
+    : `Hermes import is unavailable because the gateway did not advertise: ${missing.join(", ")}.`;
+}
 
 export interface HermesSessionCatalogSnapshot {
   readonly providerInstanceId: ProviderInstanceId;
@@ -27,6 +52,10 @@ export function makeHermesSessionCatalog(input: {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly authToken: string | undefined;
+  readonly remoteGloballyEnabled: boolean;
+  readonly remoteInstanceEnabled: boolean;
+  readonly remotePairingToken: string | undefined;
+  readonly remoteTlsCertificateSha256: string | undefined;
   readonly profileKey: string;
   readonly importEnabled: boolean;
   readonly clientFactory?: (options: {
@@ -44,16 +73,38 @@ export function makeHermesSessionCatalog(input: {
           message: "Hermes session discovery requires a configured endpoint and gateway token.",
         });
       }
+      const security = assessHermesConnectionSecurity({
+        endpoint: input.endpoint,
+        gatewayToken: input.authToken,
+        remoteGloballyEnabled: input.remoteGloballyEnabled,
+        remoteInstanceEnabled: input.remoteInstanceEnabled,
+        remotePairingToken: input.remotePairingToken,
+        remoteTlsCertificateSha256: input.remoteTlsCertificateSha256,
+      });
+      if (security.status !== "ready") {
+        return yield* new HermesSessionsError({
+          code: "provider_not_configured",
+          message: "Hermes session discovery is blocked by the gateway connection policy.",
+          cause: security,
+        });
+      }
       const client =
-        input.clientFactory?.({ endpoint: input.endpoint, authToken: input.authToken }) ??
+        input.clientFactory?.({ endpoint: security.endpoint, authToken: security.authToken }) ??
         new HermesGatewayClient({
-          endpoint: input.endpoint,
-          authToken: input.authToken,
+          endpoint: security.endpoint,
+          authToken: security.authToken,
         });
       return yield* Effect.tryPromise({
         try: async () => {
           try {
             const compatibility = await client.connect();
+            const capabilityError = hermesImportCapabilityError(compatibility);
+            if (capabilityError !== null) {
+              throw new HermesSessionsError({
+                code: "import_failed",
+                message: capabilityError,
+              });
+            }
             const result = await client.listSessions({
               profile: input.profileKey,
               limit,
@@ -69,11 +120,13 @@ export function makeHermesSessionCatalog(input: {
           }
         },
         catch: (cause) =>
-          new HermesSessionsError({
-            code: "gateway_error",
-            message: "Hermes session discovery failed.",
-            cause,
-          }),
+          isHermesSessionsError(cause)
+            ? cause
+            : new HermesSessionsError({
+                code: "gateway_error",
+                message: "Hermes session discovery failed.",
+                cause,
+              }),
       });
     }),
   };

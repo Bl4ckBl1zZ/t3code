@@ -10,6 +10,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
+import type { EnvironmentPresentation } from "../../state/environments";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -51,60 +52,49 @@ interface InspectState {
   readonly info: Record<string, unknown>;
 }
 
-export function HermesSkillsSettings() {
-  const environment = usePrimaryEnvironment();
-  const query = useEnvironmentQuery(
-    environment
-      ? serverEnvironment.hermesSkills({
-          environmentId: environment.environmentId,
-          input: {},
-        })
-      : null,
-  );
+function HermesSkillsProviderSection({
+  environment,
+  provider,
+  reloading,
+  onReload,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly provider: HermesSkillsProviderProjection;
+  readonly reloading: boolean;
+  readonly onReload: (provider: HermesSkillsProviderProjection) => void;
+}) {
   const search = useAtomCommand(serverEnvironment.searchHermesSkills, {
     label: "Hermes skills search",
   });
   const inspect = useAtomCommand(serverEnvironment.inspectHermesSkill, {
     label: "Hermes skills inspect",
   });
-  const reload = useAtomCommand(serverEnvironment.reloadHermesSkills, {
-    label: "Hermes skills reload",
-  });
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<ReadonlyArray<HermesSkillEntry> | null>(null);
   const [inspecting, setInspecting] = useState<string | null>(null);
   const [inspectState, setInspectState] = useState<InspectState | null>(null);
-  const [reloading, setReloading] = useState(false);
-  const providers = query.data?.providers ?? [];
-  const readyProviders = useMemo(
-    () => providers.filter((provider) => provider.status === "ready"),
-    [providers],
-  );
 
-  const runSearch = useCallback(
-    async (provider: HermesSkillsProviderProjection) => {
-      if (!environment || searching || !searchQuery.trim()) return;
-      setSearching(true);
-      const result = await search({
-        environmentId: environment.environmentId,
-        input: { providerInstanceId: provider.providerInstanceId, query: searchQuery.trim() },
-      });
-      setSearching(false);
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          reportFailure("Hermes skills search failed", squashAtomCommandFailure(result));
-        }
-        return;
+  const runSearch = useCallback(async () => {
+    if (searching || !searchQuery.trim()) return;
+    setSearching(true);
+    const result = await search({
+      environmentId: environment.environmentId,
+      input: { providerInstanceId: provider.providerInstanceId, query: searchQuery.trim() },
+    });
+    setSearching(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        reportFailure("Hermes skills search failed", squashAtomCommandFailure(result));
       }
-      setSearchResults(result.value.results);
-    },
-    [environment, search, searchQuery, searching],
-  );
+      return;
+    }
+    setSearchResults(result.value.results);
+  }, [environment, provider.providerInstanceId, search, searchQuery, searching]);
 
   const runInspect = useCallback(
-    async (provider: HermesSkillsProviderProjection, name: string) => {
-      if (!environment || inspecting !== null) return;
+    async (name: string) => {
+      if (inspecting !== null) return;
       setInspecting(name);
       const result = await inspect({
         environmentId: environment.environmentId,
@@ -119,7 +109,168 @@ export function HermesSkillsSettings() {
       }
       setInspectState({ name, info: result.value.info });
     },
-    [environment, inspect, inspecting],
+    [environment, inspect, inspecting, provider.providerInstanceId],
+  );
+
+  const blocked = skillsBlockedDiagnostic(provider);
+  return (
+    <section className="space-y-3 px-5 py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold">{provider.displayName}</h3>
+        <Badge variant={provider.status === "ready" ? "success" : "outline"}>
+          {provider.status}
+        </Badge>
+        <span className="text-[11px] text-muted-foreground">Profile {provider.profileKey}</span>
+        {provider.capabilities.reload ? (
+          <Button
+            size="xs"
+            variant="outline"
+            className="ml-auto"
+            disabled={reloading}
+            onClick={() => onReload(provider)}
+          >
+            <RefreshCwIcon className="size-3.5" />
+            {reloading ? "Reloading…" : "Reload skills"}
+          </Button>
+        ) : null}
+      </div>
+      {provider.diagnostics.map((diagnostic) => (
+        <p key={diagnostic} className="text-[11px] text-muted-foreground">
+          {diagnostic}
+        </p>
+      ))}
+      {blocked !== null ? null : (
+        <>
+          {provider.skills.length === 0 ? (
+            <p className="py-3 text-xs text-muted-foreground">No skills are installed.</p>
+          ) : (
+            <div className="space-y-2">
+              {provider.skills.map((skill) => (
+                <div
+                  key={skill.name}
+                  className="grid gap-3 rounded-md border border-border/70 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <span className="truncate text-sm font-medium">{skill.name}</span>
+                    {skill.description ? (
+                      <p className="line-clamp-2 text-xs text-muted-foreground">
+                        {skill.description}
+                      </p>
+                    ) : null}
+                  </div>
+                  {provider.capabilities.inspect ? (
+                    <div className="flex items-start">
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={inspecting !== null}
+                        onClick={() => void runInspect(skill.name)}
+                      >
+                        {inspecting === skill.name ? "Inspecting…" : "Inspect"}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+          {provider.capabilities.search ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Search the skills hub"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void runSearch();
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={searching || !searchQuery.trim()}
+                  onClick={() => void runSearch()}
+                >
+                  <SearchIcon className="size-3.5" />
+                  {searching ? "Searching…" : "Search"}
+                </Button>
+              </div>
+              {searchResults === null ? null : searchResults.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No skills hub results.</p>
+              ) : (
+                <div className="space-y-2">
+                  {searchResults.map((entry) => (
+                    <div
+                      key={entry.name}
+                      className="grid gap-3 rounded-md border border-border/70 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <span className="truncate text-sm font-medium">{entry.name}</span>
+                        {entry.description ? (
+                          <p className="line-clamp-2 text-xs text-muted-foreground">
+                            {entry.description}
+                          </p>
+                        ) : null}
+                      </div>
+                      {provider.capabilities.inspect ? (
+                        <div className="flex items-start">
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            disabled={inspecting !== null}
+                            onClick={() => void runInspect(entry.name)}
+                          >
+                            {inspecting === entry.name ? "Inspecting…" : "Inspect"}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </>
+      )}
+
+      <Dialog open={inspectState !== null} onOpenChange={(open) => !open && setInspectState(null)}>
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>{inspectState?.name}</DialogTitle>
+            <DialogDescription>Skill details reported by the Hermes skills hub.</DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <pre className="max-h-80 overflow-auto rounded-md border border-border/70 p-3 font-mono text-[11px]">
+              {inspectState === null ? "" : JSON.stringify(inspectState.info, null, 2)}
+            </pre>
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" size="sm" />}>Close</DialogClose>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    </section>
+  );
+}
+
+export function HermesSkillsSettings() {
+  const environment = usePrimaryEnvironment();
+  const query = useEnvironmentQuery(
+    environment
+      ? serverEnvironment.hermesSkills({
+          environmentId: environment.environmentId,
+          input: {},
+        })
+      : null,
+  );
+  const reload = useAtomCommand(serverEnvironment.reloadHermesSkills, {
+    label: "Hermes skills reload",
+  });
+  const [reloading, setReloading] = useState(false);
+  const providers = query.data?.providers ?? [];
+  const readyProviders = useMemo(
+    () => providers.filter((provider) => provider.status === "ready"),
+    [providers],
   );
 
   const reportReload = useCallback((value: HermesSkillsReloadResponse) => {
@@ -172,142 +323,21 @@ export function HermesSkillsSettings() {
           <div className="px-5 py-8 text-center text-xs text-muted-foreground">
             Loading Hermes skills inventory…
           </div>
-        ) : providers.length === 0 ? (
+        ) : providers.length === 0 || !environment ? (
           <div className="px-5 py-8 text-center text-xs text-muted-foreground">
             No Hermes provider instances are configured.
           </div>
         ) : (
           <div className="divide-y divide-border/60">
-            {providers.map((provider) => {
-              const blocked = skillsBlockedDiagnostic(provider);
-              return (
-                <section key={provider.providerInstanceId} className="space-y-3 px-5 py-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-sm font-semibold">{provider.displayName}</h3>
-                    <Badge variant={provider.status === "ready" ? "success" : "outline"}>
-                      {provider.status}
-                    </Badge>
-                    <span className="text-[11px] text-muted-foreground">
-                      Profile {provider.profileKey}
-                    </span>
-                    {provider.capabilities.reload ? (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        className="ml-auto"
-                        disabled={reloading}
-                        onClick={() => void runReload(provider)}
-                      >
-                        <RefreshCwIcon className="size-3.5" />
-                        {reloading ? "Reloading…" : "Reload skills"}
-                      </Button>
-                    ) : null}
-                  </div>
-                  {provider.diagnostics.map((diagnostic) => (
-                    <p key={diagnostic} className="text-[11px] text-muted-foreground">
-                      {diagnostic}
-                    </p>
-                  ))}
-                  {blocked !== null ? null : (
-                    <>
-                      {provider.skills.length === 0 ? (
-                        <p className="py-3 text-xs text-muted-foreground">
-                          No skills are installed.
-                        </p>
-                      ) : (
-                        <div className="space-y-2">
-                          {provider.skills.map((skill) => (
-                            <div
-                              key={skill.name}
-                              className="grid gap-3 rounded-md border border-border/70 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-                            >
-                              <div className="min-w-0 space-y-1">
-                                <span className="truncate text-sm font-medium">{skill.name}</span>
-                                {skill.description ? (
-                                  <p className="line-clamp-2 text-xs text-muted-foreground">
-                                    {skill.description}
-                                  </p>
-                                ) : null}
-                              </div>
-                              {provider.capabilities.inspect ? (
-                                <div className="flex items-start">
-                                  <Button
-                                    size="xs"
-                                    variant="ghost"
-                                    disabled={inspecting !== null}
-                                    onClick={() => void runInspect(provider, skill.name)}
-                                  >
-                                    {inspecting === skill.name ? "Inspecting…" : "Inspect"}
-                                  </Button>
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {provider.capabilities.search ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Input
-                              placeholder="Search the skills hub"
-                              value={searchQuery}
-                              onChange={(event) => setSearchQuery(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") void runSearch(provider);
-                              }}
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={searching || !searchQuery.trim()}
-                              onClick={() => void runSearch(provider)}
-                            >
-                              <SearchIcon className="size-3.5" />
-                              {searching ? "Searching…" : "Search"}
-                            </Button>
-                          </div>
-                          {searchResults === null ? null : searchResults.length === 0 ? (
-                            <p className="text-xs text-muted-foreground">No skills hub results.</p>
-                          ) : (
-                            <div className="space-y-2">
-                              {searchResults.map((entry) => (
-                                <div
-                                  key={entry.name}
-                                  className="grid gap-3 rounded-md border border-border/70 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-                                >
-                                  <div className="min-w-0 space-y-1">
-                                    <span className="truncate text-sm font-medium">
-                                      {entry.name}
-                                    </span>
-                                    {entry.description ? (
-                                      <p className="line-clamp-2 text-xs text-muted-foreground">
-                                        {entry.description}
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                  {provider.capabilities.inspect ? (
-                                    <div className="flex items-start">
-                                      <Button
-                                        size="xs"
-                                        variant="ghost"
-                                        disabled={inspecting !== null}
-                                        onClick={() => void runInspect(provider, entry.name)}
-                                      >
-                                        {inspecting === entry.name ? "Inspecting…" : "Inspect"}
-                                      </Button>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </>
-                  )}
-                </section>
-              );
-            })}
+            {providers.map((provider) => (
+              <HermesSkillsProviderSection
+                key={`${environment.environmentId}:${provider.providerInstanceId}`}
+                environment={environment}
+                provider={provider}
+                reloading={reloading}
+                onReload={(target) => void runReload(target)}
+              />
+            ))}
           </div>
         )}
         {readyProviders.length === 0 && providers.length > 0 ? (
@@ -316,23 +346,6 @@ export function HermesSkillsSettings() {
           </div>
         ) : null}
       </SettingsSection>
-
-      <Dialog open={inspectState !== null} onOpenChange={(open) => !open && setInspectState(null)}>
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>{inspectState?.name}</DialogTitle>
-            <DialogDescription>Skill details reported by the Hermes skills hub.</DialogDescription>
-          </DialogHeader>
-          <DialogPanel>
-            <pre className="max-h-80 overflow-auto rounded-md border border-border/70 p-3 font-mono text-[11px]">
-              {inspectState === null ? "" : JSON.stringify(inspectState.info, null, 2)}
-            </pre>
-          </DialogPanel>
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" size="sm" />}>Close</DialogClose>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
     </SettingsPageContainer>
   );
 }

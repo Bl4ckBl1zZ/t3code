@@ -81,6 +81,17 @@ const stringOrNumber = (value: unknown): string | number | undefined =>
 export function projectHermesCronCapabilities(
   compatibility: HermesGatewayCompatibility,
 ): HermesCronCapabilities {
+  if (compatibility.status === "unsupported") {
+    return {
+      inventory: false,
+      create: false,
+      edit: false,
+      pause: false,
+      resume: false,
+      delete: false,
+      runNow: false,
+    };
+  }
   const capabilities = new Set(compatibility.capabilities);
   const actions = hermesManageActionInventory(compatibility, "cron.manage");
   const supports = (operation: string, ...aliases: ReadonlyArray<string>) =>
@@ -320,9 +331,9 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
   const loadProvider = Effect.fn("HermesCron.loadProvider")(function* (
     config: HermesCronProviderConfig,
   ) {
-    const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
     return yield* Effect.tryPromise({
       try: async () => {
+        const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
         try {
           const compatibility = await client.connect();
           const capabilities = projectHermesCronCapabilities(compatibility);
@@ -397,9 +408,9 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
       });
     }
 
-    const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
     return yield* Effect.tryPromise({
       try: async () => {
+        const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
         try {
           const compatibility = await client.connect();
           const capabilities = projectHermesCronCapabilities(compatibility);

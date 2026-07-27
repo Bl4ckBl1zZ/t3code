@@ -1094,7 +1094,9 @@ export class HermesGatewayClient {
 
     try {
       await opened;
+      this.ensureAttemptActive(generation);
       const ready = await this.waitForReady();
+      this.ensureAttemptActive(generation);
       const compatibility = classifyHermesGatewayReady(ready);
       this.compatibilityValue = compatibility;
       if (compatibility.status === "unsupported") {
@@ -1106,6 +1108,7 @@ export class HermesGatewayClient {
       }
       this.setState("ready", attempt);
       await this.supervisor?.onConnected?.({ attempt, reconnect, compatibility });
+      this.ensureAttemptActive(generation);
       this.replayPendingReads();
       return compatibility;
     } catch (error) {
@@ -1121,6 +1124,12 @@ export class HermesGatewayClient {
           : new HermesGatewayConnectionError("Hermes gateway handshake failed."),
       );
       throw error;
+    }
+  }
+
+  private ensureAttemptActive(generation: number): void {
+    if (this.manuallyClosed || generation !== this.connectionGeneration) {
+      throw new HermesGatewayConnectionError("Hermes gateway client closed.");
     }
   }
 
@@ -1466,6 +1475,14 @@ export class HermesGatewayClient {
   private replayPendingReads(): void {
     for (const pending of this.pending.values()) {
       if (pending.operation === "read" && pending.awaitingReconnect) {
+        if (pending.requiredCapability && !this.capabilities.has(pending.requiredCapability)) {
+          this.rejectPending(
+            pending,
+            new HermesGatewayCapabilityError(pending.requiredCapability),
+            false,
+          );
+          continue;
+        }
         this.sendPending(pending);
       }
     }
@@ -1527,7 +1544,13 @@ export class HermesGatewayClient {
 
   private emitHealth(): void {
     const health = this.health;
-    for (const listener of this.healthListeners) listener(health);
+    for (const listener of this.healthListeners) {
+      try {
+        listener(health);
+      } catch {
+        // A failing health listener must not block the remaining listeners.
+      }
+    }
   }
 }
 

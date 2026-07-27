@@ -209,6 +209,40 @@ describe("HermesSkills service", () => {
     }).pipe(Effect.provide(settingsLayer)),
   );
 
+  it.effect("projects a throwing client factory as a per-provider error in list", () =>
+    Effect.gen(function* () {
+      const skills = yield* makeHermesSkills({
+        clientFactory: () => {
+          throw new Error("factory blocked");
+        },
+      });
+      const result = yield* skills.list();
+      const main = result.providers.find(
+        (candidate) => candidate.providerInstanceId === "hermes_main",
+      );
+      expect(main).toMatchObject({
+        status: "error",
+        capabilities: { inventory: false, search: false, inspect: false, reload: false },
+        skills: [],
+      });
+    }).pipe(Effect.provide(settingsLayer)),
+  );
+
+  it.effect("maps a throwing client factory to a typed error in search", () =>
+    Effect.gen(function* () {
+      const skills = yield* makeHermesSkills({
+        clientFactory: () => {
+          throw new Error("factory blocked");
+        },
+      });
+      const failure = yield* skills
+        .search({ providerInstanceId: "hermes_main", query: "hub" })
+        .pipe(Effect.flip);
+      expect(failure).toBeInstanceOf(HermesSkillsError);
+      expect(failure.code).toBe("gateway_error");
+    }).pipe(Effect.provide(settingsLayer)),
+  );
+
   it.effect("maps gateway failures into a bounded gateway_error", () =>
     Effect.gen(function* () {
       const skills = yield* makeHermesSkills({

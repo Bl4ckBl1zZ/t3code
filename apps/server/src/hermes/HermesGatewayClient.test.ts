@@ -864,6 +864,74 @@ describe("HermesGatewayClient recovery", () => {
     client.close();
   });
 
+  it("fails a queued read locally when the reconnected gateway drops its capability", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {
+      reconnect: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    socket.close(1006);
+
+    const read = client.read("cron.list", {}, { requiredCapability: "cron.read" });
+    await eventually(() => factory.sockets.length === 2);
+    const replacement = factory.sockets[1]!;
+    replacement.open();
+    await Promise.resolve();
+    replacement.receive(stableMutationReady);
+
+    await expect(read).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    expect(replacement.sent).toHaveLength(0);
+    client.close();
+  });
+
+  it("still reconnects when a health listener throws during disconnect", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {
+      reconnect: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    const seen: string[] = [];
+    client.onHealthChange((snapshot) => {
+      if (snapshot.state !== "ready") throw new Error("listener failure");
+    });
+    client.onHealthChange((snapshot) => seen.push(snapshot.state));
+    socket.close(1006);
+
+    await eventually(() => factory.sockets.length === 2);
+    const replacement = factory.sockets[1]!;
+    replacement.open();
+    await Promise.resolve();
+    replacement.receive(fullyNegotiatedReady);
+    await eventually(() => client.state === "ready");
+    expect(seen).toContain("reconnecting");
+    expect(seen).toContain("ready");
+    client.close();
+  });
+
+  it("aborts a connect attempt when close() lands while onConnected is pending", async () => {
+    const factory = new FakeSocketFactory();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = new HermesGatewayClient({
+      endpoint: "ws://127.0.0.1:9119/api/ws",
+      authToken: "private-token",
+      socketFactory: factory.create,
+      reconnect: { maxAttempts: 0 },
+      supervisor: { onConnected: () => gate },
+    });
+    const connecting = client.connect();
+    await Promise.resolve();
+    const socket = factory.sockets[0]!;
+    socket.open();
+    await Promise.resolve();
+    socket.receive(fullyNegotiatedReady);
+    await eventually(() => client.state === "ready");
+    client.close();
+    release();
+    await expect(connecting).rejects.toBeInstanceOf(HermesGatewayConnectionError);
+    expect(client.state).toBe("closed");
+  });
+
   it("uses mutation.status to release only an authoritatively completed local fence", async () => {
     const factory = new FakeSocketFactory();
     const { client, socket } = await openClient(factory, {}, stableMutationReady);

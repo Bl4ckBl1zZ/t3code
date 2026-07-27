@@ -1,4 +1,5 @@
 import {
+  HermesCronError,
   ProviderInstanceConfigMap,
   type HermesGatewayCompatibility,
   type HermesGatewayCronListResult,
@@ -34,6 +35,29 @@ describe("HermesCron projection", () => {
       pause: false,
       resume: false,
       delete: true,
+      runNow: false,
+    });
+  });
+
+  it("fails closed for unsupported gateways even when capabilities are advertised", () => {
+    expect(
+      projectHermesCronCapabilities({
+        status: "unsupported",
+        protocol: null,
+        inventory: {
+          "cron.read": "supported",
+          "cron.manage": { operations: ["add", "remove", "update", "pause", "resume", "run"] },
+        },
+        capabilities: ["cron.read", "cron.manage"],
+        reason: "unsupported",
+      }),
+    ).toEqual({
+      inventory: false,
+      create: false,
+      edit: false,
+      pause: false,
+      resume: false,
+      delete: false,
       runNow: false,
     });
   });
@@ -188,5 +212,46 @@ describe("HermesCron mutate", () => {
       expect(response.provider.status).toBe("ready");
       expect(response.provider.jobs.map((job) => job.id)).toEqual(["job-1"]);
     }),
+  );
+
+  it.effect("projects a throwing client factory as a per-provider error in list", () =>
+    Effect.gen(function* () {
+      const cron = yield* makeHermesCron({
+        clientFactory: () => {
+          throw new Error("factory blocked");
+        },
+      });
+      const result = yield* cron.list();
+      const main = result.providers.find(
+        (candidate) => candidate.providerInstanceId === "hermes_main",
+      );
+      expect(main).toMatchObject({
+        status: "error",
+        capabilities: { inventory: false, create: false },
+        jobs: [],
+      });
+    }).pipe(Effect.provide(settingsLayer)),
+  );
+
+  it.effect("maps a throwing client factory to a typed error in mutate", () =>
+    Effect.gen(function* () {
+      const cron = yield* makeHermesCron({
+        clientFactory: () => {
+          throw new Error("factory blocked");
+        },
+      });
+      const failure = yield* cron
+        .mutate({
+          providerInstanceId: "hermes_main",
+          operation: "create",
+          operationId: "op-1",
+          name: "Daily check",
+          schedule: "0 9 * * *",
+          prompt: "Check status",
+        })
+        .pipe(Effect.flip);
+      expect(failure).toBeInstanceOf(HermesCronError);
+      expect(failure.code).toBe("gateway_error");
+    }).pipe(Effect.provide(settingsLayer)),
   );
 });

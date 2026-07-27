@@ -214,9 +214,9 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
   const loadProvider = Effect.fn("HermesSkills.loadProvider")(function* (
     config: HermesSkillsProviderConfig,
   ) {
-    const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
     return yield* Effect.tryPromise({
       try: async () => {
+        const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
         try {
           const compatibility = await client.connect();
           const blocked = blockedProjection(config, compatibility);
@@ -295,9 +295,9 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
     capability: (capabilities: HermesSkillsCapabilities) => boolean,
     run: (client: HermesSkillsGatewayClient) => Promise<Result>,
   ): Effect.Effect<Result, HermesSkillsError> => {
-    const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
     return Effect.tryPromise({
       try: async () => {
+        const client = clientFactory({ endpoint: config.endpoint, authToken: config.token });
         try {
           const compatibility = await client.connect();
           const capabilities = projectHermesSkillsCapabilities(compatibility);
