@@ -71,7 +71,8 @@ export function makeHermesSessionCatalog(input: {
         catch: (cause) =>
           new HermesSessionsError({
             code: "gateway_error",
-            message: cause instanceof Error ? cause.message : "Hermes session discovery failed.",
+            message: "Hermes session discovery failed.",
+            cause,
           }),
       });
     }),

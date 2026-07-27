@@ -151,7 +151,8 @@ function asImportError(cause: unknown): HermesSessionsError {
     ? cause
     : new HermesSessionsError({
         code: "import_failed",
-        message: cause instanceof Error ? cause.message : "Hermes session import failed.",
+        message: "Hermes session import failed.",
+        cause,
       });
 }
 
@@ -160,7 +161,8 @@ function asHistoryResetError(cause: unknown): HermesSessionsError {
     ? cause
     : new HermesSessionsError({
         code: "history_reset_failed",
-        message: cause instanceof Error ? cause.message : "T3 Work history reset failed.",
+        message: "T3 Work history reset failed.",
+        cause,
       });
 }
 

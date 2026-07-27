@@ -133,5 +133,6 @@ export class HermesSessionsError extends Schema.TaggedErrorClass<HermesSessionsE
       "history_reset_failed",
     ]),
     message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

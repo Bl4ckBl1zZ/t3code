@@ -23,6 +23,10 @@ import {
   HermesGatewaySessionTitleResult,
   HermesGatewayReasoningConfigResult,
   HermesGatewayFastConfigResult,
+  HermesGatewaySkillsInspectResult,
+  HermesGatewaySkillsListResult,
+  HermesGatewaySkillsReloadResult,
+  HermesGatewaySkillsSearchResult,
   type HermesGatewayApprovalRespondParams,
   type HermesGatewayApprovalRespondResult as HermesGatewayApprovalRespondResultType,
   type HermesGatewayCapabilityName,
@@ -59,6 +63,10 @@ import {
   type HermesGatewaySessionStatusResult as HermesGatewaySessionStatusResultType,
   type HermesGatewaySessionTitleParams,
   type HermesGatewaySessionTitleResult as HermesGatewaySessionTitleResultType,
+  type HermesGatewaySkillsInspectResult as HermesGatewaySkillsInspectResultType,
+  type HermesGatewaySkillsListResult as HermesGatewaySkillsListResultType,
+  type HermesGatewaySkillsReloadResult as HermesGatewaySkillsReloadResultType,
+  type HermesGatewaySkillsSearchResult as HermesGatewaySkillsSearchResultType,
   type HermesGatewayUnknownRecord,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -329,6 +337,8 @@ const METHOD_CAPABILITIES: Readonly<Record<string, string>> = {
   "approval.respond": "events.approvals",
   "clarify.respond": "events.clarification",
   "cron.manage": "cron.manage",
+  "skills.manage": "skills.manage",
+  "skills.reload": "skills.reload",
 };
 
 const SOCKET_OPEN = 1;
@@ -794,6 +804,52 @@ export class HermesGatewayClient {
     );
   }
 
+  async listSkills(
+    options: Omit<HermesGatewayReadOptions, "requiredCapability"> = {},
+  ): Promise<HermesGatewaySkillsListResultType> {
+    const result = await this.read(
+      "skills.manage",
+      { action: "list" },
+      { ...options, requiredCapability: "skills.manage" },
+    );
+    return decodeResult(HermesGatewaySkillsListResult, result, "skills.manage/list");
+  }
+
+  async searchSkills(
+    query: string,
+    options: Omit<HermesGatewayReadOptions, "requiredCapability"> = {},
+  ): Promise<HermesGatewaySkillsSearchResultType> {
+    const result = await this.read(
+      "skills.manage",
+      { action: "search", query },
+      { ...options, requiredCapability: "skills.manage" },
+    );
+    return decodeResult(HermesGatewaySkillsSearchResult, result, "skills.manage/search");
+  }
+
+  async inspectSkill(
+    name: string,
+    options: Omit<HermesGatewayReadOptions, "requiredCapability"> = {},
+  ): Promise<HermesGatewaySkillsInspectResultType> {
+    const result = await this.read(
+      "skills.manage",
+      { action: "inspect", query: name },
+      { ...options, requiredCapability: "skills.manage" },
+    );
+    return decodeResult(HermesGatewaySkillsInspectResult, result, "skills.manage/inspect");
+  }
+
+  async reloadSkills(
+    options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
+  ): Promise<HermesGatewaySkillsReloadResultType> {
+    return this.mutateDecoded(
+      "skills.reload",
+      {},
+      { ...options, requiredCapability: "skills.reload" },
+      (result) => decodeResult(HermesGatewaySkillsReloadResult, result, "skills.reload"),
+    );
+  }
+
   async readCommandsCatalog(
     sessionId?: string,
     options: Omit<HermesGatewayReadOptions, "requiredCapability"> = {},
@@ -853,11 +909,12 @@ export class HermesGatewayClient {
 
   async reconcileMutation(
     operationId: string,
-    mutationId: string = operationId,
+    mutationId?: string,
   ): Promise<HermesGatewayMutationStatusResultType> {
+    const wireMutationId = mutationId ?? this.mutations.get(operationId)?.mutationId ?? operationId;
     const result = await this.read(
       "mutation.status",
-      { mutation_id: mutationId },
+      { mutation_id: wireMutationId },
       {
         requiredCapability: "mutation.stable_ids",
         retryOnReconnect: true,
@@ -1014,7 +1071,11 @@ export class HermesGatewayClient {
     reconnect: boolean,
   ): Promise<HermesGatewayCompatibility> {
     this.setState(reconnect ? "reconnecting" : "connecting", attempt);
+    const generationBefore = this.connectionGeneration;
     await this.supervisor?.beforeConnect?.({ attempt, reconnect });
+    if (this.manuallyClosed || generationBefore !== this.connectionGeneration) {
+      throw new HermesGatewayConnectionError("Hermes gateway client closed.");
+    }
     const generation = ++this.connectionGeneration;
     const socket = this.socketFactory(this.endpoint);
     this.socket = socket;
@@ -1024,6 +1085,11 @@ export class HermesGatewayClient {
       socket.addEventListener(
         "error",
         () => reject(new HermesGatewayConnectionError("Hermes gateway connection failed.")),
+        { once: true },
+      );
+      socket.addEventListener(
+        "close",
+        () => reject(new HermesGatewayConnectionError("Hermes gateway connection closed.")),
         { once: true },
       );
     });

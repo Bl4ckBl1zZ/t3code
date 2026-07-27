@@ -5,6 +5,7 @@ import {
   HermesGatewayCapabilityError,
   HermesGatewayClient,
   HermesGatewayConfigurationError,
+  HermesGatewayConnectionError,
   HermesGatewayMutationIndeterminateError,
   HermesGatewayMutationsBlockedError,
   classifyHermesGatewayReady,
@@ -950,6 +951,75 @@ describe("HermesGatewayClient recovery", () => {
     client.close();
   });
 
+  it("defaults reconciliation to the stored mutationId for the operation", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {}, stableMutationReady);
+    const prompt = client.submitPrompt(
+      { session_id: "session-1", text: "private" },
+      {
+        operationId: "prompt-stored-operation",
+        mutationId: "prompt-stored-mutation",
+      },
+    );
+    let frame = sentFrames(socket).at(-1)!;
+    socket.receive(
+      success(frame.id, {
+        mutation_id: "prompt-stored-mutation",
+        mutation_status: "indeterminate",
+        run_id: "run-stored",
+        replayed: true,
+      }),
+    );
+    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
+
+    const reconciliation = client.reconcileMutation("prompt-stored-operation");
+    frame = sentFrames(socket).at(-1)!;
+    expect(frame).toMatchObject({
+      method: "mutation.status",
+      params: { mutation_id: "prompt-stored-mutation" },
+    });
+    socket.receive(success(frame.id, { mutation_status: "completed" }));
+    await expect(reconciliation).resolves.toEqual({ mutation_status: "completed" });
+    client.close();
+  });
+
+  it("does not resurrect a client closed while beforeConnect is pending", async () => {
+    const factory = new FakeSocketFactory();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = new HermesGatewayClient({
+      endpoint: "ws://127.0.0.1:9119/api/ws",
+      authToken: "private-token",
+      socketFactory: factory.create,
+      reconnect: { maxAttempts: 0 },
+      supervisor: { beforeConnect: () => gate },
+    });
+    const connecting = client.connect();
+    client.close();
+    release();
+    await expect(connecting).rejects.toBeInstanceOf(HermesGatewayConnectionError);
+    expect(factory.sockets).toHaveLength(0);
+    expect(client.state).toBe("closed");
+  });
+
+  it("rejects an in-flight connect() when close() is called mid-handshake", async () => {
+    const factory = new FakeSocketFactory();
+    const client = new HermesGatewayClient({
+      endpoint: "ws://127.0.0.1:9119/api/ws",
+      authToken: "private-token",
+      socketFactory: factory.create,
+      reconnect: { maxAttempts: 0 },
+    });
+    const connecting = client.connect();
+    await Promise.resolve();
+    expect(factory.sockets).toHaveLength(1);
+    client.close();
+    await expect(connecting).rejects.toBeInstanceOf(HermesGatewayConnectionError);
+    expect(client.state).toBe("closed");
+  });
+
   it("marks a status-less indeterminate replay and blocks later mutations", async () => {
     const factory = new FakeSocketFactory();
     const { client, socket } = await openClient(factory, {}, stableMutationReady);
@@ -1187,6 +1257,102 @@ describe("HermesGatewayClient recovery", () => {
       "disconnected:true",
       "exhausted:2",
     ]);
+  });
+});
+
+const skillsReady = {
+  jsonrpc: "2.0",
+  method: "event",
+  params: {
+    type: "gateway.ready",
+    payload: {
+      protocol: {
+        major: 1,
+        minor: 0,
+        capabilities: {
+          "skills.manage": "supported",
+          "skills.reload": "supported",
+        },
+      },
+    },
+  },
+} as const;
+
+describe("HermesGatewayClient skills", () => {
+  it("uses the skills.manage read and skills.reload mutation wire protocol", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {}, skillsReady);
+
+    const listing = client.listSkills();
+    let frame = sentFrames(socket).at(-1)!;
+    expect(frame).toMatchObject({ method: "skills.manage", params: { action: "list" } });
+    socket.receive(success(frame.id, { skills: [{ name: "notes", description: "Take notes" }] }));
+    await expect(listing).resolves.toEqual({
+      skills: [{ name: "notes", description: "Take notes" }],
+    });
+
+    const searching = client.searchSkills("git");
+    frame = sentFrames(socket).at(-1)!;
+    expect(frame).toMatchObject({
+      method: "skills.manage",
+      params: { action: "search", query: "git" },
+    });
+    socket.receive(success(frame.id, { results: [{ name: "git-helper", description: "Git" }] }));
+    await expect(searching).resolves.toEqual({
+      results: [{ name: "git-helper", description: "Git" }],
+    });
+
+    const inspecting = client.inspectSkill("git-helper");
+    frame = sentFrames(socket).at(-1)!;
+    expect(frame).toMatchObject({
+      method: "skills.manage",
+      params: { action: "inspect", query: "git-helper" },
+    });
+    socket.receive(success(frame.id, { info: { name: "git-helper" } }));
+    await expect(inspecting).resolves.toEqual({ info: { name: "git-helper" } });
+
+    const reloading = client.reloadSkills({ operationId: "skills-reload-1" });
+    frame = sentFrames(socket).at(-1)!;
+    expect(frame).toMatchObject({ method: "skills.reload", params: {} });
+    socket.receive(
+      success(frame.id, {
+        output: "Reloaded",
+        result: { added: [{ name: "new-skill" }], removed: [], total: 4 },
+      }),
+    );
+    await expect(reloading).resolves.toEqual({
+      output: "Reloaded",
+      result: { added: [{ name: "new-skill" }], removed: [], total: 4 },
+    });
+    client.close();
+  });
+
+  it("removes only the skills.manage capability after a -32601 response", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {}, skillsReady);
+
+    const listing = client.listSkills();
+    const frame = sentFrames(socket).at(-1)!;
+    socket.receive({
+      jsonrpc: "2.0",
+      id: frame.id,
+      error: { code: -32601, message: "method not found" },
+    });
+    await expect(listing).rejects.toThrow("skills.manage failed with code -32601");
+    expect(client.hasCapability("skills.manage")).toBe(false);
+    expect(client.hasCapability("skills.reload")).toBe(true);
+    await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    client.close();
+  });
+
+  it("refuses skills access on a legacy gateway without a negotiated inventory", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(factory, {}, legacyReady);
+    await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    await expect(client.reloadSkills({ operationId: "skills-reload-2" })).rejects.toBeInstanceOf(
+      HermesGatewayCapabilityError,
+    );
+    client.close();
   });
 });
 

@@ -229,6 +229,7 @@ export function NewTaskDraftScreen(props: {
   // A new navigation to this mounted screen delivers a fresh initialProjectRef
   // reference — treat it as a new request and let it apply again.
   const lastInitialProjectRefRef = useRef(props.initialProjectRef);
+  const clearedWorkDraftRef = useRef<string | null>(null);
   const initializedWorkDraftRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -244,6 +245,11 @@ export function NewTaskDraftScreen(props: {
     ) {
       return;
     }
+    // Clear once when the Work draft is first seen, before the user can type.
+    if (clearedWorkDraftRef.current !== flow.draftKey) {
+      clearedWorkDraftRef.current = flow.draftKey;
+      clearComposerDraftContent(flow.draftKey);
+    }
     if (initializedWorkDraftRef.current === flow.draftKey) {
       return;
     }
@@ -254,7 +260,6 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     initializedWorkDraftRef.current = flow.draftKey;
-    clearComposerDraftContent(flow.draftKey);
     flow.setSelectedModelKey(requestedModelKey);
   }, [
     flow.draftKey,

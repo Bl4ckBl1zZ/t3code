@@ -290,7 +290,10 @@ export function parseHermesHistoryText(input: {
 
 function isPathInsideRoot(root: string, candidate: string): boolean {
   const relative = NodePath.relative(root, candidate);
-  return relative === "" || (!relative.startsWith(`..${NodePath.sep}`) && relative !== "..");
+  if (relative === "") return true;
+  return (
+    !relative.startsWith(`..${NodePath.sep}`) && relative !== ".." && !NodePath.isAbsolute(relative)
+  );
 }
 
 function detectSupportedMedia(bytes: Uint8Array): {
