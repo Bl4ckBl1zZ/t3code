@@ -365,6 +365,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     -webkit-app-region: no-drag;
   }
 
+  /* The collapsed-sidebar trigger floats at the titlebar's left inset; keep
+     the right-anchored panel controls from stretching underneath it so both
+     stay clickable in narrow header columns. */
+  [data-sidebar-state="collapsed"] .workspace-titlebar-controls {
+    max-width: calc(
+      100% - var(--workspace-titlebar-content-left) - var(--workspace-controls-right)
+    );
+    overflow: hidden;
+  }
+
   .surface-subheader {
     @apply flex h-10 min-h-10 shrink-0 items-center border-b border-border/60 bg-background;
   }

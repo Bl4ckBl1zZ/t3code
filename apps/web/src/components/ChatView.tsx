@@ -6086,7 +6086,7 @@ function ChatViewContent(props: ChatViewProps) {
     />
   );
   const threadPanelHeaderControl = (
-    <div className="workspace-titlebar-controls z-50 [-webkit-app-region:no-drag]">
+    <div className="workspace-titlebar-controls z-40 [-webkit-app-region:no-drag]">
       <PanelLayoutControls
         {...panelToggleControlProps}
         showTerminalControl={false}
@@ -6095,7 +6095,7 @@ function ChatViewContent(props: ChatViewProps) {
     </div>
   );
   const panelLayoutControls = (
-    <div className="workspace-titlebar-controls z-50 gap-1 [-webkit-app-region:no-drag]">
+    <div className="workspace-titlebar-controls z-40 gap-1 [-webkit-app-region:no-drag]">
       {rightPanelOpen && !shouldUsePlanSidebarSheet ? (
         <RightPanelMaximizeControl
           maximized={rightPanelMaximized}

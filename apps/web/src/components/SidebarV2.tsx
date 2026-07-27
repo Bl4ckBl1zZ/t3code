@@ -15,6 +15,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   ProviderDriverKind,
+  type EnvironmentId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
@@ -123,6 +124,7 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
+  resolveWorkspaceSwitchNavigation,
   resolveSettledTimestamp,
   resolveSidebarV2Status,
   resolveWorkingStartedAt,
@@ -1345,22 +1347,40 @@ export default function SidebarV2() {
       ),
     [serverProviders],
   );
-  const hermesProviderEntry = useMemo(
-    () =>
-      [...providerEntryByInstanceId.values()].find(
-        (entry) =>
-          entry.driverKind === "hermes" &&
-          entry.enabled &&
-          entry.isAvailable &&
-          entry.status === "ready",
-      ) ?? null,
-    [providerEntryByInstanceId],
-  );
-  const t3WorkDirectory = t3WorkDirectoryForEnvironment(serverConfigs, primaryEnvironmentId);
+  // Work-mode environment scope: one menu above the list, mirroring the
+  // code-mode project scope. Scoping filters the visible work threads and
+  // retargets the New-thread composer to the selected environment.
+  const [workEnvironmentScopeId, setWorkEnvironmentScopeId] = useState<EnvironmentId | null>(null);
+  useEffect(() => {
+    if (
+      workEnvironmentScopeId !== null &&
+      !environments.some((environment) => environment.environmentId === workEnvironmentScopeId)
+    ) {
+      setWorkEnvironmentScopeId(null);
+    }
+  }, [environments, workEnvironmentScopeId]);
+  const workTargetEnvironmentId = workEnvironmentScopeId ?? primaryEnvironmentId;
+  const hermesProviderEntry = useMemo(() => {
+    const isReadyHermesEntry = (entry: ProviderInstanceEntry) =>
+      entry.driverKind === "hermes" &&
+      entry.enabled &&
+      entry.isAvailable &&
+      entry.status === "ready";
+    const scopedProviders =
+      workTargetEnvironmentId === null
+        ? undefined
+        : serverConfigs.get(workTargetEnvironmentId)?.providers;
+    if (scopedProviders !== undefined) {
+      return deriveProviderInstanceEntries(scopedProviders).find(isReadyHermesEntry) ?? null;
+    }
+    if (workTargetEnvironmentId !== primaryEnvironmentId) return null;
+    return [...providerEntryByInstanceId.values()].find(isReadyHermesEntry) ?? null;
+  }, [primaryEnvironmentId, providerEntryByInstanceId, serverConfigs, workTargetEnvironmentId]);
+  const t3WorkDirectory = t3WorkDirectoryForEnvironment(serverConfigs, workTargetEnvironmentId);
   const hermesBackingProject =
     projects.find(
       (project) =>
-        project.environmentId === primaryEnvironmentId &&
+        project.environmentId === workTargetEnvironmentId &&
         t3WorkDirectory !== null &&
         project.workspaceRoot === t3WorkDirectory,
     ) ?? null;
@@ -1368,14 +1388,14 @@ export default function SidebarV2() {
   useEffect(() => {
     if (
       workspace !== "work" ||
-      primaryEnvironmentId === null ||
+      workTargetEnvironmentId === null ||
       t3WorkDirectory === null ||
       hermesProviderEntry === null ||
       hermesBackingProject !== null
     ) {
       return;
     }
-    const createKey = `${primaryEnvironmentId}:${t3WorkDirectory}`;
+    const createKey = `${workTargetEnvironmentId}:${t3WorkDirectory}`;
     if (t3WorkProjectCreateRef.current === createKey) return;
     t3WorkProjectCreateRef.current = createKey;
     const hermesModel =
@@ -1384,7 +1404,7 @@ export default function SidebarV2() {
       null;
     void (async () => {
       const result = await createProject({
-        environmentId: primaryEnvironmentId,
+        environmentId: workTargetEnvironmentId,
         input: {
           projectId: T3_WORK_BACKING_PROJECT_ID,
           title: T3_WORK_BACKING_PROJECT_TITLE,
@@ -1418,8 +1438,8 @@ export default function SidebarV2() {
     createProject,
     hermesBackingProject,
     hermesProviderEntry,
-    primaryEnvironmentId,
     t3WorkDirectory,
+    workTargetEnvironmentId,
     workspace,
   ]);
   const [hermesImportOpen, setHermesImportOpen] = useState(false);
@@ -1515,7 +1535,7 @@ export default function SidebarV2() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey]);
+  }, [clearSelection, projectScopeKey, workEnvironmentScopeId]);
 
   const handleRemoveProjectMembers = useCallback(
     async (projectGroup: SidebarProjectSnapshot, members: readonly SidebarProjectGroupMember[]) => {
@@ -1684,9 +1704,10 @@ export default function SidebarV2() {
     const visible = threads.filter(
       (thread) =>
         isThreadVisibleInSidebarWorkspace(thread, workspace, providerDriverKindByInstance) &&
-        (workspace === "work" ||
-          scopedProjectKeys === null ||
-          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+        (workspace === "work"
+          ? workEnvironmentScopeId === null || thread.environmentId === workEnvironmentScopeId
+          : scopedProjectKeys === null ||
+            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -1743,6 +1764,7 @@ export default function SidebarV2() {
     serverConfigs,
     snoozeWakeTick,
     threads,
+    workEnvironmentScopeId,
     workspace,
   ]);
   const { mainThreads, needsYouThreads, ordinaryActiveThreads } = useMemo(() => {
@@ -1792,7 +1814,10 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey =
+    workspace === "work"
+      ? `work:${workEnvironmentScopeId ?? "all"}`
+      : `code:${projectScopeKey ?? "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -1941,25 +1966,63 @@ export default function SidebarV2() {
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
+  // The work-mode composer target: a fresh draft on the Hermes backing
+  // project. Returns false when Hermes is not ready so callers can fall back.
+  const openWorkComposer = useCallback((): boolean => {
+    const hermesModel =
+      hermesProviderEntry?.models.find((model) => model.slug === "default") ??
+      hermesProviderEntry?.models[0] ??
+      null;
+    if (!hermesBackingProject || !hermesProviderEntry || !hermesModel) return false;
+    if (isMobile) setOpenMobile(false);
+    void newThreadContext.handleNewThread(
+      scopeProjectRef(hermesBackingProject.environmentId, hermesBackingProject.id),
+      {
+        fresh: true,
+        modelSelection: {
+          instanceId: hermesProviderEntry.instanceId,
+          model: hermesModel.slug,
+        },
+      },
+    );
+    return true;
+  }, [hermesBackingProject, hermesProviderEntry, isMobile, newThreadContext, setOpenMobile]);
   const handleWorkspaceChange = useCallback(
     (nextWorkspace: SidebarWorkspace) => {
       if (nextWorkspace === workspace) return;
-      const rememberedThreadKey = workspaceRoutes[nextWorkspace];
       setWorkspace(nextWorkspace);
-      if (rememberedThreadKey === undefined) return;
-      const rememberedThread = threads.find(
-        (thread) =>
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-            rememberedThreadKey &&
-          isThreadVisibleInSidebarWorkspace(thread, nextWorkspace, providerDriverKindByInstance),
-      );
-      if (rememberedThread) {
-        navigateToThread(scopeThreadRef(rememberedThread.environmentId, rememberedThread.id));
+      const navigation = resolveWorkspaceSwitchNavigation({
+        nextWorkspace,
+        rememberedThreadKey: workspaceRoutes[nextWorkspace],
+        routeThreadKey,
+        threads: threads.map((thread) => ({
+          ...thread,
+          threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        })),
+        providerDriverKindByInstance,
+      });
+      if (navigation.kind === "remembered-thread") {
+        const rememberedThread = threads.find(
+          (thread) =>
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+            navigation.threadKey,
+        );
+        if (rememberedThread) {
+          navigateToThread(scopeThreadRef(rememberedThread.environmentId, rememberedThread.id));
+        }
+        return;
+      }
+      if (navigation.kind === "new-chat") {
+        if (nextWorkspace === "work" && openWorkComposer()) return;
+        void router.navigate({ to: "/" });
       }
     },
     [
       navigateToThread,
+      openWorkComposer,
       providerDriverKindByInstance,
+      routeThreadKey,
+      router,
       setWorkspace,
       threads,
       workspace,
@@ -2590,30 +2653,14 @@ export default function SidebarV2() {
   // for multi-project setups.
   const handleNewThreadClick = useCallback(() => {
     if (workspace === "work") {
-      const hermesModel =
-        hermesProviderEntry?.models.find((model) => model.slug === "default") ??
-        hermesProviderEntry?.models[0] ??
-        null;
-      if (!hermesBackingProject || !hermesProviderEntry || !hermesModel) {
+      if (!openWorkComposer()) {
         toastManager.add({
           type: "warning",
           title: "Hermes is not ready",
           description:
             "Enable and configure Hermes, then wait for T3 Work to finish preparing its private conversation directory.",
         });
-        return;
       }
-      if (isMobile) setOpenMobile(false);
-      void newThreadContext.handleNewThread(
-        scopeProjectRef(hermesBackingProject.environmentId, hermesBackingProject.id),
-        {
-          fresh: true,
-          modelSelection: {
-            instanceId: hermesProviderEntry.instanceId,
-            model: hermesModel.slug,
-          },
-        },
-      );
       return;
     }
     // One project: nothing to pick, create immediately.
@@ -2630,10 +2677,9 @@ export default function SidebarV2() {
     if (isMobile) setOpenMobile(false);
     openCommandPalette({ open: "new-thread-in" });
   }, [
-    hermesBackingProject,
-    hermesProviderEntry,
     isMobile,
     newThreadContext,
+    openWorkComposer,
     projectGroups.length,
     setOpenMobile,
     workspace,
@@ -2823,6 +2869,52 @@ export default function SidebarV2() {
                 <TooltipPopup side="right">New project</TooltipPopup>
               </Tooltip>
             </div>
+          </SidebarGroup>
+        ) : null}
+        {workspace === "work" && environments.length > 1 ? (
+          <SidebarGroup className="px-2 pb-2 pt-0">
+            <Menu>
+              <MenuTrigger
+                aria-label="Filter threads by environment"
+                className="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+              >
+                <ServerIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                <span className="min-w-0 flex-1 truncate">
+                  {(workEnvironmentScopeId !== null
+                    ? environmentLabelById.get(workEnvironmentScopeId)
+                    : null) ?? "All environments"}
+                </span>
+                <ChevronDownIcon className="size-4 shrink-0 text-sidebar-muted-foreground/70" />
+              </MenuTrigger>
+              <MenuPopup align="start" className="w-(--anchor-width)">
+                <MenuRadioGroup
+                  value={workEnvironmentScopeId ?? "all"}
+                  onValueChange={(value) =>
+                    setWorkEnvironmentScopeId(value === "all" ? null : (value as EnvironmentId))
+                  }
+                >
+                  <MenuRadioItem
+                    value="all"
+                    closeOnClick
+                    className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                  >
+                    <ServerIcon className="size-4 shrink-0" />
+                    <span className="min-w-0 truncate text-sm">All environments</span>
+                  </MenuRadioItem>
+                  {environments.map((environment) => (
+                    <MenuRadioItem
+                      key={environment.environmentId}
+                      value={environment.environmentId}
+                      closeOnClick
+                      className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                    >
+                      <ServerIcon className="size-4 shrink-0" />
+                      <span className="min-w-0 truncate text-sm">{environment.label}</span>
+                    </MenuRadioItem>
+                  ))}
+                </MenuRadioGroup>
+              </MenuPopup>
+            </Menu>
           </SidebarGroup>
         ) : null}
         <SidebarGroup className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-gutter:stable]">

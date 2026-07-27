@@ -139,9 +139,23 @@ export function sidebarProviderInstanceKey(
   return `${environmentId}\u0000${providerInstanceId}`;
 }
 
+export function isHermesSidebarThread(
+  thread: Pick<SidebarThreadSummary, "environmentId" | "providerInstanceId">,
+  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
+): boolean {
+  const driverKind = providerDriverKindByInstance.get(
+    sidebarProviderInstanceKey(thread.environmentId, thread.providerInstanceId),
+  );
+  return (
+    driverKind === "hermes" || (driverKind === undefined && thread.providerInstanceId === "hermes")
+  );
+}
+
 /**
  * Applies the selected workspace to the sidebar lifecycle lists.
  *
+ * The work and code workspaces partition lifecycle threads on Hermes
+ * membership: Hermes conversations belong to work, everything else to code.
  * Provider instance ids are user-configurable, so Hermes membership comes
  * from the environment's provider metadata. The literal `hermes` fallback is
  * only for cached historical shells whose server config has not loaded yet.
@@ -155,26 +169,53 @@ export function isThreadVisibleInSidebarWorkspace(
   providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
 ): boolean {
   if (!isSidebarLifecycleThread(thread)) return false;
-  if (workspace === "code") return true;
-
-  const driverKind = providerDriverKindByInstance.get(
-    sidebarProviderInstanceKey(thread.environmentId, thread.providerInstanceId),
-  );
-  return (
-    driverKind === "hermes" || (driverKind === undefined && thread.providerInstanceId === "hermes")
-  );
+  const isHermes = isHermesSidebarThread(thread, providerDriverKindByInstance);
+  return workspace === "work" ? isHermes : !isHermes;
 }
 
-export function isHermesSidebarThread(
-  thread: Pick<SidebarThreadSummary, "environmentId" | "providerInstanceId">,
-  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
-): boolean {
-  const driverKind = providerDriverKindByInstance.get(
-    sidebarProviderInstanceKey(thread.environmentId, thread.providerInstanceId),
-  );
-  return (
-    driverKind === "hermes" || (driverKind === undefined && thread.providerInstanceId === "hermes")
-  );
+/**
+ * Where the sidebar should route after a workspace switch.
+ *
+ * The remembered thread for the target workspace wins when it is still
+ * visible there. Otherwise, leaving a thread that belongs to the other
+ * workspace open would strand the user on stale content, so the switch
+ * falls back to the target workspace's new-chat composer. Routes that are
+ * already workspace-neutral (drafts, the index composer) stay put.
+ */
+export type WorkspaceSwitchNavigation =
+  | { kind: "remembered-thread"; threadKey: string }
+  | { kind: "new-chat" }
+  | { kind: "stay" };
+
+export function resolveWorkspaceSwitchNavigation(input: {
+  nextWorkspace: SidebarWorkspace;
+  rememberedThreadKey: string | undefined;
+  routeThreadKey: string | null;
+  threads: readonly (Pick<
+    SidebarThreadSummary,
+    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
+  > & { readonly threadKey: string })[];
+  providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
+}): WorkspaceSwitchNavigation {
+  const isVisible = (threadKey: string | null): boolean => {
+    if (threadKey === null) return false;
+    const thread = input.threads.find((candidate) => candidate.threadKey === threadKey);
+    return (
+      thread !== undefined &&
+      isThreadVisibleInSidebarWorkspace(
+        thread,
+        input.nextWorkspace,
+        input.providerDriverKindByInstance,
+      )
+    );
+  };
+  if (input.rememberedThreadKey !== undefined && isVisible(input.rememberedThreadKey)) {
+    return { kind: "remembered-thread", threadKey: input.rememberedThreadKey };
+  }
+  if (input.routeThreadKey === null || isVisible(input.routeThreadKey)) {
+    return { kind: "stay" };
+  }
+  return { kind: "new-chat" };
 }
 
 export type WorkInboxActiveSection = "main" | "needs-you" | "active";

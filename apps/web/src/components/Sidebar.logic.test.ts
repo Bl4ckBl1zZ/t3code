@@ -25,6 +25,7 @@ import {
   resolveSidebarV2Status,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
+  resolveWorkspaceSwitchNavigation,
   sidebarProviderInstanceKey,
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
@@ -412,7 +413,7 @@ describe("sidebar thread lineage helpers", () => {
       threads.filter((thread) =>
         isThreadVisibleInSidebarWorkspace(thread, "code", providerDriverKindByInstance),
       ),
-    ).toEqual([ordinaryThread, hermesThread, customHermesThread]);
+    ).toEqual([ordinaryThread]);
     expect(
       threads.filter((thread) =>
         isThreadVisibleInSidebarWorkspace(thread, "work", providerDriverKindByInstance),
@@ -435,6 +436,47 @@ describe("sidebar thread lineage helpers", () => {
     expect(isThreadVisibleInSidebarWorkspace(misleadingCustomThread, "work", new Map())).toBe(
       false,
     );
+    expect(isThreadVisibleInSidebarWorkspace(historicalHermesThread, "code", new Map())).toBe(
+      false,
+    );
+    expect(isThreadVisibleInSidebarWorkspace(misleadingCustomThread, "code", new Map())).toBe(true);
+  });
+
+  it("scopes Hermes membership to the thread's own environment", () => {
+    const homeEnvironmentId = EnvironmentId.make("environment-home");
+    const otherEnvironmentId = EnvironmentId.make("environment-other");
+    const sharedInstanceId = ProviderInstanceId.make("assistant");
+    const providerDriverKindByInstance = new Map([
+      [
+        sidebarProviderInstanceKey(homeEnvironmentId, sharedInstanceId),
+        ProviderDriverKind.make("hermes"),
+      ],
+      [
+        sidebarProviderInstanceKey(otherEnvironmentId, sharedInstanceId),
+        ProviderDriverKind.make("codex"),
+      ],
+    ]);
+    const homeThread = makeThreadFixture({
+      environmentId: homeEnvironmentId,
+      providerInstanceId: sharedInstanceId,
+    });
+    const otherThread = makeThreadFixture({
+      environmentId: otherEnvironmentId,
+      providerInstanceId: sharedInstanceId,
+    });
+
+    expect(
+      isThreadVisibleInSidebarWorkspace(homeThread, "work", providerDriverKindByInstance),
+    ).toBe(true);
+    expect(
+      isThreadVisibleInSidebarWorkspace(homeThread, "code", providerDriverKindByInstance),
+    ).toBe(false);
+    expect(
+      isThreadVisibleInSidebarWorkspace(otherThread, "work", providerDriverKindByInstance),
+    ).toBe(false);
+    expect(
+      isThreadVisibleInSidebarWorkspace(otherThread, "code", providerDriverKindByInstance),
+    ).toBe(true);
   });
 
   it("resolves the parent thread for fork sidebar affordances", () => {
@@ -459,6 +501,94 @@ describe("sidebar thread lineage helpers", () => {
     expect(getSidebarForkParentThreadId(runFork)).toBe(parentId);
     expect(getSidebarForkParentThreadId(lineageFork)).toBe(fallbackParentId);
     expect(getSidebarForkParentThreadId(makeThreadFixture())).toBeNull();
+  });
+});
+
+describe("resolveWorkspaceSwitchNavigation", () => {
+  const environmentId = EnvironmentId.make("environment-switch");
+  const hermesInstanceId = ProviderInstanceId.make("hermes-main");
+  const codexInstanceId = ProviderInstanceId.make("codex-main");
+  const providerDriverKindByInstance = new Map([
+    [
+      sidebarProviderInstanceKey(environmentId, hermesInstanceId),
+      ProviderDriverKind.make("hermes"),
+    ],
+    [sidebarProviderInstanceKey(environmentId, codexInstanceId), ProviderDriverKind.make("codex")],
+  ]);
+  const codeThread = {
+    ...makeThreadFixture({ environmentId, providerInstanceId: codexInstanceId }),
+    threadKey: "code-thread",
+  };
+  const workThread = {
+    ...makeThreadFixture({ environmentId, providerInstanceId: hermesInstanceId }),
+    threadKey: "work-thread",
+  };
+  const threads = [codeThread, workThread];
+
+  it("navigates to the remembered thread when it is still visible in the target workspace", () => {
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "work",
+        rememberedThreadKey: "work-thread",
+        routeThreadKey: "code-thread",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "remembered-thread", threadKey: "work-thread" });
+  });
+
+  it("opens the target-mode composer when the open thread belongs to the other workspace", () => {
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "work",
+        rememberedThreadKey: undefined,
+        routeThreadKey: "code-thread",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "new-chat" });
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "code",
+        rememberedThreadKey: undefined,
+        routeThreadKey: "work-thread",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "new-chat" });
+  });
+
+  it("falls back to the composer when the remembered thread is no longer visible", () => {
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "work",
+        rememberedThreadKey: "archived-work-thread",
+        routeThreadKey: "code-thread",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "new-chat" });
+  });
+
+  it("stays put on workspace-neutral routes and threads already valid in the target workspace", () => {
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "work",
+        rememberedThreadKey: undefined,
+        routeThreadKey: null,
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "stay" });
+    expect(
+      resolveWorkspaceSwitchNavigation({
+        nextWorkspace: "work",
+        rememberedThreadKey: undefined,
+        routeThreadKey: "work-thread",
+        threads,
+        providerDriverKindByInstance,
+      }),
+    ).toEqual({ kind: "stay" });
   });
 });
 
