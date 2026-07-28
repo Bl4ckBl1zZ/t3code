@@ -133,6 +133,75 @@ describe("V2 session presentation", () => {
     });
   });
 
+  it("skips provider-hydrated orphan rows whose text is already committed", () => {
+    const threadId = ThreadId.make("thread-hermes-dedup");
+    const at = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");
+    const committedMessageId = MessageId.make("message-web-user");
+    const makeProjectionMessage = (
+      id: string,
+      text: string,
+    ): OrchestrationV2ConversationMessage => ({
+      id: MessageId.make(id),
+      threadId,
+      runId: null,
+      nodeId: null,
+      role: "user",
+      text,
+      attachments: [],
+      streaming: false,
+      createdBy: "user",
+      creationSource: "provider",
+      createdAt: at,
+      updatedAt: at,
+    });
+    const userItem = {
+      id: TurnItemId.make("item-web-user"),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed" as const,
+      title: null,
+      startedAt: at,
+      completedAt: at,
+      updatedAt: at,
+      type: "user_message" as const,
+      messageId: committedMessageId,
+      text: "make me a script",
+      attachments: [],
+      createdBy: "user" as const,
+      creationSource: "web" as const,
+      inputIntent: "turn_start" as const,
+    } satisfies OrchestrationV2TurnItem;
+
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: userItem.id,
+          item: userItem,
+        },
+      ],
+      projectionMessages: [
+        // Hydrated duplicate of the committed web message: skipped.
+        makeProjectionMessage("message:provider:hermes:native-item:abc123", "make me a script"),
+        // Distinct hydrated history: kept.
+        makeProjectionMessage("message:provider:hermes:native-item:def456", "another question"),
+      ],
+      optimisticMessages: [],
+    });
+
+    expect(
+      entries.flatMap((entry) => (entry.kind === "message" ? [entry.message.text] : [])),
+    ).toEqual(["make me a script", "another question"]);
+  });
+
   it("merges durable attachments into committed assistant turn items", () => {
     const threadId = ThreadId.make("thread-hermes-media");
     const at = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");

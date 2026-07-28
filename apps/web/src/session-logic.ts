@@ -628,9 +628,28 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
     });
   }
 
+  // Provider-hydrated history rows carry digest-derived ids that never
+  // match the ids of app-created messages, so the same utterance can exist
+  // twice (web row + hydrated `native-item` row). Skip orphan rows whose
+  // content is already committed, consuming one committed occurrence per
+  // skipped row so genuinely repeated identical messages still render.
+  const committedTextBudget = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.kind !== "message") continue;
+    const key = `${entry.message.role}\n${entry.message.text}`;
+    committedTextBudget.set(key, (committedTextBudget.get(key) ?? 0) + 1);
+  }
   for (const projectedMessage of input.projectionMessages ?? []) {
     if (committedMessageIds.has(projectedMessage.id) || projectedMessage.role === "system") {
       continue;
+    }
+    if (projectedMessage.attachments.length === 0) {
+      const key = `${projectedMessage.role}\n${projectedMessage.text}`;
+      const budget = committedTextBudget.get(key) ?? 0;
+      if (budget > 0) {
+        committedTextBudget.set(key, budget - 1);
+        continue;
+      }
     }
     const message: ChatMessage = {
       id: projectedMessage.id,
