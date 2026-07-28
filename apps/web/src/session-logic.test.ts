@@ -194,19 +194,22 @@ describe("V2 session presentation", () => {
         makeProjectionMessage("message:provider:hermes:native-item:abc123", "make me a script"),
         // Distinct hydrated history: kept.
         makeProjectionMessage("message:provider:hermes:native-item:def456", "another question"),
-        // Imported history reusing the same text far in the past: kept.
+        // Imported history reusing the same text once the committed
+        // occurrence budget is spent: kept.
         makeProjectionMessage(
           "message:provider:hermes:native-item:old789",
           "make me a script",
           DateTime.makeUnsafe("2026-07-20T12:00:00.000Z"),
         ),
+        // Non-hydrated orphan rows are never text-deduped: kept.
+        makeProjectionMessage("message-app-created", "another question"),
       ],
       optimisticMessages: [],
     });
 
     expect(
       entries.flatMap((entry) => (entry.kind === "message" ? [entry.message.text] : [])),
-    ).toEqual(["make me a script", "make me a script", "another question"]);
+    ).toEqual(["make me a script", "make me a script", "another question", "another question"]);
   });
 
   it("merges durable attachments into committed assistant turn items", () => {
