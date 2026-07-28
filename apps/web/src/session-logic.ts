@@ -340,6 +340,9 @@ export function hasActionableProposedPlan(plan: LatestProposedPlanState | null):
   return plan?.status === "active";
 }
 
+const PROVIDER_HYDRATED_MESSAGE_ID_PATTERN = /^message:provider:[^:]+:native-item:/;
+const PROVIDER_HYDRATED_ECHO_WINDOW_MS = 15 * 60 * 1000;
+
 const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"]["type"]>([
   "approval_request",
   "compaction",
@@ -630,24 +633,37 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 
   // Provider-hydrated history rows carry digest-derived ids that never
   // match the ids of app-created messages, so the same utterance can exist
-  // twice (web row + hydrated `native-item` row). Skip orphan rows whose
-  // content is already committed, consuming one committed occurrence per
-  // skipped row so genuinely repeated identical messages still render.
-  const committedTextBudget = new Map<string, number>();
+  // twice (web row + hydrated `native-item` row). Skip hydrated orphan rows
+  // that echo an already-committed message: same role and text, created at
+  // roughly the same time. Each committed occurrence is consumed at most
+  // once, and time proximity keeps distinct imported history that happens
+  // to reuse common short replies from being suppressed.
+  const committedTimestampsByText = new Map<string, Array<number>>();
   for (const entry of entries) {
     if (entry.kind !== "message") continue;
     const key = `${entry.message.role}\n${entry.message.text}`;
-    committedTextBudget.set(key, (committedTextBudget.get(key) ?? 0) + 1);
+    const timestamps = committedTimestampsByText.get(key) ?? [];
+    timestamps.push(Date.parse(entry.message.createdAt));
+    committedTimestampsByText.set(key, timestamps);
   }
   for (const projectedMessage of input.projectionMessages ?? []) {
     if (committedMessageIds.has(projectedMessage.id) || projectedMessage.role === "system") {
       continue;
     }
-    if (projectedMessage.attachments.length === 0) {
+    if (
+      projectedMessage.attachments.length === 0 &&
+      PROVIDER_HYDRATED_MESSAGE_ID_PATTERN.test(projectedMessage.id)
+    ) {
       const key = `${projectedMessage.role}\n${projectedMessage.text}`;
-      const budget = committedTextBudget.get(key) ?? 0;
-      if (budget > 0) {
-        committedTextBudget.set(key, budget - 1);
+      const timestamps = committedTimestampsByText.get(key);
+      const projectedAtMs = DateTime.toEpochMillis(projectedMessage.createdAt);
+      const matchIndex =
+        timestamps?.findIndex(
+          (committedAtMs) =>
+            Math.abs(committedAtMs - projectedAtMs) <= PROVIDER_HYDRATED_ECHO_WINDOW_MS,
+        ) ?? -1;
+      if (timestamps !== undefined && matchIndex !== -1) {
+        timestamps.splice(matchIndex, 1);
         continue;
       }
     }

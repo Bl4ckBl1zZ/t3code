@@ -3037,7 +3037,14 @@ export function makeHermesServeAdapterV2(
                   // The gateway stages the file and hands back a reference token
                   // (e.g. "@file:..."); the model only sees the file when that
                   // token is included in the prompt text.
-                  return hermesAttachmentRefText(attachResult);
+                  const refText = hermesAttachmentRefText(attachResult);
+                  if (refText === null) {
+                    return yield* new ProviderAdapterProtocolError({
+                      driver: HERMES_PROVIDER,
+                      detail: `Hermes gateway staged "${attachment.name}" without returning a file reference`,
+                    });
+                  }
+                  return refText;
                 }),
               { concurrency: 1 },
             );

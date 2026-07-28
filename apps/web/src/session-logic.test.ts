@@ -140,6 +140,7 @@ describe("V2 session presentation", () => {
     const makeProjectionMessage = (
       id: string,
       text: string,
+      createdAt: DateTime.Utc = at,
     ): OrchestrationV2ConversationMessage => ({
       id: MessageId.make(id),
       threadId,
@@ -151,8 +152,8 @@ describe("V2 session presentation", () => {
       streaming: false,
       createdBy: "user",
       creationSource: "provider",
-      createdAt: at,
-      updatedAt: at,
+      createdAt,
+      updatedAt: createdAt,
     });
     const userItem = {
       id: TurnItemId.make("item-web-user"),
@@ -193,13 +194,19 @@ describe("V2 session presentation", () => {
         makeProjectionMessage("message:provider:hermes:native-item:abc123", "make me a script"),
         // Distinct hydrated history: kept.
         makeProjectionMessage("message:provider:hermes:native-item:def456", "another question"),
+        // Imported history reusing the same text far in the past: kept.
+        makeProjectionMessage(
+          "message:provider:hermes:native-item:old789",
+          "make me a script",
+          DateTime.makeUnsafe("2026-07-20T12:00:00.000Z"),
+        ),
       ],
       optimisticMessages: [],
     });
 
     expect(
       entries.flatMap((entry) => (entry.kind === "message" ? [entry.message.text] : [])),
-    ).toEqual(["make me a script", "another question"]);
+    ).toEqual(["make me a script", "make me a script", "another question"]);
   });
 
   it("merges durable attachments into committed assistant turn items", () => {

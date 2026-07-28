@@ -28,6 +28,7 @@ import {
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -334,8 +335,12 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
   ): Promise<unknown> {
     this.fileAttachments.push({ params, options });
-    return { attached: true, ref_text: `@file:${params.name}` };
+    return this.fileAttachOmitsRef
+      ? { attached: true }
+      : { attached: true, ref_text: `@file:${params.name}` };
   }
+
+  fileAttachOmitsRef = false;
 
   async attachPdf(
     params: {
@@ -1361,6 +1366,43 @@ describe("HermesServeAdapterV2", () => {
           fake.prompts[0]?.params.text,
           `${input.message.text}\n\n@file:notes.txt\n@file:clip.webm`,
         );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("fails the turn when a staged file attach returns no reference token", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.fileAttachOmitsRef = true;
+        const runtime = yield* makeRuntime(fake, true, () =>
+          Effect.succeed(Uint8Array.from([0x61, 0x62, 0x63])),
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const input = turnInput(providerThread);
+        const result = yield* Effect.exit(
+          runtime.startTurn({
+            ...input,
+            message: {
+              ...input.message,
+              attachments: [
+                {
+                  type: "file",
+                  id: "thread-hermes-test-00000000-0000-4000-8000-000000000001",
+                  name: "notes.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 3,
+                },
+              ],
+            },
+          }),
+        );
+        assert.equal(Exit.isFailure(result), true);
+        assert.equal(fake.prompts.length, 0);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
