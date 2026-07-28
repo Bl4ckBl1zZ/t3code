@@ -212,6 +212,88 @@ describe("V2 session presentation", () => {
     ).toEqual(["make me a script", "make me a script", "another question", "another question"]);
   });
 
+  it("merges attachment-bearing hydrated echoes onto their committed entry", () => {
+    const threadId = ThreadId.make("thread-hermes-echo-attach");
+    const at = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");
+    const committedMessageId = MessageId.make("message-web-user-attach");
+    const attachmentId = "thread-hermes-echo-attach-00000000-0000-0000-0000-000000000001";
+    const userItem = {
+      id: TurnItemId.make("item-web-user-attach"),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed" as const,
+      title: null,
+      startedAt: at,
+      completedAt: at,
+      updatedAt: at,
+      type: "user_message" as const,
+      messageId: committedMessageId,
+      text: "look at this",
+      attachments: [],
+      createdBy: "user" as const,
+      creationSource: "web" as const,
+      inputIntent: "turn_start" as const,
+    } satisfies OrchestrationV2TurnItem;
+
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: userItem.id,
+          item: userItem,
+        },
+      ],
+      projectionMessages: [
+        {
+          id: MessageId.make("message:provider:hermes:native-item:echo1"),
+          threadId,
+          runId: null,
+          nodeId: null,
+          role: "user",
+          text: "look at this",
+          attachments: [
+            {
+              type: "image",
+              id: attachmentId,
+              name: "photo.png",
+              mimeType: "image/png",
+              sizeBytes: 4,
+            },
+          ],
+          streaming: false,
+          createdBy: "user",
+          creationSource: "provider",
+          createdAt: at,
+          updatedAt: at,
+        },
+      ],
+      attachmentUrlById: new Map([[attachmentId, "blob:photo"]]),
+      optimisticMessages: [],
+    });
+
+    const messages = entries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : []));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe(committedMessageId);
+    expect(messages[0]?.attachments).toEqual([
+      {
+        type: "image",
+        id: attachmentId,
+        name: "photo.png",
+        mimeType: "image/png",
+        sizeBytes: 4,
+        previewUrl: "blob:photo",
+      },
+    ]);
+  });
+
   it("merges durable attachments into committed assistant turn items", () => {
     const threadId = ThreadId.make("thread-hermes-media");
     const at = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");

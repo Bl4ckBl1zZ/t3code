@@ -637,27 +637,48 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
   // proximity cannot identify echoes. Skip hydrated orphan rows whose role
   // and text match a committed message, consuming one committed occurrence
   // per skipped row so genuinely repeated identical messages still render.
-  const committedTextBudget = new Map<string, number>();
-  for (const entry of entries) {
-    if (entry.kind !== "message") continue;
+  const committedIndexesByText = new Map<string, Array<number>>();
+  entries.forEach((entry, index) => {
+    if (entry.kind !== "message") return;
     const key = `${entry.message.role}\n${entry.message.text}`;
-    committedTextBudget.set(key, (committedTextBudget.get(key) ?? 0) + 1);
-  }
+    const bucket = committedIndexesByText.get(key) ?? [];
+    bucket.push(index);
+    committedIndexesByText.set(key, bucket);
+  });
+  const orphanProjectedMessages: Array<OrchestrationV2ConversationMessage> = [];
   for (const projectedMessage of input.projectionMessages ?? []) {
     if (committedMessageIds.has(projectedMessage.id) || projectedMessage.role === "system") {
       continue;
     }
-    if (
-      projectedMessage.attachments.length === 0 &&
-      PROVIDER_HYDRATED_MESSAGE_ID_PATTERN.test(projectedMessage.id)
-    ) {
+    if (PROVIDER_HYDRATED_MESSAGE_ID_PATTERN.test(projectedMessage.id)) {
       const key = `${projectedMessage.role}\n${projectedMessage.text}`;
-      const budget = committedTextBudget.get(key) ?? 0;
-      if (budget > 0) {
-        committedTextBudget.set(key, budget - 1);
+      const committedIndex = committedIndexesByText.get(key)?.shift();
+      const committed = committedIndex === undefined ? undefined : entries[committedIndex];
+      if (committedIndex !== undefined && committed?.kind === "message") {
+        // An attachment-bearing echo still deduplicates; its attachments are
+        // merged onto the committed entry when that entry has none.
+        if (
+          projectedMessage.attachments.length > 0 &&
+          (committed.message.attachments === undefined ||
+            committed.message.attachments.length === 0)
+        ) {
+          entries[committedIndex] = {
+            ...committed,
+            message: {
+              ...committed.message,
+              attachments: projectedMessage.attachments.map((attachment) => {
+                const previewUrl = input.attachmentUrlById?.get(attachment.id);
+                return previewUrl ? { ...attachment, previewUrl } : attachment;
+              }),
+            },
+          };
+        }
         continue;
       }
     }
+    orphanProjectedMessages.push(projectedMessage);
+  }
+  for (const projectedMessage of orphanProjectedMessages) {
     const message: ChatMessage = {
       id: projectedMessage.id,
       role: projectedMessage.role,
