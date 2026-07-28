@@ -519,6 +519,9 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 }): TimelineEntry[] {
   const committedMessageIds = new Set<string>();
   const entries: TimelineEntry[] = [];
+  const projectionMessageById = new Map(
+    (input.projectionMessages ?? []).map((message) => [message.id, message] as const),
+  );
   const attemptByRootNodeId = new Map(
     (input.attempts ?? []).map((attempt) => [attempt.rootNodeId, attempt] as const),
   );
@@ -547,13 +550,19 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };
     if (item.type === "user_message" || item.type === "assistant_message") {
+      // Assistant turn items carry no attachments; provider-produced media
+      // (e.g. Hermes MEDIA outputs) lives on the durable projection message.
+      const itemAttachments =
+        item.type === "user_message"
+          ? item.attachments
+          : (projectionMessageById.get(item.messageId)?.attachments ?? []);
       const message: ChatMessage = {
         id: item.messageId,
         role: item.type === "user_message" ? "user" : "assistant",
         text: item.text,
-        ...(item.type === "user_message" && item.attachments.length > 0
+        ...(itemAttachments.length > 0
           ? {
-              attachments: item.attachments.map((attachment) => {
+              attachments: itemAttachments.map((attachment) => {
                 const previewUrl = input.attachmentUrlById?.get(attachment.id);
                 return previewUrl ? { ...attachment, previewUrl } : attachment;
               }),

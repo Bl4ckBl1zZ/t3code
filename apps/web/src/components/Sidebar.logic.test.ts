@@ -26,6 +26,7 @@ import {
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   resolveWorkspaceSwitchNavigation,
+  sidebarProjectKey,
   sidebarProviderInstanceKey,
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
@@ -419,6 +420,62 @@ describe("sidebar thread lineage helpers", () => {
         isThreadVisibleInSidebarWorkspace(thread, "work", providerDriverKindByInstance),
       ),
     ).toEqual([hermesThread, customHermesThread]);
+  });
+
+  it("keeps Hermes threads on known Code projects in the code workspace", () => {
+    const environmentId = EnvironmentId.make("environment-partition");
+    const hermesInstanceId = ProviderInstanceId.make("hermes-main");
+    const providerDriverKindByInstance = new Map([
+      [
+        sidebarProviderInstanceKey(environmentId, hermesInstanceId),
+        ProviderDriverKind.make("hermes"),
+      ],
+    ]);
+    const workProjectId = ProjectId.make("project:t3-work");
+    const codeProjectId = ProjectId.make("project-code");
+    const hermesWorkThread = makeThreadFixture({
+      environmentId,
+      id: ThreadId.make("thread-hermes-work"),
+      providerInstanceId: hermesInstanceId,
+      projectId: workProjectId,
+    });
+    const hermesCodeThread = makeThreadFixture({
+      environmentId,
+      id: ThreadId.make("thread-hermes-code"),
+      providerInstanceId: hermesInstanceId,
+      projectId: codeProjectId,
+    });
+    const codeProjectKeys = new Set([sidebarProjectKey(environmentId, codeProjectId)]);
+
+    expect(
+      isThreadVisibleInSidebarWorkspace(
+        hermesWorkThread,
+        "work",
+        providerDriverKindByInstance,
+        codeProjectKeys,
+      ),
+    ).toBe(true);
+    expect(
+      isThreadVisibleInSidebarWorkspace(
+        hermesCodeThread,
+        "code",
+        providerDriverKindByInstance,
+        codeProjectKeys,
+      ),
+    ).toBe(true);
+    expect(
+      isThreadVisibleInSidebarWorkspace(
+        hermesCodeThread,
+        "work",
+        providerDriverKindByInstance,
+        codeProjectKeys,
+      ),
+    ).toBe(false);
+    // While projects/configs are still loading the set is absent, so Hermes
+    // threads conservatively stay in the work workspace.
+    expect(
+      isThreadVisibleInSidebarWorkspace(hermesCodeThread, "work", providerDriverKindByInstance),
+    ).toBe(true);
   });
 
   it("uses the literal Hermes instance only as a missing-metadata fallback", () => {

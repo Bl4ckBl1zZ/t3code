@@ -334,7 +334,7 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
   ): Promise<unknown> {
     this.fileAttachments.push({ params, options });
-    return { attached: true };
+    return { attached: true, ref_text: `@file:${params.name}` };
   }
 
   async attachPdf(
@@ -1354,6 +1354,13 @@ describe("HermesServeAdapterV2", () => {
             options: { operationId: "hermes:pdf:attempt:hermes-test:1" },
           },
         ]);
+        // Staged file/video references are what make the uploads visible to
+        // the model, so they must ride along in the submitted prompt text.
+        assert.equal(fake.prompts.length, 1);
+        assert.equal(
+          fake.prompts[0]?.params.text,
+          `${input.message.text}\n\n@file:notes.txt\n@file:clip.webm`,
+        );
       }),
     ).pipe(Effect.provide(TestLayer)),
   );

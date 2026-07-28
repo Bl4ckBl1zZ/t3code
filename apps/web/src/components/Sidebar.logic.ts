@@ -151,6 +151,13 @@ export function isHermesSidebarThread(
   );
 }
 
+export function sidebarProjectKey(
+  environmentId: EnvironmentId,
+  projectId: SidebarThreadSummary["projectId"],
+): string {
+  return `${environmentId}:${projectId}`;
+}
+
 /**
  * Applies the selected workspace to the sidebar lifecycle lists.
  *
@@ -159,18 +166,27 @@ export function isHermesSidebarThread(
  * Provider instance ids are user-configurable, so Hermes membership comes
  * from the environment's provider metadata. The literal `hermes` fallback is
  * only for cached historical shells whose server config has not loaded yet.
+ *
+ * A Hermes-driven thread on a regular Code project (Hermes as a coding
+ * provider) belongs to code, not work; `hermesCodeProjectKeys` holds the
+ * project keys known NOT to be the T3 Work backing project. While projects
+ * or server configs are still loading the set is conservative, so Hermes
+ * threads default to work rather than flickering into code.
  */
 export function isThreadVisibleInSidebarWorkspace(
   thread: Pick<
     SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
+    "archivedAt" | "environmentId" | "lineage" | "projectId" | "providerInstanceId"
   >,
   workspace: SidebarWorkspace,
   providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
+  hermesCodeProjectKeys?: ReadonlySet<string>,
 ): boolean {
   if (!isSidebarLifecycleThread(thread)) return false;
-  const isHermes = isHermesSidebarThread(thread, providerDriverKindByInstance);
-  return workspace === "work" ? isHermes : !isHermes;
+  const isWork =
+    isHermesSidebarThread(thread, providerDriverKindByInstance) &&
+    !hermesCodeProjectKeys?.has(sidebarProjectKey(thread.environmentId, thread.projectId));
+  return workspace === "work" ? isWork : !isWork;
 }
 
 /**
@@ -196,9 +212,10 @@ export function resolveWorkspaceSwitchNavigation(input: {
   routeDraftWorkspace?: SidebarWorkspace | null;
   threads: readonly (Pick<
     SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
+    "archivedAt" | "environmentId" | "lineage" | "projectId" | "providerInstanceId"
   > & { readonly threadKey: string })[];
   providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
+  hermesCodeProjectKeys?: ReadonlySet<string>;
 }): WorkspaceSwitchNavigation {
   const isVisible = (threadKey: string | null): boolean => {
     if (threadKey === null) return false;
@@ -209,6 +226,7 @@ export function resolveWorkspaceSwitchNavigation(input: {
         thread,
         input.nextWorkspace,
         input.providerDriverKindByInstance,
+        input.hermesCodeProjectKeys,
       )
     );
   };

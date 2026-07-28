@@ -617,6 +617,12 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+export function hermesAttachmentRefText(result: unknown): string | null {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return null;
+  const row = result as Readonly<Record<string, unknown>>;
+  return nonEmptyString(row.ref_text) ?? nonEmptyString(row.refText) ?? null;
+}
+
 function sensitiveToolKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase();
   return (
@@ -2962,7 +2968,7 @@ export function makeHermesServeAdapterV2(
                 detail: "Hermes attachment storage is unavailable",
               });
             }
-            yield* Effect.forEach(
+            const attachmentRefs = yield* Effect.forEach(
               turnInput.message.attachments,
               (attachment, attachmentOrdinal) =>
                 Effect.gen(function* () {
@@ -2987,7 +2993,7 @@ export function makeHermesServeAdapterV2(
                         },
                       ),
                     );
-                    return;
+                    return null;
                   }
                   if (attachment.type === "pdf") {
                     if (!client.hasCapability("attachments.pdf")) {
@@ -3008,7 +3014,7 @@ export function makeHermesServeAdapterV2(
                         },
                       ),
                     );
-                    return;
+                    return null;
                   }
                   if (!client.hasCapability("attachments.file")) {
                     return yield* new ProviderAdapterProtocolError({
@@ -3016,7 +3022,7 @@ export function makeHermesServeAdapterV2(
                       detail: `This Hermes gateway does not support ${attachment.type === "video" ? "video" : "file"} attachments`,
                     });
                   }
-                  yield* gatewayEffect(() =>
+                  const attachResult = yield* gatewayEffect(() =>
                     client.attachFile(
                       {
                         session_id: state.liveSessionId,
@@ -3028,9 +3034,18 @@ export function makeHermesServeAdapterV2(
                       },
                     ),
                   );
+                  // The gateway stages the file and hands back a reference token
+                  // (e.g. "@file:..."); the model only sees the file when that
+                  // token is included in the prompt text.
+                  return hermesAttachmentRefText(attachResult);
                 }),
               { concurrency: 1 },
             );
+            const promptRefs = attachmentRefs.filter((ref): ref is string => ref !== null);
+            const promptText =
+              promptRefs.length > 0
+                ? `${turnInput.message.text}\n\n${promptRefs.join("\n")}`
+                : turnInput.message.text;
             const operationId = `hermes:prompt:${turnInput.attemptId}`;
             const prepared = yield* prepareBoundMutation(state, {
               operationId,
@@ -3072,7 +3087,7 @@ export function makeHermesServeAdapterV2(
               client.submitPrompt(
                 {
                   session_id: state.liveSessionId,
-                  text: turnInput.message.text,
+                  text: promptText,
                 },
                 mutationOptions(operationId),
               ),

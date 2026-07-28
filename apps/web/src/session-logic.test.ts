@@ -133,6 +133,87 @@ describe("V2 session presentation", () => {
     });
   });
 
+  it("merges durable attachments into committed assistant turn items", () => {
+    const threadId = ThreadId.make("thread-hermes-media");
+    const at = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");
+    const assistantMessageId = MessageId.make("message-hermes-media-assistant");
+    const attachmentId = "thread-hermes-media-00000000-0000-0000-0000-000000000002";
+    const projectionMessages: ReadonlyArray<OrchestrationV2ConversationMessage> = [
+      {
+        id: assistantMessageId,
+        threadId,
+        runId: null,
+        nodeId: null,
+        role: "assistant",
+        text: "",
+        attachments: [
+          {
+            type: "image",
+            id: attachmentId,
+            name: "generated.png",
+            mimeType: "image/png",
+            sizeBytes: 34,
+          },
+        ],
+        streaming: false,
+        createdBy: "agent",
+        creationSource: "provider",
+        createdAt: at,
+        updatedAt: at,
+      },
+    ];
+    const assistantItem = {
+      id: TurnItemId.make("item-hermes-media-assistant"),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed" as const,
+      title: null,
+      startedAt: at,
+      completedAt: at,
+      updatedAt: at,
+      type: "assistant_message" as const,
+      messageId: assistantMessageId,
+      text: "",
+      streaming: false,
+    } satisfies OrchestrationV2TurnItem;
+
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: assistantItem.id,
+          item: assistantItem,
+        },
+      ],
+      projectionMessages,
+      optimisticMessages: [],
+      attachmentUrlById: new Map([[attachmentId, "/assets/generated-image"]]),
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: "message",
+      message: {
+        id: assistantMessageId,
+        role: "assistant",
+        attachments: [
+          {
+            id: attachmentId,
+            previewUrl: "/assets/generated-image",
+          },
+        ],
+      },
+    });
+  });
+
   it("keeps projected V2 tool calls visible throughout their lifecycle", () => {
     const now = DateTime.makeUnsafe("2026-07-25T12:00:00.000Z");
     const threadId = ThreadId.make("thread-hermes-tools");
