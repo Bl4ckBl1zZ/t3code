@@ -34,6 +34,11 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Prepare executable temp directory
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
+          echo "TMPDIR=$GITHUB_WORKSPACE/.ci-tmp" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
