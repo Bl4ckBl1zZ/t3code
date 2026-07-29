@@ -36,8 +36,10 @@ jobs:
 
       - name: Prepare executable temp directory
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
-          echo "TMPDIR=$GITHUB_WORKSPACE/.ci-tmp" >> "$GITHUB_ENV"
+          ci_tmp="$RUNNER_TEMP/t3code-ci-tmp"
+          mkdir -p "$ci_tmp"
+          chmod 1777 "$ci_tmp"
+          echo "TMPDIR=$ci_tmp" >> "$GITHUB_ENV"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -53,10 +55,22 @@ jobs:
       - name: Typecheck
         run: vpr typecheck
 
+      - name: Prepare unprivileged test user
+        run: |
+          if ! id -u t3ci >/dev/null 2>&1; then
+            useradd --create-home --shell /bin/bash t3ci
+          fi
+          chown -R t3ci:t3ci "$GITHUB_WORKSPACE"
+
       - name: Test
         env:
           CI: "true"
-        run: vp run test
+        run: |
+          runuser --user t3ci -- env \
+            CI="$CI" \
+            PATH="$PATH" \
+            TMPDIR="$TMPDIR" \
+            "$GITHUB_WORKSPACE/node_modules/.bin/vp" run test
 
       - name: Check resource monitor
         run: |
