@@ -45,6 +45,9 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+
       - id: release
         name: Resolve fork release version
         shell: bash
