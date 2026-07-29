@@ -61,6 +61,12 @@ jobs:
             useradd --create-home --shell /bin/bash t3ci
           fi
           chown -R t3ci:t3ci "$GITHUB_WORKSPACE"
+          parent="$GITHUB_WORKSPACE"
+          while [[ "$parent" != "/" ]]; do
+            chmod o+x "$parent"
+            parent="$(dirname "$parent")"
+          done
+          runuser --user t3ci -- test -x "$GITHUB_WORKSPACE/node_modules/.bin/vp"
 
       - name: Test
         env:
