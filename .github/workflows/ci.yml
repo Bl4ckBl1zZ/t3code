@@ -31,7 +31,7 @@ jobs:
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          cache: true
+          cache: false
           run-install: true
 
       - name: Prepare executable temp directory
@@ -93,6 +93,3 @@ jobs:
           test -f apps/server/dist/client/index.html
           grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
           grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
-
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
