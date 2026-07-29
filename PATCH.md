@@ -3,8 +3,9 @@
 This fork stays close to `pingdotgg/t3code` and carries only the following operational changes:
 
 - Builds a macOS ARM64-only DMG with bundle ID `com.t3code.dev`; the desktop updater reads releases
-  from `Bl4ckBl1zZ/t3code`. Public releases require and verify Developer ID signing, hardened
-  runtime, and Apple notarization.
+  from `Bl4ckBl1zZ/t3code`. CI applies and deeply verifies a complete ad-hoc signature when Apple
+  credentials are absent, then automatically switches to Developer ID signing, hardened runtime,
+  notarization, and Gatekeeper validation when the production credentials are configured.
 - Merges `upstream/main` into the fork hourly and triggers a new ARM64 build when upstream changed.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
