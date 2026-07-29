@@ -17,6 +17,7 @@ jobs:
   sync:
     name: Merge upstream main
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
+    timeout-minutes: 15
     steps:
       - name: Checkout fork
         uses: actions/checkout@v6
@@ -35,7 +36,11 @@ jobs:
           git fetch --no-tags upstream main
 
           before="$(git rev-parse HEAD)"
-          git merge --no-edit upstream/main
+          if ! git merge --no-edit upstream/main; then
+            git merge --abort
+            echo "Upstream/main conflicts with fork main and requires one manual resolution." >&2
+            exit 1
+          fi
           after="$(git rev-parse HEAD)"
 
           if [[ "$before" == "$after" ]]; then

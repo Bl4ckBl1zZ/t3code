@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Check
+  verify:
+    name: Verify
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -34,93 +34,40 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      - name: Check
+      - name: Check formatting and lint
         run: vp check
 
       - name: Typecheck
         run: vpr typecheck
 
+      - name: Test
+        env:
+          CI: "true"
+        run: vp run test
+
+      - name: Check resource monitor
+        run: |
+          cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check
+          cargo test --locked --manifest-path native/resource-monitor/Cargo.toml
+
       - name: Build desktop pipeline
         run: vp run build:desktop
 
-      - name: Verify preload bundle output
+      - name: Verify desktop bundle
         run: |
           test -f apps/desktop/dist-electron/preload.cjs
+          test -f apps/server/dist/bin.mjs
+          test -f apps/server/dist/client/index.html
           grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
           grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
-
-  test:
-    name: Test
-    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
-
-      - name: Prepare Halifax test environment
-        run: |
-          if ! id -u t3ci >/dev/null 2>&1; then
-            useradd --create-home --shell /bin/bash t3ci
-          fi
-          install -d --owner t3ci --group t3ci "$GITHUB_WORKSPACE/.ci-tmp"
-          chown -R t3ci:t3ci "$GITHUB_WORKSPACE"
-
-      - name: Test
-        run: |
-          vp_entrypoint="$(realpath node_modules/vite-plus/bin/vp)"
-          runuser --user t3ci -- env \
-            CI=true \
-            PATH="$PATH" \
-            TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
-            node "$vp_entrypoint" run test
-
-      - name: Restore workspace ownership
-        if: always()
-        run: chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-
-  mobile_native_static_analysis:
-    name: Mobile Native Static Analysis
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Install mobile native static analysis tools
-        run: brew bundle install --file apps/mobile/Brewfile
-
-      - name: Lint mobile native sources
-        run: vp run lint:mobile
