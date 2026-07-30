@@ -79,7 +79,7 @@ jobs:
       - name: Start fork builds and deployment
         if: steps.merge.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           for workflow in \
@@ -88,5 +88,11 @@ jobs:
             fork-macos-release.yml \
             mobile-eas-production.yml
           do
-            gh workflow run "$workflow" --ref main
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${DISPATCH_TOKEN}" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+              --data '{"ref":"main"}'
           done
