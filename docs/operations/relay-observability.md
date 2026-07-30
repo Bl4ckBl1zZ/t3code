@@ -1,5 +1,7 @@
 # Relay observability
 
+> For maintainers. Using T3 Code? See [docs/user](../user/).
+
 The fork uses Cloudflare Workers observability for initial relay diagnostics. No external Axiom
 dataset or ingest token is required.
 
