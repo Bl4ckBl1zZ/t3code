@@ -186,8 +186,33 @@ jobs:
             echo "No release assets were produced." >&2
             exit 1
           fi
-          gh release create "${{ steps.release.outputs.tag }}" \
-            "${assets[@]}" \
-            --target "$GITHUB_SHA" \
-            --title "T3 Code Fork ${{ steps.release.outputs.version }}" \
-            --generate-notes
+
+          tag="${{ steps.release.outputs.tag }}"
+          title="T3 Code Fork ${{ steps.release.outputs.version }}"
+          publish_release() {
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release edit "$tag" \
+                --target "$GITHUB_SHA" \
+                --title "$title"
+              gh release upload "$tag" "${assets[@]}" --clobber
+            else
+              gh release create "$tag" \
+                "${assets[@]}" \
+                --target "$GITHUB_SHA" \
+                --title "$title" \
+                --generate-notes
+            fi
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if publish_release; then
+              exit 0
+            fi
+            if (( attempt == 5 )); then
+              echo "GitHub release publishing failed after $attempt attempts." >&2
+              exit 1
+            fi
+            delay=$((attempt * 5))
+            echo "GitHub release publishing attempt $attempt failed; retrying in ${delay}s." >&2
+            sleep "$delay"
+          done
