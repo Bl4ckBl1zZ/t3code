@@ -37,9 +37,27 @@ jobs:
 
           before="$(git rev-parse HEAD)"
           if ! git merge --no-edit upstream/main; then
-            git merge --abort
-            echo "Upstream/main conflicts with fork main and requires one manual resolution." >&2
-            exit 1
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            unresolved=()
+
+            for path in "${conflicts[@]}"; do
+              if [[ "$path" == .github/workflows/* ]]; then
+                echo "Keeping fork-managed workflow: $path"
+                git checkout --ours -- "$path"
+                git add -- "$path"
+              else
+                unresolved+=("$path")
+              fi
+            done
+
+            if (( ${#unresolved[@]} > 0 )); then
+              printf 'Upstream/main has source conflicts requiring manual resolution: %s\n' \
+                "${unresolved[*]}" >&2
+              git merge --abort
+              exit 1
+            fi
+
+            git commit --no-edit
           fi
           after="$(git rev-parse HEAD)"
 
