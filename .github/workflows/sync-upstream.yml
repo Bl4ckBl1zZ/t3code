@@ -75,3 +75,18 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Merged upstream/main at $after."
           fi
+
+      - name: Start fork builds and deployment
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in \
+            ci.yml \
+            deploy-relay.yml \
+            fork-macos-release.yml \
+            mobile-eas-production.yml
+          do
+            gh workflow run "$workflow" --ref main
+          done
