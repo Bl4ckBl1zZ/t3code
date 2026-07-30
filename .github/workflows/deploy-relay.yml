@@ -112,12 +112,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          database_status="$(
+          if ! database_json="$(
             dokploy postgres one \
               --postgresId "$DOKPLOY_POSTGRES_ID" \
-              --json |
-              jq -r '.applicationStatus // empty'
-          )"
+              --json
+          )"; then
+            echo "::warning::Dokploy's control-plane API was unavailable; the authenticated database migration will perform the authoritative availability check."
+            exit 0
+          fi
+
+          database_status="$(jq -r '.applicationStatus // empty' <<<"$database_json")"
           if [[ "$database_status" == "done" ]]; then
             echo "Dokploy PostgreSQL is already running."
             exit 0
