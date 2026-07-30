@@ -57,6 +57,9 @@ jobs:
           APPLE_API_ISSUER_VALUE: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_DISTRIBUTION_P12_BASE64_VALUE: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
           APPLE_DISTRIBUTION_P12_PASSWORD_VALUE: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          APPLE_MAIN_PROFILE_VALUE: ${{ secrets.APPLE_MAIN_APPSTORE_PROFILE_BASE64 }}
+          APPLE_WIDGETS_PROFILE_VALUE: ${{ secrets.APPLE_WIDGETS_APPSTORE_PROFILE_BASE64 }}
+          APPLE_SHARING_PROFILE_VALUE: ${{ secrets.APPLE_SHARING_APPSTORE_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
           required=(
@@ -66,6 +69,9 @@ jobs:
             APPLE_API_ISSUER_VALUE
             APPLE_DISTRIBUTION_P12_BASE64_VALUE
             APPLE_DISTRIBUTION_P12_PASSWORD_VALUE
+            APPLE_MAIN_PROFILE_VALUE
+            APPLE_WIDGETS_PROFILE_VALUE
+            APPLE_SHARING_PROFILE_VALUE
           )
           missing=()
           for name in "${required[@]}"; do
@@ -107,12 +113,31 @@ jobs:
             -k "$signing_keychain_password" \
             "$signing_keychain"
 
+          profile_dir="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$profile_dir"
+          install_profile() {
+            local encoded="$1"
+            local temporary="$RUNNER_TEMP/profile-$RANDOM.mobileprovision"
+            printf '%s' "$encoded" | base64 --decode > "$temporary"
+            local uuid
+            uuid="$(security cms -D -i "$temporary" | plutil -extract UUID raw -)"
+            local destination="$profile_dir/$uuid.mobileprovision"
+            cp "$temporary" "$destination"
+            printf '%s' "$destination"
+          }
+          main_profile="$(install_profile "$APPLE_MAIN_PROFILE_VALUE")"
+          widgets_profile="$(install_profile "$APPLE_WIDGETS_PROFILE_VALUE")"
+          sharing_profile="$(install_profile "$APPLE_SHARING_PROFILE_VALUE")"
+
           {
             printf 'APPLE_API_KEY_PATH=%s\n' "$key_path"
             printf 'APPLE_API_PRIVATE_KEYS_DIR=%s\n' "$key_dir"
             printf 'APPLE_API_KEY_ID=%s\n' "$APPLE_API_KEY_ID_VALUE"
             printf 'APPLE_API_ISSUER=%s\n' "$APPLE_API_ISSUER_VALUE"
             printf 'APPLE_SIGNING_KEYCHAIN=%s\n' "$signing_keychain"
+            printf 'APPLE_MAIN_PROFILE_PATH=%s\n' "$main_profile"
+            printf 'APPLE_WIDGETS_PROFILE_PATH=%s\n' "$widgets_profile"
+            printf 'APPLE_SHARING_PROFILE_PATH=%s\n' "$sharing_profile"
           } >> "$GITHUB_ENV"
 
       - name: Generate native iOS project
@@ -171,8 +196,13 @@ jobs:
           export_options="$RUNNER_TEMP/ExportOptions.plist"
           /usr/libexec/PlistBuddy -c "Add :method string app-store-connect" "$export_options"
           /usr/libexec/PlistBuddy -c "Add :destination string export" "$export_options"
-          /usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :signingCertificate string Apple Distribution" "$export_options"
           /usr/libexec/PlistBuddy -c "Add :teamID string $T3CODE_IOS_APPLE_TEAM_ID" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:com.t3code.dev string T3 Code App Store" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:com.t3code.dev.widgets string T3 Code Widgets App Store" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:com.t3code.dev.sharing string T3 Code Sharing App Store" "$export_options"
           /usr/libexec/PlistBuddy -c "Add :manageAppVersionAndBuildNumber bool false" "$export_options"
           /usr/libexec/PlistBuddy -c "Add :stripSwiftSymbols bool true" "$export_options"
           /usr/libexec/PlistBuddy -c "Add :uploadSymbols bool true" "$export_options"
@@ -239,3 +269,11 @@ jobs:
           if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" && -f "$APPLE_SIGNING_KEYCHAIN" ]]; then
             security delete-keychain "$APPLE_SIGNING_KEYCHAIN"
           fi
+          for profile in \
+            "${APPLE_MAIN_PROFILE_PATH:-}" \
+            "${APPLE_WIDGETS_PROFILE_PATH:-}" \
+            "${APPLE_SHARING_PROFILE_PATH:-}"; do
+            if [[ -n "$profile" && -f "$profile" ]]; then
+              rm "$profile"
+            fi
+          done
