@@ -143,6 +143,8 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
 - `DATABASE_TUNNEL_HOSTNAME` for CI migrations through Cloudflare Access
+- `DOKPLOY_URL` for the authenticated Dokploy CLI
+- `DOKPLOY_POSTGRES_ID` for the dedicated relay PostgreSQL service
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -153,6 +155,7 @@ The `production` GitHub environment must define these Actions variables:
 
 The `production` GitHub environment must define these Actions secrets:
 
+- `DOKPLOY_AUTH_TOKEN`
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
@@ -163,6 +166,11 @@ into the relay Worker. The relay uses Cloudflare Worker logs for initial operati
 does not require an external tracing account. The release workflow reads the production relay's
 derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
 and hosted web builds.
+
+Before migrations, CI uses the Dokploy CLI to inspect the configured PostgreSQL service and deploys
+it only when Dokploy does not report it as running. Schema updates remain forward-only Drizzle
+migrations applied through the authenticated Cloudflare Access TCP listener; routine source pushes
+do not restart a healthy database.
 
 See:
 

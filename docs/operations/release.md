@@ -72,6 +72,8 @@ Required `production` environment variables:
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
 - `DATABASE_TUNNEL_HOSTNAME`
+- `DOKPLOY_URL`
+- `DOKPLOY_POSTGRES_ID`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -87,6 +89,7 @@ Optional `production` environment variables:
 
 Required `production` environment secrets:
 
+- `DOKPLOY_AUTH_TOKEN`
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
@@ -94,9 +97,10 @@ Required `production` environment secrets:
 `CLOUDFLARE_RUNTIME_API_TOKEN` is bound into the Worker and must be limited to Cloudflare Tunnel Edit
 for the relay account plus DNS Edit for the managed endpoint zone. The production database is a
 provider-neutral PostgreSQL instance reached by Hyperdrive through a Workers VPC service and
-Cloudflare Tunnel. Cloudflare Worker logs provide initial operational diagnostics without an
-external tracing account. Production adopts the configured relay API and tunnel DNS zones as
-retained Cloudflare resources. Personal stages reference the production-owned zones.
+Cloudflare Tunnel. CI verifies that service through the authenticated Dokploy CLI before applying
+database migrations. Cloudflare Worker logs provide initial operational diagnostics without an
+external tracing account. Production adopts the configured relay API and tunnel DNS zones as retained
+Cloudflare resources. Personal stages reference the production-owned zones.
 
 Developers deploy personal stages locally rather than through pull-request automation:
 
