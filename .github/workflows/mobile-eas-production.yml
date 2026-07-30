@@ -55,6 +55,8 @@ jobs:
           APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID_VALUE: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_VALUE: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_DISTRIBUTION_P12_BASE64_VALUE: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_DISTRIBUTION_P12_PASSWORD_VALUE: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
         run: |
           set -euo pipefail
           required=(
@@ -62,6 +64,8 @@ jobs:
             APPLE_API_KEY_VALUE
             APPLE_API_KEY_ID_VALUE
             APPLE_API_ISSUER_VALUE
+            APPLE_DISTRIBUTION_P12_BASE64_VALUE
+            APPLE_DISTRIBUTION_P12_PASSWORD_VALUE
           )
           missing=()
           for name in "${required[@]}"; do
@@ -80,11 +84,35 @@ jobs:
           printf '%s' "$APPLE_API_KEY_VALUE" > "$key_path"
           chmod 600 "$key_path"
 
+          signing_keychain="$RUNNER_TEMP/t3code-signing.keychain-db"
+          signing_keychain_password="$(openssl rand -base64 36)"
+          security create-keychain -p "$signing_keychain_password" "$signing_keychain"
+          security set-keychain-settings -lut 7200 "$signing_keychain"
+          security unlock-keychain -p "$signing_keychain_password" "$signing_keychain"
+          security list-keychains -d user -s \
+            "$signing_keychain" \
+            "$HOME/Library/Keychains/login.keychain-db"
+
+          distribution_p12="$RUNNER_TEMP/apple-distribution.p12"
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64_VALUE" |
+            base64 --decode > "$distribution_p12"
+          security import "$distribution_p12" \
+            -k "$signing_keychain" \
+            -P "$APPLE_DISTRIBUTION_P12_PASSWORD_VALUE" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$signing_keychain_password" \
+            "$signing_keychain"
+
           {
             printf 'APPLE_API_KEY_PATH=%s\n' "$key_path"
             printf 'APPLE_API_PRIVATE_KEYS_DIR=%s\n' "$key_dir"
             printf 'APPLE_API_KEY_ID=%s\n' "$APPLE_API_KEY_ID_VALUE"
             printf 'APPLE_API_ISSUER=%s\n' "$APPLE_API_ISSUER_VALUE"
+            printf 'APPLE_SIGNING_KEYCHAIN=%s\n' "$signing_keychain"
           } >> "$GITHUB_ENV"
 
       - name: Generate native iOS project
@@ -202,3 +230,12 @@ jobs:
             /tmp/T3Code*.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Remove temporary signing keychain
+        if: always()
+        shell: bash
+        run: |
+          security list-keychains -d user -s "$HOME/Library/Keychains/login.keychain-db"
+          if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" && -f "$APPLE_SIGNING_KEYCHAIN" ]]; then
+            security delete-keychain "$APPLE_SIGNING_KEYCHAIN"
+          fi
