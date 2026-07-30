@@ -21,3 +21,6 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `group.com.bl4ckbl1zz.t3code.dev`, supplied through the fork's iOS build variables. Local
   development signing uses the APNs sandbox and may omit the share extension until its separate
   provisioning profile exists.
+- Builds and uploads the production iOS app to the fork's App Store Connect/TestFlight app from the
+  self-hosted Apple Silicon runner after every push to `main`. The fork no longer consumes the
+  upstream Expo project's OTA updates; TestFlight distributes signed updates to opted-in testers.

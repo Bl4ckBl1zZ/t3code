@@ -18,6 +18,8 @@ const managedIosAppleTeamId = repoEnv.T3CODE_IOS_APPLE_TEAM_ID?.trim();
 const managedIosProvisioningProfile = repoEnv.T3CODE_IOS_PROVISIONING_PROFILE?.trim();
 const managedIosWidgetsProvisioningProfile =
   repoEnv.T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE?.trim();
+const expoProjectId = repoEnv.T3CODE_EXPO_PROJECT_ID?.trim();
+const expoOwner = repoEnv.T3CODE_EXPO_OWNER?.trim();
 const isIosManualSigningEnabled =
   Boolean(managedIosProvisioningProfile) || Boolean(managedIosWidgetsProvisioningProfile);
 const isIosSharingExtensionEnabled =
@@ -247,12 +249,18 @@ const config: ExpoConfig = {
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
-  updates: {
-    enabled: true,
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    checkAutomatically: "ON_LOAD",
-    fallbackToCacheTimeout: 0,
-  },
+  // A fork without its own EAS project must never consume updates published
+  // for the upstream app. TestFlight handles binary updates independently.
+  updates: expoProjectId
+    ? {
+        enabled: true,
+        url: `https://u.expo.dev/${expoProjectId}`,
+        checkAutomatically: "ON_LOAD",
+        fallbackToCacheTimeout: 0,
+      }
+    : {
+        enabled: false,
+      },
   ios: {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
@@ -434,11 +442,9 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    },
+    ...(expoProjectId ? { eas: { projectId: expoProjectId } } : {}),
   },
-  owner: "pingdotgg",
+  ...(expoOwner ? { owner: expoOwner } : {}),
 };
 
 export default config;

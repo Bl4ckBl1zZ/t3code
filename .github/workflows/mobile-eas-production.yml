@@ -1,119 +1,204 @@
-name: Mobile EAS Production
+name: iOS TestFlight
 
-# Production builds and OTA updates run from CI (Linux) — never from a laptop.
-# Under the fingerprint runtime-version policy the fingerprint must be computed
-# in the same OS/pnpm as the EAS build; a macOS `eas build` computes a different
-# fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
-# runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "build (+ auto-submit to TestFlight) or update (OTA)"
-        required: true
-        type: choice
-        default: build
-        options:
-          - build
-          - update
-      platform:
-        description: "Target platform"
-        required: true
-        type: choice
-        default: ios
-        options:
-          - ios
-          - android
-          - all
-      message:
-        description: "OTA update message (mode=update only)"
-        required: false
-        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: true
 
 jobs:
-  production:
-    name: EAS Production ${{ inputs.mode }}
-    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 30
-    permissions:
-      contents: read
+  build-and-upload:
+    name: Build and upload iOS app
+    runs-on: [self-hosted, macOS, ARM64, t3code-mac]
+    timeout-minutes: 90
+    environment:
+      name: production
     env:
+      DEVELOPER_DIR: /Applications/Xcode-beta.app/Contents/Developer
       APP_VARIANT: production
+      EXPO_NO_GIT_STATUS: "1"
       NODE_OPTIONS: --max-old-space-size=8192
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+      T3CODE_RELAY_URL: https://${{ vars.RELAY_DOMAIN }}
+      T3CODE_IOS_BUNDLE_ID: com.t3code.dev
+      T3CODE_IOS_APP_GROUP_ID: group.com.bl4ckbl1zz.t3code.dev
+      T3CODE_IOS_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      T3CODE_IOS_APNS_ENVIRONMENT: production
+      T3CODE_IOS_ASSOCIATED_DOMAINS: "1"
+      T3CODE_IOS_SHARING_EXTENSION: "1"
     steps:
-      - id: expo-token
-        name: Check for EXPO_TOKEN
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          if [ -n "$EXPO_TOKEN" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "EXPO_TOKEN is not available; skipping EAS production job."
-          fi
-
       - name: Checkout
-        if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
       - name: Setup Vite+
-        if: steps.expo-token.outputs.present == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          cache: true
+          cache: false
           run-install: true
 
-      - name: Expose pnpm
-        if: steps.expo-token.outputs.present == 'true'
+      - id: credentials
+        name: Configure App Store Connect authentication
+        shell: bash
+        env:
+          APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID_VALUE: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_VALUE: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
-          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
-          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
-          "$vp_pnpm_bin/pnpm" --version
+          set -euo pipefail
+          required=(
+            T3CODE_IOS_APPLE_TEAM_ID
+            APPLE_API_KEY_VALUE
+            APPLE_API_KEY_ID_VALUE
+            APPLE_API_ISSUER_VALUE
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing TestFlight configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
 
-      - name: Setup EAS
-        if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action@v8
+          key_dir="$RUNNER_TEMP/app-store-connect-keys"
+          mkdir -p "$key_dir"
+          key_path="$key_dir/AuthKey_${APPLE_API_KEY_ID_VALUE}.p8"
+          printf '%s' "$APPLE_API_KEY_VALUE" > "$key_path"
+          chmod 600 "$key_path"
+
+          {
+            printf 'APPLE_API_KEY_PATH=%s\n' "$key_path"
+            printf 'APPLE_API_PRIVATE_KEYS_DIR=%s\n' "$key_dir"
+            printf 'APPLE_API_KEY_ID=%s\n' "$APPLE_API_KEY_ID_VALUE"
+            printf 'APPLE_API_ISSUER=%s\n' "$APPLE_API_ISSUER_VALUE"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate native iOS project
+        working-directory: apps/mobile
+        run: vp exec expo prebuild --clean --platform ios
+
+      - id: native
+        name: Resolve Xcode workspace and scheme
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          if [[ -z "$workspace" ]]; then
+            echo "Expo did not generate an Xcode workspace." >&2
+            exit 1
+          fi
+          scheme="$(
+            xcodebuild -workspace "$workspace" -list -json |
+              /usr/bin/python3 -c 'import json, sys; workspace = json.load(sys.stdin)["workspace"]; name = workspace["name"]; schemes = workspace["schemes"]; print(name) if name in schemes else sys.exit(f"Expected app scheme {name!r}; available schemes: {schemes}")'
+          )"
+          if [[ -z "$scheme" ]]; then
+            echo "Could not resolve the generated app scheme." >&2
+            exit 1
+          fi
+          echo "workspace=$workspace" >> "$GITHUB_OUTPUT"
+          echo "scheme=$scheme" >> "$GITHUB_OUTPUT"
+
+      - name: Archive signed iOS app
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_path="$RUNNER_TEMP/T3Code.xcarchive"
+          xcodebuild \
+            -workspace "${{ steps.native.outputs.workspace }}" \
+            -scheme "${{ steps.native.outputs.scheme }}" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$archive_path" \
+            -derivedDataPath "$RUNNER_TEMP/t3code-derived-data" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$APPLE_API_KEY_PATH" \
+            -authenticationKeyID "$APPLE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
+            DEVELOPMENT_TEAM="$T3CODE_IOS_APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            -quiet \
+            archive
+
+      - name: Export signed IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          export_options="$RUNNER_TEMP/ExportOptions.plist"
+          /usr/libexec/PlistBuddy -c "Add :method string app-store-connect" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :destination string export" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :teamID string $T3CODE_IOS_APPLE_TEAM_ID" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :manageAppVersionAndBuildNumber bool false" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :stripSwiftSymbols bool true" "$export_options"
+          /usr/libexec/PlistBuddy -c "Add :uploadSymbols bool true" "$export_options"
+
+          mkdir -p "$RUNNER_TEMP/t3code-testflight-export"
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/T3Code.xcarchive" \
+            -exportPath "$RUNNER_TEMP/t3code-testflight-export" \
+            -exportOptionsPlist "$export_options" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$APPLE_API_KEY_PATH" \
+            -authenticationKeyID "$APPLE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
+            -quiet
+
+      - name: Validate and upload to TestFlight
+        shell: bash
+        run: |
+          set -euo pipefail
+          export API_PRIVATE_KEYS_DIR="$APPLE_API_PRIVATE_KEYS_DIR"
+          ipa="$(find "$RUNNER_TEMP/t3code-testflight-export" -maxdepth 1 -name '*.ipa' -print -quit)"
+          if [[ -z "$ipa" ]]; then
+            echo "No IPA was exported." >&2
+            exit 1
+          fi
+          xcrun altool \
+            --validate-app \
+            --type ios \
+            --file "$ipa" \
+            --api-key "$APPLE_API_KEY_ID" \
+            --api-issuer "$APPLE_API_ISSUER"
+          xcrun altool \
+            --upload-app \
+            --type ios \
+            --file "$ipa" \
+            --api-key "$APPLE_API_KEY_ID" \
+            --api-issuer "$APPLE_API_ISSUER"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v7
         with:
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
-          # npm, not pnpm: this only installs eas-cli into the action's own
-          # tool dir, and pnpm 11 hard-fails that install on dtrace-provider's
-          # ignored build script (no allowBuilds config outside the repo).
-          packager: npm
+          name: t3-code-ios-${{ github.run_number }}
+          path: ${{ runner.temp }}/t3code-testflight-export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Pull production environment variables
-        if: steps.expo-token.outputs.present == 'true'
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas env:pull production --non-interactive
-
-      - name: Build and submit
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
-
-      - name: Publish OTA update
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          eas update \
-            --channel production \
-            --environment production \
-            --platform ${{ inputs.platform }} \
-            --message "${{ inputs.message || format('Production OTA ({0})', github.sha) }}" \
-            --non-interactive
+      - name: Upload Xcode logs after failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: t3-code-ios-logs-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/t3code-derived-data/Logs
+            /tmp/T3Code*.log
+          if-no-files-found: ignore
+          retention-days: 7
