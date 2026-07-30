@@ -36,16 +36,15 @@ jobs:
           git fetch --no-tags upstream main
 
           before="$(git rev-parse HEAD)"
-          if ! git merge --no-edit upstream/main; then
-            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+          if ! git merge --no-commit --no-ff upstream/main; then
+            conflicts=()
+            while IFS= read -r path; do
+              conflicts+=("$path")
+            done < <(git diff --name-only --diff-filter=U)
             unresolved=()
 
             for path in "${conflicts[@]}"; do
-              if [[ "$path" == .github/workflows/* ]]; then
-                echo "Keeping fork-managed workflow: $path"
-                git checkout --ours -- "$path"
-                git add -- "$path"
-              else
+              if [[ "$path" != .github/workflows/* ]]; then
                 unresolved+=("$path")
               fi
             done
@@ -57,6 +56,13 @@ jobs:
               exit 1
             fi
 
+            echo "All merge conflicts are limited to fork-managed workflows."
+          fi
+
+          if git rev-parse --quiet --verify MERGE_HEAD >/dev/null; then
+            git rm -rf --ignore-unmatch .github/workflows
+            git checkout "$before" -- .github/workflows
+            git add .github/workflows
             git commit --no-edit
           fi
           after="$(git rev-parse HEAD)"
