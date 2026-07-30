@@ -178,7 +178,7 @@ jobs:
           trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
 
           for attempt in {1..30}; do
-            if nc -z 127.0.0.1 15433; then
+            if (echo >/dev/tcp/127.0.0.1/15433) 2>/dev/null; then
               break
             fi
             if ! kill -0 "$proxy_pid" 2>/dev/null; then
