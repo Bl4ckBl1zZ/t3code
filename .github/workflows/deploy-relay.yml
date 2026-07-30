@@ -20,7 +20,7 @@ jobs:
     name: Deploy production relay
     if: vars.RELAY_DEPLOY_ENABLED == 'true'
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment:
       name: production
     env:
@@ -36,6 +36,9 @@ jobs:
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
       DATABASE_TUNNEL_HOSTNAME: ${{ vars.DATABASE_TUNNEL_HOSTNAME }}
+      DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+      DOKPLOY_POSTGRES_ID: ${{ vars.DOKPLOY_POSTGRES_ID }}
+      DOKPLOY_AUTH_TOKEN: ${{ secrets.DOKPLOY_AUTH_TOKEN }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
@@ -52,6 +55,96 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: true
+
+      - name: Validate production deployment configuration
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_RUNTIME_API_TOKEN_VALUE: ${{ secrets.CLOUDFLARE_RUNTIME_API_TOKEN }}
+          DATABASE_URL_VALUE: ${{ secrets.DATABASE_URL }}
+          DATABASE_MIGRATION_URL_VALUE: ${{ secrets.DATABASE_MIGRATION_URL }}
+          DATABASE_ACCESS_CLIENT_ID_VALUE: ${{ secrets.DATABASE_ACCESS_CLIENT_ID }}
+          DATABASE_ACCESS_CLIENT_SECRET_VALUE: ${{ secrets.DATABASE_ACCESS_CLIENT_SECRET }}
+          CLERK_SECRET_KEY_VALUE: ${{ secrets.CLERK_SECRET_KEY }}
+          APNS_PRIVATE_KEY_VALUE: ${{ secrets.APNS_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          required=(
+            CLOUDFLARE_ACCOUNT_ID
+            DATABASE_HYPERDRIVE_ID
+            RELAY_DOMAIN
+            RELAY_API_ZONE_NAME
+            RELAY_TUNNEL_ZONE_NAME
+            CLERK_PUBLISHABLE_KEY
+            CLERK_JWT_AUDIENCE
+            APNS_ENVIRONMENT
+            APNS_TEAM_ID
+            APNS_KEY_ID
+            APNS_BUNDLE_ID
+            DATABASE_TUNNEL_HOSTNAME
+            DOKPLOY_URL
+            DOKPLOY_POSTGRES_ID
+            DOKPLOY_AUTH_TOKEN
+            CLOUDFLARE_API_TOKEN_VALUE
+            CLOUDFLARE_RUNTIME_API_TOKEN_VALUE
+            DATABASE_URL_VALUE
+            DATABASE_MIGRATION_URL_VALUE
+            DATABASE_ACCESS_CLIENT_ID_VALUE
+            DATABASE_ACCESS_CLIENT_SECRET_VALUE
+            CLERK_SECRET_KEY_VALUE
+            APNS_PRIVATE_KEY_VALUE
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing production relay configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install Dokploy CLI
+        run: npm install --global @dokploy/cli@0.3.0
+
+      - name: Ensure Dokploy PostgreSQL is running
+        shell: bash
+        run: |
+          set -euo pipefail
+          database_status="$(
+            dokploy postgres one \
+              --postgresId "$DOKPLOY_POSTGRES_ID" \
+              --json |
+              jq -r '.applicationStatus // empty'
+          )"
+          if [[ "$database_status" == "done" ]]; then
+            echo "Dokploy PostgreSQL is already running."
+            exit 0
+          fi
+
+          echo "Dokploy PostgreSQL status is '${database_status:-unknown}'; deploying it."
+          dokploy postgres deploy \
+            --postgresId "$DOKPLOY_POSTGRES_ID" \
+            --json >/dev/null
+
+          for attempt in {1..60}; do
+            database_status="$(
+              dokploy postgres one \
+                --postgresId "$DOKPLOY_POSTGRES_ID" \
+                --json |
+                jq -r '.applicationStatus // empty'
+            )"
+            if [[ "$database_status" == "done" ]]; then
+              echo "Dokploy PostgreSQL is running."
+              exit 0
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo "Dokploy PostgreSQL did not become ready; last status: ${database_status:-unknown}." >&2
+              exit 1
+            fi
+            sleep 2
+          done
 
       - name: Install cloudflared
         shell: bash
@@ -106,6 +199,23 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+
+      - name: Verify production relay and database
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if response="$(curl --fail --silent --show-error "https://$RELAY_DOMAIN/health")" &&
+              jq -e '.ok == true and .service == "relay"' <<<"$response" >/dev/null; then
+              echo "Production relay and PostgreSQL health check passed."
+              exit 0
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              echo "Production relay health check did not pass after deployment." >&2
+              exit 1
+            fi
+            sleep 2
+          done
 
       - name: Publish relay deploy commit status
         uses: actions/github-script@v8

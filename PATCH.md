@@ -11,10 +11,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.
 - Runs database migrations through an authenticated `cloudflared access tcp` listener in CI.
+- Uses the authenticated Dokploy CLI on every `main` deployment to verify the dedicated PostgreSQL
+  service is running before applying migrations. The database stays private and is deployed only
+  when Dokploy reports it unavailable.
 - Uses one least-privilege Worker credential for managed tunnels and DNS instead of attempting to
   mint API tokens from an OAuth deployment credential.
 - Deploys the T3 Connect relay with APNs production credentials for `com.t3code.dev`, including push
-  notification and Live Activity delivery support.
+  notification and Live Activity delivery support. Every push to `main` applies the Cloudflare
+  Worker stack and verifies the public relay plus its PostgreSQL dependency through `/health`.
 - Uses Cloudflare Worker logs for initial relay diagnostics, with no Axiom account or ingest tokens
   required.
 - Uses the fork's iOS identifiers: `com.t3code.dev`, `com.t3code.dev.widgets`,
