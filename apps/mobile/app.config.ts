@@ -15,6 +15,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const managedIosBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim();
 const managedIosAppGroupIdentifier = repoEnv.T3CODE_IOS_APP_GROUP_ID?.trim();
 const managedIosAppleTeamId = repoEnv.T3CODE_IOS_APPLE_TEAM_ID?.trim();
+const managedIosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim();
 const managedIosProvisioningProfile = repoEnv.T3CODE_IOS_PROVISIONING_PROFILE?.trim();
 const managedIosWidgetsProvisioningProfile =
   repoEnv.T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE?.trim();
@@ -265,6 +266,7 @@ const config: ExpoConfig = {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
     bundleIdentifier: iosBundleIdentifier,
+    buildNumber: managedIosBuildNumber || "1",
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).

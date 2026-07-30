@@ -32,6 +32,7 @@ jobs:
       T3CODE_IOS_BUNDLE_ID: com.t3code.dev
       T3CODE_IOS_APP_GROUP_ID: group.com.bl4ckbl1zz.t3code.dev
       T3CODE_IOS_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      T3CODE_IOS_BUILD_NUMBER: ${{ github.run_number }}
       T3CODE_IOS_APNS_ENVIRONMENT: production
       T3CODE_IOS_ASSOCIATED_DOMAINS: "1"
       T3CODE_IOS_SHARING_EXTENSION: "1"
@@ -184,22 +185,34 @@ jobs:
         run: |
           set -euo pipefail
           archive_path="$RUNNER_TEMP/T3Code.xcarchive"
-          xcodebuild \
-            -workspace "${{ steps.native.outputs.workspace }}" \
-            -scheme "${{ steps.native.outputs.scheme }}" \
-            -configuration Release \
-            -destination "generic/platform=iOS" \
-            -archivePath "$archive_path" \
-            -derivedDataPath "$RUNNER_TEMP/t3code-derived-data" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$APPLE_API_KEY_PATH" \
-            -authenticationKeyID "$APPLE_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
-            DEVELOPMENT_TEAM="$T3CODE_IOS_APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
-            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
-            -quiet \
-            archive
+          for attempt in 1 2 3; do
+            rm -rf "$archive_path"
+            if xcodebuild \
+              -workspace "${{ steps.native.outputs.workspace }}" \
+              -scheme "${{ steps.native.outputs.scheme }}" \
+              -configuration Release \
+              -destination "generic/platform=iOS" \
+              -archivePath "$archive_path" \
+              -derivedDataPath "$RUNNER_TEMP/t3code-derived-data" \
+              -jobs 4 \
+              -allowProvisioningUpdates \
+              -authenticationKeyPath "$APPLE_API_KEY_PATH" \
+              -authenticationKeyID "$APPLE_API_KEY_ID" \
+              -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
+              DEVELOPMENT_TEAM="$T3CODE_IOS_APPLE_TEAM_ID" \
+              CODE_SIGN_STYLE=Automatic \
+              CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              -quiet \
+              archive; then
+              exit 0
+            fi
+            if (( attempt == 3 )); then
+              echo "Archive failed after $attempt attempts." >&2
+              exit 1
+            fi
+            echo "Archive attempt $attempt failed; retrying with warmed DerivedData." >&2
+          done
 
       - name: Export signed IPA
         shell: bash
