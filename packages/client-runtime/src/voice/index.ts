@@ -86,6 +86,18 @@ export type VoiceInputControllerOptions = {
   readonly onLevel?: (level: number) => void;
 };
 
+// React Native's Hermes runtime has no global `crypto`, so referencing it directly would make
+// every transcription fail on mobile. Platforms with a real UUID source should inject one via
+// `createRequestId`; this fallback only needs enough entropy for request idempotency keys.
+function defaultCreateRequestId(): string {
+  const globalCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (typeof globalCrypto?.randomUUID === "function") return globalCrypto.randomUUID();
+  // @effect-diagnostics-next-line globalRandom:off
+  const random = () => Math.random().toString(36).slice(2, 10);
+  // @effect-diagnostics-next-line globalDate:off
+  return `voice-${Date.now().toString(36)}-${random()}${random()}`;
+}
+
 const RETRYABLE_ERRORS = new Set<VoiceInputError["code"]>([
   "rate_limited",
   "transcription_failed",
@@ -173,9 +185,7 @@ export class VoiceInputController {
   constructor(options: VoiceInputControllerOptions) {
     this.#capture = options.capture;
     this.#client = options.client;
-    // This controller is platform-neutral and intentionally accepts an injected ID source for tests.
-    // @effect-diagnostics-next-line cryptoRandomUUID:off
-    this.#createRequestId = options.createRequestId ?? (() => crypto.randomUUID());
+    this.#createRequestId = options.createRequestId ?? defaultCreateRequestId;
     this.#now = options.now ?? Date.now;
     this.#maxDurationMs = (options.maxDurationSeconds ?? VOICE_INPUT_MAX_DURATION_SECONDS) * 1_000;
     this.#onAnalytics = options.onAnalytics;
