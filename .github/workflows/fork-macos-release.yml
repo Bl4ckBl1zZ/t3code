@@ -21,8 +21,9 @@ concurrency:
 jobs:
   build:
     name: Build downloadable macOS ARM64 app
-    runs-on: [self-hosted, macOS, ARM64, t3code-mac]
-    timeout-minutes: 60
+    # GitHub-hosted Apple Silicon runner; cold VMs rely on the vp and Rust caches below.
+    runs-on: macos-15
+    timeout-minutes: 90
     environment:
       name: production
     env:
@@ -44,11 +45,16 @@ jobs:
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          cache: false
+          cache: true
           run-install: true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/resource-monitor
 
       - id: release
         name: Resolve fork release version
