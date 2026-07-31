@@ -66,8 +66,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=fork-v$version" >> "$GITHUB_OUTPUT"
 
-      - id: signing
-        name: Configure macOS signing
+      - name: Configure required macOS signing
         shell: bash
         env:
           CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
@@ -88,19 +87,12 @@ jobs:
             APPLE_API_ISSUER_VALUE
             MACOS_PROVISIONING_PROFILE_BASE64
           )
-          missing=()
           for name in "${required[@]}"; do
             if [[ -z "${!name:-}" ]]; then
-              missing+=("$name")
+              echo "Missing required Developer ID release credential: $name" >&2
+              exit 1
             fi
           done
-
-          if (( ${#missing[@]} > 0 )); then
-            echo "Developer ID signing is not fully configured; building a complete ad-hoc signed app."
-            printf 'Missing: %s\n' "${missing[*]}"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID_VALUE}.p8"
           printf '%s' "$APPLE_API_KEY_VALUE" > "$key_path"
@@ -119,25 +111,20 @@ jobs:
             printf 'APPLE_API_ISSUER=%s\n' "$APPLE_API_ISSUER_VALUE"
             printf 'T3CODE_MACOS_PROVISIONING_PROFILE=%s\n' "$profile_path"
           } >> "$GITHUB_ENV"
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "Developer ID signing and notarization enabled."
 
       - name: Build ARM64 DMG
         shell: bash
         run: |
           set -euo pipefail
-          args=(
-            --platform mac
-            --target dmg
-            --arch arm64
-            --build-version "${{ steps.release.outputs.version }}"
-            --output-dir release-publish
+          vp run dist:desktop:artifact \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ steps.release.outputs.version }}" \
+            --output-dir release-publish \
+            --signed \
             --verbose
-          )
-          if [[ "${{ steps.signing.outputs.enabled }}" == "true" ]]; then
-            args+=(--signed)
-          fi
-          vp run dist:desktop:artifact "${args[@]}"
 
       - name: Verify downloadable artifacts
         shell: bash
@@ -162,10 +149,20 @@ jobs:
             exit 1
           fi
           codesign --verify --deep --strict --verbose=4 "$app"
-          if [[ "${{ steps.signing.outputs.enabled }}" == "true" ]]; then
-            spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
-            xcrun stapler validate "$dmg"
+          signing_details="$(codesign --display --verbose=4 "$app" 2>&1)"
+          if ! grep -Fq "TeamIdentifier=${T3CODE_APPLE_TEAM_ID}" <<<"$signing_details"; then
+            echo "App is not signed by the configured Apple Developer team." >&2
+            printf '%s\n' "$signing_details" >&2
+            exit 1
           fi
+          if grep -Fq "Signature=adhoc" <<<"$signing_details"; then
+            echo "Refusing to publish an ad-hoc signed app." >&2
+            exit 1
+          fi
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          xcrun stapler validate "$dmg"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
