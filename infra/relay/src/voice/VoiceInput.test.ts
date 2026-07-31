@@ -63,4 +63,26 @@ describe("relay Voice Input normalization", () => {
     expect(testExports.CLEANUP_SYSTEM_PROMPT).not.toContain("repository");
     expect(testExports.CLEANUP_SYSTEM_PROMPT).not.toContain("thread history");
   });
+
+  it.each([
+    [400, "invalid_audio"],
+    [403, "credential_invalid"],
+    [413, "audio_too_large"],
+    [415, "unsupported_format"],
+    [422, "invalid_audio"],
+    [429, "rate_limited"],
+    [503, "model_unavailable"],
+  ] as const)("maps OpenRouter HTTP %s to %s", async (status, code) => {
+    const error = await testExports.upstreamError(
+      new Response(JSON.stringify({ error: { message: "provider detail" } }), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    expect(error.code).toBe(code);
+    expect(error.cause).toEqual(
+      expect.objectContaining({ message: expect.stringContaining("HTTP") }),
+    );
+  });
 });

@@ -84,6 +84,17 @@ const RETRYABLE_ERRORS = new Set<VoiceInputError["code"]>([
 ]);
 
 function normalizeError(error: unknown): VoiceInputError {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "relayError" in error &&
+    typeof error.relayError === "object" &&
+    error.relayError !== null &&
+    "_tag" in error.relayError &&
+    error.relayError._tag === "RelayVoiceInputError"
+  ) {
+    return normalizeError(error.relayError);
+  }
   if (typeof error === "object" && error !== null && "code" in error) {
     const candidate = error as { code?: unknown; message?: unknown; permanent?: unknown };
     if (typeof candidate.code === "string") {
@@ -225,7 +236,9 @@ export class VoiceInputController {
     const recording = this.#recording;
     if (recording === null) return false;
     const generation = ++this.#generation;
-    this.#abortController?.abort();
+    // The capture adapter owns the recording signal until stop() has finished. Aborting it here
+    // tells browser capture adapters to cancel the whole voice operation while we are transitioning
+    // to transcription.
     this.#abortController = new AbortController();
     const requestId = this.#createRequestId();
     this.#setState({ type: "transcribing", requestId });

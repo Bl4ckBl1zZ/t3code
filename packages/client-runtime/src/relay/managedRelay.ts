@@ -27,7 +27,7 @@ import {
   RelayRegisterLiveActivityEndpoint,
   RelayProtectedError,
   type RelayProtectedError as RelayProtectedErrorType,
-  type RelayVoiceInputError,
+  RelayVoiceInputError,
   RelayUnregisterDeviceEndpoint,
 } from "@t3tools/contracts/relay";
 import type {
@@ -171,7 +171,7 @@ export class ManagedRelayRequestFailedError extends Schema.TaggedErrorClass<Mana
   {
     action: ManagedRelayRequestAction,
     cause: Schema.Defect(),
-    relayError: Schema.optional(RelayProtectedError),
+    relayError: Schema.optional(Schema.Union([RelayProtectedError, RelayVoiceInputError])),
     traceId: Schema.optional(Schema.String),
   },
 ) {
@@ -359,13 +359,16 @@ export class ManagedRelayClient extends Context.Service<
 >()("@t3tools/client-runtime/relay/managedRelay/ManagedRelayClient") {}
 
 const isRelayProtectedError = Schema.is(RelayProtectedError);
+const isRelayVoiceInputError = Schema.is(RelayVoiceInputError);
 
 function relayRequestError(action: ManagedRelayRequestAction) {
   return (cause: RelayHttpRequestError): ManagedRelayClientError =>
     new ManagedRelayRequestFailedError({
       action,
       cause,
-      ...(isRelayProtectedError(cause) ? { relayError: cause, traceId: cause.traceId } : {}),
+      ...(isRelayProtectedError(cause) || isRelayVoiceInputError(cause)
+        ? { relayError: cause, traceId: cause.traceId }
+        : {}),
     });
 }
 

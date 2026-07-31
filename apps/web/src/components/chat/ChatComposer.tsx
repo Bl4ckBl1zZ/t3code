@@ -1325,6 +1325,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
   });
 
+  useEffect(() => {
+    if (voice.state.type !== "failed") return;
+    toastManager.add({
+      type: "error",
+      title: `Voice input failed (${voice.state.stage}: ${voice.state.error.code})`,
+      description: voice.state.error.message ?? "No additional error details were provided.",
+    });
+  }, [voice.state]);
+
   const toggleVoiceInput = useCallback(() => {
     if (voice.state.type === "recording") {
       const snapshot = composerEditorRef.current?.readSnapshot();

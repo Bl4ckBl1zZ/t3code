@@ -130,18 +130,55 @@ function decodedBase64Size(data: string): number {
   return (normalized.length / 4) * 3 - padding;
 }
 
-function upstreamError(response: Response): VoiceInputOperationError {
+function upstreamErrorMessage(payload: string): string | undefined {
+  try {
+    const decoded: unknown = JSON.parse(payload);
+    if (typeof decoded !== "object" || decoded === null || !("error" in decoded)) return undefined;
+    const error = decoded.error;
+    if (typeof error === "string") return error.slice(0, 300);
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof error.message === "string"
+    ) {
+      return error.message.slice(0, 300);
+    }
+  } catch {
+    // Non-JSON upstream error pages are represented by status only.
+  }
+  return undefined;
+}
+
+async function upstreamError(response: Response): Promise<VoiceInputOperationError> {
   const retryAfter = Number(response.headers.get("retry-after"));
-  const options =
-    Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterSeconds: retryAfter } : {};
+  const providerMessage = upstreamErrorMessage(await response.text());
+  const options = {
+    ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterSeconds: retryAfter } : {}),
+    cause: new Error(
+      `OpenRouter returned HTTP ${response.status}${providerMessage ? `: ${providerMessage}` : ""}`,
+    ),
+  };
   switch (response.status) {
     case 401:
+    case 403:
       return operationError("credential_invalid", options);
     case 402:
       return operationError("provider_payment_required", options);
+    case 400:
+    case 422:
+      return operationError("invalid_audio", options);
+    case 408:
+      return operationError("request_aborted", options);
+    case 413:
+      return operationError("audio_too_large", options);
+    case 415:
+      return operationError("unsupported_format", options);
     case 404:
+    case 500:
     case 502:
     case 503:
+    case 504:
       return operationError("model_unavailable", options);
     case 429:
       return operationError("rate_limited", options);
@@ -166,7 +203,7 @@ async function openRouterJson(input: {
     ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
-  if (!response.ok) throw upstreamError(response);
+  if (!response.ok) throw await upstreamError(response);
   return response.json();
 }
 
@@ -539,7 +576,19 @@ const make = Effect.gen(function* () {
         isVoiceInputOperationError(cause)
           ? cause
           : operationError("transcription_failed", { cause }),
-    });
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning("OpenRouter transcription request failed").pipe(
+          Effect.annotateLogs({
+            "voice.error.code": error.code,
+            "voice.error.cause": error.cause instanceof Error ? error.cause.message : "unknown",
+            "voice.audio.format": input.request.audio.format,
+            "voice.audio.bytes": audioBytes,
+            "voice.transcription.model": settings.transcriptionModel,
+          }),
+        ),
+      ),
+    );
     const rawText =
       typeof transcriptionPayload === "object" &&
       transcriptionPayload !== null &&
@@ -667,4 +716,5 @@ export const testExports = {
   decodedBase64Size,
   integrationStatus,
   normalizeModels,
+  upstreamError,
 };

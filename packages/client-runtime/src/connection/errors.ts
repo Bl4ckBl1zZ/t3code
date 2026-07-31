@@ -77,7 +77,7 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
 export function mapManagedRelayError(error: ManagedRelayClientError): ConnectionAttemptError {
   switch (error._tag) {
     case "ManagedRelayRequestFailedError":
-      if (error.relayError) {
+      if (error.relayError && error.relayError._tag !== "RelayVoiceInputError") {
         return relayProtectedError(error.relayError);
       }
       return new ConnectionTransientError({

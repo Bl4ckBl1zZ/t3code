@@ -47,6 +47,19 @@ describe("VoiceInputController", () => {
     expect(recording.dispose).toHaveBeenCalledOnce();
   });
 
+  it("does not abort the completed recording when transcription begins", async () => {
+    const { capture, controller } = fixture();
+    let recordingSignal: AbortSignal | undefined;
+    vi.mocked(capture.start).mockImplementation(async ({ signal }) => {
+      recordingSignal = signal;
+    });
+
+    await controller.start(true);
+    expect(await controller.stop()).toBe(true);
+    expect(recordingSignal?.aborted).toBe(false);
+    expect(controller.state.type).toBe("completed");
+  });
+
   it("rejects duplicate starts and stops", async () => {
     const { controller } = fixture();
     expect(await controller.start(false)).toBe(true);
@@ -68,6 +81,28 @@ describe("VoiceInputController", () => {
     expect(controller.state).toMatchObject({ type: "failed", canRetry: true });
     expect(recording.dispose).not.toHaveBeenCalled();
     expect(await controller.retry()).toBe(true);
+    expect(recording.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a Voice Input error returned through the managed relay", async () => {
+    const { controller, recording, transcribe } = fixture();
+    transcribe.mockRejectedValueOnce({
+      _tag: "ManagedRelayRequestFailedError",
+      relayError: {
+        _tag: "RelayVoiceInputError",
+        code: "credential_invalid",
+        traceId: "trace-1",
+      },
+    });
+
+    await controller.start(false);
+    expect(await controller.stop()).toBe(false);
+    expect(controller.state).toMatchObject({
+      type: "failed",
+      stage: "transcription",
+      error: { code: "credential_invalid" },
+      canRetry: false,
+    });
     expect(recording.dispose).toHaveBeenCalledOnce();
   });
 
