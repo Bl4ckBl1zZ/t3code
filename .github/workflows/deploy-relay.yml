@@ -19,7 +19,7 @@ jobs:
   deploy_relay:
     name: Deploy production relay
     if: vars.RELAY_DEPLOY_ENABLED == 'true'
-    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
       name: production
