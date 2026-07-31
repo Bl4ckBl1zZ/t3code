@@ -161,6 +161,26 @@ describe("VoiceInputController", () => {
     expect(controller.state).toEqual({ type: "idle" });
   });
 
+  it("generates request ids without a global crypto (React Native Hermes)", async () => {
+    const { capture } = fixture();
+    const transcribe = vi.fn(async ({ requestId }: { requestId: string }) => ({
+      requestId,
+      rawText: "hello",
+      text: "hello",
+      cleanupApplied: false,
+    }));
+    const controller = new VoiceInputController({ capture, client: { transcribe } });
+    vi.stubGlobal("crypto", undefined);
+    try {
+      await controller.start(false);
+      expect(await controller.stop()).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const requestId = transcribe.mock.calls[0]?.[0]?.requestId;
+    expect(requestId).toMatch(/^voice-[a-z0-9]+-[a-z0-9]+$/);
+  });
+
   it("releases capture when the adapter fails to start", async () => {
     const { capture, controller } = fixture();
     vi.mocked(capture.start).mockRejectedValueOnce(new Error("boom"));

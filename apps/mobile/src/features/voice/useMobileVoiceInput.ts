@@ -4,6 +4,7 @@ import {
   VoiceInputController,
   type VoiceInputState,
 } from "@t3tools/client-runtime/voice";
+import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -40,6 +41,8 @@ export function useMobileVoiceInput(input: {
       client: {
         transcribe: (request, signal) => transcribeVoice(request, signal),
       },
+      // Hermes has no global crypto.randomUUID; expo-crypto provides the UUID source.
+      createRequestId: () => Crypto.randomUUID(),
       onLevel: (level) => {
         for (const listener of levelListeners) listener(level);
       },
