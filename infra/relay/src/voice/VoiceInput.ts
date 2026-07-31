@@ -59,6 +59,13 @@ const OPENROUTER_TRANSCRIPTION_MODELS: ReadonlyArray<OpenRouterModelOption> = [
     capability: "transcription",
     available: true,
   },
+  {
+    id: "openai/whisper-large-v3-turbo",
+    name: "OpenAI: Whisper Large v3 Turbo",
+    providerName: "OpenAI",
+    capability: "transcription",
+    available: true,
+  },
 ];
 const OPENROUTER_TRANSCRIPTION_MODEL_IDS = new Set(
   OPENROUTER_TRANSCRIPTION_MODELS.map((model) => model.id),
