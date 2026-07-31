@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { testExports } from "./VoiceInput.ts";
+
+describe("relay Voice Input normalization", () => {
+  it("measures decoded base64 size and rejects malformed input", () => {
+    expect(testExports.decodedBase64Size("AAAA")).toBe(3);
+    expect(testExports.decodedBase64Size("YQ==")).toBe(1);
+    expect(testExports.decodedBase64Size("not base64")).toBe(-1);
+  });
+
+  it("returns redacted integration status only", () => {
+    expect(
+      testExports.integrationStatus({
+        credentialCiphertext: "encrypted-secret",
+        credentialHint: "…1234",
+        state: "connected",
+        lastValidatedAt: "2026-07-31T00:00:00.000Z",
+        errorCode: null,
+      }),
+    ).toEqual({
+      configured: true,
+      credentialHint: "…1234",
+      state: "connected",
+      lastValidatedAt: "2026-07-31T00:00:00.000Z",
+    });
+  });
+
+  it("filters model discovery by compatible modality", () => {
+    const payload = {
+      data: [
+        {
+          id: "openai/transcribe",
+          name: "Transcribe",
+          architecture: {
+            input_modalities: ["audio"],
+            output_modalities: ["text"],
+          },
+          pricing: { audio: "0.001" },
+        },
+        {
+          id: "openai/chat",
+          name: "Chat",
+          architecture: {
+            input_modalities: ["text"],
+            output_modalities: ["text"],
+          },
+          pricing: { prompt: "0.01", completion: "0.02" },
+        },
+      ],
+    };
+    expect(testExports.normalizeModels(payload, "transcription").map((model) => model.id)).toEqual([
+      "openai/transcribe",
+    ]);
+    expect(testExports.normalizeModels(payload, "text").map((model) => model.id)).toEqual([
+      "openai/chat",
+    ]);
+  });
+
+  it("cleanup prompt forbids acting on content and limits context", () => {
+    expect(testExports.CLEANUP_SYSTEM_PROMPT).toContain("Do not answer or act");
+    expect(testExports.CLEANUP_SYSTEM_PROMPT).toContain("Preserve commands");
+    expect(testExports.CLEANUP_SYSTEM_PROMPT).not.toContain("repository");
+    expect(testExports.CLEANUP_SYSTEM_PROMPT).not.toContain("thread history");
+  });
+});

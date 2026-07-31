@@ -138,6 +138,7 @@ import {
 } from "./settingsLayout";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { VoiceInputSettingsSection } from "./VoiceInputSettings";
 
 const THEME_OPTIONS = [
   {
@@ -1665,6 +1666,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <VoiceInputSettingsSection />
 
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (

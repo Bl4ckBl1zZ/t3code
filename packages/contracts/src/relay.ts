@@ -10,6 +10,18 @@ import * as OpenApi from "effect/unstable/httpapi/OpenApi";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import {
+  IntegrationSummary,
+  OpenRouterIntegrationStatus,
+  OpenRouterModelCapability,
+  OpenRouterModelsResponse,
+  PutOpenRouterCredentialRequest,
+  VoiceInputSettings,
+  VoiceInputSettingsPatch,
+  VoiceTranscriptionErrorCode,
+  VoiceTranscriptionRequest,
+  VoiceTranscriptionResponse,
+} from "./voice.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literal("ios");
 export type RelayAgentAwarenessPlatform = typeof RelayAgentAwarenessPlatform.Type;
@@ -512,6 +524,20 @@ export class RelayInternalError extends Schema.TaggedErrorClass<RelayInternalErr
   }
 }
 
+export class RelayVoiceInputError extends Schema.TaggedErrorClass<RelayVoiceInputError>()(
+  "RelayVoiceInputError",
+  {
+    code: VoiceTranscriptionErrorCode,
+    traceId: TrimmedNonEmptyString,
+    retryAfterSeconds: Schema.optionalKey(Schema.Number),
+  },
+  { httpApiStatus: 400 },
+) {
+  override get message(): string {
+    return `Voice input request failed: ${this.code}`;
+  }
+}
+
 export const RelayProtectedError = Schema.Union([
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
@@ -980,6 +1006,67 @@ export const RelayClientGroup = HttpApiGroup.make("client")
       success: RelayOkResponse,
       error: RelayAuthAndInternalErrors,
     }).annotate(OpenApi.Summary, "Unlink an environment"),
+    HttpApiEndpoint.get("listIntegrations", "/v1/client/integrations", {
+      headers: RelayBearerRequestHeaders,
+      success: Schema.Struct({ integrations: Schema.Array(IntegrationSummary) }),
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "List account integrations"),
+    HttpApiEndpoint.get("getOpenRouterIntegration", "/v1/client/integrations/openrouter", {
+      headers: RelayBearerRequestHeaders,
+      success: OpenRouterIntegrationStatus,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Read redacted OpenRouter integration status"),
+    HttpApiEndpoint.put(
+      "putOpenRouterCredential",
+      "/v1/client/integrations/openrouter/credential",
+      {
+        headers: RelayBearerRequestHeaders,
+        payload: PutOpenRouterCredentialRequest,
+        success: OpenRouterIntegrationStatus,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Validate and store an OpenRouter credential"),
+    HttpApiEndpoint.post(
+      "validateOpenRouterCredential",
+      "/v1/client/integrations/openrouter/validate",
+      {
+        headers: RelayBearerRequestHeaders,
+        success: OpenRouterIntegrationStatus,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Revalidate the stored OpenRouter credential"),
+    HttpApiEndpoint.delete(
+      "deleteOpenRouterCredential",
+      "/v1/client/integrations/openrouter/credential",
+      {
+        headers: RelayBearerRequestHeaders,
+        success: OpenRouterIntegrationStatus,
+        error: RelayAuthAndInternalErrors,
+      },
+    ).annotate(OpenApi.Summary, "Disconnect OpenRouter"),
+    HttpApiEndpoint.get("getVoiceInputSettings", "/v1/client/preferences/voice-input", {
+      headers: RelayBearerRequestHeaders,
+      success: VoiceInputSettings,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Read Voice Input preferences"),
+    HttpApiEndpoint.patch("patchVoiceInputSettings", "/v1/client/preferences/voice-input", {
+      headers: RelayBearerRequestHeaders,
+      payload: VoiceInputSettingsPatch,
+      success: VoiceInputSettings,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Update Voice Input preferences"),
+    HttpApiEndpoint.get("listOpenRouterModels", "/v1/client/integrations/openrouter/models", {
+      headers: RelayBearerRequestHeaders,
+      query: Schema.Struct({ capability: OpenRouterModelCapability }),
+      success: OpenRouterModelsResponse,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "List compatible OpenRouter models"),
+    HttpApiEndpoint.post("transcribeVoice", "/v1/client/voice/transcriptions", {
+      headers: RelayBearerRequestHeaders,
+      payload: VoiceTranscriptionRequest,
+      success: VoiceTranscriptionResponse,
+      error: [...RelayAuthAndInternalErrors, RelayVoiceInputError],
+    }).annotate(OpenApi.Summary, "Transcribe ephemeral voice audio"),
     HttpApiEndpoint.delete(
       "releaseEnvironmentTunnel",
       "/v1/client/environment-links/:environmentId/tunnel",
@@ -996,7 +1083,7 @@ export const RelayClientGroup = HttpApiGroup.make("client")
         "Deletes the provisioned Cloudflare tunnel while keeping the environment link and its hostname reservation, so a later link re-provisions the tunnel under the same URL. Environments call this when they shut down; Cloudflare bills per provisioned tunnel, so idle tunnels should not outlive their environment.",
       ),
   )
-  .annotate(OpenApi.Description, "Cloud-user environment links and registered devices.")
+  .annotate(OpenApi.Description, "Cloud-user environments, devices, integrations, and preferences.")
   .middleware(RelayClientAuth);
 
 export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(

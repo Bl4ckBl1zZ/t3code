@@ -17,14 +17,17 @@ import {
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
+  Alert,
   ActivityIndicator,
   Image,
+  Linking,
   Platform,
   Pressable,
   useColorScheme,
   View,
   type ViewStyle,
 } from "react-native";
+import { useNavigation } from "@react-navigation/native";
 import ImageViewing from "react-native-image-viewing";
 import Animated, {
   FadeIn,
@@ -69,6 +72,13 @@ import {
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import {
+  insertVoiceTranscript,
+  replaceVoiceInsertionWithRaw,
+  undoVoiceInsertion,
+  type VoiceInsertionRecovery,
+} from "@t3tools/shared/voiceInput";
+import { useMobileVoiceInput } from "../voice/useMobileVoiceInput";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -266,6 +276,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
 });
 
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
+  const navigation = useNavigation();
   const isDarkMode = useColorScheme() === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
   const bodyText = useScaledTextRole("body");
@@ -353,6 +364,80 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       return { start, end: selectionEnd };
     });
   }, [props.draftMessage.length]);
+
+  const voiceAnchorRef = useRef<{
+    readonly draft: string;
+    readonly selection: ComposerEditorSelection;
+    readonly threadId: string;
+  } | null>(null);
+  const [voiceRecovery, setVoiceRecovery] = useState<VoiceInsertionRecovery | null>(null);
+  const voice = useMobileVoiceInput({
+    onCompleted: (result) => {
+      const anchor = voiceAnchorRef.current;
+      if (!anchor || anchor.threadId !== props.selectedThread.id) return;
+      const useFallback = props.draftMessage !== anchor.draft;
+      const range = useFallback
+        ? { start: composerSelection.end, end: composerSelection.end }
+        : anchor.selection;
+      const insertion = insertVoiceTranscript({
+        draft: props.draftMessage,
+        range,
+        rawText: result.rawText,
+        cleanedText: result.text,
+      });
+      props.onChangeDraftMessage(insertion.text);
+      setComposerSelection({ start: insertion.caret, end: insertion.caret });
+      setVoiceRecovery(insertion.recovery);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelection({ start: insertion.caret, end: insertion.caret });
+      });
+      if (useFallback) {
+        Alert.alert("Transcript inserted at current cursor");
+      }
+    },
+    onUnavailable: (reason) => {
+      if (reason === "connect_openrouter") {
+        navigation.navigate("SettingsSheet", { screen: "SettingsOpenRouter" });
+      } else {
+        Alert.alert("Sign in to use voice input");
+      }
+    },
+  });
+  const voiceBusy =
+    voice.state.type === "requesting_permission" ||
+    voice.state.type === "recording" ||
+    voice.state.type === "stopping" ||
+    voice.state.type === "transcribing";
+  const toggleVoice = useCallback(() => {
+    if (voice.state.type === "recording") {
+      voiceAnchorRef.current = {
+        draft: props.draftMessage,
+        selection: composerSelection,
+        threadId: props.selectedThread.id,
+      };
+    } else {
+      setVoiceRecovery(null);
+    }
+    void voice.toggle();
+  }, [composerSelection, props.draftMessage, props.selectedThread.id, voice]);
+
+  useEffect(() => {
+    if (
+      voice.state.type === "failed" &&
+      voice.state.stage === "permission" &&
+      voice.state.error.permanent
+    ) {
+      Alert.alert(
+        "Microphone permission required",
+        "Enable microphone access in system settings to use Voice Input.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Open Settings", onPress: () => void Linking.openSettings() },
+        ],
+      );
+    }
+  }, [voice.state]);
 
   const composerTrigger = useMemo<ComposerTrigger | null>(() => {
     if (composerSelection.start !== composerSelection.end) {
@@ -515,6 +600,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
   const handleSend = useCallback(async () => {
+    if (voiceBusy) return;
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -537,6 +623,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.environmentLabel,
     props.selectedThread.id,
     props.selectedThread.title,
+    voiceBusy,
   ]);
   const handleCommandSelect = useCallback(
     (item: ComposerCommandItem) => {
@@ -839,16 +926,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           ) : null}
           {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
-              {showStopAction ? (
-                <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
-              ) : (
+              <View className="flex-row gap-1">
                 <ControlPill
-                  icon="arrow.up"
-                  variant="primary"
-                  disabled={!canSend}
-                  onPress={handleSend}
+                  icon={voice.state.type === "recording" ? "stop.fill" : "mic"}
+                  variant={voice.state.type === "recording" ? "danger" : undefined}
+                  disabled={voiceBusy && voice.state.type !== "recording"}
+                  onPress={toggleVoice}
                 />
-              )}
+                {showStopAction ? (
+                  <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
+                ) : (
+                  <ControlPill
+                    icon="arrow.up"
+                    variant="primary"
+                    disabled={!canSend || voiceBusy}
+                    onPress={handleSend}
+                  />
+                )}
+              </View>
             </Animated.View>
           ) : null}
         </ComposerSurface>
@@ -898,16 +993,66 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     showChevron={false}
                   />
                 ) : null}
+                <ComposerToolbarButton
+                  accessibilityLabel={
+                    voice.state.type === "recording"
+                      ? "Stop recording and transcribe"
+                      : voice.state.type === "transcribing"
+                        ? "Transcribing voice input"
+                        : "Dictate message"
+                  }
+                  icon={voice.state.type === "recording" ? "stop.fill" : "mic"}
+                  variant={voice.state.type === "recording" ? "danger" : undefined}
+                  disabled={voiceBusy && voice.state.type !== "recording"}
+                  onPress={toggleVoice}
+                  showChevron={false}
+                />
               </ComposerToolbarScroller>
               <ComposerToolbarButton
                 accessibilityLabel={sendLabel}
                 icon="arrow.up"
                 variant="primary"
-                disabled={!canSend}
+                disabled={!canSend || voiceBusy}
                 onPress={handleSend}
                 showChevron={false}
               />
             </ComposerToolbarRow>
+            {voiceRecovery ? (
+              <View className="flex-row items-center justify-end gap-2 px-2 pb-2">
+                <Text className="text-xs text-foreground-muted">
+                  {voiceRecovery.rawText === voiceRecovery.cleanedText
+                    ? "Transcript added"
+                    : "Cleaned up"}
+                </Text>
+                {voiceRecovery.rawText !== voiceRecovery.cleanedText ? (
+                  <Pressable
+                    onPress={() => {
+                      const replacement = replaceVoiceInsertionWithRaw(
+                        props.draftMessage,
+                        voiceRecovery,
+                      );
+                      if (!replacement) return setVoiceRecovery(null);
+                      props.onChangeDraftMessage(replacement.text);
+                      setComposerSelection({ start: replacement.caret, end: replacement.caret });
+                      setVoiceRecovery(replacement.recovery);
+                    }}
+                  >
+                    <Text className="text-xs text-accent">Use raw</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => {
+                    const undone = undoVoiceInsertion(props.draftMessage, voiceRecovery);
+                    setVoiceRecovery(null);
+                    if (!undone) return;
+                    props.onChangeDraftMessage(undone.text);
+                    setComposerSelection({ start: undone.caret, end: undone.caret });
+                  }}
+                >
+                  <Text className="text-xs text-accent">Undo</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </Animated.View>
         ) : null}
 

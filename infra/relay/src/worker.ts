@@ -45,6 +45,7 @@ import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import * as RelayDb from "./db.ts";
+import * as VoiceInput from "./voice/VoiceInput.ts";
 import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
@@ -92,6 +93,9 @@ const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningS
   bytes: 32,
 });
 const relayHyperdriveBindingName = "RELAY_HYPERDRIVE";
+const VoiceCredentialEncryptionKey = Alchemy.makeRandom("VoiceCredentialEncryptionKey", {
+  bytes: 32,
+});
 
 export class Api extends Cloudflare.Worker<Api, {}>()("Api") {}
 
@@ -118,6 +122,7 @@ export const ApiLive = Api.make(
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
+    const voiceCredentialEncryptionKey = yield* VoiceCredentialEncryptionKey;
     const hyperdrive = yield* RelayDb.RelayHyperdriveBinding;
     const worker = yield* Cloudflare.Worker;
 
@@ -147,6 +152,7 @@ export const ApiLive = Api.make(
     const apnsPrivateKey = yield* Config.redacted("APNS_PRIVATE_KEY");
     const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
     const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
+    const voiceCredentialSecret = yield* voiceCredentialEncryptionKey;
 
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
@@ -198,6 +204,7 @@ export const ApiLive = Api.make(
           privateKey: apnsPrivateKey,
         },
         apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
+        voiceCredentialEncryptionKey: yield* voiceCredentialSecret,
         clerkSecretKey,
         clerkPublishableKey,
         clerkJwtAudience,
@@ -208,7 +215,7 @@ export const ApiLive = Api.make(
       });
     });
 
-    const runtimeLayer = Layer.empty.pipe(
+    const runtimeBaseLayer = Layer.empty.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
       Layer.provideMerge(AgentActivityPublisher.layer),
       Layer.provideMerge(EnvironmentConnector.layer),
@@ -247,6 +254,10 @@ export const ApiLive = Api.make(
       ),
       Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
       Layer.provideMerge(webcryptoLayer),
+    );
+    const runtimeLayer = Layer.merge(
+      runtimeBaseLayer,
+      VoiceInput.layer.pipe(Layer.provide(runtimeBaseLayer)),
     );
 
     const appLayer = relayApiLayer.pipe(

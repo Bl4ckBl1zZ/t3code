@@ -1,7 +1,7 @@
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
+import { Alert, InteractionManager, Platform, Pressable, View, useColorScheme } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -13,7 +13,11 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
-import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
+import {
+  ComposerEditor,
+  type ComposerEditorHandle,
+  type ComposerEditorSelection,
+} from "../../components/ComposerEditor";
 import {
   ComposerToolbarButton,
   ComposerToolbarRow,
@@ -51,6 +55,14 @@ import { useRemoteConnectionStatus } from "../../state/use-remote-environment-re
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useCreateProjectThread } from "./use-project-actions";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
+import { AppText as Text } from "../../components/AppText";
+import {
+  insertVoiceTranscript,
+  replaceVoiceInsertionWithRaw,
+  undoVoiceInsertion,
+  type VoiceInsertionRecovery,
+} from "@t3tools/shared/voiceInput";
+import { useMobileVoiceInput } from "../voice/useMobileVoiceInput";
 
 function formatWorkspaceLabel(input: {
   readonly workspaceMode: string;
@@ -100,6 +112,64 @@ export function NewTaskDraftScreen(props: {
       (environment) => environment.environmentId === selectedProject.environmentId,
     )?.connectionState === "connected";
   const promptInputRef = useRef<ComposerEditorHandle>(null);
+  const [composerSelection, setComposerSelection] = useState<ComposerEditorSelection>({
+    start: 0,
+    end: 0,
+  });
+  const voiceAnchorRef = useRef<{
+    readonly draft: string;
+    readonly selection: ComposerEditorSelection;
+    readonly draftKey: string | null;
+  } | null>(null);
+  const [voiceRecovery, setVoiceRecovery] = useState<VoiceInsertionRecovery | null>(null);
+  const voice = useMobileVoiceInput({
+    onCompleted: (result) => {
+      const anchor = voiceAnchorRef.current;
+      if (!anchor || anchor.draftKey !== flow.draftKey) return;
+      const useFallback = flow.prompt !== anchor.draft;
+      const range = useFallback
+        ? { start: composerSelection.end, end: composerSelection.end }
+        : anchor.selection;
+      const insertion = insertVoiceTranscript({
+        draft: flow.prompt,
+        range,
+        rawText: result.rawText,
+        cleanedText: result.text,
+      });
+      flow.setPrompt(insertion.text);
+      setComposerSelection({ start: insertion.caret, end: insertion.caret });
+      setVoiceRecovery(insertion.recovery);
+      requestAnimationFrame(() => {
+        promptInputRef.current?.focus();
+        promptInputRef.current?.setSelection({ start: insertion.caret, end: insertion.caret });
+      });
+      if (useFallback) Alert.alert("Transcript inserted at current cursor");
+    },
+    onUnavailable: (reason) => {
+      if (reason === "connect_openrouter") {
+        navigation.navigate("SettingsSheet", { screen: "SettingsOpenRouter" });
+      } else {
+        Alert.alert("Sign in to use voice input");
+      }
+    },
+  });
+  const voiceBusy =
+    voice.state.type === "requesting_permission" ||
+    voice.state.type === "recording" ||
+    voice.state.type === "stopping" ||
+    voice.state.type === "transcribing";
+  const toggleVoice = useCallback(() => {
+    if (voice.state.type === "recording") {
+      voiceAnchorRef.current = {
+        draft: flow.prompt,
+        selection: composerSelection,
+        draftKey: flow.draftKey,
+      };
+    } else {
+      setVoiceRecovery(null);
+    }
+    void voice.toggle();
+  }, [composerSelection, flow.draftKey, flow.prompt, voice]);
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
@@ -955,6 +1025,7 @@ export function NewTaskDraftScreen(props: {
     flow.prompt.trim().length > 0 &&
     isIncomingShareReady &&
     !isImportingShare &&
+    !voiceBusy &&
     !flow.submitting &&
     !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
   const promptEditor = (
@@ -969,8 +1040,13 @@ export function NewTaskDraftScreen(props: {
       multiline
       scrollEnabled={isExpanded}
       value={flow.prompt}
+      selection={composerSelection}
       skills={flow.selectedProviderSkills}
-      onChangeText={flow.setPrompt}
+      onChangeText={(text) => {
+        if (voiceRecovery) setVoiceRecovery(null);
+        flow.setPrompt(text);
+      }}
+      onSelectionChange={setComposerSelection}
       onFocus={() => setIsComposerFocused(true)}
       onBlur={() => setIsComposerFocused(false)}
       onPasteImages={(uris) => void handleNativePasteImages(uris)}
@@ -1001,6 +1077,20 @@ export function NewTaskDraftScreen(props: {
         onPress={() => void handlePickImages()}
         showChevron={false}
         disabled={isIncomingShareTransferPending}
+      />
+      <ComposerToolbarButton
+        accessibilityLabel={
+          voice.state.type === "recording"
+            ? "Stop recording and transcribe"
+            : voice.state.type === "transcribing"
+              ? "Transcribing voice input"
+              : "Dictate message"
+        }
+        icon={voice.state.type === "recording" ? "stop.fill" : "mic"}
+        {...(voice.state.type === "recording" ? { variant: "danger" as const } : {})}
+        disabled={voiceBusy && voice.state.type !== "recording"}
+        onPress={toggleVoice}
+        showChevron={false}
       />
       <ControlPillMenu
         actions={modelMenuActions}
@@ -1062,6 +1152,38 @@ export function NewTaskDraftScreen(props: {
     />
   );
 
+  const voiceRecoveryControls = voiceRecovery ? (
+    <View className="flex-row items-center justify-end gap-3 px-2 pb-2">
+      <Text className="text-xs text-foreground-muted">
+        {voiceRecovery.rawText === voiceRecovery.cleanedText ? "Transcript added" : "Cleaned up"}
+      </Text>
+      {voiceRecovery.rawText !== voiceRecovery.cleanedText ? (
+        <Pressable
+          onPress={() => {
+            const replacement = replaceVoiceInsertionWithRaw(flow.prompt, voiceRecovery);
+            if (!replacement) return setVoiceRecovery(null);
+            flow.setPrompt(replacement.text);
+            setComposerSelection({ start: replacement.caret, end: replacement.caret });
+            setVoiceRecovery(replacement.recovery);
+          }}
+        >
+          <Text className="text-xs text-accent">Use raw</Text>
+        </Pressable>
+      ) : null}
+      <Pressable
+        onPress={() => {
+          const undone = undoVoiceInsertion(flow.prompt, voiceRecovery);
+          setVoiceRecovery(null);
+          if (!undone) return;
+          flow.setPrompt(undone.text);
+          setComposerSelection({ start: undone.caret, end: undone.caret });
+        }}
+      >
+        <Text className="text-xs text-accent">Undo</Text>
+      </Pressable>
+    </View>
+  ) : null;
+
   if (isAndroid) {
     // The draft is a thread that doesn't exist yet, so it mirrors the thread
     // page: in-screen header, empty feed canvas above, and the same floating
@@ -1116,25 +1238,36 @@ export function NewTaskDraftScreen(props: {
               ) : null}
               <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
               {!isExpanded ? (
-                <ControlPill
-                  icon="arrow.up"
-                  variant="primary"
-                  disabled={!canStart}
-                  onPress={() => void handleStart()}
-                />
+                <View className="flex-row gap-1">
+                  <ControlPill
+                    icon={voice.state.type === "recording" ? "stop.fill" : "mic"}
+                    {...(voice.state.type === "recording" ? { variant: "danger" as const } : {})}
+                    disabled={voiceBusy && voice.state.type !== "recording"}
+                    onPress={toggleVoice}
+                  />
+                  <ControlPill
+                    icon="arrow.up"
+                    variant="primary"
+                    disabled={!canStart}
+                    onPress={() => void handleStart()}
+                  />
+                </View>
               ) : null}
             </ComposerSurface>
 
             {isExpanded ? (
-              <ComposerToolbarRow paddingBottom={8} paddingHorizontal={0} paddingTop={8}>
-                <ComposerToolbarScroller
-                  fadeOpaque={isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)"}
-                  fadeTransparent={isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)"}
-                >
-                  {toolbarPills}
-                </ComposerToolbarScroller>
-                {startButton}
-              </ComposerToolbarRow>
+              <>
+                {voiceRecoveryControls}
+                <ComposerToolbarRow paddingBottom={8} paddingHorizontal={0} paddingTop={8}>
+                  <ComposerToolbarScroller
+                    fadeOpaque={isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)"}
+                    fadeTransparent={isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)"}
+                  >
+                    {toolbarPills}
+                  </ComposerToolbarScroller>
+                  {startButton}
+                </ComposerToolbarRow>
+              </>
             ) : null}
           </View>
         </KeyboardAvoidingView>
@@ -1150,6 +1283,7 @@ export function NewTaskDraftScreen(props: {
         <View className="min-h-0 flex-1 px-5 pt-2">{promptEditor}</View>
 
         <View className="border-t border-border" style={{ paddingBottom: controlsBottomPadding }}>
+          {voiceRecoveryControls}
           {flow.attachments.length > 0 ? (
             <View className="px-4 pt-3">
               <ComposerAttachmentStrip

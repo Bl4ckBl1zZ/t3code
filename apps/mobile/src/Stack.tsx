@@ -48,6 +48,11 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
+import {
+  SettingsIntegrationsRouteScreen,
+  SettingsOpenRouterRouteScreen,
+} from "./features/settings/SettingsIntegrationsRouteScreen";
+import { SettingsVoiceInputRouteScreen } from "./features/settings/SettingsVoiceInputRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
   SettingsLegalDocumentCloseHeaderButton,
@@ -181,6 +186,21 @@ const SettingsSheetStack = createNativeStackNavigator({
       options: {
         title: "Client Storage",
       },
+    }),
+    SettingsIntegrations: createNativeStackScreen({
+      screen: SettingsIntegrationsRouteScreen,
+      linking: "integrations",
+      options: { title: "Integrations" },
+    }),
+    SettingsOpenRouter: createNativeStackScreen({
+      screen: SettingsOpenRouterRouteScreen,
+      linking: "integrations/openrouter",
+      options: { title: "OpenRouter" },
+    }),
+    SettingsVoiceInput: createNativeStackScreen({
+      screen: SettingsVoiceInputRouteScreen,
+      linking: "voice-input",
+      options: { title: "Voice Input" },
     }),
     SettingsAuth: createNativeStackScreen({
       screen: SettingsAuthRouteScreen,
