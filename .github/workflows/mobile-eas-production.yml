@@ -20,6 +20,12 @@ jobs:
     timeout-minutes: 90
     environment:
       name: production
+    env:
+      # Resolve the EAS project when evaluating the dynamic app config locally;
+      # the same values are set in the EAS "production" environment for remote builds.
+      APP_VARIANT: production
+      T3CODE_EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+      T3CODE_EXPO_OWNER: ${{ vars.EXPO_OWNER }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
