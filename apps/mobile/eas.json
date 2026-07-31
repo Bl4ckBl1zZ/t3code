@@ -42,6 +42,7 @@
     },
     "production": {
       "corepack": true,
+      "credentialsSource": "local",
       "env": {
         "APP_VARIANT": "production",
         "NODE_OPTIONS": "--max-old-space-size=4096"

@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# EAS local credentials (materialized in CI only)
+credentials.json
+credentials/
