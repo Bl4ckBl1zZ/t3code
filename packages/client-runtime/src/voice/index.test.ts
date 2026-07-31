@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { VoiceInputController, type VoiceCaptureAdapter, type VoiceRecording } from "./index.ts";
 
-function fixture() {
+function fixture(options?: { readonly onLevel?: (level: number) => void }) {
   const recording: VoiceRecording = {
     data: "AAAA",
     format: "webm",
+    durationSeconds: 2.5,
     dispose: vi.fn(),
   };
   const capture: VoiceCaptureAdapter = {
@@ -24,6 +25,7 @@ function fixture() {
     capture,
     client: { transcribe },
     createRequestId: () => "request-1",
+    ...(options?.onLevel ? { onLevel: options.onLevel } : {}),
   });
   return { capture, controller, recording, transcribe };
 }
@@ -124,5 +126,46 @@ describe("VoiceInputController", () => {
     await controller.cancel();
     expect(capture.cancel).toHaveBeenCalledOnce();
     expect(controller.state).toEqual({ type: "idle" });
+  });
+
+  it("forwards the recording duration to the transcription client", async () => {
+    const { controller, transcribe } = fixture();
+    await controller.start(true);
+    await controller.stop();
+    expect(transcribe).toHaveBeenCalledWith(
+      expect.objectContaining({ durationSeconds: 2.5 }),
+      expect.anything(),
+    );
+  });
+
+  it("passes the level callback through to the capture adapter", async () => {
+    const onLevel = vi.fn();
+    const { capture, controller } = fixture({ onLevel });
+    await controller.start(true);
+    expect(vi.mocked(capture.start).mock.calls[0]?.[0]?.onLevel).toBe(onLevel);
+  });
+
+  it("releases capture when cancelled while requesting permission", async () => {
+    const { capture, controller } = fixture();
+    let grant: ((value: "granted") => void) | undefined;
+    vi.mocked(capture.requestPermission).mockImplementation(
+      () => new Promise((resolve) => (grant = resolve)),
+    );
+    const started = controller.start(true);
+    await vi.waitFor(() => expect(controller.state.type).toBe("requesting_permission"));
+    await controller.cancel();
+    grant?.("granted");
+    expect(await started).toBe(false);
+    expect(capture.cancel).toHaveBeenCalled();
+    expect(capture.start).not.toHaveBeenCalled();
+    expect(controller.state).toEqual({ type: "idle" });
+  });
+
+  it("releases capture when the adapter fails to start", async () => {
+    const { capture, controller } = fixture();
+    vi.mocked(capture.start).mockRejectedValueOnce(new Error("boom"));
+    expect(await controller.start(true)).toBe(false);
+    expect(capture.cancel).toHaveBeenCalled();
+    expect(controller.state).toMatchObject({ type: "failed", stage: "recording" });
   });
 });

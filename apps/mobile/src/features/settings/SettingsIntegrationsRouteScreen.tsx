@@ -10,6 +10,7 @@ import {
   putOpenRouterCredential,
   validateOpenRouterCredential,
 } from "../voice/mobileVoiceApi";
+import { invalidateVoicePreflight } from "../voice/useMobileVoiceInput";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 
@@ -54,6 +55,7 @@ export function SettingsOpenRouterRouteScreen() {
     setBusy(true);
     try {
       setStatus(await operation());
+      invalidateVoicePreflight();
       setApiKey("");
     } catch (cause) {
       Alert.alert(

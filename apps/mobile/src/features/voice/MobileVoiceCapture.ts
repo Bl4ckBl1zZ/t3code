@@ -10,10 +10,15 @@ import {
 import { File } from "expo-file-system";
 import { AppState, type NativeEventSubscription } from "react-native";
 
+const LEVEL_SAMPLE_INTERVAL_MS = 100;
+// Metering is reported in dBFS; treat -50 dB as silence for the visual meter.
+const LEVEL_FLOOR_DB = -50;
+
 export class MobileVoiceCapture implements VoiceCaptureAdapter {
   #recorder: InstanceType<typeof AudioModule.AudioRecorder> | null = null;
   #appStateSubscription: NativeEventSubscription | null = null;
   #statusSubscription: { remove(): void } | null = null;
+  #levelTimer: ReturnType<typeof setInterval> | null = null;
   #interrupted = false;
 
   async requestPermission(_signal: AbortSignal): Promise<"granted" | "denied" | "blocked"> {
@@ -56,6 +61,15 @@ export class MobileVoiceCapture implements VoiceCaptureAdapter {
         input.onInterrupted?.();
       }
     });
+    if (input.onLevel) {
+      const recorder = this.#recorder;
+      const onLevel = input.onLevel;
+      this.#levelTimer = setInterval(() => {
+        const metering = recorder.getStatus().metering;
+        if (typeof metering !== "number") return;
+        onLevel(Math.min(1, Math.max(0, (metering - LEVEL_FLOOR_DB) / -LEVEL_FLOOR_DB)));
+      }, LEVEL_SAMPLE_INTERVAL_MS);
+    }
     input.signal.addEventListener("abort", () => void this.cancel(), { once: true });
     this.#recorder.record({ forDuration: 120 });
   }
@@ -95,6 +109,8 @@ export class MobileVoiceCapture implements VoiceCaptureAdapter {
   }
 
   #releaseSession(): void {
+    if (this.#levelTimer !== null) clearInterval(this.#levelTimer);
+    this.#levelTimer = null;
     this.#statusSubscription?.remove();
     this.#statusSubscription = null;
     this.#appStateSubscription?.remove();

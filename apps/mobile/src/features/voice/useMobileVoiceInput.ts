@@ -1,9 +1,24 @@
-import { VoiceInputController, type VoiceInputState } from "@t3tools/client-runtime/voice";
+import {
+  createVoicePreflightCache,
+  voicePreflightReady,
+  VoiceInputController,
+  type VoiceInputState,
+} from "@t3tools/client-runtime/voice";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { MobileVoiceCapture } from "./MobileVoiceCapture";
 import { getOpenRouterIntegration, getVoiceInputSettings, transcribeVoice } from "./mobileVoiceApi";
+
+const voicePreflight = createVoicePreflightCache({
+  getIntegration: getOpenRouterIntegration,
+  getSettings: getVoiceInputSettings,
+});
+
+/** Call after Voice Input settings or the OpenRouter connection change. */
+export function invalidateVoicePreflight(): void {
+  voicePreflight.invalidate();
+}
 
 export function useMobileVoiceInput(input: {
   readonly onCompleted: (result: {
@@ -16,12 +31,17 @@ export function useMobileVoiceInput(input: {
 }) {
   const completedRef = useRef(input.onCompleted);
   completedRef.current = input.onCompleted;
+  const levelListenersRef = useRef(new Set<(level: number) => void>());
   const controllerRef = useRef<VoiceInputController | null>(null);
   if (controllerRef.current === null) {
+    const levelListeners = levelListenersRef.current;
     controllerRef.current = new VoiceInputController({
       capture: new MobileVoiceCapture(),
       client: {
-        transcribe: (request) => transcribeVoice(request),
+        transcribe: (request, signal) => transcribeVoice(request, signal),
+      },
+      onLevel: (level) => {
+        for (const listener of levelListeners) listener(level);
       },
     });
   }
@@ -38,6 +58,11 @@ export function useMobileVoiceInput(input: {
         completedRef.current(next);
       }
     });
+  }, []);
+
+  // Warm the preflight cache so the mic starts without waiting on two relay round-trips.
+  useEffect(() => {
+    voicePreflight.prime();
   }, []);
 
   useEffect(
@@ -61,25 +86,38 @@ export function useMobileVoiceInput(input: {
     ) {
       return;
     }
+    const cached = voicePreflight.read();
+    if (cached && voicePreflightReady(cached)) {
+      voicePreflight.prime();
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await controller.start(cached.settings.cleanup.enabled);
+      return;
+    }
+    voicePreflight.invalidate();
     try {
-      const [status, settings] = await Promise.all([
-        getOpenRouterIntegration(),
-        getVoiceInputSettings(),
-      ]);
-      if (status.state !== "connected") {
+      const fresh = await voicePreflight.refresh();
+      if (!voicePreflightReady(fresh)) {
         input.onUnavailable("connect_openrouter");
         return;
       }
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await controller.start(settings.cleanup.enabled);
+      await controller.start(fresh.settings.cleanup.enabled);
     } catch {
       input.onUnavailable("sign_in");
     }
   }, [input]);
 
+  const subscribeLevel = useCallback((listener: (level: number) => void) => {
+    levelListenersRef.current.add(listener);
+    return () => {
+      levelListenersRef.current.delete(listener);
+    };
+  }, []);
+
   return {
     state,
     toggle,
+    subscribeLevel,
     cancel: () => controllerRef.current?.cancel() ?? Promise.resolve(),
     retry: () => controllerRef.current?.retry() ?? Promise.resolve(false),
     setCleanup: (cleanup: boolean) => controllerRef.current?.setRecordingCleanup(cleanup) ?? false,

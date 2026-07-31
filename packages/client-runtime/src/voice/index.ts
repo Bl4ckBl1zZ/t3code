@@ -5,6 +5,13 @@ import {
   type VoiceTranscriptionResponse,
 } from "@t3tools/contracts/voice";
 
+export {
+  createVoicePreflightCache,
+  voicePreflightReady,
+  type VoicePreflightCache,
+  type VoicePreflightSnapshot,
+} from "./preflight.ts";
+
 export type VoiceInputError = {
   readonly code: VoiceTranscriptionErrorCode | "permission_denied" | "recording_failed";
   readonly message?: string;
@@ -56,6 +63,7 @@ export type VoiceTranscriptionClient = {
       readonly requestId: string;
       readonly audio: { readonly data: string; readonly format: VoiceAudioFormat };
       readonly cleanup: boolean;
+      readonly durationSeconds?: number;
     },
     signal: AbortSignal,
   ): Promise<VoiceTranscriptionResponse>;
@@ -75,6 +83,7 @@ export type VoiceInputControllerOptions = {
   readonly now?: () => number;
   readonly maxDurationSeconds?: number;
   readonly onAnalytics?: (event: VoiceInputAnalyticsEvent) => void;
+  readonly onLevel?: (level: number) => void;
 };
 
 const RETRYABLE_ERRORS = new Set<VoiceInputError["code"]>([
@@ -82,6 +91,40 @@ const RETRYABLE_ERRORS = new Set<VoiceInputError["code"]>([
   "transcription_failed",
   "model_unavailable",
 ]);
+
+export function voiceInputErrorMessage(error: VoiceInputError): string {
+  switch (error.code) {
+    case "permission_denied":
+      return "Microphone access was denied.";
+    case "recording_failed":
+      return error.message ?? "Recording failed. Check your microphone and try again.";
+    case "unauthenticated":
+      return "Sign in to T3 Connect to use Voice Input.";
+    case "integration_not_configured":
+      return "Connect OpenRouter in Settings to use Voice Input.";
+    case "credential_invalid":
+      return "Your OpenRouter API key was rejected. Update it in Settings.";
+    case "invalid_audio":
+    case "unsupported_format":
+      return "The recording could not be processed.";
+    case "audio_too_large":
+      return "The recording is too large to transcribe.";
+    case "duration_exceeded":
+      return "The recording is longer than the transcription limit.";
+    case "no_speech":
+      return "No speech was detected in the recording.";
+    case "model_unavailable":
+      return "The transcription model is temporarily unavailable.";
+    case "rate_limited":
+      return "Transcription is rate limited right now. Try again shortly.";
+    case "provider_payment_required":
+      return "OpenRouter needs credit to transcribe. Check your account balance.";
+    case "request_aborted":
+      return "The transcription request was interrupted.";
+    case "transcription_failed":
+      return error.message ?? "Transcription failed. Try again.";
+  }
+}
 
 function normalizeError(error: unknown): VoiceInputError {
   if (
@@ -118,6 +161,7 @@ export class VoiceInputController {
   readonly #now: () => number;
   readonly #maxDurationMs: number;
   readonly #onAnalytics: ((event: VoiceInputAnalyticsEvent) => void) | undefined;
+  readonly #onLevel: ((level: number) => void) | undefined;
   readonly #listeners = new Set<(state: VoiceInputState) => void>();
   #state: VoiceInputState = { type: "idle" };
   #abortController: AbortController | null = null;
@@ -135,6 +179,7 @@ export class VoiceInputController {
     this.#now = options.now ?? Date.now;
     this.#maxDurationMs = (options.maxDurationSeconds ?? VOICE_INPUT_MAX_DURATION_SECONDS) * 1_000;
     this.#onAnalytics = options.onAnalytics;
+    this.#onLevel = options.onLevel;
   }
 
   get state(): VoiceInputState {
@@ -167,7 +212,11 @@ export class VoiceInputController {
     this.#setState({ type: "requesting_permission" });
     try {
       const permission = await this.#capture.requestPermission(this.#abortController.signal);
-      if (generation !== this.#generation) return false;
+      if (generation !== this.#generation) {
+        // A stale permission grant can leave the adapter holding a live microphone stream.
+        await this.#capture.cancel().catch(() => undefined);
+        return false;
+      }
       if (permission !== "granted") {
         const error: VoiceInputError = {
           code: "permission_denied",
@@ -184,9 +233,13 @@ export class VoiceInputController {
       }
       await this.#capture.start({
         signal: this.#abortController.signal,
+        ...(this.#onLevel ? { onLevel: this.#onLevel } : {}),
         onInterrupted: () => void this.stop(),
       });
-      if (generation !== this.#generation) return false;
+      if (generation !== this.#generation) {
+        await this.#capture.cancel().catch(() => undefined);
+        return false;
+      }
       this.#setState({ type: "recording", startedAt: this.#now(), cleanup });
       this.#onAnalytics?.({ type: "recording_started", cleanup });
       // The controller integrates with browser/native lifecycles rather than an Effect runtime.
@@ -194,6 +247,7 @@ export class VoiceInputController {
       this.#durationTimer = setTimeout(() => void this.stop(), this.#maxDurationMs);
       return true;
     } catch (cause) {
+      await this.#capture.cancel().catch(() => undefined);
       if (generation !== this.#generation) return false;
       const error = normalizeError(cause);
       this.#setState({ type: "failed", stage: "recording", error, canRetry: false });
@@ -248,6 +302,9 @@ export class VoiceInputController {
           requestId,
           audio: { data: recording.data, format: recording.format },
           cleanup: this.#cleanup,
+          ...(recording.durationSeconds === undefined
+            ? {}
+            : { durationSeconds: recording.durationSeconds }),
         },
         this.#abortController.signal,
       );
@@ -283,7 +340,9 @@ export class VoiceInputController {
     this.#clearDurationTimer();
     this.#abortController?.abort();
     this.#abortController = null;
-    if (this.#state.type === "recording" || this.#state.type === "stopping") {
+    // Release capture from every non-idle state: a pending permission request or a failed start
+    // can still hold a live microphone stream even though nothing is "recording".
+    if (this.#state.type !== "idle") {
       await this.#capture.cancel().catch(() => undefined);
     }
     this.#disposeRecording();

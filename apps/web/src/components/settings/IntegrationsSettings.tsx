@@ -8,6 +8,7 @@ import {
   putOpenRouterCredential,
   validateOpenRouterCredential,
 } from "../../cloud/voiceInput";
+import { invalidateVoicePreflight } from "../../voice/useWebVoiceInput";
 import { Button } from "../ui/button";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -63,6 +64,7 @@ export function OpenRouterIntegrationSettings() {
     setError(null);
     try {
       setStatus(await operation());
+      invalidateVoicePreflight();
       setApiKey("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "OpenRouter request failed.");

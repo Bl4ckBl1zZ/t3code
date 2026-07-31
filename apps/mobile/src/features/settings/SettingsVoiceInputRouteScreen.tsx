@@ -14,6 +14,7 @@ import {
   getVoiceInputSettings,
   patchVoiceInputSettings,
 } from "../voice/mobileVoiceApi";
+import { invalidateVoicePreflight } from "../voice/useMobileVoiceInput";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -43,6 +44,7 @@ export function SettingsVoiceInputRouteScreen() {
   const update = async (patch: VoiceInputSettingsPatch) => {
     try {
       const next = await patchVoiceInputSettings(patch);
+      invalidateVoicePreflight();
       setSettings(next);
       setDictionary(next.dictionary.join("\n"));
     } catch (cause) {
