@@ -25,7 +25,7 @@ import { Route as SettingsBetaRouteImport } from './routes/settings.beta'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
-import { Route as SettingsIntegrationsOpenrouterRouteImport } from './routes/settings.integrations.openrouter'
+import { Route as SettingsIntegrationsOpenrouterRouteImport } from './routes/settings.integrations_.openrouter'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -110,9 +110,9 @@ const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
 } as any)
 const SettingsIntegrationsOpenrouterRoute =
   SettingsIntegrationsOpenrouterRouteImport.update({
-    id: '/openrouter',
-    path: '/openrouter',
-    getParentRoute: () => SettingsIntegrationsRoute,
+    id: '/integrations_/openrouter',
+    path: '/integrations/openrouter',
+    getParentRoute: () => SettingsRoute,
   } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
@@ -138,7 +138,7 @@ export interface FileRoutesByFullPath {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
-  '/settings/integrations': typeof SettingsIntegrationsRouteWithChildren
+  '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -157,7 +157,7 @@ export interface FileRoutesByTo {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
-  '/settings/integrations': typeof SettingsIntegrationsRouteWithChildren
+  '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -179,14 +179,14 @@ export interface FileRoutesById {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
-  '/settings/integrations': typeof SettingsIntegrationsRouteWithChildren
+  '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
-  '/settings/integrations/openrouter': typeof SettingsIntegrationsOpenrouterRoute
+  '/settings/integrations_/openrouter': typeof SettingsIntegrationsOpenrouterRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -249,7 +249,7 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
-    | '/settings/integrations/openrouter'
+    | '/settings/integrations_/openrouter'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -374,12 +374,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings/integrations/openrouter': {
-      id: '/settings/integrations/openrouter'
-      path: '/openrouter'
+    '/settings/integrations_/openrouter': {
+      id: '/settings/integrations_/openrouter'
+      path: '/integrations/openrouter'
       fullPath: '/settings/integrations/openrouter'
       preLoaderRoute: typeof SettingsIntegrationsOpenrouterRouteImport
-      parentRoute: typeof SettingsIntegrationsRoute
+      parentRoute: typeof SettingsRoute
     }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
@@ -412,17 +412,6 @@ const ChatRouteChildren: ChatRouteChildren = {
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
-interface SettingsIntegrationsRouteChildren {
-  SettingsIntegrationsOpenrouterRoute: typeof SettingsIntegrationsOpenrouterRoute
-}
-
-const SettingsIntegrationsRouteChildren: SettingsIntegrationsRouteChildren = {
-  SettingsIntegrationsOpenrouterRoute: SettingsIntegrationsOpenrouterRoute,
-}
-
-const SettingsIntegrationsRouteWithChildren =
-  SettingsIntegrationsRoute._addFileChildren(SettingsIntegrationsRouteChildren)
-
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
@@ -430,10 +419,11 @@ interface SettingsRouteChildren {
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
-  SettingsIntegrationsRoute: typeof SettingsIntegrationsRouteWithChildren
+  SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
+  SettingsIntegrationsOpenrouterRoute: typeof SettingsIntegrationsOpenrouterRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
@@ -443,10 +433,11 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
-  SettingsIntegrationsRoute: SettingsIntegrationsRouteWithChildren,
+  SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
+  SettingsIntegrationsOpenrouterRoute: SettingsIntegrationsOpenrouterRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
