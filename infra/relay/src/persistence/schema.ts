@@ -3,6 +3,11 @@ import type {
   RelayAgentActivityState,
   RelayAgentAwarenessPreferences,
 } from "@t3tools/contracts/relay";
+import type {
+  OpenRouterIntegrationState,
+  VoiceInputSettings,
+  VoiceTranscriptionResponse,
+} from "@t3tools/contracts/voice";
 import {
   boolean,
   index,
@@ -36,6 +41,46 @@ export const relayMobileDevices = pgTable(
     primaryKey({ columns: [table.userId, table.deviceId] }),
     uniqueIndex("idx_relay_mobile_devices_push_token").on(table.pushToken),
     uniqueIndex("idx_relay_mobile_devices_push_to_start_token").on(table.pushToStartToken),
+  ],
+);
+
+export const relayAccountIntegrations = pgTable(
+  "relay_account_integrations",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    integrationId: varchar("integration_id", { length: 64 }).notNull().$type<"openrouter">(),
+    credentialCiphertext: text("credential_ciphertext"),
+    credentialHint: varchar("credential_hint", { length: 32 }),
+    state: varchar("state", { length: 32 }).notNull().$type<OpenRouterIntegrationState>(),
+    lastValidatedAt: varchar("last_validated_at", { length: 64 }),
+    errorCode: varchar("error_code", { length: 64 }),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.integrationId] }),
+    index("idx_relay_account_integrations_user").on(table.userId),
+  ],
+);
+
+export const relayVoiceInputSettings = pgTable("relay_voice_input_settings", {
+  userId: varchar("user_id", { length: 255 }).primaryKey(),
+  settingsJson: jsonb("settings_json").notNull().$type<VoiceInputSettings>(),
+  createdAt: varchar("created_at", { length: 64 }).notNull(),
+  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+});
+
+export const relayVoiceTranscriptionRequests = pgTable(
+  "relay_voice_transcription_requests",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    requestId: varchar("request_id", { length: 191 }).notNull(),
+    responseJson: jsonb("response_json").notNull().$type<VoiceTranscriptionResponse>(),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.requestId] }),
+    index("idx_relay_voice_requests_created").on(table.createdAt),
   ],
 );
 

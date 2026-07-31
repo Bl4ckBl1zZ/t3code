@@ -206,6 +206,10 @@
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
+    },
+    "./voiceInput": {
+      "types": "./src/voiceInput.ts",
+      "import": "./src/voiceInput.ts"
     }
   },
   "scripts": {

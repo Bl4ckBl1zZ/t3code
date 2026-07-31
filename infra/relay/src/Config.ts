@@ -27,6 +27,7 @@ export class RelayConfiguration extends Context.Service<
     readonly cloudMintPublicKey: string;
     readonly managedEndpointBaseDomain: string | undefined;
     readonly managedEndpointNamespace: string | undefined;
+    readonly voiceCredentialEncryptionKey?: Redacted.Redacted<string>;
   }
 >()("t3code-relay/Config/RelayConfiguration") {}
 

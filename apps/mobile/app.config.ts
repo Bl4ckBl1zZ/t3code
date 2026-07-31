@@ -280,6 +280,7 @@ const config: ExpoConfig = {
         }
       : {}),
     infoPlist: {
+      NSMicrophoneUsageDescription: "Allow T3 Code to record speech for Voice Input transcription.",
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
       },
@@ -300,12 +301,19 @@ const config: ExpoConfig = {
     // JS back handling survives it via react-native's Android 16 shim plus
     // withAndroidPredictiveBackCompat on Android 13-15.
     predictiveBackGestureEnabled: true,
+    permissions: ["android.permission.RECORD_AUDIO"],
   },
   web: {
     favicon: variant.assets.appIcon,
   },
   plugins: [
     "expo-asset",
+    [
+      "expo-audio",
+      {
+        microphonePermission: "Allow T3 Code to record speech for Voice Input transcription.",
+      },
+    ],
     [
       "expo-font",
       {

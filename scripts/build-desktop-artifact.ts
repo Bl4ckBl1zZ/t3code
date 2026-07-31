@@ -880,6 +880,8 @@ ${associatedDomains}
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>
 `;
@@ -1593,6 +1595,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(signed ? {} : { identity: "-" }),
       hardenedRuntime: signed,
       notarize: signed,
+      extendInfo: {
+        NSMicrophoneUsageDescription:
+          "Allow T3 Code to record speech for Voice Input transcription.",
+      },
       protocols: [
         {
           name: "T3 Code",

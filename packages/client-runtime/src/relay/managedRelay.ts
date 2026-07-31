@@ -27,8 +27,19 @@ import {
   RelayRegisterLiveActivityEndpoint,
   RelayProtectedError,
   type RelayProtectedError as RelayProtectedErrorType,
+  type RelayVoiceInputError,
   RelayUnregisterDeviceEndpoint,
 } from "@t3tools/contracts/relay";
+import type {
+  IntegrationSummary,
+  OpenRouterIntegrationStatus,
+  OpenRouterModelCapability,
+  OpenRouterModelOption,
+  VoiceInputSettings,
+  VoiceInputSettingsPatch,
+  VoiceTranscriptionRequest,
+  VoiceTranscriptionResponse,
+} from "@t3tools/contracts/voice";
 import { encodeOAuthScope, oauthScopeSetEquals } from "@t3tools/shared/oauthScope";
 import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
@@ -95,6 +106,15 @@ export const ManagedRelayRequestAction = Schema.Literals([
   "unregister relay mobile device",
   "register relay live activity",
   "read relay agent activity snapshot",
+  "list relay integrations",
+  "read OpenRouter integration",
+  "update OpenRouter credential",
+  "validate OpenRouter credential",
+  "disconnect OpenRouter",
+  "read Voice Input settings",
+  "update Voice Input settings",
+  "list OpenRouter models",
+  "transcribe voice input",
 ]);
 export type ManagedRelayRequestAction = typeof ManagedRelayRequestAction.Type;
 
@@ -111,6 +131,11 @@ export const ManagedRelayRequestActivity = Schema.Literals([
   "Relay mobile device unregistration",
   "Relay Live Activity registration",
   "Relay agent activity snapshot",
+  "Relay integration listing",
+  "OpenRouter integration request",
+  "Voice Input settings request",
+  "OpenRouter model listing",
+  "Voice transcription",
 ]);
 export type ManagedRelayRequestActivity = typeof ManagedRelayRequestActivity.Type;
 
@@ -206,6 +231,7 @@ export type ManagedRelayClientError = typeof ManagedRelayClientError.Type;
 
 type RelayHttpRequestError =
   | RelayProtectedErrorType
+  | RelayVoiceInputError
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
 
@@ -297,6 +323,37 @@ export class ManagedRelayClient extends Context.Service<
     readonly getAgentActivitySnapshot: (input: {
       readonly clerkToken: string;
     }) => Effect.Effect<RelayAgentActivitySnapshotResponse, ManagedRelayClientError>;
+    readonly listIntegrations?: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<ReadonlyArray<IntegrationSummary>, ManagedRelayClientError>;
+    readonly getOpenRouterIntegration?: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<OpenRouterIntegrationStatus, ManagedRelayClientError>;
+    readonly putOpenRouterCredential?: (input: {
+      readonly clerkToken: string;
+      readonly apiKey: string;
+    }) => Effect.Effect<OpenRouterIntegrationStatus, ManagedRelayClientError>;
+    readonly validateOpenRouterCredential?: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<OpenRouterIntegrationStatus, ManagedRelayClientError>;
+    readonly deleteOpenRouterCredential?: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<OpenRouterIntegrationStatus, ManagedRelayClientError>;
+    readonly getVoiceInputSettings?: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<VoiceInputSettings, ManagedRelayClientError>;
+    readonly patchVoiceInputSettings?: (input: {
+      readonly clerkToken: string;
+      readonly patch: VoiceInputSettingsPatch;
+    }) => Effect.Effect<VoiceInputSettings, ManagedRelayClientError>;
+    readonly listOpenRouterModels?: (input: {
+      readonly clerkToken: string;
+      readonly capability: OpenRouterModelCapability;
+    }) => Effect.Effect<ReadonlyArray<OpenRouterModelOption>, ManagedRelayClientError>;
+    readonly transcribeVoice?: (input: {
+      readonly clerkToken: string;
+      readonly request: VoiceTranscriptionRequest;
+    }) => Effect.Effect<VoiceTranscriptionResponse, ManagedRelayClientError>;
     readonly resetTokenCache: Effect.Effect<void>;
   }
 >()("@t3tools/client-runtime/relay/managedRelay/ManagedRelayClient") {}
@@ -418,6 +475,19 @@ function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Servi
     unregisterDevice: unavailable("clientRuntime.managedRelay.unregisterDevice"),
     registerLiveActivity: unavailable("clientRuntime.managedRelay.registerLiveActivity"),
     getAgentActivitySnapshot: unavailable("clientRuntime.managedRelay.getAgentActivitySnapshot"),
+    listIntegrations: unavailable("clientRuntime.managedRelay.listIntegrations"),
+    getOpenRouterIntegration: unavailable("clientRuntime.managedRelay.getOpenRouterIntegration"),
+    putOpenRouterCredential: unavailable("clientRuntime.managedRelay.putOpenRouterCredential"),
+    validateOpenRouterCredential: unavailable(
+      "clientRuntime.managedRelay.validateOpenRouterCredential",
+    ),
+    deleteOpenRouterCredential: unavailable(
+      "clientRuntime.managedRelay.deleteOpenRouterCredential",
+    ),
+    getVoiceInputSettings: unavailable("clientRuntime.managedRelay.getVoiceInputSettings"),
+    patchVoiceInputSettings: unavailable("clientRuntime.managedRelay.patchVoiceInputSettings"),
+    listOpenRouterModels: unavailable("clientRuntime.managedRelay.listOpenRouterModels"),
+    transcribeVoice: unavailable("clientRuntime.managedRelay.transcribeVoice"),
     resetTokenCache: Effect.void.pipe(
       Effect.withSpan("clientRuntime.managedRelay.resetTokenCache"),
     ),
@@ -719,6 +789,128 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
           );
       },
       Effect.withSpan("clientRuntime.managedRelay.listDevices"),
+      withRelayClientTracing,
+    ),
+    listIntegrations: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .listIntegrations({ headers: bearerHeaders(input.clerkToken) })
+          .pipe(
+            Effect.map((response) => response.integrations),
+            Effect.mapError(relayRequestError("list relay integrations")),
+            timeoutRelayRequest("Relay integration listing"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.listIntegrations"),
+      withRelayClientTracing,
+    ),
+    getOpenRouterIntegration: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .getOpenRouterIntegration({ headers: bearerHeaders(input.clerkToken) })
+          .pipe(
+            Effect.mapError(relayRequestError("read OpenRouter integration")),
+            timeoutRelayRequest("OpenRouter integration request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.getOpenRouterIntegration"),
+      withRelayClientTracing,
+    ),
+    putOpenRouterCredential: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .putOpenRouterCredential({
+            headers: bearerHeaders(input.clerkToken),
+            payload: { apiKey: input.apiKey },
+          })
+          .pipe(
+            Effect.mapError(relayRequestError("update OpenRouter credential")),
+            timeoutRelayRequest("OpenRouter integration request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.putOpenRouterCredential"),
+      withRelayClientTracing,
+    ),
+    validateOpenRouterCredential: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .validateOpenRouterCredential({ headers: bearerHeaders(input.clerkToken) })
+          .pipe(
+            Effect.mapError(relayRequestError("validate OpenRouter credential")),
+            timeoutRelayRequest("OpenRouter integration request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.validateOpenRouterCredential"),
+      withRelayClientTracing,
+    ),
+    deleteOpenRouterCredential: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .deleteOpenRouterCredential({ headers: bearerHeaders(input.clerkToken) })
+          .pipe(
+            Effect.mapError(relayRequestError("disconnect OpenRouter")),
+            timeoutRelayRequest("OpenRouter integration request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.deleteOpenRouterCredential"),
+      withRelayClientTracing,
+    ),
+    getVoiceInputSettings: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .getVoiceInputSettings({ headers: bearerHeaders(input.clerkToken) })
+          .pipe(
+            Effect.mapError(relayRequestError("read Voice Input settings")),
+            timeoutRelayRequest("Voice Input settings request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.getVoiceInputSettings"),
+      withRelayClientTracing,
+    ),
+    patchVoiceInputSettings: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .patchVoiceInputSettings({
+            headers: bearerHeaders(input.clerkToken),
+            payload: input.patch,
+          })
+          .pipe(
+            Effect.mapError(relayRequestError("update Voice Input settings")),
+            timeoutRelayRequest("Voice Input settings request"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.patchVoiceInputSettings"),
+      withRelayClientTracing,
+    ),
+    listOpenRouterModels: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .listOpenRouterModels({
+            headers: bearerHeaders(input.clerkToken),
+            query: { capability: input.capability },
+          })
+          .pipe(
+            Effect.map((response) => response.models),
+            Effect.mapError(relayRequestError("list OpenRouter models")),
+            timeoutRelayRequest("OpenRouter model listing"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.listOpenRouterModels"),
+      withRelayClientTracing,
+    ),
+    transcribeVoice: Effect.fnUntraced(
+      function* (input) {
+        return yield* client.client
+          .transcribeVoice({
+            headers: bearerHeaders(input.clerkToken),
+            payload: input.request,
+          })
+          .pipe(
+            Effect.mapError(relayRequestError("transcribe voice input")),
+            timeoutRelayRequest("Voice transcription"),
+          );
+      },
+      Effect.withSpan("clientRuntime.managedRelay.transcribeVoice"),
       withRelayClientTracing,
     ),
     createEnvironmentLinkChallenge: Effect.fnUntraced(

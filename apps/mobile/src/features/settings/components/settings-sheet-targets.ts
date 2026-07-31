@@ -2,6 +2,9 @@ export type SettingsSheetTarget =
   | "SettingsEnvironments"
   | "SettingsArchive"
   | "SettingsAppearance"
-  | "SettingsClientStorage";
+  | "SettingsClientStorage"
+  | "SettingsIntegrations"
+  | "SettingsOpenRouter"
+  | "SettingsVoiceInput";
 
 export type SettingsLegalDocumentTarget = "SettingsLegal";

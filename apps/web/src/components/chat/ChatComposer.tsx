@@ -107,6 +107,14 @@ import { buildExpandedImagePreview, type ExpandedImagePreview } from "./Expanded
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
+import {
+  insertVoiceTranscript,
+  replaceVoiceInsertionWithRaw,
+  undoVoiceInsertion,
+  type VoiceInsertionRecovery,
+} from "@t3tools/shared/voiceInput";
+import { useWebVoiceInput } from "../../voice/useWebVoiceInput";
+import { ComposerVoiceAction } from "./ComposerVoiceAction";
 
 function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children: ReactNode }) {
   const [position, setPosition] = useState<{
@@ -1201,6 +1209,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         scheduleComposerFocus();
         return;
       }
+      if (voiceRecovery) setVoiceRecovery(null);
       promptRef.current = nextPrompt;
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
       const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
@@ -1268,6 +1277,129 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [composerDraftTarget, setComposerDraftPrompt],
   );
+
+  const voiceAnchorRef = useRef<{
+    readonly prompt: string;
+    readonly cursor: number;
+    readonly identity: string;
+  } | null>(null);
+  const [voiceRecovery, setVoiceRecovery] = useState<VoiceInsertionRecovery | null>(null);
+  const composerVoiceIdentity = `${environmentId}:${draftId ?? activeThreadId ?? "new"}`;
+  const voice = useWebVoiceInput({
+    onCompleted: (result) => {
+      const anchor = voiceAnchorRef.current;
+      if (!anchor || anchor.identity !== composerVoiceIdentity) return;
+      const currentPrompt = promptRef.current;
+      const usedFallback = currentPrompt !== anchor.prompt;
+      const cursor = usedFallback ? composerCursor : anchor.cursor;
+      const insertion = insertVoiceTranscript({
+        draft: currentPrompt,
+        range: { start: cursor, end: cursor },
+        rawText: result.rawText,
+        cleanedText: result.text,
+      });
+      promptRef.current = insertion.text;
+      setPrompt(insertion.text);
+      setComposerCursor(insertion.caret);
+      setVoiceRecovery(insertion.recovery);
+      window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(insertion.caret));
+      if (usedFallback) {
+        toastManager.add({
+          type: "info",
+          title: "Transcript inserted at current cursor",
+        });
+      }
+    },
+    onUnavailable: (reason) => {
+      if (reason === "connect_openrouter") {
+        void window.location.assign("/settings/integrations/openrouter");
+        return;
+      }
+      toastManager.add({
+        type: "error",
+        title:
+          reason === "sign_in"
+            ? "Sign in to use voice input"
+            : "Voice input is unavailable in this browser",
+      });
+    },
+  });
+
+  const toggleVoiceInput = useCallback(() => {
+    if (voice.state.type === "recording") {
+      const snapshot = composerEditorRef.current?.readSnapshot();
+      voiceAnchorRef.current = {
+        prompt: promptRef.current,
+        cursor: snapshot?.cursor ?? composerCursor,
+        identity: composerVoiceIdentity,
+      };
+    } else {
+      setVoiceRecovery(null);
+    }
+    void voice.toggle();
+  }, [composerCursor, composerVoiceIdentity, promptRef, voice]);
+
+  const useRawVoiceTranscript = useCallback(() => {
+    if (!voiceRecovery) return;
+    const replacement = replaceVoiceInsertionWithRaw(promptRef.current, voiceRecovery);
+    if (!replacement) {
+      setVoiceRecovery(null);
+      return;
+    }
+    promptRef.current = replacement.text;
+    setPrompt(replacement.text);
+    setComposerCursor(replacement.caret);
+    setVoiceRecovery(replacement.recovery);
+    window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(replacement.caret));
+  }, [promptRef, setPrompt, voiceRecovery]);
+
+  const undoVoiceTranscript = useCallback(() => {
+    if (!voiceRecovery) return;
+    const undone = undoVoiceInsertion(promptRef.current, voiceRecovery);
+    setVoiceRecovery(null);
+    if (!undone) return;
+    promptRef.current = undone.text;
+    setPrompt(undone.text);
+    setComposerCursor(undone.caret);
+    window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(undone.caret));
+  }, [promptRef, setPrompt, voiceRecovery]);
+  const voiceBusy =
+    voice.state.type === "requesting_permission" ||
+    voice.state.type === "recording" ||
+    voice.state.type === "stopping" ||
+    voice.state.type === "transcribing";
+
+  useEffect(() => {
+    const onVoiceShortcut = (event: KeyboardEvent) => {
+      if (event.isComposing || event.defaultPrevented) return;
+      if (event.key === "Escape" && voice.state.type === "recording") {
+        event.preventDefault();
+        void voice.cancel();
+        scheduleComposerFocus();
+        return;
+      }
+      if (
+        event.key.toLowerCase() !== "m" ||
+        !event.shiftKey ||
+        (!event.metaKey && !event.ctrlKey)
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLButtonElement ||
+        document.querySelector('[role="dialog"][data-open="true"]')
+      ) {
+        return;
+      }
+      event.preventDefault();
+      toggleVoiceInput();
+    };
+    window.addEventListener("keydown", onVoiceShortcut);
+    return () => window.removeEventListener("keydown", onVoiceShortcut);
+  }, [scheduleComposerFocus, toggleVoiceInput, voice]);
 
   const addComposerImage = useCallback(
     (image: ComposerImageAttachment) => {
@@ -1579,6 +1711,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerDraftTarget,
       composerTerminalContexts,
       setComposerDraftTerminalContexts,
+      voiceRecovery,
     ],
   );
 
@@ -2665,7 +2798,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   return (
     <form
       ref={composerFormRef}
-      onSubmit={submitComposer}
+      onSubmit={(event) => {
+        if (voiceBusy) {
+          event.preventDefault();
+          return;
+        }
+        submitComposer(event);
+      }}
       className="mx-auto w-full min-w-0 max-w-3xl"
       data-chat-composer-form="true"
     >
@@ -3205,6 +3344,47 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
+                {voiceRecovery ? (
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <span>
+                      {voiceRecovery.rawText === voiceRecovery.cleanedText ? "Added" : "Cleaned up"}
+                    </span>
+                    {voiceRecovery.rawText !== voiceRecovery.cleanedText ? (
+                      <button
+                        type="button"
+                        className="rounded px-1.5 py-1 hover:bg-muted hover:text-foreground"
+                        onClick={useRawVoiceTranscript}
+                      >
+                        Use raw
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="rounded px-1.5 py-1 hover:bg-muted hover:text-foreground"
+                      onClick={undoVoiceTranscript}
+                    >
+                      Undo
+                    </button>
+                  </div>
+                ) : null}
+                <ComposerVoiceAction
+                  state={voice.state}
+                  disabled={
+                    isConnecting ||
+                    isSendBusy ||
+                    phase === "running" ||
+                    environmentUnavailable !== null ||
+                    noProviderAvailable ||
+                    projectSelectionRequired
+                  }
+                  onToggle={toggleVoiceInput}
+                  onCancel={() => {
+                    void voice.cancel();
+                    scheduleComposerFocus();
+                  }}
+                  onRetry={() => void voice.retry()}
+                  onCleanupChange={voice.setCleanup}
+                />
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
@@ -3213,7 +3393,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isRunning={phase === "running"}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
-                  isSendBusy={isSendBusy}
+                  isSendBusy={isSendBusy || voiceBusy}
                   sendDisabledReason={sendDisabledReason}
                   isConnecting={isConnecting}
                   isEnvironmentUnavailable={

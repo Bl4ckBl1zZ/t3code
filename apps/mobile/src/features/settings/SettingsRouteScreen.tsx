@@ -123,6 +123,11 @@ function LocalSettingsRouteScreen() {
             value={`${environmentCount}`}
             target="SettingsEnvironments"
           />
+          <SettingsRow
+            icon="point.3.connected.trianglepath.dotted"
+            label="Integrations"
+            target="SettingsIntegrations"
+          />
         </SettingsSection>
 
         <GeneralSettingsSection />
@@ -477,6 +482,11 @@ function ConfiguredSettingsRouteScreen() {
             value={`${environmentCount}`}
             target="SettingsEnvironments"
           />
+          <SettingsRow
+            icon="point.3.connected.trianglepath.dotted"
+            label="Integrations"
+            target="SettingsIntegrations"
+          />
           <SettingsSwitchRow
             icon="bell.badge"
             label="Device Notifications"
@@ -544,6 +554,7 @@ function GeneralSettingsSection() {
         value={projectGroupingEnabled}
         onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
       />
+      <SettingsRow icon="mic" label="Voice Input" target="SettingsVoiceInput" />
     </SettingsSection>
   );
 }

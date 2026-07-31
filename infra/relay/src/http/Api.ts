@@ -48,8 +48,10 @@ import {
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
+  RelayVoiceInputError,
 } from "@t3tools/contracts/relay";
 import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
+import type { VoiceTranscriptionErrorCode } from "@t3tools/contracts/voice";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
@@ -69,8 +71,9 @@ import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublis
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import * as RelayDb from "../db.ts";
+import * as VoiceInput from "../voice/VoiceInput.ts";
 
-const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
+const relayCorsAllowedMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
   "authorization",
   "b3",
@@ -532,6 +535,7 @@ export const clientApi = HttpApiBuilder.group(
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const devices = yield* Devices.Devices;
+    const voiceInput = yield* VoiceInput.VoiceInput;
     return handlers
       .handle(
         "listEnvironments",
@@ -680,6 +684,98 @@ export const clientApi = HttpApiBuilder.group(
             })
             .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
           return { ok: released };
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "listIntegrations",
+        Effect.fn("relay.api.client.listIntegrations")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          const status = yield* voiceInput
+            .status(userId)
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+          return {
+            integrations: [
+              {
+                id: "openrouter" as const,
+                name: "OpenRouter",
+                state: status.state,
+                configured: status.configured,
+                usedBy: ["Voice Input"],
+              },
+            ],
+          };
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "getOpenRouterIntegration",
+        Effect.fn("relay.api.client.getOpenRouterIntegration")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .status(userId)
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "putOpenRouterCredential",
+        Effect.fn("relay.api.client.putOpenRouterCredential")(function* (args) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .connect({ userId, apiKey: args.payload.apiKey })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "validateOpenRouterCredential",
+        Effect.fn("relay.api.client.validateOpenRouterCredential")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .validate(userId)
+            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "deleteOpenRouterCredential",
+        Effect.fn("relay.api.client.deleteOpenRouterCredential")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .disconnect(userId)
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "getVoiceInputSettings",
+        Effect.fn("relay.api.client.getVoiceInputSettings")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .settings(userId)
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "patchVoiceInputSettings",
+        Effect.fn("relay.api.client.patchVoiceInputSettings")(function* (args) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .patchSettings({ userId, patch: args.payload })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "listOpenRouterModels",
+        Effect.fn("relay.api.client.listOpenRouterModels")(function* (args) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .models({ userId, capability: args.query.capability })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "transcribeVoice",
+        Effect.fn("relay.api.client.transcribeVoice")(function* (args) {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* voiceInput
+            .transcribe({ userId, request: args.payload })
+            .pipe(Effect.catch(mapVoiceInputOperationError));
         }, mapRelayCommonApiErrors("not_authorized")),
       );
   }),
@@ -1004,6 +1100,31 @@ const currentTraceId = Effect.currentParentSpan.pipe(
   Effect.map((span) => span.traceId),
   Effect.orElseSucceed(() => "unavailable"),
 );
+
+function mapVoiceInputOperationError(
+  error: VoiceInput.VoiceInputOperationError,
+): Effect.Effect<never, RelayInternalError | RelayVoiceInputError> {
+  if (error.code === "persistence_failed") {
+    return relayInternalErrorResponse("persistence_failed");
+  }
+  if (error.code === "integration_unavailable") {
+    return relayInternalErrorResponse("upstream_unavailable");
+  }
+  const code = error.code as VoiceTranscriptionErrorCode;
+  return currentTraceId.pipe(
+    Effect.flatMap((traceId) =>
+      Effect.fail(
+        new RelayVoiceInputError({
+          code,
+          traceId,
+          ...(error.retryAfterSeconds === undefined
+            ? {}
+            : { retryAfterSeconds: error.retryAfterSeconds }),
+        }),
+      ),
+    ),
+  );
+}
 
 const RelayCommonPersistenceError = Schema.Union([
   Devices.DeviceRegistrationPersistenceError,
