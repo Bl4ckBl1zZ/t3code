@@ -65,6 +65,8 @@ jobs:
           APPLE_WIDGETS_PROFILE: ${{ secrets.APPLE_WIDGETS_APPSTORE_PROFILE_BASE64 }}
           APPLE_SHARING_PROFILE: ${{ secrets.APPLE_SHARING_APPSTORE_PROFILE_BASE64 }}
           APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID_VALUE: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_VALUE: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -euo pipefail
           mkdir -p credentials
@@ -102,16 +104,22 @@ jobs:
                 2,
               ),
             );
+            // eas submit only reads the ASC API key from the submit profile, so
+            // inject the key reference into eas.json here instead of committing ids.
+            const easJson = JSON.parse(fs.readFileSync("eas.json", "utf8"));
+            easJson.submit.production.ios = {
+              ...easJson.submit.production.ios,
+              ascApiKeyPath: "./credentials/asc-api-key.p8",
+              ascApiKeyId: process.env.APPLE_API_KEY_ID_VALUE,
+              ascApiKeyIssuerId: process.env.APPLE_API_ISSUER_VALUE,
+            };
+            fs.writeFileSync("eas.json", JSON.stringify(easJson, null, 2));
           '
 
       - name: Build on EAS and submit to TestFlight
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          EXPO_ASC_API_KEY_PATH: credentials/asc-api-key.p8
-          EXPO_ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          EXPO_ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
-          EXPO_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           eas build \
             --platform ios \
