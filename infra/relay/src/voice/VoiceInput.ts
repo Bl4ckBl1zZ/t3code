@@ -89,6 +89,7 @@ export class VoiceInputOperationError extends Schema.TaggedErrorClass<VoiceInput
       Schema.Literal("request_aborted"),
     ]),
     retryAfterSeconds: Schema.optionalKey(Schema.Number),
+    detail: Schema.optionalKey(Schema.String),
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
@@ -100,13 +101,18 @@ type VoiceErrorCode =
 
 function operationError(
   code: VoiceErrorCode,
-  options?: { readonly retryAfterSeconds?: number; readonly cause?: unknown },
+  options?: {
+    readonly retryAfterSeconds?: number;
+    readonly cause?: unknown;
+    readonly detail?: string;
+  },
 ): VoiceInputOperationError {
   return new VoiceInputOperationError({
     code,
     ...(options?.retryAfterSeconds === undefined
       ? {}
       : { retryAfterSeconds: options.retryAfterSeconds }),
+    ...(options?.detail === undefined ? {} : { detail: options.detail }),
     ...(options && "cause" in options ? { cause: options.cause } : {}),
   });
 }
@@ -184,6 +190,7 @@ async function upstreamError(response: Response): Promise<VoiceInputOperationErr
   const providerMessage = upstreamErrorMessage(await response.text());
   const options = {
     ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterSeconds: retryAfter } : {}),
+    ...(providerMessage ? { detail: `HTTP ${response.status}: ${providerMessage}` } : {}),
     cause: new Error(
       `OpenRouter returned HTTP ${response.status}${providerMessage ? `: ${providerMessage}` : ""}`,
     ),

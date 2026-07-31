@@ -530,11 +530,13 @@ export class RelayVoiceInputError extends Schema.TaggedErrorClass<RelayVoiceInpu
     code: VoiceTranscriptionErrorCode,
     traceId: TrimmedNonEmptyString,
     retryAfterSeconds: Schema.optionalKey(Schema.Number),
+    /** Sanitized upstream provider error text, when one was returned. */
+    detail: Schema.optionalKey(TrimmedNonEmptyString),
   },
   { httpApiStatus: 400 },
 ) {
   override get message(): string {
-    return `Voice input request failed: ${this.code}`;
+    return `Voice input request failed: ${this.code}${this.detail ? ` (${this.detail})` : ""}`;
   }
 }
 

@@ -118,7 +118,9 @@ export function voiceInputErrorMessage(error: VoiceInputError): string {
       return "Your OpenRouter API key was rejected. Update it in Settings.";
     case "invalid_audio":
     case "unsupported_format":
-      return "The recording could not be processed.";
+      return error.message
+        ? `The recording could not be processed: ${error.message}`
+        : "The recording could not be processed.";
     case "audio_too_large":
       return "The recording is too large to transcribe.";
     case "duration_exceeded":
@@ -148,6 +150,13 @@ function normalizeError(error: unknown): VoiceInputError {
     "_tag" in error.relayError &&
     error.relayError._tag === "RelayVoiceInputError"
   ) {
+    const relayError = error.relayError as { code?: unknown; detail?: unknown };
+    if (typeof relayError.code === "string") {
+      return {
+        code: relayError.code as VoiceInputError["code"],
+        ...(typeof relayError.detail === "string" ? { message: relayError.detail } : {}),
+      };
+    }
     return normalizeError(error.relayError);
   }
   if (typeof error === "object" && error !== null && "code" in error) {

@@ -1120,6 +1120,9 @@ function mapVoiceInputOperationError(
           ...(error.retryAfterSeconds === undefined
             ? {}
             : { retryAfterSeconds: error.retryAfterSeconds }),
+          ...(error.detail === undefined || error.detail.trim() === ""
+            ? {}
+            : { detail: error.detail.slice(0, 300) }),
         }),
       ),
     ),
