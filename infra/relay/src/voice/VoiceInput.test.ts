@@ -50,11 +50,21 @@ describe("relay Voice Input normalization", () => {
       ],
     };
     expect(testExports.normalizeModels(payload, "transcription").map((model) => model.id)).toEqual([
-      "openai/transcribe",
+      "openai/gpt-4o-mini-transcribe",
+      "openai/gpt-4o-transcribe",
     ]);
     expect(testExports.normalizeModels(payload, "text").map((model) => model.id)).toEqual([
       "openai/chat",
     ]);
+  });
+
+  it("replaces an incompatible persisted transcription model with the default", () => {
+    expect(testExports.resolveTranscriptionModel("openai/gpt-audio-mini")).toBe(
+      "openai/gpt-4o-mini-transcribe",
+    );
+    expect(testExports.resolveTranscriptionModel("openai/gpt-4o-transcribe")).toBe(
+      "openai/gpt-4o-transcribe",
+    );
   });
 
   it("cleanup prompt forbids acting on content and limits context", () => {
@@ -84,5 +94,16 @@ describe("relay Voice Input normalization", () => {
     expect(error.cause).toEqual(
       expect.objectContaining({ message: expect.stringContaining("HTTP") }),
     );
+  });
+
+  it("maps a rejected transcription model to model_unavailable", async () => {
+    const error = await testExports.upstreamError(
+      new Response(
+        JSON.stringify({ error: { message: "Model openai/gpt-audio-mini does not exist" } }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    expect(error.code).toBe("model_unavailable");
   });
 });

@@ -34,6 +34,25 @@ import {
 } from "../persistence/schema.ts";
 
 const OPENROUTER_ORIGIN = "https://openrouter.ai";
+const OPENROUTER_TRANSCRIPTION_MODELS: ReadonlyArray<OpenRouterModelOption> = [
+  {
+    id: "openai/gpt-4o-mini-transcribe",
+    name: "OpenAI: GPT-4o Mini Transcribe",
+    providerName: "OpenAI",
+    capability: "transcription",
+    available: true,
+  },
+  {
+    id: "openai/gpt-4o-transcribe",
+    name: "OpenAI: GPT-4o Transcribe",
+    providerName: "OpenAI",
+    capability: "transcription",
+    available: true,
+  },
+];
+const OPENROUTER_TRANSCRIPTION_MODEL_IDS = new Set(
+  OPENROUTER_TRANSCRIPTION_MODELS.map((model) => model.id),
+);
 const modelCache = new Map<
   OpenRouterModelCapability,
   { readonly models: ReadonlyArray<OpenRouterModelOption>; readonly cachedAt: number }
@@ -166,6 +185,10 @@ async function upstreamError(response: Response): Promise<VoiceInputOperationErr
     case 402:
       return operationError("provider_payment_required", options);
     case 400:
+      if (providerMessage?.toLowerCase().includes("model") && providerMessage.includes("exist")) {
+        return operationError("model_unavailable", options);
+      }
+      return operationError("invalid_audio", options);
     case 422:
       return operationError("invalid_audio", options);
     case 408:
@@ -240,6 +263,9 @@ function normalizeModels(
   payload: unknown,
   capability: OpenRouterModelCapability,
 ): OpenRouterModelOption[] {
+  // OpenRouter's general model catalog includes audio-capable chat models that the dedicated
+  // transcription endpoint rejects, while transcription-only models are not consistently listed.
+  if (capability === "transcription") return [...OPENROUTER_TRANSCRIPTION_MODELS];
   if (typeof payload !== "object" || payload === null || !("data" in payload)) return [];
   const data = (payload as { data?: unknown }).data;
   if (!Array.isArray(data)) return [];
@@ -258,10 +284,7 @@ function normalizeModels(
     const outputs = Array.isArray(architecture.output_modalities)
       ? architecture.output_modalities
       : [];
-    const compatible =
-      capability === "transcription"
-        ? inputs.includes("audio") && outputs.includes("text")
-        : inputs.includes("text") && outputs.includes("text");
+    const compatible = inputs.includes("text") && outputs.includes("text");
     if (!compatible) continue;
     const pricing =
       typeof model.pricing === "object" && model.pricing !== null
@@ -281,6 +304,12 @@ function normalizeModels(
     });
   }
   return models;
+}
+
+function resolveTranscriptionModel(modelId: string): string {
+  return OPENROUTER_TRANSCRIPTION_MODEL_IDS.has(modelId)
+    ? modelId
+    : DEFAULT_VOICE_INPUT_SETTINGS.transcriptionModel;
 }
 
 const CLEANUP_SYSTEM_PROMPT = `Correct a speech transcript conservatively.
@@ -557,6 +586,7 @@ const make = Effect.gen(function* () {
 
     const apiKey = yield* readCredential(input.userId);
     const settings = yield* readSettings(input.userId);
+    const transcriptionModel = resolveTranscriptionModel(settings.transcriptionModel);
     const transcriptionPayload = yield* Effect.tryPromise({
       try: () =>
         openRouterJson({
@@ -568,7 +598,7 @@ const make = Effect.gen(function* () {
               data: input.request.audio.data,
               format: input.request.audio.format satisfies VoiceAudioFormat,
             },
-            model: settings.transcriptionModel,
+            model: transcriptionModel,
             ...(settings.language === null ? {} : { language: settings.language }),
           },
         }),
@@ -584,7 +614,7 @@ const make = Effect.gen(function* () {
             "voice.error.cause": error.cause instanceof Error ? error.cause.message : "unknown",
             "voice.audio.format": input.request.audio.format,
             "voice.audio.bytes": audioBytes,
-            "voice.transcription.model": settings.transcriptionModel,
+            "voice.transcription.model": transcriptionModel,
           }),
         ),
       ),
@@ -716,5 +746,6 @@ export const testExports = {
   decodedBase64Size,
   integrationStatus,
   normalizeModels,
+  resolveTranscriptionModel,
   upstreamError,
 };
