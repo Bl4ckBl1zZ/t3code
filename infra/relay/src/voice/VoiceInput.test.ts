@@ -59,6 +59,7 @@ describe("relay Voice Input normalization", () => {
     expect(testExports.normalizeModels(payload, "transcription").map((model) => model.id)).toEqual([
       "openai/gpt-4o-mini-transcribe",
       "openai/gpt-4o-transcribe",
+      "openai/whisper-large-v3-turbo",
     ]);
     expect(testExports.normalizeModels(payload, "text").map((model) => model.id)).toEqual([
       "openai/chat",
