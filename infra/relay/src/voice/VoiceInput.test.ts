@@ -69,6 +69,9 @@ describe("relay Voice Input normalization", () => {
     expect(testExports.resolveTranscriptionModel("openai/gpt-audio-mini")).toBe(
       "openai/gpt-4o-mini-transcribe",
     );
+    expect(testExports.resolveTranscriptionModel("openai/whisper-large-v3-turbo")).toBe(
+      "openai/whisper-large-v3-turbo",
+    );
     expect(testExports.resolveTranscriptionModel("openai/gpt-4o-transcribe")).toBe(
       "openai/gpt-4o-transcribe",
     );
