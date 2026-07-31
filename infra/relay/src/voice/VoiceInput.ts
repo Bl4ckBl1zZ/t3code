@@ -14,6 +14,7 @@ import type {
 import {
   DEFAULT_VOICE_INPUT_SETTINGS,
   VOICE_INPUT_MAX_AUDIO_BYTES,
+  VOICE_INPUT_MAX_DURATION_SECONDS,
 } from "@t3tools/contracts/voice";
 import { applyVoiceInputSettingsPatch, normalizeVoiceDictionary } from "@t3tools/shared/voiceInput";
 import * as Clock from "effect/Clock";
@@ -34,6 +35,15 @@ import {
 } from "../persistence/schema.ts";
 
 const OPENROUTER_ORIGIN = "https://openrouter.ai";
+// Client duration timers stop at exactly the limit; allow a little slop before rejecting.
+const DURATION_TOLERANCE_SECONDS = 3;
+
+function durationExceedsLimit(durationSeconds: number | undefined): boolean {
+  return (
+    durationSeconds !== undefined &&
+    durationSeconds > VOICE_INPUT_MAX_DURATION_SECONDS + DURATION_TOLERANCE_SECONDS
+  );
+}
 const OPENROUTER_TRANSCRIPTION_MODELS: ReadonlyArray<OpenRouterModelOption> = [
   {
     id: "openai/gpt-4o-mini-transcribe",
@@ -583,6 +593,9 @@ const make = Effect.gen(function* () {
     const audioBytes = decodedBase64Size(input.request.audio.data);
     if (audioBytes < 0) return yield* operationError("invalid_audio");
     if (audioBytes > VOICE_INPUT_MAX_AUDIO_BYTES) return yield* operationError("audio_too_large");
+    if (durationExceedsLimit(input.request.durationSeconds)) {
+      return yield* operationError("duration_exceeded");
+    }
 
     const apiKey = yield* readCredential(input.userId);
     const settings = yield* readSettings(input.userId);
@@ -744,6 +757,7 @@ export const layer = Layer.effect(VoiceInput, make);
 export const testExports = {
   CLEANUP_SYSTEM_PROMPT,
   decodedBase64Size,
+  durationExceedsLimit,
   integrationStatus,
   normalizeModels,
   resolveTranscriptionModel,

@@ -14,6 +14,7 @@ import {
   listOpenRouterModels,
   patchVoiceInputSettings,
 } from "../../cloud/voiceInput";
+import { invalidateVoicePreflight } from "../../voice/useWebVoiceInput";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -67,6 +68,7 @@ export function VoiceInputSettingsSection() {
       setError(null);
       try {
         const next = await patchVoiceInputSettings(patch);
+        invalidateVoicePreflight();
         setSettings(next);
         setDictionaryDraft(next.dictionary.join("\n"));
       } catch (cause) {

@@ -1,7 +1,7 @@
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, InteractionManager, Platform, Pressable, View, useColorScheme } from "react-native";
+import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -55,14 +55,12 @@ import { useRemoteConnectionStatus } from "../../state/use-remote-environment-re
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useCreateProjectThread } from "./use-project-actions";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
-import { AppText as Text } from "../../components/AppText";
 import {
-  insertVoiceTranscript,
-  replaceVoiceInsertionWithRaw,
-  undoVoiceInsertion,
-  type VoiceInsertionRecovery,
-} from "@t3tools/shared/voiceInput";
-import { useMobileVoiceInput } from "../voice/useMobileVoiceInput";
+  voiceMicButtonProps,
+  VoiceRecordingBar,
+  VoiceRecoveryRow,
+} from "../voice/VoiceComposerControls";
+import { useVoiceComposer } from "../voice/useVoiceComposer";
 
 function formatWorkspaceLabel(input: {
   readonly workspaceMode: string;
@@ -116,60 +114,19 @@ export function NewTaskDraftScreen(props: {
     start: 0,
     end: 0,
   });
-  const voiceAnchorRef = useRef<{
-    readonly draft: string;
-    readonly selection: ComposerEditorSelection;
-    readonly draftKey: string | null;
-  } | null>(null);
-  const [voiceRecovery, setVoiceRecovery] = useState<VoiceInsertionRecovery | null>(null);
-  const voice = useMobileVoiceInput({
-    onCompleted: (result) => {
-      const anchor = voiceAnchorRef.current;
-      if (!anchor || anchor.draftKey !== flow.draftKey) return;
-      const useFallback = flow.prompt !== anchor.draft;
-      const range = useFallback
-        ? { start: composerSelection.end, end: composerSelection.end }
-        : anchor.selection;
-      const insertion = insertVoiceTranscript({
-        draft: flow.prompt,
-        range,
-        rawText: result.rawText,
-        cleanedText: result.text,
-      });
-      flow.setPrompt(insertion.text);
-      setComposerSelection({ start: insertion.caret, end: insertion.caret });
-      setVoiceRecovery(insertion.recovery);
-      requestAnimationFrame(() => {
-        promptInputRef.current?.focus();
-        promptInputRef.current?.setSelection({ start: insertion.caret, end: insertion.caret });
-      });
-      if (useFallback) Alert.alert("Transcript inserted at current cursor");
-    },
-    onUnavailable: (reason) => {
-      if (reason === "connect_openrouter") {
-        navigation.navigate("SettingsSheet", { screen: "SettingsOpenRouter" });
-      } else {
-        Alert.alert("Sign in to use voice input");
-      }
+  const voice = useVoiceComposer({
+    identity: `draft:${flow.draftKey ?? "none"}`,
+    draft: flow.prompt,
+    selection: composerSelection,
+    setDraft: flow.setPrompt,
+    setSelection: setComposerSelection,
+    focusAt: (caret) => {
+      promptInputRef.current?.focus();
+      promptInputRef.current?.setSelection({ start: caret, end: caret });
     },
   });
-  const voiceBusy =
-    voice.state.type === "requesting_permission" ||
-    voice.state.type === "recording" ||
-    voice.state.type === "stopping" ||
-    voice.state.type === "transcribing";
-  const toggleVoice = useCallback(() => {
-    if (voice.state.type === "recording") {
-      voiceAnchorRef.current = {
-        draft: flow.prompt,
-        selection: composerSelection,
-        draftKey: flow.draftKey,
-      };
-    } else {
-      setVoiceRecovery(null);
-    }
-    void voice.toggle();
-  }, [composerSelection, flow.draftKey, flow.prompt, voice]);
+  const voiceBusy = voice.busy;
+  const toggleVoice = voice.toggle;
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
@@ -1043,7 +1000,7 @@ export function NewTaskDraftScreen(props: {
       selection={composerSelection}
       skills={flow.selectedProviderSkills}
       onChangeText={(text) => {
-        if (voiceRecovery) setVoiceRecovery(null);
+        if (voice.recovery) voice.clearRecovery();
         flow.setPrompt(text);
       }}
       onSelectionChange={setComposerSelection}
@@ -1079,16 +1036,7 @@ export function NewTaskDraftScreen(props: {
         disabled={isIncomingShareTransferPending}
       />
       <ComposerToolbarButton
-        accessibilityLabel={
-          voice.state.type === "recording"
-            ? "Stop recording and transcribe"
-            : voice.state.type === "transcribing"
-              ? "Transcribing voice input"
-              : "Dictate message"
-        }
-        icon={voice.state.type === "recording" ? "stop.fill" : "mic"}
-        {...(voice.state.type === "recording" ? { variant: "danger" as const } : {})}
-        disabled={voiceBusy && voice.state.type !== "recording"}
+        {...voiceMicButtonProps(voice.state)}
         onPress={toggleVoice}
         showChevron={false}
       />
@@ -1152,37 +1100,18 @@ export function NewTaskDraftScreen(props: {
     />
   );
 
-  const voiceRecoveryControls = voiceRecovery ? (
-    <View className="flex-row items-center justify-end gap-3 px-2 pb-2">
-      <Text className="text-xs text-foreground-muted">
-        {voiceRecovery.rawText === voiceRecovery.cleanedText ? "Transcript added" : "Cleaned up"}
-      </Text>
-      {voiceRecovery.rawText !== voiceRecovery.cleanedText ? (
-        <Pressable
-          onPress={() => {
-            const replacement = replaceVoiceInsertionWithRaw(flow.prompt, voiceRecovery);
-            if (!replacement) return setVoiceRecovery(null);
-            flow.setPrompt(replacement.text);
-            setComposerSelection({ start: replacement.caret, end: replacement.caret });
-            setVoiceRecovery(replacement.recovery);
-          }}
-        >
-          <Text className="text-xs text-accent">Use raw</Text>
-        </Pressable>
-      ) : null}
-      <Pressable
-        onPress={() => {
-          const undone = undoVoiceInsertion(flow.prompt, voiceRecovery);
-          setVoiceRecovery(null);
-          if (!undone) return;
-          flow.setPrompt(undone.text);
-          setComposerSelection({ start: undone.caret, end: undone.caret });
-        }}
-      >
-        <Text className="text-xs text-accent">Undo</Text>
-      </Pressable>
-    </View>
-  ) : null;
+  const voiceRecoveryControls = (
+    <>
+      <VoiceRecordingBar
+        state={voice.state}
+        subscribeLevel={voice.subscribeLevel}
+        onCancel={() => void voice.cancel()}
+        onStop={toggleVoice}
+        onCleanupChange={voice.setCleanup}
+      />
+      <VoiceRecoveryRow recovery={voice.recovery} onUseRaw={voice.useRaw} onUndo={voice.undo} />
+    </>
+  );
 
   if (isAndroid) {
     // The draft is a thread that doesn't exist yet, so it mirrors the thread
@@ -1239,12 +1168,7 @@ export function NewTaskDraftScreen(props: {
               <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
               {!isExpanded ? (
                 <View className="flex-row gap-1">
-                  <ControlPill
-                    icon={voice.state.type === "recording" ? "stop.fill" : "mic"}
-                    {...(voice.state.type === "recording" ? { variant: "danger" as const } : {})}
-                    disabled={voiceBusy && voice.state.type !== "recording"}
-                    onPress={toggleVoice}
-                  />
+                  <ControlPill {...voiceMicButtonProps(voice.state)} onPress={toggleVoice} />
                   <ControlPill
                     icon="arrow.up"
                     variant="primary"

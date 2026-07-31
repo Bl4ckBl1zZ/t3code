@@ -9,18 +9,56 @@ const MIME_TYPES: ReadonlyArray<{ readonly mimeType: string; readonly format: Vo
     { mimeType: "audio/ogg;codecs=opus", format: "ogg" },
   ];
 
+const LEVEL_SAMPLE_INTERVAL_MS = 100;
+
+export function voiceFormatFromMimeType(mimeType: string): VoiceAudioFormat | null {
+  const container = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+  switch (container) {
+    case "audio/webm":
+    case "video/webm":
+      return "webm";
+    case "audio/mp4":
+    case "video/mp4":
+    case "audio/m4a":
+    case "audio/x-m4a":
+      return "m4a";
+    case "audio/ogg":
+    case "application/ogg":
+      return "ogg";
+    case "audio/mpeg":
+    case "audio/mp3":
+      return "mp3";
+    case "audio/wav":
+    case "audio/wave":
+    case "audio/x-wav":
+      return "wav";
+    case "audio/aac":
+      return "aac";
+    default:
+      return null;
+  }
+}
+
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read recording."));
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        reject(new Error("Could not encode recording."));
-        return;
-      }
-      resolve(result.slice(result.indexOf(",") + 1));
-    };
+    reader.addEventListener(
+      "error",
+      () => reject(reader.error ?? new Error("Could not read recording.")),
+      { once: true },
+    );
+    reader.addEventListener(
+      "load",
+      () => {
+        const result = reader.result;
+        if (typeof result !== "string") {
+          reject(new Error("Could not encode recording."));
+          return;
+        }
+        resolve(result.slice(result.indexOf(",") + 1));
+      },
+      { once: true },
+    );
     reader.readAsDataURL(blob);
   });
 }
@@ -29,13 +67,19 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
   #stream: MediaStream | null = null;
   #recorder: MediaRecorder | null = null;
   #chunks: Blob[] = [];
-  #format: VoiceAudioFormat = "webm";
+  #format: VoiceAudioFormat | null = null;
   #audioContext: AudioContext | null = null;
-  #levelFrame: number | null = null;
+  #levelTimer: number | null = null;
   #startedAt = 0;
 
   async requestPermission(signal: AbortSignal): Promise<"granted" | "denied" | "blocked"> {
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return "blocked";
+    if (
+      !window.isSecureContext ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      return "blocked";
+    }
     try {
       this.#stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (signal.aborted) {
@@ -51,6 +95,7 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
           });
           return permission.state === "denied" ? "blocked" : "denied";
         } catch {
+          // Safari and Firefox reject the "microphone" permission name.
           return "denied";
         }
       }
@@ -66,10 +111,14 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
     const stream = this.#stream;
     if (!stream) throw new Error("Microphone permission was not granted.");
     const supported = MIME_TYPES.find(({ mimeType }) => MediaRecorder.isTypeSupported(mimeType));
-    const options = supported ? { mimeType: supported.mimeType } : undefined;
-    this.#format = supported?.format ?? "webm";
     this.#chunks = [];
-    this.#recorder = new MediaRecorder(stream, options);
+    this.#recorder = new MediaRecorder(
+      stream,
+      supported ? { mimeType: supported.mimeType } : undefined,
+    );
+    // When no probed type matched, the browser records in its default container; the real format
+    // is resolved from the recorder/blob MIME type at stop() instead of being assumed here.
+    this.#format = supported?.format ?? voiceFormatFromMimeType(this.#recorder.mimeType) ?? null;
     this.#recorder.addEventListener("dataavailable", (event) => {
       if (event.data.size > 0) this.#chunks.push(event.data);
     });
@@ -87,21 +136,33 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
     if (!recorder) throw new Error("No recording is active.");
     const durationSeconds = Math.max(0, (Date.now() - this.#startedAt) / 1_000);
     const blob = await new Promise<Blob>((resolve, reject) => {
-      recorder.addEventListener(
-        "stop",
-        () => resolve(new Blob(this.#chunks, { type: recorder.mimeType })),
-        { once: true },
-      );
+      const finish = () =>
+        resolve(
+          new Blob(this.#chunks, recorder.mimeType ? { type: recorder.mimeType } : undefined),
+        );
+      // An interruption (device unplugged, OS revoked the mic) may have stopped the recorder
+      // already; collect whatever audio made it into the buffer instead of throwing.
+      if (recorder.state === "inactive") {
+        finish();
+        return;
+      }
+      recorder.addEventListener("stop", finish, { once: true });
       recorder.addEventListener("error", () => reject(new Error("Audio recording failed.")), {
         once: true,
       });
       recorder.stop();
     });
+    const format =
+      this.#format ??
+      voiceFormatFromMimeType(recorder.mimeType) ??
+      voiceFormatFromMimeType(blob.type);
     this.#release();
+    if (blob.size === 0) throw new Error("The recording did not contain usable audio.");
+    if (!format) throw new Error("This browser records an unsupported audio format.");
     const data = await blobToBase64(blob);
     return {
       data,
-      format: this.#format,
+      format,
       durationSeconds,
       dispose: () => {
         this.#chunks = [];
@@ -116,26 +177,38 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
   }
 
   #startLevelSampling(stream: MediaStream, onLevel: (level: number) => void): void {
-    this.#audioContext = new AudioContext();
+    try {
+      this.#audioContext = new AudioContext();
+    } catch {
+      return;
+    }
+    // iOS Safari creates AudioContexts suspended unless construction happens inside a fresh
+    // user gesture; resume explicitly so the meter works after async preflight.
+    void this.#audioContext.resume().catch(() => undefined);
     const analyser = this.#audioContext.createAnalyser();
-    analyser.fftSize = 64;
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.4;
     this.#audioContext.createMediaStreamSource(stream).connect(analyser);
-    const samples = new Uint8Array(analyser.frequencyBinCount);
-    const sample = () => {
-      analyser.getByteFrequencyData(samples);
-      onLevel(samples.reduce((sum, value) => sum + value, 0) / samples.length / 255);
-      this.#levelFrame = window.requestAnimationFrame(sample);
-    };
-    sample();
+    const samples = new Uint8Array(analyser.fftSize);
+    this.#levelTimer = window.setInterval(() => {
+      analyser.getByteTimeDomainData(samples);
+      let sum = 0;
+      for (const value of samples) {
+        const centered = (value - 128) / 128;
+        sum += centered * centered;
+      }
+      onLevel(Math.min(1, Math.sqrt(sum / samples.length) * 4));
+    }, LEVEL_SAMPLE_INTERVAL_MS);
   }
 
   #release(): void {
-    if (this.#levelFrame !== null) window.cancelAnimationFrame(this.#levelFrame);
-    this.#levelFrame = null;
-    void this.#audioContext?.close();
+    if (this.#levelTimer !== null) window.clearInterval(this.#levelTimer);
+    this.#levelTimer = null;
+    void this.#audioContext?.close().catch(() => undefined);
     this.#audioContext = null;
     for (const track of this.#stream?.getTracks() ?? []) track.stop();
     this.#stream = null;
     this.#recorder = null;
+    this.#format = null;
   }
 }

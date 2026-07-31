@@ -9,6 +9,13 @@ describe("relay Voice Input normalization", () => {
     expect(testExports.decodedBase64Size("not base64")).toBe(-1);
   });
 
+  it("rejects recordings meaningfully over the duration limit", () => {
+    expect(testExports.durationExceedsLimit(undefined)).toBe(false);
+    expect(testExports.durationExceedsLimit(120)).toBe(false);
+    expect(testExports.durationExceedsLimit(122)).toBe(false);
+    expect(testExports.durationExceedsLimit(124)).toBe(true);
+  });
+
   it("returns redacted integration status only", () => {
     expect(
       testExports.integrationStatus({

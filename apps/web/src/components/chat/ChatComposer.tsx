@@ -113,6 +113,7 @@ import {
   undoVoiceInsertion,
   type VoiceInsertionRecovery,
 } from "@t3tools/shared/voiceInput";
+import { voiceInputErrorMessage } from "@t3tools/client-runtime/voice";
 import { useWebVoiceInput } from "../../voice/useWebVoiceInput";
 import { ComposerVoiceAction } from "./ComposerVoiceAction";
 
@@ -1288,7 +1289,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const voice = useWebVoiceInput({
     onCompleted: (result) => {
       const anchor = voiceAnchorRef.current;
-      if (!anchor || anchor.identity !== composerVoiceIdentity) return;
+      if (!anchor || anchor.identity !== composerVoiceIdentity) {
+        toastManager.add({
+          type: "info",
+          title: "Voice transcript discarded",
+          description: "The composer changed while the recording was transcribing.",
+        });
+        return;
+      }
       const currentPrompt = promptRef.current;
       const usedFallback = currentPrompt !== anchor.prompt;
       const cursor = usedFallback ? composerCursor : anchor.cursor;
@@ -1329,22 +1337,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (voice.state.type !== "failed") return;
     toastManager.add({
       type: "error",
-      title: `Voice input failed (${voice.state.stage}: ${voice.state.error.code})`,
-      description: voice.state.error.message ?? "No additional error details were provided.",
+      title: voice.state.canRetry ? "Voice input failed — tap retry" : "Voice input failed",
+      description: voiceInputErrorMessage(voice.state.error),
     });
   }, [voice.state]);
 
   const toggleVoiceInput = useCallback(() => {
-    if (voice.state.type === "recording") {
-      const snapshot = composerEditorRef.current?.readSnapshot();
-      voiceAnchorRef.current = {
-        prompt: promptRef.current,
-        cursor: snapshot?.cursor ?? composerCursor,
-        identity: composerVoiceIdentity,
-      };
-    } else {
-      setVoiceRecovery(null);
-    }
+    // Capture the anchor on start as well as on manual stop: a recording that stops on its own
+    // (duration cap, interruption) still needs an insertion point for the transcript.
+    const snapshot = composerEditorRef.current?.readSnapshot();
+    voiceAnchorRef.current = {
+      prompt: promptRef.current,
+      cursor: snapshot?.cursor ?? composerCursor,
+      identity: composerVoiceIdentity,
+    };
+    if (voice.state.type !== "recording") setVoiceRecovery(null);
     void voice.toggle();
   }, [composerCursor, composerVoiceIdentity, promptRef, voice]);
 
@@ -3393,6 +3400,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }}
                   onRetry={() => void voice.retry()}
                   onCleanupChange={voice.setCleanup}
+                  subscribeLevel={voice.subscribeLevel}
                 />
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}

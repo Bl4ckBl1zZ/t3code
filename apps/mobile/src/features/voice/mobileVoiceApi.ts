@@ -18,12 +18,14 @@ async function withRelay<A>(
     client: ManagedRelay.ManagedRelayClient["Service"],
     clerkToken: string,
   ) => Effect.Effect<A, ManagedRelay.ManagedRelayClientError>,
+  signal?: AbortSignal,
 ): Promise<A> {
   const session = appAtomRegistry.get(managedRelaySessionAtom);
   const clerkToken = session ? await runtime.runPromise(session.readClerkToken()) : null;
   if (!clerkToken) throw new Error("Sign in to T3 Connect to use Voice Input.");
   return runtime.runPromise(
     ManagedRelay.ManagedRelayClient.pipe(Effect.flatMap((client) => operation(client, clerkToken))),
+    signal ? { signal } : undefined,
   );
 }
 
@@ -75,7 +77,9 @@ export const listOpenRouterModels = (
 
 export const transcribeVoice = (
   request: VoiceTranscriptionRequest,
+  signal?: AbortSignal,
 ): Promise<VoiceTranscriptionResponse> =>
   withRelay(
     (client, clerkToken) => client.transcribeVoice?.({ clerkToken, request }) ?? unavailable(),
+    signal,
   );

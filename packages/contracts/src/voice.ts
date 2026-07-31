@@ -123,6 +123,7 @@ export const VoiceTranscriptionRequest = Schema.Struct({
     format: VoiceAudioFormat,
   }),
   cleanup: Schema.optionalKey(Schema.Boolean),
+  durationSeconds: Schema.optionalKey(Schema.Number),
 });
 export type VoiceTranscriptionRequest = typeof VoiceTranscriptionRequest.Type;
 
