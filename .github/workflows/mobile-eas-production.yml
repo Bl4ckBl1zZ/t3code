@@ -56,10 +56,62 @@ jobs:
           # ignored build script (no allowBuilds config outside the repo).
           packager: npm
 
+      - name: Materialize local iOS signing credentials
+        working-directory: apps/mobile
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          APPLE_MAIN_PROFILE: ${{ secrets.APPLE_MAIN_APPSTORE_PROFILE_BASE64 }}
+          APPLE_WIDGETS_PROFILE: ${{ secrets.APPLE_WIDGETS_APPSTORE_PROFILE_BASE64 }}
+          APPLE_SHARING_PROFILE: ${{ secrets.APPLE_SHARING_APPSTORE_PROFILE_BASE64 }}
+          APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p credentials
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64" | base64 -d > credentials/distribution.p12
+          printf '%s' "$APPLE_MAIN_PROFILE" | base64 -d > credentials/main.mobileprovision
+          printf '%s' "$APPLE_WIDGETS_PROFILE" | base64 -d > credentials/widgets.mobileprovision
+          printf '%s' "$APPLE_SHARING_PROFILE" | base64 -d > credentials/sharing.mobileprovision
+          printf '%s' "$APPLE_API_KEY_VALUE" > credentials/asc-api-key.p8
+          node --eval '
+            const fs = require("fs");
+            const certificate = {
+              path: "credentials/distribution.p12",
+              password: process.env.APPLE_DISTRIBUTION_P12_PASSWORD,
+            };
+            fs.writeFileSync(
+              "credentials.json",
+              JSON.stringify(
+                {
+                  ios: {
+                    T3Code: {
+                      provisioningProfilePath: "credentials/main.mobileprovision",
+                      distributionCertificate: certificate,
+                    },
+                    ExpoWidgetsTarget: {
+                      provisioningProfilePath: "credentials/widgets.mobileprovision",
+                      distributionCertificate: certificate,
+                    },
+                    "expo-sharing-extension": {
+                      provisioningProfilePath: "credentials/sharing.mobileprovision",
+                      distributionCertificate: certificate,
+                    },
+                  },
+                },
+                null,
+                2,
+              ),
+            );
+          '
+
       - name: Build on EAS and submit to TestFlight
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_ASC_API_KEY_PATH: credentials/asc-api-key.p8
+          EXPO_ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          EXPO_ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+          EXPO_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           eas build \
             --platform ios \
