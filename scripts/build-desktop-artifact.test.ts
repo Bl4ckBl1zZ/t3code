@@ -25,6 +25,7 @@ import {
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
+  renderMacHelperEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
@@ -457,6 +458,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<key>com.apple.security.device.audio-input</key>");
   });
 
+  it("keeps profile-bound capabilities out of inherited macOS helper entitlements", () => {
+    const entitlements = renderMacHelperEntitlements();
+
+    assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
+    assert.include(
+      entitlements,
+      "<key>com.apple.security.cs.allow-unsigned-executable-memory</key>",
+    );
+    assert.include(entitlements, "<key>com.apple.security.cs.disable-library-validation</key>");
+    assert.notInclude(entitlements, "com.apple.application-identifier");
+    assert.notInclude(entitlements, "com.apple.developer.team-identifier");
+    assert.notInclude(entitlements, "com.apple.developer.associated-domains");
+  });
+
   it("rejects incomplete macOS passkey signing configuration", () => {
     const captureError = (env: Readonly<Record<string, string | undefined>>) => {
       try {
@@ -549,6 +564,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         {
           entitlementsPath: "/tmp/entitlements.mac.plist",
+          helperEntitlementsPath: "/tmp/entitlements.mac.inherit.plist",
           provisioningProfilePath: "/tmp/t3code.provisionprofile",
         },
         "com.t3code.dev",
@@ -559,7 +575,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.hardenedRuntime, true);
       assert.equal(mac.notarize, true);
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
-      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.deepStrictEqual(mac.extendInfo, {
         NSMicrophoneUsageDescription:

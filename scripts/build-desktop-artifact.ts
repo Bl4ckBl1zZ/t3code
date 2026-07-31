@@ -887,6 +887,22 @@ ${associatedDomains}
 `;
 }
 
+export function renderMacHelperEntitlements(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>
+`;
+}
+
 export function resolveFffNativeDependencies(
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
@@ -1554,6 +1570,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   macPasskeySigning:
     | {
         readonly entitlementsPath: string;
+        readonly helperEntitlementsPath: string;
         readonly provisioningProfilePath: string;
       }
     | undefined,
@@ -1608,7 +1625,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
-            entitlementsInherit: macPasskeySigning.entitlementsPath,
+            entitlementsInherit: macPasskeySigning.helperEntitlementsPath,
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
         : {}),
@@ -1912,13 +1929,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const macEntitlementsPath = macPasskeySigning
     ? path.join(stageAppDir, "entitlements.mac.plist")
     : undefined;
-  if (macPasskeySigning && macEntitlementsPath) {
+  const macHelperEntitlementsPath = macPasskeySigning
+    ? path.join(stageAppDir, "entitlements.mac.inherit.plist")
+    : undefined;
+  if (macPasskeySigning && macEntitlementsPath && macHelperEntitlementsPath) {
     if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
         provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
       });
     }
     yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
+    yield* fs.writeFileString(macHelperEntitlementsPath, renderMacHelperEntitlements());
   }
 
   const stageDependencies = {
@@ -1962,9 +1983,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
+      macPasskeySigning && macEntitlementsPath && macHelperEntitlementsPath
         ? {
             entitlementsPath: macEntitlementsPath,
+            helperEntitlementsPath: macHelperEntitlementsPath,
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
