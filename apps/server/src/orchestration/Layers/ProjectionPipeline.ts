@@ -613,6 +613,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             snoozedAt: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
+            handoff: null,
+            pendingHandoffContext: null,
             latestUserMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
@@ -633,6 +635,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             archivedAt: event.payload.archivedAt,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
+            handoff: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -732,6 +735,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   titleRegenerationRequestId: event.payload.titleRegeneration?.requestId ?? null,
                   titleRegenerationStartedAt: event.payload.titleRegeneration?.startedAt ?? null,
                 }
+              : {}),
+            ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
+            ...(event.payload.pendingHandoffContext !== undefined
+              ? { pendingHandoffContext: event.payload.pendingHandoffContext }
               : {}),
             ...(event.payload.modelSelection !== undefined
               ? { modelSelection: event.payload.modelSelection }

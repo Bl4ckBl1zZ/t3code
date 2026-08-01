@@ -430,6 +430,75 @@ export function getStartedThreadModelChangeBlockReason(input: {
   };
 }
 
+/** True while the server is summarizing this thread for a provider switch. */
+export function threadHandoffPending(thread: Thread | null | undefined): boolean {
+  return Boolean(thread?.handoff);
+}
+
+export interface CrossProviderHandoffPlan {
+  readonly fromInstanceId: ModelSelection["instanceId"];
+  readonly toInstanceId: ModelSelection["instanceId"];
+  readonly fromLabel: string;
+  readonly toLabel: string;
+  /** Which incompatibility forces the switch to go through a handoff. */
+  readonly reason: "driver" | "continuation";
+}
+
+/**
+ * Whether selecting `nextModelSelection` on this thread requires a
+ * cross-provider handoff rather than a plain model change. A started thread is
+ * bound to its driver kind and to that driver's resume state, so switching
+ * across either boundary means a fresh session — and a fresh session only
+ * remembers the conversation if we hand it a summary first.
+ *
+ * Returns null when the change is an ordinary in-session model switch (or when
+ * the thread has not started, where nothing needs summarizing).
+ */
+export function getCrossProviderHandoffPlan(input: {
+  providers: ReadonlyArray<
+    Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "continuation">
+  >;
+  thread: Thread | null | undefined;
+  currentProviderInstanceId?: ModelSelection["instanceId"] | null | undefined;
+  nextModelSelection: ModelSelection;
+}): CrossProviderHandoffPlan | null {
+  if (!threadHasStarted(input.thread) || !input.thread) {
+    return null;
+  }
+  const fromInstanceId =
+    input.currentProviderInstanceId ??
+    input.thread.session?.providerInstanceId ??
+    input.thread.modelSelection.instanceId;
+  const toInstanceId = input.nextModelSelection.instanceId;
+  if (fromInstanceId === toInstanceId) {
+    return null;
+  }
+  const fromProvider = input.providers.find((snapshot) => snapshot.instanceId === fromInstanceId);
+  const toProvider = input.providers.find((snapshot) => snapshot.instanceId === toInstanceId);
+  // An unknown instance on either side means we cannot prove the switch is
+  // safe in-session; treating it as a plain change is what today's routing
+  // already does, so leave that path alone.
+  if (!fromProvider || !toProvider) {
+    return null;
+  }
+  const reason: CrossProviderHandoffPlan["reason"] | null =
+    fromProvider.driver !== toProvider.driver
+      ? "driver"
+      : fromProvider.continuation?.groupKey !== toProvider.continuation?.groupKey
+        ? "continuation"
+        : null;
+  if (reason === null) {
+    return null;
+  }
+  return {
+    fromInstanceId,
+    toInstanceId,
+    fromLabel: fromProvider.displayName ?? fromProvider.driver,
+    toLabel: toProvider.displayName ?? toProvider.driver,
+    reason,
+  };
+}
+
 export async function waitForStartedServerThread(
   threadRef: ScopedThreadRef,
   timeoutMs = 1_000,

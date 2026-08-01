@@ -274,7 +274,10 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
+  type CrossProviderHandoffPlan,
   deriveLockedProvider,
+  getCrossProviderHandoffPlan,
+  threadHandoffPending,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
@@ -1198,6 +1201,9 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
+  const startThreadHandoff = useAtomCommand(threadEnvironment.startHandoff, {
+    reportFailure: false,
+  });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
@@ -1894,6 +1900,10 @@ function ChatViewContent(props: ChatViewProps) {
     selectedProvider: selectedProviderByThreadId,
     threadProvider,
   });
+  // A started server thread can move to another provider by handing off: the
+  // outgoing provider summarizes and the incoming one resumes from that.
+  const isHandoffPending = threadHandoffPending(activeThread);
+  const canHandOffProvider = lockedProvider !== null && !isHandoffPending;
   // Once a thread selects an environment, never substitute the primary
   // environment's config while the selected environment is still loading.
   const serverConfig = activeThread
@@ -4084,6 +4094,12 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, unsnoozeThreadMutation]);
   const [isRestoringThreadBranch, setIsRestoringThreadBranch] = useState(false);
   const [branchRestoreConfirmOpen, setBranchRestoreConfirmOpen] = useState(false);
+  // Set when the user picks a model that needs a cross-provider handoff; the
+  // switch only happens once they confirm.
+  const [pendingHandoff, setPendingHandoff] = useState<{
+    plan: CrossProviderHandoffPlan;
+    modelSelection: ModelSelection;
+  } | null>(null);
   // Once revealed for a given mismatch, the banner stays mounted until the
   // mismatch changes or resolves, so clearing the draft doesn't flicker it.
   const [revealedBranchMismatchKey, setRevealedBranchMismatchKey] = useState<string | null>(null);
@@ -4591,6 +4607,16 @@ function ChatViewContent(props: ChatViewProps) {
       sendInFlightRef.current
     )
       return;
+    // The server rejects turns mid-handoff; catch it here so the message stays
+    // in the composer instead of being lost to a rejection.
+    if (isHandoffPending) {
+      toastManager.add({
+        type: "warning",
+        title: "Switching providers",
+        description: "Your message will send once the handoff summary is written.",
+      });
+      return;
+    }
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -5813,27 +5839,9 @@ function ChatViewContent(props: ChatViewProps) {
       // model lookup stay scoped to that exact instance. Unknown instance ids
       // are rejected by returning early; the server remains authoritative too.
       const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
-      const resolvedDriverKind = entry?.driver ?? null;
-      if (
-        lockedProvider !== null &&
-        resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
-      ) {
+      if (!entry) {
         scheduleComposerFocus();
         return;
-      }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
-        const currentEntry = providerStatuses.find(
-          (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
-        );
-        if (
-          currentEntry?.continuation?.groupKey &&
-          entry?.continuation?.groupKey &&
-          currentEntry.continuation.groupKey !== entry.continuation.groupKey
-        ) {
-          scheduleComposerFocus();
-          return;
-        }
       }
       const resolvedModel = resolveAppModelSelectionForInstance(
         instanceId,
@@ -5865,6 +5873,23 @@ function ChatViewContent(props: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
+      // Crossing a driver or continuation boundary cannot reuse the provider
+      // session, so it goes through a handoff: the outgoing provider writes a
+      // summary and the incoming one picks the conversation up from it.
+      const handoffPlan = getCrossProviderHandoffPlan({
+        providers: providerStatuses,
+        thread: activeThread,
+        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
+        nextModelSelection,
+      });
+      if (handoffPlan) {
+        if (activeThread.handoff) {
+          scheduleComposerFocus();
+          return;
+        }
+        setPendingHandoff({ plan: handoffPlan, modelSelection: nextModelSelection });
+        return;
+      }
       setComposerDraftModelSelection(
         scopeThreadRef(activeThread.environmentId, activeThread.id),
         nextModelSelection,
@@ -5874,7 +5899,6 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
-      lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
@@ -5882,6 +5906,42 @@ function ChatViewContent(props: ChatViewProps) {
       settings,
     ],
   );
+  const confirmProviderHandoff = useCallback(async () => {
+    if (!activeThread || !pendingHandoff) return;
+    const { modelSelection } = pendingHandoff;
+    setPendingHandoff(null);
+    const result = await startThreadHandoff({
+      environmentId: activeThread.environmentId,
+      input: { threadId: activeThread.id, toModelSelection: modelSelection },
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        toastManager.add({
+          type: "error",
+          title: "Could not switch providers",
+          description: chatActionErrorMessage(squashAtomCommandFailure(result)),
+        });
+      }
+      scheduleComposerFocus();
+      return;
+    }
+    // The thread's model selection is swapped server-side once the summary
+    // lands, so the composer draft must not keep pinning the old provider.
+    setComposerDraftModelSelection(
+      scopeThreadRef(activeThread.environmentId, activeThread.id),
+      undefined,
+    );
+    setStickyComposerModelSelection(modelSelection);
+    scheduleComposerFocus();
+  }, [
+    activeThread,
+    pendingHandoff,
+    scheduleComposerFocus,
+    setComposerDraftModelSelection,
+    setStickyComposerModelSelection,
+    startThreadHandoff,
+  ]);
+
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (canOverrideServerThreadEnvMode) {
@@ -6287,6 +6347,7 @@ function ChatViewContent(props: ChatViewProps) {
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             lockedProvider={lockedProvider}
+                            allowCrossProviderHandoff={canHandOffProvider}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             activeProjectDefaultModelSelection={
                               activeProject?.defaultModelSelection
@@ -6409,6 +6470,41 @@ function ChatViewContent(props: ChatViewProps) {
                     }}
                   >
                     Switch branch
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
+
+            <AlertDialog
+              open={pendingHandoff !== null}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setPendingHandoff(null);
+                  scheduleComposerFocus();
+                }
+              }}
+            >
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Switch to <span className="font-medium">{pendingHandoff?.plan.toLabel}</span>?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {pendingHandoff?.plan.fromLabel} will write a summary of this conversation, then{" "}
+                    {pendingHandoff?.plan.toLabel} continues in this thread with that summary as
+                    context. The summary appears in the timeline.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                  <Button
+                    variant="default"
+                    disabled={phase === "running"}
+                    onClick={() => {
+                      void confirmProviderHandoff();
+                    }}
+                  >
+                    Switch provider
                   </Button>
                 </AlertDialogFooter>
               </AlertDialogPopup>

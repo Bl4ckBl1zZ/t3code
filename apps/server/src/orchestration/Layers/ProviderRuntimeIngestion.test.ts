@@ -44,6 +44,8 @@ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityRes
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import { HandoffSummaryCaptureLive } from "./HandoffSummaryCapture.ts";
+import { HandoffSummaryCapture } from "../Services/HandoffSummaryCapture.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -192,7 +194,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | HandoffSummaryCapture,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -240,6 +245,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
+      Layer.provideMerge(HandoffSummaryCaptureLive),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -310,14 +316,131 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
+    const capture = await runtime.runPromise(Effect.service(HandoffSummaryCapture));
+
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      capture,
+      runEffect: <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect),
       drain,
     };
   }
+
+  it("diverts a handoff summary turn away from the thread", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.runEffect(harness.capture.begin(asThreadId("thread-1")));
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-handoff-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-handoff"),
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-handoff-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-handoff"),
+      payload: { streamKind: "assistant_text", delta: "Handoff summary text." },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-handoff-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-handoff"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    expect(await harness.runEffect(harness.capture.await(asThreadId("thread-1")))).toBe(
+      "Handoff summary text.",
+    );
+
+    // The summarization turn is machinery: no assistant message, no session churn.
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    expect(thread?.messages).toHaveLength(0);
+    expect(thread?.session?.status).toBe("ready");
+    expect(thread?.session?.activeTurnId).toBeNull();
+
+    await harness.runEffect(harness.capture.end(asThreadId("thread-1")));
+  });
+
+  it("captures providers that deliver the summary only on item completion", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.runEffect(harness.capture.begin(asThreadId("thread-1")));
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-handoff-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-handoff"),
+      itemId: asItemId("handoff-item-1"),
+      payload: { itemType: "assistant_message", detail: "Final-only summary." },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-handoff-turn-completed-2"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-handoff"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    expect(await harness.runEffect(harness.capture.await(asThreadId("thread-1")))).toBe(
+      "Final-only summary.",
+    );
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    expect(thread?.messages).toHaveLength(0);
+
+    await harness.runEffect(harness.capture.end(asThreadId("thread-1")));
+  });
+
+  it("fails the capture when the summary turn opens an approval request", async () => {
+    const harness = await createHarness();
+    await harness.runEffect(harness.capture.begin(asThreadId("thread-1")));
+
+    harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-handoff-request-opened"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId("turn-handoff"),
+      requestId: ApprovalRequestId.make("handoff-request-1"),
+      payload: { requestType: "command_approval" },
+    });
+    await harness.drain();
+
+    const error = await harness
+      .runEffect(harness.capture.await(asThreadId("thread-1")))
+      .then(() => null)
+      .catch((cause: unknown) => cause);
+    expect(error).not.toBeNull();
+
+    // No approval reaches the user for a turn they did not ask for.
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    expect(thread?.activities.some((entry) => entry.kind === "approval.requested")).toBe(false);
+
+    await harness.runEffect(harness.capture.end(asThreadId("thread-1")));
+  });
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();

@@ -789,6 +789,7 @@ function ThreadRouteContent(
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
+          onStartThreadProviderHandoff={composer.onStartProviderHandoff}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
           onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
           onRespondToApproval={requests.onRespondToApproval}

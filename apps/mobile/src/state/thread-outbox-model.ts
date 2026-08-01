@@ -97,6 +97,24 @@ export function resolveQueuedThreadSettings(
   };
 }
 
+/**
+ * A queued message can carry a model selection chosen before the thread's
+ * provider was known (offline drafts, stale composer state). Applying one that
+ * points at a different provider instance would be a cross-provider switch,
+ * which now requires an explicit handoff — so on a started thread the queued
+ * selection is dropped back to whatever the thread is actually running.
+ */
+export function resolveQueuedModelSelectionForDelivery(input: {
+  readonly queued: ModelSelectionType;
+  readonly thread: ModelSelectionType;
+  readonly threadHasStarted: boolean;
+}): ModelSelectionType {
+  if (!input.threadHasStarted) {
+    return input.queued;
+  }
+  return input.queued.instanceId === input.thread.instanceId ? input.queued : input.thread;
+}
+
 export function modelSelectionsEqual(left: ModelSelectionType, right: ModelSelectionType): boolean {
   return (
     left.instanceId === right.instanceId &&

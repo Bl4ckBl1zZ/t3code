@@ -24,6 +24,7 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
+  ThreadHandoff,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -79,6 +80,7 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    handoff: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadHandoff))),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -386,6 +388,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
+          handoff_json AS "handoff",
+          pending_handoff_context AS "pendingHandoffContext",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -420,6 +424,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
+          handoff_json AS "handoff",
+          pending_handoff_context AS "pendingHandoffContext",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -456,6 +462,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
+          handoff_json AS "handoff",
+          pending_handoff_context AS "pendingHandoffContext",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -892,6 +900,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
+          handoff_json AS "handoff",
+          pending_handoff_context AS "pendingHandoffContext",
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
@@ -1329,6 +1339,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 snoozedUntil: row.snoozedUntil,
                 snoozedAt: row.snoozedAt,
                 titleRegeneration: mapTitleRegeneration(row),
+                ...(row.handoff != null ? { handoff: row.handoff } : {}),
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
@@ -1532,6 +1543,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   snoozedUntil: row.snoozedUntil,
                   snoozedAt: row.snoozedAt,
                   titleRegeneration: mapTitleRegeneration(row),
+                  ...(row.handoff != null ? { handoff: row.handoff } : {}),
+                  ...(row.pendingHandoffContext != null
+                    ? { pendingHandoffContext: row.pendingHandoffContext }
+                    : {}),
                   deletedAt: row.deletedAt,
                   messages: [],
                   proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
@@ -1666,6 +1681,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       snoozedUntil: row.snoozedUntil,
                       snoozedAt: row.snoozedAt,
                       titleRegeneration: mapTitleRegeneration(row),
+                      ...(row.handoff != null ? { handoff: row.handoff } : {}),
                       session: sessionByThread.get(row.threadId) ?? null,
                       latestUserMessageAt: row.latestUserMessageAt,
                       hasPendingApprovals: row.pendingApprovalCount > 0,
@@ -1805,6 +1821,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   snoozedUntil: row.snoozedUntil,
                   snoozedAt: row.snoozedAt,
                   titleRegeneration: mapTitleRegeneration(row),
+                  ...(row.handoff != null ? { handoff: row.handoff } : {}),
                   session: sessionByThread.get(row.threadId) ?? null,
                   latestUserMessageAt: row.latestUserMessageAt,
                   hasPendingApprovals: row.pendingApprovalCount > 0,
@@ -2076,6 +2093,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         snoozedUntil: threadRow.value.snoozedUntil,
         snoozedAt: threadRow.value.snoozedAt,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        ...(threadRow.value.handoff != null ? { handoff: threadRow.value.handoff } : {}),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
@@ -2175,6 +2193,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         snoozedUntil: threadRow.value.snoozedUntil,
         snoozedAt: threadRow.value.snoozedAt,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        ...(threadRow.value.handoff != null ? { handoff: threadRow.value.handoff } : {}),
         deletedAt: null,
         messages: messageRows.map((row) => {
           const message = {

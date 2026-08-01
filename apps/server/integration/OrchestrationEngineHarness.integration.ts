@@ -46,6 +46,7 @@ import {
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import { HandoffSummaryCaptureLive } from "../src/orchestration/Layers/HandoffSummaryCapture.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
@@ -379,6 +380,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(providerRegistryLayer),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
+      Layer.provideMerge(HandoffSummaryCaptureLive),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),

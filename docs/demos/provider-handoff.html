@@ -1,0 +1,2188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cross-Provider Handoff — T3 Code</title>
+    <style>
+      /* ============================================================
+         Palette — provider identity colors carry meaning here, so
+         they are the only saturated hues in the page.
+         ============================================================ */
+      :root {
+        --bg: #0b0b0e;
+        --bg-soft: #101014;
+        --panel: #16161b;
+        --panel-2: #1c1c22;
+        --line: #26262e;
+        --line-soft: #1f1f26;
+        --text: #ececf1;
+        --muted: #8b8b96;
+        --faint: #5f5f6b;
+
+        --codex: #10a37f;
+        --claude: #d97757;
+        --handoff: #38bdf8;
+        --danger: #f0616d;
+        --ok: #4ade80;
+
+        --radius: 12px;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1200px 600px at 15% -10%, #17171f 0%, transparent 60%),
+          radial-gradient(900px 500px at 95% 0%, #151a1e 0%, transparent 55%), var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .wrap {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 40px 28px 96px;
+      }
+
+      /* ---------------- Page header ---------------- */
+      .masthead {
+        margin-bottom: 28px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--faint);
+        font-weight: 600;
+      }
+      h1 {
+        margin: 8px 0 10px;
+        font-size: 30px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+        font-weight: 650;
+      }
+      .lede {
+        color: var(--muted);
+        max-width: 74ch;
+        margin: 0;
+      }
+      .lede strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* ---------------- Controls ---------------- */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: center;
+        margin: 26px 0 22px;
+        padding: 14px 16px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        position: sticky;
+        top: 12px;
+        z-index: 40;
+        backdrop-filter: blur(12px);
+      }
+      .ctrl-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .ctrl-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--faint);
+        font-weight: 600;
+        margin-right: 2px;
+      }
+      .steps {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .step-pill {
+        appearance: none;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--muted);
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 11px;
+        border-radius: 999px;
+        cursor: pointer;
+        transition:
+          background 120ms,
+          color 120ms,
+          border-color 120ms;
+        white-space: nowrap;
+      }
+      .step-pill:hover {
+        color: var(--text);
+        border-color: #34343e;
+      }
+      .step-pill[aria-current="true"] {
+        background: var(--text);
+        color: #0b0b0e;
+        border-color: var(--text);
+        font-weight: 600;
+      }
+      .step-pill:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+
+      .nav-btn {
+        appearance: none;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 15px;
+        line-height: 1;
+        display: grid;
+        place-items: center;
+      }
+      .nav-btn:hover {
+        border-color: #3a3a46;
+      }
+      .nav-btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      .seg {
+        display: flex;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 2px;
+      }
+      .seg button {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 12px;
+        border-radius: 7px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--panel);
+        color: var(--text);
+        font-weight: 600;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+      }
+
+      .narration {
+        margin: 0 0 26px;
+        padding: 13px 16px;
+        border-left: 2px solid var(--handoff);
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.07), transparent 70%);
+        border-radius: 0 8px 8px 0;
+        color: var(--muted);
+        min-height: 46px;
+      }
+      .narration b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .narration code {
+        font-family: var(--mono);
+        font-size: 12px;
+        background: #000;
+        padding: 1px 5px;
+        border-radius: 4px;
+        color: #cfcfd8;
+      }
+
+      /* ---------------- Stage layout ---------------- */
+      .stage {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 32px;
+        align-items: start;
+      }
+      @media (max-width: 1120px) {
+        .stage {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+
+      .surface-label {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--faint);
+      }
+      .surface-label span {
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 400;
+        color: #4a4a55;
+      }
+
+      /* ============================================================
+         DESKTOP — web app window
+         ============================================================ */
+      .win {
+        position: relative;
+        background: var(--bg-soft);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+      }
+      .win-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      .lights {
+        display: flex;
+        gap: 6px;
+      }
+      .lights i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        display: block;
+      }
+      .lights i:nth-child(1) {
+        background: #ff5f57;
+      }
+      .lights i:nth-child(2) {
+        background: #febc2e;
+      }
+      .lights i:nth-child(3) {
+        background: #28c840;
+      }
+      .win-title {
+        font-size: 12px;
+        color: var(--muted);
+        margin-left: 4px;
+      }
+      .win-title b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .branch-chip {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        padding: 3px 9px;
+        border-radius: 6px;
+      }
+
+      .chat {
+        position: relative;
+        height: 560px;
+        display: flex;
+        flex-direction: column;
+      }
+      .timeline {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px 22px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        scrollbar-width: thin;
+        scrollbar-color: #2c2c36 transparent;
+      }
+      .timeline::-webkit-scrollbar {
+        width: 8px;
+      }
+      .timeline::-webkit-scrollbar-thumb {
+        background: #2c2c36;
+        border-radius: 8px;
+      }
+
+      .msg {
+        display: flex;
+        gap: 12px;
+        animation: rise 260ms ease-out;
+      }
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      .avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        flex: none;
+        display: grid;
+        place-items: center;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .avatar.user {
+        background: #2f2f3a;
+        color: #c9c9d4;
+      }
+      .avatar.codex {
+        background: rgba(16, 163, 127, 0.16);
+        color: var(--codex);
+        border: 1px solid rgba(16, 163, 127, 0.3);
+      }
+      .avatar.claude {
+        background: rgba(217, 119, 87, 0.16);
+        color: var(--claude);
+        border: 1px solid rgba(217, 119, 87, 0.3);
+      }
+
+      .msg-body {
+        min-width: 0;
+        flex: 1;
+      }
+      .msg-who {
+        font-size: 11px;
+        color: var(--faint);
+        font-weight: 600;
+        margin-bottom: 3px;
+      }
+      .msg-text {
+        color: #d6d6de;
+      }
+      .msg-text p {
+        margin: 0 0 8px;
+      }
+      .msg-text p:last-child {
+        margin-bottom: 0;
+      }
+      .msg-text code {
+        font-family: var(--mono);
+        font-size: 12px;
+        background: #000;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+
+      .worklog {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 12px;
+        color: var(--muted);
+        padding-left: 36px;
+      }
+      .worklog .dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--faint);
+        flex: none;
+      }
+      .worklog code {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: #a9a9b6;
+      }
+
+      /* Handoff timeline row — the visible record of what was handed over */
+      .handoff-row {
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        background: linear-gradient(180deg, rgba(56, 189, 248, 0.09), rgba(56, 189, 248, 0.03));
+        border-radius: 10px;
+        overflow: hidden;
+        animation: rise 300ms ease-out;
+      }
+      .handoff-row.is-error {
+        border-color: rgba(240, 97, 109, 0.32);
+        background: linear-gradient(180deg, rgba(240, 97, 109, 0.09), rgba(240, 97, 109, 0.03));
+      }
+      .handoff-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 11px 13px;
+        cursor: pointer;
+        user-select: none;
+        width: 100%;
+        text-align: left;
+        background: none;
+        border: 0;
+        color: inherit;
+        font: inherit;
+      }
+      .handoff-head:hover {
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .handoff-icon {
+        color: var(--handoff);
+        flex: none;
+        display: grid;
+        place-items: center;
+      }
+      .handoff-row.is-error .handoff-icon {
+        color: var(--danger);
+      }
+      .handoff-title {
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .handoff-sub {
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .src-tag {
+        margin-left: auto;
+        flex: none;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 2.5px 7px;
+        border-radius: 5px;
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        background: rgba(56, 189, 248, 0.12);
+        color: #8fd6f7;
+      }
+      .src-tag.transcript {
+        border-color: rgba(250, 204, 21, 0.3);
+        background: rgba(250, 204, 21, 0.11);
+        color: #f2d98a;
+      }
+      .chev {
+        flex: none;
+        color: var(--faint);
+        transition: transform 160ms;
+      }
+      .handoff-row[data-open="true"] .chev {
+        transform: rotate(90deg);
+      }
+      .handoff-body {
+        display: none;
+        padding: 0 13px 13px 40px;
+      }
+      .handoff-row[data-open="true"] .handoff-body {
+        display: block;
+      }
+      .summary-md {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.65;
+        color: #b9b9c6;
+        white-space: pre-wrap;
+        margin: 0;
+        background: #08080b;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        padding: 12px 13px;
+        max-height: 210px;
+        overflow: auto;
+      }
+      .summary-md b {
+        color: #e4e4ec;
+        font-weight: 600;
+      }
+
+      /* Injected-context annotation on the first post-handoff turn */
+      .injected {
+        margin-top: 8px;
+        border: 1px dashed rgba(56, 189, 248, 0.35);
+        border-radius: 8px;
+        background: rgba(56, 189, 248, 0.04);
+        padding: 9px 11px;
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .injected .tagline {
+        color: #8fd6f7;
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+      .injected .note {
+        display: block;
+        margin-top: 5px;
+        color: var(--faint);
+      }
+
+      /* ---------------- Composer ---------------- */
+      .composer {
+        margin: 8px 16px 16px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 12px;
+        transition: opacity 160ms;
+      }
+      .composer[data-disabled="true"] {
+        opacity: 0.55;
+      }
+      .composer-input {
+        padding: 12px 14px 4px;
+        color: var(--faint);
+        min-height: 40px;
+      }
+      .composer-input[data-typed="true"] {
+        color: var(--text);
+      }
+      .composer-foot {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 10px 10px 12px;
+      }
+      .cc {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: #c4c4cf;
+        font-size: 12px;
+        padding: 5px 9px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition:
+          border-color 120ms,
+          background 120ms;
+      }
+      .cc:hover {
+        border-color: #3a3a46;
+      }
+      .cc.active {
+        border-color: #45454f;
+        background: #24242c;
+      }
+      .cc .swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+      }
+      .cc.model .swatch {
+        background: var(--codex);
+      }
+      .win[data-provider="claude"] .cc.model .swatch {
+        background: var(--claude);
+      }
+      .cc-chev {
+        color: var(--faint);
+        font-size: 9px;
+      }
+      .send {
+        margin-left: auto;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        border: 0;
+        background: var(--text);
+        color: #0b0b0e;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+      }
+      .composer[data-disabled="true"] .send {
+        background: #3a3a44;
+        color: #7a7a86;
+        cursor: not-allowed;
+      }
+
+      .composer-status {
+        display: none;
+        align-items: center;
+        gap: 9px;
+        padding: 8px 14px;
+        border-top: 1px solid var(--line-soft);
+        font-size: 12px;
+        color: #9ec9e0;
+      }
+      .composer[data-status="true"] .composer-status {
+        display: flex;
+      }
+      .spinner {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex: none;
+        border: 1.5px solid rgba(56, 189, 248, 0.25);
+        border-top-color: var(--handoff);
+        animation: spin 700ms linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ---------------- Model picker popover ---------------- */
+      .picker {
+        position: absolute;
+        left: 14px;
+        bottom: 74px;
+        width: 430px;
+        background: var(--panel);
+        border: 1px solid #30303a;
+        border-radius: 12px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+        overflow: hidden;
+        display: none;
+        z-index: 20;
+        animation: pop 140ms ease-out;
+      }
+      @keyframes pop {
+        from {
+          opacity: 0;
+          transform: translateY(6px) scale(0.985);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .chat[data-picker="true"] .picker {
+        display: flex;
+      }
+      .picker-rail {
+        width: 132px;
+        flex: none;
+        border-right: 1px solid var(--line);
+        background: var(--bg-soft);
+        padding: 7px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .rail-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 8px;
+        border-radius: 7px;
+        font-size: 12px;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .rail-item:hover {
+        background: #1e1e25;
+        color: var(--text);
+      }
+      .rail-item[aria-selected="true"] {
+        background: #24242c;
+        color: var(--text);
+        font-weight: 600;
+      }
+      .rail-item .swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+      }
+      .picker-list {
+        flex: 1;
+        padding: 7px;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        max-height: 268px;
+        overflow-y: auto;
+      }
+      .picker-search {
+        font-size: 12px;
+        color: var(--faint);
+        padding: 9px 11px;
+        border-bottom: 1px solid var(--line);
+      }
+      .model-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 9px;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      .model-row:hover {
+        background: #22222a;
+      }
+      .model-row[aria-selected="true"] {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .model-name {
+        font-size: 12.5px;
+        font-weight: 500;
+      }
+      .model-sub {
+        font-size: 11px;
+        color: var(--faint);
+      }
+      .badge {
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 2px 6px;
+        border-radius: 4px;
+        flex: none;
+      }
+      .badge.handoff {
+        border: 1px solid rgba(56, 189, 248, 0.34);
+        background: rgba(56, 189, 248, 0.14);
+        color: #8fd6f7;
+      }
+      .badge.check {
+        margin-left: auto;
+        color: var(--ok);
+        border: 0;
+        background: none;
+        font-size: 12px;
+      }
+      .model-row .badge.handoff {
+        margin-left: auto;
+      }
+      .picker-note {
+        padding: 8px 11px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        color: var(--faint);
+        background: var(--bg-soft);
+      }
+      .strike-note {
+        color: var(--faint);
+        font-size: 11px;
+      }
+      .strike-note s {
+        color: #45454f;
+      }
+
+      /* ---------------- Desktop alert dialog ---------------- */
+      .scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(4, 4, 7, 0.62);
+        backdrop-filter: blur(2px);
+        display: none;
+        place-items: center;
+        z-index: 30;
+      }
+      .chat[data-dialog="true"] .scrim {
+        display: grid;
+      }
+      .dialog {
+        width: 420px;
+        background: var(--panel);
+        border: 1px solid #32323c;
+        border-radius: 13px;
+        padding: 20px;
+        box-shadow: 0 30px 70px rgba(0, 0, 0, 0.7);
+        animation: pop 160ms ease-out;
+      }
+      .dialog h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+        font-weight: 620;
+      }
+      .dialog p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .dialog-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 18px;
+      }
+      .btn {
+        appearance: none;
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--text);
+      }
+      .btn:hover {
+        border-color: #45454f;
+      }
+      .btn.primary {
+        background: var(--text);
+        color: #0b0b0e;
+        border-color: var(--text);
+        font-weight: 600;
+      }
+
+      /* ============================================================
+         MOBILE — iOS
+         ============================================================ */
+      .phone {
+        width: 360px;
+        background: #000;
+        border-radius: 46px;
+        padding: 11px;
+        box-shadow:
+          0 24px 60px rgba(0, 0, 0, 0.6),
+          0 0 0 1px #2a2a32;
+        margin: 0 auto;
+      }
+      .screen {
+        position: relative;
+        background: var(--bg-soft);
+        border-radius: 36px;
+        overflow: hidden;
+        height: 700px;
+        display: flex;
+        flex-direction: column;
+      }
+      .island {
+        position: absolute;
+        top: 9px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 104px;
+        height: 27px;
+        background: #000;
+        border-radius: 999px;
+        z-index: 25;
+      }
+      .ios-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 22px 6px;
+        font-size: 12.5px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .ios-status .icons {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        color: var(--text);
+      }
+      .ios-nav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px 10px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .ios-back {
+        color: #3b9dff;
+        font-size: 15px;
+      }
+      .ios-nav-title {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .ios-nav-sub {
+        font-size: 11px;
+        color: var(--faint);
+      }
+
+      .feed {
+        flex: 1;
+        overflow-y: auto;
+        padding: 14px 14px 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 13px;
+        scrollbar-width: none;
+      }
+      .feed::-webkit-scrollbar {
+        display: none;
+      }
+      .m-msg {
+        animation: rise 240ms ease-out;
+      }
+      .m-who {
+        font-size: 10.5px;
+        color: var(--faint);
+        font-weight: 600;
+        margin-bottom: 3px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .m-who .swatch {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+      }
+      .m-text {
+        font-size: 13px;
+        color: #d3d3dc;
+      }
+      .m-bubble {
+        background: #24242c;
+        border-radius: 14px 14px 4px 14px;
+        padding: 9px 12px;
+        font-size: 13px;
+        margin-left: auto;
+        max-width: 82%;
+      }
+      .m-user {
+        display: flex;
+      }
+      .m-log {
+        font-size: 11.5px;
+        color: var(--muted);
+        display: flex;
+        gap: 7px;
+        align-items: center;
+      }
+      .m-log .dot {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--faint);
+        flex: none;
+      }
+
+      .m-handoff {
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        background: rgba(56, 189, 248, 0.06);
+        border-radius: 12px;
+        animation: rise 280ms ease-out;
+      }
+      .m-handoff.is-error {
+        border-color: rgba(240, 97, 109, 0.32);
+        background: rgba(240, 97, 109, 0.06);
+      }
+      .m-handoff-head {
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        padding: 10px 11px;
+        width: 100%;
+        background: none;
+        border: 0;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .m-handoff-title {
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .m-handoff-sub {
+        font-size: 10.5px;
+        color: var(--muted);
+      }
+      .m-handoff-body {
+        display: none;
+        padding: 0 11px 11px;
+      }
+      .m-handoff[data-open="true"] .m-handoff-body {
+        display: block;
+      }
+      .m-summary {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        line-height: 1.6;
+        color: #b3b3c0;
+        white-space: pre-wrap;
+        margin: 0;
+        background: #08080b;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        padding: 10px;
+        max-height: 150px;
+        overflow: auto;
+      }
+
+      /* iOS composer */
+      .m-composer-wrap {
+        padding: 8px 12px 22px;
+        position: relative;
+      }
+      .m-status-pill {
+        display: none;
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        bottom: 84px;
+        justify-content: center;
+      }
+      .m-composer-wrap[data-status="true"] .m-status-pill {
+        display: flex;
+      }
+      .m-status-pill span {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: rgba(30, 30, 38, 0.94);
+        border: 1px solid var(--line);
+        color: #9ec9e0;
+        font-size: 11.5px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        backdrop-filter: blur(8px);
+      }
+      .m-composer {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 10px 12px;
+        transition: opacity 160ms;
+      }
+      .m-composer[data-disabled="true"] {
+        opacity: 0.5;
+      }
+      .m-placeholder {
+        color: var(--faint);
+        font-size: 13px;
+        padding: 2px 2px 10px;
+      }
+      .m-placeholder[data-typed="true"] {
+        color: var(--text);
+      }
+      .m-pills {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        color: #c2c2cd;
+        font-size: 11.5px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .pill.active {
+        background: #26262e;
+        border-color: #43434e;
+      }
+      .pill .swatch {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+      }
+      .m-send {
+        margin-left: auto;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: var(--text);
+        color: #0b0b0e;
+        border: 0;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+      }
+      .m-composer[data-disabled="true"] .m-send {
+        background: #3a3a44;
+        color: #7a7a86;
+      }
+
+      /* iOS context menu (ControlPillMenu) */
+      .m-menu {
+        display: none;
+        position: absolute;
+        left: 12px;
+        bottom: 92px;
+        width: 250px;
+        background: rgba(38, 38, 46, 0.97);
+        backdrop-filter: blur(22px);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 20px 44px rgba(0, 0, 0, 0.6);
+        z-index: 22;
+        animation: pop 150ms ease-out;
+      }
+      .screen[data-menu="true"] .m-menu {
+        display: block;
+      }
+      .m-menu-section {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #8e8e98;
+        padding: 8px 13px 5px;
+        font-weight: 600;
+      }
+      .m-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 13px;
+        font-size: 13px;
+        border-top: 0.5px solid rgba(255, 255, 255, 0.07);
+        cursor: pointer;
+      }
+      .m-menu-item:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .m-menu-item .swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+      }
+      .m-menu-item .badge.handoff {
+        margin-left: auto;
+      }
+      .m-menu-item .tick {
+        margin-left: auto;
+        color: var(--ok);
+      }
+
+      /* iOS alert */
+      .m-scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.42);
+        display: none;
+        place-items: center;
+        z-index: 30;
+        padding: 0 34px;
+        backdrop-filter: blur(1px);
+      }
+      .screen[data-alert="true"] .m-scrim {
+        display: grid;
+      }
+      .m-alert {
+        width: 100%;
+        background: rgba(44, 44, 52, 0.97);
+        backdrop-filter: blur(22px);
+        border-radius: 15px;
+        overflow: hidden;
+        text-align: center;
+        animation: pop 160ms ease-out;
+      }
+      .m-alert-body {
+        padding: 18px 16px 15px;
+      }
+      .m-alert h4 {
+        margin: 0 0 5px;
+        font-size: 15px;
+        font-weight: 620;
+      }
+      .m-alert p {
+        margin: 0;
+        font-size: 12px;
+        color: #c0c0ca;
+        line-height: 1.45;
+      }
+      .m-alert-actions {
+        display: flex;
+        border-top: 0.5px solid rgba(255, 255, 255, 0.14);
+      }
+      .m-alert-actions button {
+        flex: 1;
+        appearance: none;
+        border: 0;
+        background: none;
+        color: #3b9dff;
+        font: inherit;
+        font-size: 15px;
+        padding: 12px 6px;
+        cursor: pointer;
+      }
+      .m-alert-actions button + button {
+        border-left: 0.5px solid rgba(255, 255, 255, 0.14);
+        font-weight: 600;
+      }
+      .m-alert-actions button:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      /* ============================================================
+         Reference section
+         ============================================================ */
+      .cards {
+        margin-top: 48px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+        gap: 18px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px 19px;
+      }
+      .card h3 {
+        margin: 0 0 13px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--faint);
+      }
+      .flow {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        counter-reset: f;
+      }
+      .flow li {
+        position: relative;
+        padding: 0 0 15px 30px;
+        counter-increment: f;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .flow li:last-child {
+        padding-bottom: 0;
+      }
+      .flow li::before {
+        content: counter(f);
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 19px;
+        height: 19px;
+        border-radius: 50%;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        color: var(--text);
+        font-size: 10px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+      }
+      .flow li::after {
+        content: "";
+        position: absolute;
+        left: 9px;
+        top: 21px;
+        bottom: 3px;
+        width: 1px;
+        background: var(--line);
+      }
+      .flow li:last-child::after {
+        display: none;
+      }
+      .flow b {
+        color: var(--text);
+        font-weight: 600;
+        display: block;
+        margin-bottom: 2px;
+        font-size: 12.5px;
+      }
+      .flow code {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: #9fd0e8;
+        background: #08080b;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+
+      .facts {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 11px;
+      }
+      .facts li {
+        font-size: 12.5px;
+        color: var(--muted);
+        padding-left: 20px;
+        position: relative;
+      }
+      .facts li::before {
+        content: "";
+        position: absolute;
+        left: 3px;
+        top: 7px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--handoff);
+      }
+      .facts li.warn::before {
+        background: var(--danger);
+      }
+      .facts b {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      table.tests {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+      }
+      table.tests td {
+        padding: 6px 0;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--muted);
+      }
+      table.tests tr:last-child td {
+        border-bottom: 0;
+      }
+      table.tests td:last-child {
+        text-align: right;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+      table.tests td .pass {
+        color: var(--ok);
+        font-weight: 600;
+      }
+
+      footer {
+        margin-top: 40px;
+        color: #43434e;
+        font-size: 11.5px;
+      }
+      footer code {
+        font-family: var(--mono);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <div class="eyebrow">T3 Code · Feature walkthrough</div>
+        <h1>Cross-provider handoff</h1>
+        <p class="lede">
+          Switching a started thread to another provider used to be blocked — the provider's resume
+          state is driver-specific, so a new session would start with no memory. Now the outgoing
+          model
+          <strong>writes a handoff summary first</strong>, the summary is recorded in the timeline,
+          and the incoming model picks the conversation up from it. Same thread, in place.
+        </p>
+      </header>
+
+      <div class="controls">
+        <div class="ctrl-group">
+          <button class="nav-btn" id="prev" aria-label="Previous step">‹</button>
+          <button class="nav-btn" id="next" aria-label="Next step">›</button>
+        </div>
+        <div class="ctrl-group">
+          <span class="ctrl-label">Step</span>
+          <div class="steps" id="steps"></div>
+        </div>
+        <div class="ctrl-group" style="margin-left: auto">
+          <span class="ctrl-label">Summary source</span>
+          <div class="seg" id="variants">
+            <button data-variant="live" aria-pressed="true">Live session</button>
+            <button data-variant="transcript" aria-pressed="false">Transcript fallback</button>
+            <button data-variant="failed" aria-pressed="false">Both fail</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="narration" id="narration"></p>
+
+      <div class="stage">
+        <!-- ============================ DESKTOP ============================ -->
+        <section>
+          <h2 class="surface-label">Desktop <span>· web app (apps/web)</span></h2>
+
+          <div class="win" id="win" data-provider="codex">
+            <div class="win-bar">
+              <div class="lights"><i></i><i></i><i></i></div>
+              <div class="win-title">T3 Code — <b>Refactor the tokenizer</b></div>
+              <div class="branch-chip">t3code/tokenizer-rewrite</div>
+            </div>
+
+            <div class="chat" id="chat">
+              <div class="timeline" id="timeline"></div>
+
+              <!-- Model picker popover -->
+              <div class="picker">
+                <div class="picker-rail">
+                  <div class="rail-item" aria-selected="false">
+                    <span class="swatch" style="background: #facc15"></span>Favorites
+                  </div>
+                  <div class="rail-item" id="rail-codex" aria-selected="true">
+                    <span class="swatch" style="background: var(--codex)"></span>Codex
+                  </div>
+                  <div class="rail-item">
+                    <span class="swatch" style="background: var(--codex)"></span>Codex Work
+                  </div>
+                  <div class="rail-item" id="rail-claude">
+                    <span class="swatch" style="background: var(--claude)"></span>Claude Code
+                  </div>
+                  <div class="rail-item">
+                    <span class="swatch" style="background: #a78bfa"></span>Cursor
+                  </div>
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; min-width: 0">
+                  <div class="picker-search">Search models…</div>
+                  <div class="picker-list" id="picker-list"></div>
+                  <div class="picker-note" id="picker-note"></div>
+                </div>
+              </div>
+
+              <!-- Confirmation dialog -->
+              <div class="scrim">
+                <div class="dialog" role="alertdialog" aria-modal="true">
+                  <h3>Switch to <span id="dlg-to">Claude Code</span>?</h3>
+                  <p>
+                    <span id="dlg-from">Codex</span> will write a summary of this conversation, then
+                    <span id="dlg-to-2">Claude Code</span> continues in this thread with that
+                    summary as context. The summary appears in the timeline.
+                  </p>
+                  <div class="dialog-foot">
+                    <button class="btn" data-go="1">Cancel</button>
+                    <button class="btn primary" data-go="3">Switch provider</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Composer -->
+              <div class="composer" id="composer">
+                <div class="composer-input" id="composer-input">Message the agent…</div>
+                <div class="composer-foot">
+                  <button class="cc model" id="model-btn" data-go="1">
+                    <span class="swatch"></span><span id="model-label">GPT-5.4</span>
+                    <span class="cc-chev">▾</span>
+                  </button>
+                  <span class="cc">Auto-accept edits <span class="cc-chev">▾</span></span>
+                  <span class="cc">Chat <span class="cc-chev">▾</span></span>
+                  <button class="send" aria-label="Send">↑</button>
+                </div>
+                <div class="composer-status">
+                  <span class="spinner"></span>
+                  <span id="composer-status-text"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================ MOBILE ============================ -->
+        <section>
+          <h2 class="surface-label">Mobile <span>· iOS (apps/mobile)</span></h2>
+
+          <div class="phone">
+            <div class="screen" id="screen">
+              <div class="island"></div>
+
+              <div class="ios-status">
+                <span>9:41</span>
+                <span class="icons">
+                  <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor">
+                    <rect x="0" y="7" width="3" height="4" rx="1" />
+                    <rect x="4.3" y="5" width="3" height="6" rx="1" />
+                    <rect x="8.6" y="2.5" width="3" height="8.5" rx="1" />
+                    <rect x="12.9" y="0" width="3" height="11" rx="1" opacity="0.4" />
+                  </svg>
+                  <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor">
+                    <path
+                      d="M7.5 9.8 5.4 7.6a3 3 0 0 1 4.2 0L7.5 9.8Zm-4-4.1L2 4.2a7.8 7.8 0 0 1 11 0l-1.5 1.5a5.7 5.7 0 0 0-8 0Z"
+                    />
+                  </svg>
+                  <svg width="24" height="11" viewBox="0 0 24 11" fill="none">
+                    <rect
+                      x="0.5"
+                      y="0.5"
+                      width="20"
+                      height="10"
+                      rx="3"
+                      stroke="currentColor"
+                      opacity="0.45"
+                    />
+                    <rect x="2" y="2" width="15" height="7" rx="1.6" fill="currentColor" />
+                    <path d="M22 4v3a2 2 0 0 0 0-3Z" fill="currentColor" opacity="0.45" />
+                  </svg>
+                </span>
+              </div>
+
+              <div class="ios-nav">
+                <span class="ios-back">‹</span>
+                <div>
+                  <div class="ios-nav-title">Refactor the tokenizer</div>
+                  <div class="ios-nav-sub" id="m-nav-sub">Codex · GPT-5.4</div>
+                </div>
+              </div>
+
+              <div class="feed" id="feed"></div>
+
+              <!-- ControlPillMenu -->
+              <div class="m-menu" id="m-menu">
+                <div class="m-menu-section">Codex</div>
+                <div class="m-menu-item">
+                  <span class="swatch" style="background: var(--codex)"></span>GPT-5.6 Sol
+                </div>
+                <div class="m-menu-item">
+                  <span class="swatch" style="background: var(--codex)"></span>GPT-5.4
+                  <span class="tick">✓</span>
+                </div>
+                <div class="m-menu-section">Claude Code</div>
+                <div class="m-menu-item" data-go="2">
+                  <span class="swatch" style="background: var(--claude)"></span>Claude Sonnet 5
+                  <span class="badge handoff">Handoff</span>
+                </div>
+                <div class="m-menu-item" data-go="2">
+                  <span class="swatch" style="background: var(--claude)"></span>Claude Opus 5
+                  <span class="badge handoff">Handoff</span>
+                </div>
+              </div>
+
+              <!-- iOS Alert -->
+              <div class="m-scrim">
+                <div class="m-alert" role="alertdialog" aria-modal="true">
+                  <div class="m-alert-body">
+                    <h4>Switch to <span class="m-alert-to">Claude Code</span>?</h4>
+                    <p>
+                      <span class="m-alert-from">Codex</span> will write a summary of this
+                      conversation, then <span class="m-alert-to">Claude Code</span> continues in
+                      this thread with that summary as context. The summary appears in the timeline.
+                    </p>
+                  </div>
+                  <div class="m-alert-actions">
+                    <button data-go="1">Cancel</button>
+                    <button data-go="3">Switch provider</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="m-composer-wrap" id="m-composer-wrap">
+                <div class="m-status-pill">
+                  <span><i class="spinner"></i> <span id="m-status-text"></span></span>
+                </div>
+                <div class="m-composer" id="m-composer">
+                  <div class="m-placeholder" id="m-placeholder">Message…</div>
+                  <div class="m-pills">
+                    <button class="pill" id="m-model-pill" data-go="1">
+                      <span
+                        class="swatch"
+                        id="m-model-swatch"
+                        style="background: var(--codex)"
+                      ></span>
+                      <span id="m-model-label">GPT-5.4</span> ▾
+                    </button>
+                    <span class="pill">Options ▾</span>
+                    <button class="m-send" aria-label="Send">↑</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ============================ REFERENCE ============================ -->
+      <div class="cards">
+        <div class="card">
+          <h3>What happens server-side</h3>
+          <ol class="flow">
+            <li>
+              <b>Client dispatches</b>
+              <code>thread.handoff.start</code> — the only new client command.
+            </li>
+            <li>
+              <b>Decider records pending state</b>
+              on the existing <code>thread.meta-updated</code> event. Rejects if a turn is running,
+              a handoff is already pending, or the thread never started.
+            </li>
+            <li>
+              <b>Reactor asks the live session</b>
+              for a summary via <code>sendTurn</code>. <code>HandoffSummaryCapture</code> diverts
+              that turn's runtime events so nothing reaches the timeline.
+            </li>
+            <li>
+              <b>Fallback if needed</b>
+              <code>textGeneration.generateHandoffSummary</code> over the stored transcript.
+            </li>
+            <li>
+              <b>Activity + swap</b>
+              appends <code>provider-handoff</code>, stops the old session, then
+              <code>thread.handoff.complete</code> swaps <code>modelSelection</code> and stores
+              <code>pendingHandoffContext</code>.
+            </li>
+            <li>
+              <b>Next turn injects it</b>
+              the decider moves the context onto the turn event and clears it in the same batch — no
+              double-injection on retry.
+            </li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <h3>Guarantees</h3>
+          <ul class="facts">
+            <li>
+              <b>Zero memory loss is best-effort, not blind.</b> The live session is preferred
+              because it still holds full tool output and file contents the transcript can't show.
+            </li>
+            <li>
+              <b>The summarization turn is invisible.</b> No assistant message, no session-status
+              churn. An approval request fails the capture rather than blocking on a prompt nobody
+              can see.
+            </li>
+            <li>
+              <b>Your message is never rewritten.</b> The context block is prepended to the provider
+              input only; the persisted user message stays exactly what you typed.
+            </li>
+            <li class="warn">
+              <b>If both summarizers fail, the switch does not happen.</b> You keep a working
+              session instead of a new provider with amnesia, and a failure row explains why.
+            </li>
+            <li>
+              <b>No new event types.</b> <code>OrchestrationEvent</code> is a closed union clients
+              decode, so this rides on optional fields — old clients ignore them.
+            </li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>Verification</h3>
+          <table class="tests">
+            <tr>
+              <td><code>pnpm tc</code> · 15 packages</td>
+              <td><span class="pass">pass</span></td>
+            </tr>
+            <tr>
+              <td>apps/server</td>
+              <td>1847 <span class="pass">✓</span></td>
+            </tr>
+            <tr>
+              <td>apps/web</td>
+              <td>1791 <span class="pass">✓</span></td>
+            </tr>
+            <tr>
+              <td>apps/mobile</td>
+              <td>605 <span class="pass">✓</span></td>
+            </tr>
+            <tr>
+              <td>packages/contracts</td>
+              <td>225 <span class="pass">✓</span></td>
+            </tr>
+            <tr>
+              <td>packages/client-runtime</td>
+              <td>528 <span class="pass">✓</span></td>
+            </tr>
+          </table>
+          <h3 style="margin-top: 18px">New coverage</h3>
+          <ul class="facts">
+            <li>10 decider cases — start, complete, stale request, turn race, context clear</li>
+            <li>
+              7 capture-service cases — deltas, item-completed-only providers, empty summary,
+              torn-down capture
+            </li>
+            <li>
+              4 reactor flows — live capture, session-exit fallback, both-fail no-switch, context
+              injection
+            </li>
+            <li>3 ingestion-suppression cases + migration 036 + web handoff-plan helpers</li>
+          </ul>
+        </div>
+      </div>
+
+      <footer>
+        Static walkthrough — no server attached. Rendered from the implementation on
+        <code>t3code/switch-providers-with-chat-handoff</code>.
+      </footer>
+    </div>
+
+    <script>
+      "use strict";
+
+      // ============================================================
+      // Demo data. Mirrors the real shapes: the summary follows the
+      // prompt's section list, and the source tag matches
+      // ThreadHandoffSummarySource.
+      // ============================================================
+      const FROM = { label: "Codex", model: "GPT-5.4", key: "codex" };
+      const TO = { label: "Claude Code", model: "Claude Sonnet 5", key: "claude" };
+
+      const SUMMARY_LIVE = `**Task** — Replace the hand-rolled tokenizer in src/parse/tokenizer.ts with a
+table-driven scanner, without changing the public Token shape.
+
+**State** — Scanner skeleton and the character-class table are written and
+compiling. String/template literals are ported. Numeric literals and comments
+are NOT started.
+
+**Files**
+- src/parse/tokenizer.ts — new scanTable + scanOnce; old switch retained
+  behind USE_TABLE_SCANNER while both paths coexist.
+- src/parse/tokenizer.test.ts — added 14 cases; 2 skipped pending numerics.
+- src/parse/types.ts — untouched. Token stays { kind, start, end }.
+
+**Decisions**
+- Table-driven over regex: the old regex path was the measured hot spot.
+- Kept the legacy switch behind a flag rather than deleting it, so the two
+  can be differentially fuzzed before the old one goes.
+
+**Environment** — pnpm -C apps/server test src/parse passes (2 skipped).
+Typecheck clean. No lint run yet.
+
+**Next steps** — Port numeric literals (hex/binary/underscore separators),
+then comments, then delete the flag.
+
+**Gotchas** — The user cares about the Token shape staying stable; downstream
+positions are byte offsets, not code points. Do not "fix" that to UTF-16.`;
+
+      const SUMMARY_TRANSCRIPT = `**Task** — Replace the hand-rolled tokenizer in src/parse/tokenizer.ts with a
+table-driven scanner while keeping the public Token shape.
+
+**State** — Based on the conversation, the scanner skeleton and character-class
+table are in place. String literals are ported. Numeric literals and comments
+appear to be outstanding.
+
+**Files**
+- src/parse/tokenizer.ts — primary edit target.
+- src/parse/tokenizer.test.ts — tests added alongside.
+
+**Decisions**
+- Table-driven approach chosen over regex for performance.
+- Legacy path kept behind a flag for comparison.
+
+**Environment** — Tests were reported passing with some cases skipped.
+
+**Next steps** — Numeric literals, then comments, then remove the flag.
+
+**Note** — Reconstructed from the stored transcript; tool output and file
+contents from the previous session were not available.`;
+
+      const VARIANTS = {
+        live: {
+          source: "live-session",
+          tag: "Live session",
+          tagClass: "",
+          summary: SUMMARY_LIVE,
+          ok: true,
+        },
+        transcript: {
+          source: "transcript",
+          tag: "Transcript",
+          tagClass: "transcript",
+          summary: SUMMARY_TRANSCRIPT,
+          ok: true,
+        },
+        failed: { source: null, tag: null, tagClass: "", summary: null, ok: false },
+      };
+
+      const STEPS = [
+        { id: "idle", label: "1 · Idle" },
+        { id: "picker", label: "2 · Pick model" },
+        { id: "confirm", label: "3 · Confirm" },
+        { id: "running", label: "4 · Handing off" },
+        { id: "done", label: "5 · Handed off" },
+        { id: "next", label: "6 · Next turn" },
+      ];
+
+      const NARRATION = {
+        idle: () =>
+          `Thread is running on <b>${FROM.label} · ${FROM.model}</b>. Before this feature, the picker was hard-locked to this driver — every other provider was filtered out of the list entirely.`,
+        picker: () =>
+          `Other providers are now <b>listed and selectable</b>, tagged <b>Handoff</b> so the cost is legible before you click. Selecting one does not change the model — it opens a confirmation.`,
+        confirm: () =>
+          `The dialog names both sides and says where the summary will land. <b>Confirm is disabled while a turn is running</b>, and the server rejects a handoff in that state too.`,
+        running: () =>
+          `<code>thread.handoff.start</code> dispatched. The outgoing session is being asked to summarize; its reply is diverted by <code>HandoffSummaryCapture</code> so it never becomes a chat message. The composer holds your send rather than losing it to a rejection.`,
+        done: (v) =>
+          v.ok
+            ? `Summary secured from the <b>${v.tag.toLowerCase()}</b>, recorded as a collapsible timeline row, old session stopped, model chip flipped to <b>${TO.model}</b>. <b>Open the row</b> to read exactly what was handed over.`
+            : `Both summarizers failed, so <b>the switch did not happen</b> — the thread stays on ${FROM.model} with its session intact. A failure row explains why rather than silently degrading.`,
+        next: (v) =>
+          v.ok
+            ? `Your next message goes out with the summary prepended as a <code>&lt;handoff-context&gt;</code> block — <b>provider input only</b>. The message stored in the thread is exactly what you typed.`
+            : `Nothing was handed off, so this is an ordinary turn on ${FROM.model}. Switch the variant above to see the successful paths.`,
+      };
+
+      // ============================================================
+      // State
+      // ============================================================
+      let stepIndex = 0;
+      let variantKey = "live";
+      let summaryOpen = false;
+
+      const $ = (sel) => document.querySelector(sel);
+      const el = {
+        steps: $("#steps"),
+        prev: $("#prev"),
+        next: $("#next"),
+        variants: $("#variants"),
+        narration: $("#narration"),
+        win: $("#win"),
+        chat: $("#chat"),
+        timeline: $("#timeline"),
+        composer: $("#composer"),
+        composerInput: $("#composer-input"),
+        composerStatus: $("#composer-status-text"),
+        modelLabel: $("#model-label"),
+        modelBtn: $("#model-btn"),
+        pickerList: $("#picker-list"),
+        pickerNote: $("#picker-note"),
+        railCodex: $("#rail-codex"),
+        railClaude: $("#rail-claude"),
+        screen: $("#screen"),
+        feed: $("#feed"),
+        mNavSub: $("#m-nav-sub"),
+        mComposerWrap: $("#m-composer-wrap"),
+        mComposer: $("#m-composer"),
+        mPlaceholder: $("#m-placeholder"),
+        mStatusText: $("#m-status-text"),
+        mModelLabel: $("#m-model-label"),
+        mModelSwatch: $("#m-model-swatch"),
+      };
+
+      // Step pills
+      STEPS.forEach((step, i) => {
+        const b = document.createElement("button");
+        b.className = "step-pill";
+        b.textContent = step.label;
+        b.addEventListener("click", () => go(i));
+        el.steps.appendChild(b);
+      });
+
+      el.prev.addEventListener("click", () => go(stepIndex - 1));
+      el.next.addEventListener("click", () => go(stepIndex + 1));
+
+      el.variants.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-variant]");
+        if (!btn) return;
+        variantKey = btn.dataset.variant;
+        summaryOpen = false;
+        render();
+      });
+
+      // Any element with data-go jumps to that step (dialog buttons, model rows…)
+      document.addEventListener("click", (e) => {
+        const target = e.target.closest("[data-go]");
+        if (!target) return;
+        go(Number(target.dataset.go));
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowRight") go(stepIndex + 1);
+        if (e.key === "ArrowLeft") go(stepIndex - 1);
+      });
+
+      function go(i) {
+        const clamped = Math.max(0, Math.min(STEPS.length - 1, i));
+        if (clamped !== stepIndex) summaryOpen = false;
+        stepIndex = clamped;
+        render();
+      }
+
+      // ============================================================
+      // Fragment builders
+      // ============================================================
+      const esc = (s) =>
+        s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+      const md = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+
+      function baseConversation() {
+        return `
+          <div class="msg">
+            <div class="avatar user">DF</div>
+            <div class="msg-body">
+              <div class="msg-who">You</div>
+              <div class="msg-text"><p>Replace the tokenizer with a table-driven scanner. Keep the <code>Token</code> shape stable.</p></div>
+            </div>
+          </div>
+          <div class="msg">
+            <div class="avatar codex">C</div>
+            <div class="msg-body">
+              <div class="msg-who">Codex · GPT-5.4</div>
+              <div class="msg-text"><p>Scanner skeleton and character-class table are in. String literals are ported and 14 tests pass. Numerics and comments are still on the old path behind <code>USE_TABLE_SCANNER</code>.</p></div>
+            </div>
+          </div>
+          <div class="worklog"><span class="dot"></span><span>Edited <code>src/parse/tokenizer.ts</code> · +182 −41</span></div>
+          <div class="worklog"><span class="dot"></span><span>Ran <code>pnpm -C apps/server test src/parse</code> · 14 passed, 2 skipped</span></div>
+        `;
+      }
+
+      function handoffRow(v) {
+        if (!v.ok) {
+          return `
+            <div class="handoff-row is-error" data-open="${summaryOpen}">
+              <button class="handoff-head" data-toggle-summary>
+                <span class="handoff-icon">
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.4"/><path d="M8 5v3.6M8 11h.01"/></svg>
+                </span>
+                <span>
+                  <span class="handoff-title">Handoff to ${TO.label} failed</span><br />
+                  <span class="handoff-sub">Provider was not changed</span>
+                </span>
+                <span class="chev">›</span>
+              </button>
+              <div class="handoff-body">
+                <p class="summary-md">Could not summarize the conversation for handoff. The provider was not changed.
+
+The live session did not return a usable summary and the transcript summarizer
+also failed. Switching now would hand ${TO.model} a conversation it cannot see,
+so the thread stays on ${FROM.model} with its session intact.</p>
+              </div>
+            </div>`;
+        }
+        return `
+          <div class="handoff-row" data-open="${summaryOpen}">
+            <button class="handoff-head" data-toggle-summary>
+              <span class="handoff-icon">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 5.5h9M8.5 3l2.5 2.5L8.5 8"/><path d="M14 10.5H5M7.5 8 5 10.5 7.5 13"/></svg>
+              </span>
+              <span>
+                <span class="handoff-title">Handed off from ${FROM.label} to ${TO.label}</span><br />
+                <span class="handoff-sub">${TO.model} continues from the summary below</span>
+              </span>
+              <span class="src-tag ${v.tagClass}">${v.tag}</span>
+              <span class="chev">›</span>
+            </button>
+            <div class="handoff-body">
+              <p class="summary-md">${md(v.summary)}</p>
+            </div>
+          </div>`;
+      }
+
+      function nextTurnFragment(v) {
+        const providerClass = v.ok ? "claude" : "codex";
+        const providerName = v.ok ? `${TO.label} · ${TO.model}` : `${FROM.label} · ${FROM.model}`;
+        const initial = v.ok ? "A" : "C";
+        const reply = v.ok
+          ? `<p>Picking up from the handoff: the table scanner is in with strings ported, numerics and comments still on the legacy path. I'll start with hex/binary literals and the underscore separators, keeping byte offsets as-is.</p>`
+          : `<p>Continuing — I'll start on the numeric literals next, keeping byte offsets as-is.</p>`;
+        const injected = v.ok
+          ? `<div class="injected">
+               <span class="tagline">&lt;handoff-context from="codex / gpt-5.4" to="claudeAgent / claude-sonnet-5"&gt;</span>
+               <span class="note">Prepended to the provider input for this turn only — clamped to <code>PROVIDER_SEND_TURN_MAX_INPUT_CHARS</code>, then cleared. The message stored in the thread is just “what were we doing?”.</span>
+             </div>`
+          : "";
+        return `
+          <div class="msg">
+            <div class="avatar user">DF</div>
+            <div class="msg-body">
+              <div class="msg-who">You</div>
+              <div class="msg-text"><p>what were we doing?</p></div>
+              ${injected}
+            </div>
+          </div>
+          <div class="msg">
+            <div class="avatar ${providerClass}">${initial}</div>
+            <div class="msg-body">
+              <div class="msg-who">${providerName}</div>
+              <div class="msg-text">${reply}</div>
+            </div>
+          </div>`;
+      }
+
+      function mobileConversation() {
+        return `
+          <div class="m-msg m-user"><div class="m-bubble">Replace the tokenizer with a table-driven scanner.</div></div>
+          <div class="m-msg">
+            <div class="m-who"><span class="swatch" style="background:var(--codex)"></span>Codex · GPT-5.4</div>
+            <div class="m-text">Scanner skeleton and character-class table are in. Strings ported, 14 tests pass.</div>
+          </div>
+          <div class="m-log"><span class="dot"></span>Edited <code>tokenizer.ts</code> · +182 −41</div>
+        `;
+      }
+
+      function mobileHandoffRow(v) {
+        if (!v.ok) {
+          return `
+            <div class="m-handoff is-error" data-open="${summaryOpen}">
+              <button class="m-handoff-head" data-toggle-summary>
+                <span class="handoff-icon" style="color:var(--danger)">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.4"/><path d="M8 5v3.6M8 11h.01"/></svg>
+                </span>
+                <span>
+                  <span class="m-handoff-title">Handoff failed</span><br />
+                  <span class="m-handoff-sub">Provider was not changed</span>
+                </span>
+                <span class="chev" style="margin-left:auto">›</span>
+              </button>
+              <div class="m-handoff-body">
+                <p class="m-summary">Could not summarize the conversation for handoff. The thread stays on ${FROM.model}.</p>
+              </div>
+            </div>`;
+        }
+        return `
+          <div class="m-handoff" data-open="${summaryOpen}">
+            <button class="m-handoff-head" data-toggle-summary>
+              <span class="handoff-icon">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 5.5h9M8.5 3l2.5 2.5L8.5 8"/><path d="M14 10.5H5M7.5 8 5 10.5 7.5 13"/></svg>
+              </span>
+              <span>
+                <span class="m-handoff-title">Handed off to ${TO.label}</span><br />
+                <span class="m-handoff-sub">${v.tag} summary · tap to read</span>
+              </span>
+              <span class="chev" style="margin-left:auto">›</span>
+            </button>
+            <div class="m-handoff-body">
+              <p class="m-summary">${md(v.summary)}</p>
+            </div>
+          </div>`;
+      }
+
+      function mobileNextTurn(v) {
+        return `
+          <div class="m-msg m-user"><div class="m-bubble">what were we doing?</div></div>
+          <div class="m-msg">
+            <div class="m-who"><span class="swatch" style="background:var(--${v.ok ? "claude" : "codex"})"></span>${v.ok ? TO.label + " · " + TO.model : FROM.label + " · " + FROM.model}</div>
+            <div class="m-text">Picking up from the handoff: strings are ported, numerics and comments are still on the legacy path. Starting with hex/binary literals.</div>
+          </div>`;
+      }
+
+      function pickerRows(step) {
+        // On a started thread every other provider stays visible and enabled,
+        // flagged so the handoff cost is legible before you click.
+        return `
+          <div class="model-row" aria-selected="true">
+            <span>
+              <span class="model-name">GPT-5.4</span><br />
+              <span class="model-sub">Codex</span>
+            </span>
+            <span class="badge check">✓</span>
+          </div>
+          <div class="model-row">
+            <span>
+              <span class="model-name">GPT-5.6 Sol</span><br />
+              <span class="model-sub">Codex</span>
+            </span>
+          </div>
+          <div class="model-row" data-go="2">
+            <span>
+              <span class="model-name">Claude Sonnet 5</span><br />
+              <span class="model-sub">Claude Code</span>
+            </span>
+            <span class="badge handoff">Handoff</span>
+          </div>
+          <div class="model-row" data-go="2">
+            <span>
+              <span class="model-name">Claude Opus 5</span><br />
+              <span class="model-sub">Claude Code</span>
+            </span>
+            <span class="badge handoff">Handoff</span>
+          </div>
+          <div class="model-row" data-go="2">
+            <span>
+              <span class="model-name">Composer 1</span><br />
+              <span class="model-sub">Cursor</span>
+            </span>
+            <span class="badge handoff">Handoff</span>
+          </div>
+          <div class="model-row" data-go="2">
+            <span>
+              <span class="model-name">GPT-5.6 Sol</span><br />
+              <span class="model-sub">Codex Work · separate auth</span>
+            </span>
+            <span class="badge handoff">Handoff</span>
+          </div>
+        `;
+      }
+
+      // ============================================================
+      // Render
+      // ============================================================
+      function render() {
+        const step = STEPS[stepIndex].id;
+        const v = VARIANTS[variantKey];
+        const switched = v.ok && (step === "done" || step === "next");
+
+        // Controls
+        [...el.steps.children].forEach((b, i) =>
+          b.setAttribute("aria-current", String(i === stepIndex)),
+        );
+        el.prev.disabled = stepIndex === 0;
+        el.next.disabled = stepIndex === STEPS.length - 1;
+        [...el.variants.children].forEach((b) =>
+          b.setAttribute("aria-pressed", String(b.dataset.variant === variantKey)),
+        );
+        el.narration.innerHTML = NARRATION[step](v);
+
+        // ---- Desktop ----
+        el.chat.dataset.picker = String(step === "picker");
+        el.chat.dataset.dialog = String(step === "confirm");
+        el.win.dataset.provider = switched ? "claude" : "codex";
+
+        let timeline = baseConversation();
+        if (step === "done" || step === "next") timeline += handoffRow(v);
+        if (step === "next") timeline += nextTurnFragment(v);
+        el.timeline.innerHTML = timeline;
+        el.timeline.scrollTop = el.timeline.scrollHeight;
+
+        el.modelLabel.textContent = switched ? TO.model : FROM.model;
+        el.modelBtn.classList.toggle("active", step === "picker");
+        el.railCodex.setAttribute("aria-selected", String(!switched));
+        el.railClaude.setAttribute("aria-selected", String(switched));
+        el.pickerList.innerHTML = pickerRows(step);
+        el.pickerNote.innerHTML =
+          'Cross-provider entries stay selectable — <b style="color:#8fd6f7">Handoff</b> means the conversation is summarized and carried over.';
+
+        const running = step === "running";
+        el.composer.dataset.disabled = String(running);
+        el.composer.dataset.status = String(running);
+        el.composerStatus.textContent = `Handing off to ${TO.model} — summarizing conversation…`;
+        el.composerInput.dataset.typed = String(step === "next");
+        el.composerInput.textContent =
+          step === "next" ? "what were we doing?" : "Message the agent…";
+
+        // ---- Mobile ----
+        el.screen.dataset.menu = String(step === "picker");
+        el.screen.dataset.alert = String(step === "confirm");
+
+        let feed = mobileConversation();
+        if (step === "done" || step === "next") feed += mobileHandoffRow(v);
+        if (step === "next") feed += mobileNextTurn(v);
+        el.feed.innerHTML = feed;
+        el.feed.scrollTop = el.feed.scrollHeight;
+
+        el.mNavSub.textContent = switched
+          ? `${TO.label} · ${TO.model}`
+          : `${FROM.label} · ${FROM.model}`;
+        el.mModelLabel.textContent = switched ? TO.model : FROM.model;
+        el.mModelSwatch.style.background = switched ? "var(--claude)" : "var(--codex)";
+        el.mComposerWrap.dataset.status = String(running);
+        el.mComposer.dataset.disabled = String(running);
+        el.mStatusText.textContent = `Handing off to ${TO.model}…`;
+        el.mPlaceholder.dataset.typed = String(step === "next");
+        el.mPlaceholder.textContent = step === "next" ? "what were we doing?" : "Message…";
+
+        // Summary rows are re-created on every render, so rebind.
+        document.querySelectorAll("[data-toggle-summary]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            summaryOpen = !summaryOpen;
+            render();
+          });
+        });
+      }
+
+      render();
+    </script>
+  </body>
+</html>

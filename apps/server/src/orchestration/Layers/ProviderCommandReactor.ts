@@ -4,9 +4,13 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationThread,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  type ThreadHandoff,
+  type ThreadHandoffSummarySource,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -16,6 +20,7 @@ import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shar
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -26,6 +31,9 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { buildHandoffSummaryPrompt, describeModelSelection } from "../handoffContext.ts";
+import { HANDOFF_TRANSCRIPT_MAX_CHARS } from "../../textGeneration/TextGenerationPrompts.ts";
+import { HandoffCaptureError, HandoffSummaryCapture } from "../Services/HandoffSummaryCapture.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -67,6 +75,28 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+/**
+ * Prepends a handoff summary to the first turn on the new provider, clamped so
+ * the combined input still satisfies ProviderSendTurnInput's max length. The
+ * user's own message always survives intact: the summary is what gets cut.
+ */
+function withHandoffContext(handoffContext: string, messageText: string): string {
+  const separator = "\n\n";
+  const budget =
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+    messageText.length -
+    separator.length -
+    HANDOFF_CLAMP_SLACK;
+  if (budget <= 0) {
+    return messageText;
+  }
+  const context =
+    handoffContext.length <= budget
+      ? handoffContext
+      : `${handoffContext.slice(0, budget).trimEnd()}\n[handoff context truncated]`;
+  return `${context}${separator}${messageText}`;
+}
+
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -88,6 +118,10 @@ function mapProviderSessionStatusToOrchestrationStatus(
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
 
+/** Leaves room for the truncation marker when clamping handoff context. */
+const HANDOFF_CLAMP_SLACK = 64;
+/** A summary turn that has not settled by now is not going to. */
+const HANDOFF_SUMMARY_TIMEOUT = Duration.seconds(120);
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -255,9 +289,11 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const handoffSummaryCapture = yield* HandoffSummaryCapture;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -673,6 +709,9 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
+    /** Handoff summary to prepend to the provider input only. The persisted
+        user message keeps the text the user actually typed. */
+    readonly handoffContext?: string;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -688,7 +727,11 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const normalizedInput = toNonEmptyProviderInput(
+      input.handoffContext !== undefined
+        ? withHandoffContext(input.handoffContext, input.messageText)
+        : input.messageText,
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -1003,6 +1046,364 @@ const make = Effect.gen(function* () {
     processThreadTitleRegenerationSafely,
   );
 
+  const dispatchHandoffCompletion = Effect.fn("dispatchHandoffCompletion")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly requestId: CommandId;
+    readonly outcome: "completed" | "failed";
+    readonly summary?: string;
+    readonly summarySource?: ThreadHandoffSummarySource;
+    readonly detail?: string;
+  }) {
+    yield* orchestrationEngine.dispatch({
+      type: "thread.handoff.complete",
+      commandId: yield* serverCommandId("thread-handoff-complete"),
+      threadId: input.threadId,
+      requestId: input.requestId,
+      outcome: input.outcome,
+      ...(input.summary !== undefined ? { summary: input.summary } : {}),
+      ...(input.summarySource !== undefined ? { summarySource: input.summarySource } : {}),
+      ...(input.detail !== undefined ? { detail: input.detail } : {}),
+      createdAt: yield* nowIso,
+    });
+  });
+
+  const appendHandoffActivity = Effect.fn("appendHandoffActivity")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly handoff: ThreadHandoff;
+    readonly summary?: string;
+    readonly summarySource?: ThreadHandoffSummarySource;
+    readonly detail?: string;
+    readonly failed: boolean;
+    readonly createdAt: string;
+  }) {
+    const fromLabel = describeModelSelection(input.handoff.fromModelSelection);
+    const toLabel = describeModelSelection(input.handoff.toModelSelection);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* serverCommandId("thread-handoff-activity"),
+      threadId: input.threadId,
+      activity: {
+        id: yield* serverEventId(),
+        tone: input.failed ? "error" : "info",
+        kind: input.failed ? "provider-handoff.failed" : "provider-handoff",
+        summary: input.failed
+          ? `Handoff to ${toLabel} failed`
+          : `Handed off from ${fromLabel} to ${toLabel}`,
+        payload: {
+          fromModelSelection: input.handoff.fromModelSelection,
+          toModelSelection: input.handoff.toModelSelection,
+          fromLabel,
+          toLabel,
+          ...(input.summary !== undefined ? { summaryMarkdown: input.summary } : {}),
+          ...(input.summarySource !== undefined ? { summarySource: input.summarySource } : {}),
+          ...(input.detail !== undefined ? { detail: input.detail } : {}),
+        },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  /**
+   * Flattens a thread into a transcript for the fallback summarizer. Retains
+   * the newest content, which is where the live task state lives.
+   */
+  const formatHandoffTranscript = (thread: OrchestrationThread): string => {
+    const sections: Array<string> = [];
+    let used = 0;
+    let truncated = false;
+    for (const message of thread.messages.toReversed()) {
+      const text = message.text.trim();
+      if (text.length === 0) continue;
+      const section = `${message.role.toUpperCase()}:\n${text}`;
+      if (used + section.length > HANDOFF_TRANSCRIPT_MAX_CHARS) {
+        truncated = true;
+        break;
+      }
+      used += section.length;
+      sections.unshift(section);
+    }
+    // Activity summaries are one-liners; they add the tool/file trail the
+    // message text alone does not show.
+    const activityTrail = thread.activities
+      .slice(-80)
+      .map((activity) => `- ${activity.kind}: ${activity.summary}`)
+      .join("\n");
+    return [
+      ...(truncated ? ["[Earlier conversation truncated]"] : []),
+      ...sections,
+      ...(activityTrail.length > 0 ? ["", "ACTIVITY TRAIL:", activityTrail] : []),
+    ].join("\n\n");
+  };
+
+  const captureHandoffSummaryFromLiveSession = Effect.fn("captureHandoffSummaryFromLiveSession")(
+    function* (input: { readonly threadId: ThreadId; readonly handoff: ThreadHandoff }) {
+      yield* handoffSummaryCapture.begin(input.threadId);
+      const captured = yield* Effect.gen(function* () {
+        yield* providerService.sendTurn({
+          threadId: input.threadId,
+          input: buildHandoffSummaryPrompt({
+            from: input.handoff.fromModelSelection,
+            to: input.handoff.toModelSelection,
+          }),
+        });
+        return yield* handoffSummaryCapture.await(input.threadId);
+      }).pipe(
+        Effect.timeoutOption(HANDOFF_SUMMARY_TIMEOUT),
+        // The summary turn may still be running when we give up on it; leaving
+        // it live would race the session stop that follows.
+        Effect.onError(() =>
+          providerService
+            .interruptTurn({ threadId: input.threadId })
+            .pipe(Effect.ignoreCause({ log: true })),
+        ),
+        Effect.ensuring(handoffSummaryCapture.end(input.threadId)),
+      );
+      if (Option.isNone(captured)) {
+        return yield* new HandoffCaptureError({
+          threadId: input.threadId,
+          reason: "turn-failed",
+          detail: "The summary turn did not finish in time.",
+        });
+      }
+      return captured.value;
+    },
+  );
+
+  const generateHandoffSummaryFromTranscript = Effect.fn("generateHandoffSummaryFromTranscript")(
+    function* (input: { readonly thread: OrchestrationThread; readonly handoff: ThreadHandoff }) {
+      const settings = yield* serverSettingsService.getSettings;
+      const project = yield* resolveProject(input.thread.projectId);
+      const cwd =
+        resolveThreadWorkspaceCwd({
+          thread: input.thread,
+          projects: project ? [project] : [],
+        }) ?? process.cwd();
+      const generated = yield* textGeneration.generateHandoffSummary({
+        cwd,
+        transcript: formatHandoffTranscript(input.thread),
+        fromLabel: describeModelSelection(input.handoff.fromModelSelection),
+        toLabel: describeModelSelection(input.handoff.toModelSelection),
+        modelSelection: settings.textGenerationModelSelection,
+      });
+      return generated.summary;
+    },
+  );
+
+  const processHandoffRequested = Effect.fn("processHandoffRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.meta-updated" }>,
+  ) {
+    const handoff = event.payload.handoff;
+    if (handoff == null) {
+      return;
+    }
+    const thread = yield* resolveThread(event.payload.threadId);
+    // A newer handoff (or a completion that already landed) owns the thread now.
+    if (!thread || thread.handoff?.requestId !== handoff.requestId) {
+      return;
+    }
+    // The decider checks this too, but a turn can start between decide and
+    // here. Summarizing mid-turn would capture half-finished state.
+    if (thread.session?.status === "running" || thread.session?.activeTurnId != null) {
+      yield* appendHandoffActivity({
+        threadId: thread.id,
+        handoff,
+        detail: "A turn started while the handoff was being prepared.",
+        failed: true,
+        createdAt: event.occurredAt,
+      });
+      yield* dispatchHandoffCompletion({
+        threadId: thread.id,
+        requestId: handoff.requestId,
+        outcome: "failed",
+        detail: "A turn started while the handoff was being prepared.",
+      });
+      return;
+    }
+
+    const hasLiveSession =
+      thread.session != null &&
+      thread.session.status !== "stopped" &&
+      thread.session.status !== "error";
+
+    type HandoffSummaryResult = {
+      readonly summary: string;
+      readonly source: ThreadHandoffSummarySource;
+    };
+
+    // Preferred path: the outgoing session still holds context the stored
+    // transcript cannot show — full tool output, file contents it read.
+    const liveSummary: Option.Option<string> = hasLiveSession
+      ? yield* captureHandoffSummaryFromLiveSession({
+          threadId: thread.id,
+          handoff,
+        }).pipe(
+          Effect.map((summary): Option.Option<string> => Option.some(summary)),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning(
+                  "provider command reactor could not capture a handoff summary from the live session",
+                  { threadId: thread.id, cause: Cause.pretty(cause) },
+                ).pipe(Effect.as(Option.none<string>())),
+          ),
+        )
+      : Option.none<string>();
+
+    const summaryResult: Option.Option<HandoffSummaryResult> = Option.isSome(liveSummary)
+      ? Option.some({ summary: liveSummary.value, source: "live-session" })
+      : yield* generateHandoffSummaryFromTranscript({ thread, handoff }).pipe(
+          Effect.map(
+            (summary): Option.Option<HandoffSummaryResult> =>
+              Option.some({ summary, source: "transcript" }),
+          ),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning(
+                  "provider command reactor could not generate a handoff summary from the transcript",
+                  { threadId: thread.id, cause: Cause.pretty(cause) },
+                ).pipe(Effect.as(Option.none<HandoffSummaryResult>())),
+          ),
+        );
+
+    // Both summarizers failed. Do NOT switch: the user keeps a working session
+    // instead of a new provider with no memory of the conversation.
+    if (Option.isNone(summaryResult) || summaryResult.value.summary.trim().length === 0) {
+      const detail =
+        "Could not summarize the conversation for handoff. The provider was not changed.";
+      yield* appendHandoffActivity({
+        threadId: thread.id,
+        handoff,
+        detail,
+        failed: true,
+        createdAt: event.occurredAt,
+      });
+      yield* dispatchHandoffCompletion({
+        threadId: thread.id,
+        requestId: handoff.requestId,
+        outcome: "failed",
+        detail,
+      });
+      return;
+    }
+
+    const summary = summaryResult.value.summary.trim();
+    yield* appendHandoffActivity({
+      threadId: thread.id,
+      handoff,
+      summary,
+      summarySource: summaryResult.value.source,
+      failed: false,
+      createdAt: event.occurredAt,
+    });
+
+    // The old session's resume state is driver-specific and useless to the
+    // incoming provider, so it is torn down rather than carried over.
+    const now = yield* nowIso;
+    if (thread.session && thread.session.status !== "stopped") {
+      yield* providerService
+        .stopSession({ threadId: thread.id })
+        .pipe(Effect.ignoreCause({ log: true }));
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "stopped",
+          providerName: thread.session.providerName,
+          ...(thread.session.providerInstanceId !== undefined
+            ? { providerInstanceId: thread.session.providerInstanceId }
+            : {}),
+          runtimeMode: thread.session.runtimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+    }
+
+    // Keep the restart heuristics from replaying the outgoing provider's
+    // selection on the next turn.
+    threadModelSelections.set(thread.id, handoff.toModelSelection);
+
+    yield* dispatchHandoffCompletion({
+      threadId: thread.id,
+      requestId: handoff.requestId,
+      outcome: "completed",
+      summary,
+      summarySource: summaryResult.value.source,
+    });
+  });
+
+  const processHandoffRequestedSafely = Effect.fn("processHandoffRequestedSafely")(
+    function* (event: Extract<ProviderIntentEvent, { type: "thread.meta-updated" }>) {
+      yield* processHandoffRequested(event);
+    },
+    (effect, event) =>
+      effect.pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.failCause(cause);
+          }
+          const requestId = event.payload.handoff?.requestId;
+          return Effect.logWarning("provider command reactor failed to process handoff", {
+            threadId: event.payload.threadId,
+            cause: Cause.pretty(cause),
+          }).pipe(
+            // Without this the thread would stay wedged in "handing off"
+            // forever, with its composer disabled.
+            Effect.andThen(
+              requestId === undefined
+                ? Effect.void
+                : dispatchHandoffCompletion({
+                    threadId: event.payload.threadId,
+                    requestId,
+                    outcome: "failed",
+                    detail: "The handoff failed unexpectedly. The provider was not changed.",
+                  }).pipe(Effect.ignoreCause({ log: true })),
+            ),
+          );
+        }),
+      ),
+  );
+
+  const handoffWorker = yield* makeDrainableWorker(processHandoffRequestedSafely);
+
+  const findInterruptedThreadHandoffs = Effect.fn("findInterruptedThreadHandoffs")(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    return readModel.threads.flatMap((thread) => {
+      const requestId = thread.handoff?.requestId;
+      return requestId === undefined ? [] : [{ threadId: thread.id, requestId }];
+    });
+  });
+
+  const clearInterruptedThreadHandoffs = Effect.fn("clearInterruptedThreadHandoffs")(function* (
+    interrupted: ReadonlyArray<{ readonly threadId: ThreadId; readonly requestId: CommandId }>,
+  ) {
+    yield* Effect.forEach(
+      interrupted,
+      ({ threadId, requestId }) =>
+        dispatchHandoffCompletion({
+          threadId,
+          requestId,
+          outcome: "failed",
+          detail: "The server restarted during the handoff. The provider was not changed.",
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : Effect.logWarning("provider command reactor failed to clear interrupted handoff", {
+                  threadId,
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      { discard: true },
+    );
+  });
+
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
@@ -1104,6 +1505,9 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      ...(event.payload.handoffContext !== undefined
+        ? { handoffContext: event.payload.handoffContext }
+        : {}),
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),
@@ -1274,6 +1678,12 @@ const make = Effect.gen(function* () {
     });
     switch (event.type) {
       case "thread.meta-updated":
+        // Separate workers: a handoff runs a provider turn and can take a
+        // couple of minutes, and must not block title regeneration.
+        if (event.payload.handoff != null) {
+          yield* handoffWorker.enqueue(event);
+          return;
+        }
         yield* threadTitleRegenerationWorker.enqueue(event);
         return;
       case "thread.runtime-mode-set": {
@@ -1334,9 +1744,20 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.as([]));
       }),
     );
+    const interruptedHandoffs = yield* findInterruptedThreadHandoffs().pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.logWarning("provider command reactor failed to find interrupted handoffs", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as([]));
+      }),
+    );
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
-        (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
+        (event.type === "thread.meta-updated" &&
+          (event.payload.regenerateTitle === true || event.payload.handoff != null)) ||
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
@@ -1353,8 +1774,9 @@ const make = Effect.gen(function* () {
     // The domain event stream is hot, so work pending before this reactor
     // starts cannot be resumed. Correlated completions only clear the request
     // captured here, leaving any newer request untouched.
-    const clearInterrupted = clearInterruptedThreadTitleRegenerations(
-      interruptedTitleRegenerations,
+    const clearInterrupted = Effect.andThen(
+      clearInterruptedThreadTitleRegenerations(interruptedTitleRegenerations),
+      clearInterruptedThreadHandoffs(interruptedHandoffs),
     ).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1381,6 +1803,7 @@ const make = Effect.gen(function* () {
     drain: Effect.gen(function* () {
       yield* worker.drain;
       yield* threadTitleRegenerationWorker.drain;
+      yield* handoffWorker.drain;
     }),
   } satisfies ProviderCommandReactorShape;
 });

@@ -271,3 +271,51 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Cross-provider handoff summary
+// ---------------------------------------------------------------------------
+
+/**
+ * Transcript budget for the handoff fallback. Far larger than the 8k the
+ * short-form prompts use: this summary is the only memory the incoming
+ * provider gets, so dropping conversation is a real loss, not a rounding
+ * error.
+ */
+export const HANDOFF_TRANSCRIPT_MAX_CHARS = 60_000;
+
+export interface HandoffSummaryPromptInput {
+  transcript: string;
+  fromLabel: string;
+  toLabel: string;
+}
+
+export function buildHandoffSummaryPrompt(input: HandoffSummaryPromptInput) {
+  // Keep the END of the transcript: recent turns carry the live task state,
+  // and the summary's job is to let the next provider pick up where this one
+  // left off.
+  const transcript =
+    input.transcript.length <= HANDOFF_TRANSCRIPT_MAX_CHARS
+      ? input.transcript
+      : `${EARLIER_CONTENT_TRUNCATION_MARKER}${input.transcript.slice(-HANDOFF_TRANSCRIPT_MAX_CHARS)}`;
+
+  const prompt = [
+    "You write handoff summaries that let one coding assistant take over a conversation from another with zero memory loss.",
+    `This conversation is moving from ${input.fromLabel} to ${input.toLabel}.`,
+    "Return a JSON object with key: summary. The value is markdown.",
+    "Rules:",
+    "- Cover: the user's task, what is done vs. in progress vs. not started, every file touched and how, decisions made and why, commands run and their outcomes, the immediate next step, and any constraints or user preferences.",
+    "- Be specific: exact file paths, identifiers, and commands beat prose.",
+    "- Only state what the transcript supports. Do not invent file contents or results.",
+    "- Write it as notes for the next assistant, not as a message to the user.",
+    "",
+    "Thread transcript:",
+    transcript,
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}

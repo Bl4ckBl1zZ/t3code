@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadHandoff,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -43,6 +44,10 @@ export const ProjectionThread = Schema.Struct({
   snoozedAt: Schema.NullOr(IsoDateTime),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** Pending cross-provider handoff; persisted JSON-encoded in handoff_json. */
+  handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
+  /** Handoff summary block awaiting injection into the next turn. */
+  pendingHandoffContext: Schema.optional(Schema.NullOr(Schema.String)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,

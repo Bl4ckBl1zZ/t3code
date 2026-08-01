@@ -349,6 +349,19 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+export const ThreadHandoffSummarySource = Schema.Literals(["live-session", "transcript"]);
+export type ThreadHandoffSummarySource = typeof ThreadHandoffSummarySource.Type;
+
+/** Pending cross-provider handoff: the outgoing session is being asked for a
+    handoff summary before the thread's model selection swaps to the target. */
+export const ThreadHandoff = Schema.Struct({
+  requestId: CommandId,
+  fromModelSelection: ModelSelection,
+  toModelSelection: ModelSelection,
+  startedAt: IsoDateTime,
+});
+export type ThreadHandoff = typeof ThreadHandoff.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -376,6 +389,10 @@ export const OrchestrationThread = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // Pending cross-provider handoff. Optional so older servers remain compatible.
+  handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
+  // Handoff summary awaiting injection into the next turn's provider input.
+  pendingHandoffContext: Schema.optional(Schema.NullOr(Schema.String)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
@@ -429,6 +446,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // Pending cross-provider handoff. Optional so older servers remain
+  // compatible; clients use it to show progress and hold back sends.
+  handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
@@ -763,6 +783,16 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/** Requests a cross-provider handoff: summarize the conversation with the
+    outgoing provider, then swap the thread onto `toModelSelection`. */
+const ThreadHandoffStartCommand = Schema.Struct({
+  type: Schema.Literal("thread.handoff.start"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  toModelSelection: ModelSelection,
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -784,6 +814,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadHandoffStartCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -809,6 +840,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadHandoffStartCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -885,6 +917,20 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+/** Server-internal completion of a pending handoff. `summary` is present when
+    `outcome` is "completed"; `detail` explains a failure. */
+const ThreadHandoffCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.handoff.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  requestId: CommandId,
+  outcome: Schema.Literals(["completed", "failed"]),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  summarySource: Schema.optional(ThreadHandoffSummarySource),
+  detail: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -894,6 +940,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadHandoffCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1033,6 +1080,10 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   previousTitle: Schema.optional(TrimmedNonEmptyString),
   /** Pending state shared with clients. Null clears a matching request. */
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  /** Pending cross-provider handoff state. Null clears a matching request. */
+  handoff: Schema.optional(Schema.NullOr(ThreadHandoff)),
+  /** Handoff context to inject into the next turn. Null clears it. */
+  pendingHandoffContext: Schema.optional(Schema.NullOr(Schema.String)),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1075,6 +1126,10 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Handoff summary carried over from a completed cross-provider switch. The
+      reactor prepends it to the provider input only; the persisted user
+      message keeps the original text. */
+  handoffContext: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 

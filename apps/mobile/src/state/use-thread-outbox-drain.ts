@@ -31,6 +31,7 @@ import {
   modelSelectionsEqual,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxFailureAction,
+  resolveQueuedModelSelectionForDelivery,
   resolveQueuedThreadSettings,
   threadOutboxRetryDelayMs,
   type QueuedThreadCreation,
@@ -167,7 +168,15 @@ export function useThreadOutboxDrain(): void {
 
   const sendQueuedMessage = useCallback(
     async (queuedMessage: QueuedThreadMessage, thread: EnvironmentThreadShell) => {
-      const settings = resolveQueuedThreadSettings(queuedMessage, thread);
+      const resolvedSettings = resolveQueuedThreadSettings(queuedMessage, thread);
+      const settings = {
+        ...resolvedSettings,
+        modelSelection: resolveQueuedModelSelectionForDelivery({
+          queued: resolvedSettings.modelSelection,
+          thread: thread.modelSelection,
+          threadHasStarted: thread.latestTurn !== null,
+        }),
+      };
       const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
 
       if (!modelSelectionsEqual(settings.modelSelection, thread.modelSelection)) {

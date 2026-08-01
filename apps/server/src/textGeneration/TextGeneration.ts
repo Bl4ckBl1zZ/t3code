@@ -73,6 +73,22 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface HandoffSummaryGenerationInput {
+  cwd: string;
+  /** Flattened thread transcript, newest content retained under truncation. */
+  transcript: string;
+  /** Human-readable label of the outgoing provider/model. */
+  fromLabel: string;
+  /** Human-readable label of the incoming provider/model. */
+  toLabel: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface HandoffSummaryGenerationResult {
+  summary: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -80,6 +96,9 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateHandoffSummary(
+    input: HandoffSummaryGenerationInput,
+  ): Promise<HandoffSummaryGenerationResult>;
 }
 
 /**
@@ -113,6 +132,16 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Summarize a thread transcript for a cross-provider handoff. This is the
+     * fallback path: the preferred summary comes from the outgoing live
+     * session, which still holds context this transcript cannot show (full
+     * tool output, file contents it read).
+     */
+    readonly generateHandoffSummary: (
+      input: HandoffSummaryGenerationInput,
+    ) => Effect.Effect<HandoffSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -123,7 +152,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateHandoffSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -162,6 +192,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    generateHandoffSummary: (input) =>
+      resolveInstance(registry, "generateHandoffSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateHandoffSummary(input)),
       ),
   });
 

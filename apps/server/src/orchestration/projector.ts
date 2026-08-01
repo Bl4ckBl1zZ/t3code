@@ -330,6 +330,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             archivedAt: payload.archivedAt,
             titleRegeneration: null,
+            handoff: null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -402,6 +403,10 @@ export function projectEvent(
             ...(payload.title !== undefined ? { title: payload.title } : {}),
             ...(payload.titleRegeneration !== undefined
               ? { titleRegeneration: payload.titleRegeneration }
+              : {}),
+            ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
+            ...(payload.pendingHandoffContext !== undefined
+              ? { pendingHandoffContext: payload.pendingHandoffContext }
               : {}),
             ...(payload.modelSelection !== undefined
               ? { modelSelection: payload.modelSelection }

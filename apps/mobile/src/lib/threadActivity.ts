@@ -299,7 +299,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
-  if (
+  // The handoff summary is the whole point of the row: surface it as the
+  // expandable detail so the user can read what the next provider was given.
+  const handoffSummary =
+    activity.kind === "provider-handoff" && typeof payload?.summaryMarkdown === "string"
+      ? payload.summaryMarkdown
+      : null;
+  if (handoffSummary) {
+    entry.detail = handoffSummary;
+  } else if (
     !taskDetailAsLabel &&
     payload &&
     typeof payload.detail === "string" &&

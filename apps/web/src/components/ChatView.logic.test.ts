@@ -1,6 +1,8 @@
 import {
+  CommandId,
   EnvironmentId,
   MessageId,
+  ProviderDriverKind,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -19,6 +21,7 @@ import {
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
+  getCrossProviderHandoffPlan,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
@@ -29,6 +32,7 @@ import {
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
+  threadHandoffPending,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -676,5 +680,139 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("getCrossProviderHandoffPlan", () => {
+  const codexInstance = ProviderInstanceId.make("codex");
+  const claudeInstance = ProviderInstanceId.make("claudeAgent");
+  const codexWorkInstance = ProviderInstanceId.make("codex_work");
+  const providers = [
+    {
+      instanceId: codexInstance,
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex",
+      continuation: { groupKey: "codex:personal" },
+    },
+    {
+      instanceId: codexWorkInstance,
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex Work",
+      continuation: { groupKey: "codex:work" },
+    },
+    {
+      instanceId: claudeInstance,
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: "Claude Code",
+      continuation: { groupKey: "claude:default" },
+    },
+  ];
+  const startedThread = makeThread({
+    messages: [
+      {
+        id: MessageId.make("message-1"),
+        role: "user",
+        text: "hello",
+        turnId: null,
+        streaming: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+  });
+
+  it("returns null for a thread that has not started", () => {
+    expect(
+      getCrossProviderHandoffPlan({
+        providers,
+        thread: makeThread(),
+        nextModelSelection: { instanceId: claudeInstance, model: "claude-sonnet-5" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a model change within the same instance", () => {
+    expect(
+      getCrossProviderHandoffPlan({
+        providers,
+        thread: startedThread,
+        nextModelSelection: { instanceId: codexInstance, model: "gpt-5.6-sol" },
+      }),
+    ).toBeNull();
+  });
+
+  it("plans a handoff when the driver kind changes", () => {
+    expect(
+      getCrossProviderHandoffPlan({
+        providers,
+        thread: startedThread,
+        nextModelSelection: { instanceId: claudeInstance, model: "claude-sonnet-5" },
+      }),
+    ).toEqual({
+      fromInstanceId: codexInstance,
+      toInstanceId: claudeInstance,
+      fromLabel: "Codex",
+      toLabel: "Claude Code",
+      reason: "driver",
+    });
+  });
+
+  it("plans a handoff across instances of one driver with incompatible resume state", () => {
+    expect(
+      getCrossProviderHandoffPlan({
+        providers,
+        thread: startedThread,
+        nextModelSelection: { instanceId: codexWorkInstance, model: "gpt-5.6-sol" },
+      })?.reason,
+    ).toBe("continuation");
+  });
+
+  it("prefers the live session instance over the thread's stored selection", () => {
+    expect(
+      getCrossProviderHandoffPlan({
+        providers,
+        thread: startedThread,
+        currentProviderInstanceId: claudeInstance,
+        nextModelSelection: { instanceId: codexInstance, model: "gpt-5.6-sol" },
+      })?.fromLabel,
+    ).toBe("Claude Code");
+  });
+
+  it("returns null when either instance is unknown", () => {
+    expect(
+      getCrossProviderHandoffPlan({
+        providers,
+        thread: startedThread,
+        nextModelSelection: {
+          instanceId: ProviderInstanceId.make("not-configured"),
+          model: "whatever",
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("threadHandoffPending", () => {
+  it("is false without a pending handoff", () => {
+    expect(threadHandoffPending(makeThread())).toBe(false);
+    expect(threadHandoffPending(null)).toBe(false);
+  });
+
+  it("is true while a handoff is recorded on the thread", () => {
+    expect(
+      threadHandoffPending(
+        makeThread({
+          handoff: {
+            requestId: CommandId.make("command-1"),
+            fromModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            toModelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: "claude-sonnet-5",
+            },
+            startedAt: now,
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 });

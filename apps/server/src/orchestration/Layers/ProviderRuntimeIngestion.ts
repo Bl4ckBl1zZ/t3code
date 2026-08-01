@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { HandoffSummaryCapture } from "../Services/HandoffSummaryCapture.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
@@ -694,6 +695,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const handoffSummaryCapture = yield* HandoffSummaryCapture;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1291,8 +1293,57 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Diverts a handoff summarization turn away from the thread. Returns true
+   * when the event was consumed by the capture and must not be projected —
+   * the summary is machinery, so nothing here reaches the timeline or the
+   * session state.
+   */
+  const consumeForHandoffCapture = (event: ProviderRuntimeEvent) =>
+    Effect.gen(function* () {
+      if (!(yield* handoffSummaryCapture.isActive(event.threadId))) {
+        return false;
+      }
+      switch (event.type) {
+        case "content.delta":
+          if (event.payload.streamKind === "assistant_text") {
+            yield* handoffSummaryCapture.appendAssistantText(event.threadId, event.payload.delta);
+          }
+          return true;
+        case "item.completed":
+          // Some providers never stream assistant deltas and deliver the final
+          // text only here.
+          if (event.payload.itemType === "assistant_message") {
+            yield* handoffSummaryCapture.noteAssistantItemCompleted(
+              event.threadId,
+              event.payload.detail,
+            );
+          }
+          return true;
+        case "turn.completed":
+          yield* handoffSummaryCapture.completeTurn(event.threadId, event.payload.state);
+          return true;
+        case "session.exited":
+          yield* handoffSummaryCapture.fail(event.threadId, "session-exited");
+          return true;
+        case "runtime.error":
+          yield* handoffSummaryCapture.fail(event.threadId, "runtime-error");
+          return true;
+        // The summary prompt forbids tools, so an approval or question means
+        // the provider went off-script. Fail fast onto the transcript fallback
+        // rather than stall behind a prompt no user can see.
+        case "request.opened":
+        case "user-input.requested":
+          yield* handoffSummaryCapture.fail(event.threadId, "request-opened");
+          return true;
+        default:
+          return true;
+      }
+    });
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
+      if (yield* consumeForHandoffCapture(event)) return;
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
 

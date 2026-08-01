@@ -52,6 +52,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
+import { HandoffSummaryCaptureLive } from "./orchestration/Layers/HandoffSummaryCapture.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
@@ -220,6 +221,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
+  // Provided last so ingestion and the command reactor share one instance:
+  // the reactor starts a capture, ingestion feeds it.
+  Layer.provideMerge(HandoffSummaryCaptureLive),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(

@@ -573,6 +573,7 @@ export interface ChatComposerProps {
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
+  allowCrossProviderHandoff?: boolean | undefined;
   providerStatuses: ServerProvider[];
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
@@ -668,6 +669,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     runtimeMode,
     interactionMode,
     lockedProvider,
+    allowCrossProviderHandoff,
     providerStatuses,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
@@ -3314,6 +3316,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeInstanceId={selectedInstanceId}
                     model={selectedModelForPickerWithCustomFallback}
                     lockedProvider={lockedProvider}
+                    allowCrossProviderHandoff={allowCrossProviderHandoff}
                     lockedContinuationGroupKey={lockedContinuationGroupKey}
                     instanceEntries={providerInstanceEntries}
                     keybindings={keybindings}

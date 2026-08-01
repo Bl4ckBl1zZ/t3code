@@ -21,6 +21,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildHandoffSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -98,7 +99,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateHandoffSummary",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -117,7 +119,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateHandoffSummary",
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
   ): Effect.fn.Return<MaterializedImageAttachments, TextGenerationError> {
     if (!attachments || attachments.length === 0) {
@@ -159,7 +162,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateHandoffSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -402,10 +406,33 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateHandoffSummary: TextGeneration.TextGeneration["Service"]["generateHandoffSummary"] =
+    Effect.fn("CodexTextGeneration.generateHandoffSummary")(function* (input) {
+      const { prompt, outputSchema } = buildHandoffSummaryPrompt({
+        transcript: input.transcript,
+        fromLabel: input.fromLabel,
+        toLabel: input.toLabel,
+      });
+
+      const generated = yield* runCodexJson({
+        operation: "generateHandoffSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        imagePaths: [],
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: generated.summary.trim(),
+      } satisfies TextGeneration.HandoffSummaryGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateHandoffSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

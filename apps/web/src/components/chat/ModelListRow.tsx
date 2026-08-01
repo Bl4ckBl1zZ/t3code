@@ -33,6 +33,8 @@ export const ModelListRow = memo(function ModelListRow(props: {
   preferShortName?: boolean;
   useTriggerLabel?: boolean;
   showNewBadge?: boolean;
+  /** Selecting this model switches providers, which triggers a handoff. */
+  showHandoffBadge?: boolean;
   jumpLabel?: string | null;
   disabledReason?: string | null;
   onToggleFavorite: () => void;
@@ -66,6 +68,15 @@ export const ModelListRow = memo(function ModelListRow(props: {
                   props.preferShortName ? { preferShortName: true } : undefined,
                 )}
           </div>
+          {props.showHandoffBadge ? (
+            <span
+              className="shrink-0 rounded border border-sky-500/35 bg-sky-500/15 px-0.5 py-px text-[10px] font-bold uppercase leading-none tracking-wide text-sky-800 dark:border-sky-400/30 dark:bg-sky-400/12 dark:text-sky-200"
+              title="Switching to this provider summarizes the conversation and hands it off"
+              aria-label="Switches provider with a handoff"
+            >
+              Handoff
+            </span>
+          ) : null}
           {props.showNewBadge ? (
             <span
               className="shrink-0 rounded border border-amber-500/35 bg-amber-500/15 px-0.5 py-px text-[10px] font-bold uppercase leading-none tracking-wide text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/12 dark:text-amber-200"

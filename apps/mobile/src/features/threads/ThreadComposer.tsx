@@ -18,6 +18,7 @@ import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Platform,
   Pressable,
@@ -54,6 +55,7 @@ import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { getCrossProviderHandoffPlan } from "../../lib/providerHandoff";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -126,6 +128,12 @@ export interface ThreadComposerProps {
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
+  /**
+   * Switches this thread to another provider by summarizing the conversation
+   * first. Separate from `onUpdateModelSelection` because the server has to run
+   * the handoff — it cannot be queued as a draft setting.
+   */
+  readonly onStartProviderHandoff: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
   readonly onReconnectEnvironment: () => void;
@@ -294,7 +302,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   const isExpanded = isFocused;
-  const canSend = hasContent;
+  // While the outgoing provider is writing its handoff summary the server
+  // rejects turns, so hold the send instead of letting it fail.
+  const isHandoffPending = props.selectedThread.handoff != null;
+  const canSend = hasContent && !isHandoffPending;
 
   const onPressImage = useCallback(
     (uri: string) => {
@@ -327,12 +338,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
-  const connectionStatus = composerConnectionStatus({
-    connectionError: props.connectionError,
-    connectionState: props.connectionState,
-    environmentLabel: props.environmentLabel,
-    threadSyncPhase: props.threadSyncPhase,
-  });
+  const handoffStatus = props.selectedThread.handoff;
+  const connectionStatus: ComposerStatusPillState | null = handoffStatus
+    ? {
+        kind: "syncing",
+        label: `Handing off to ${handoffStatus.toModelSelection.model} - summarizing conversation...`,
+      }
+    : composerConnectionStatus({
+        connectionError: props.connectionError,
+        connectionState: props.connectionState,
+        environmentLabel: props.environmentLabel,
+        threadSyncPhase: props.threadSyncPhase,
+      });
   const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
   const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
   const selectedProviderStatus = useMemo(() => {
@@ -710,9 +727,33 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
     const modelKey = event.slice("model:".length);
     const option = modelOptions.find((o) => o.key === modelKey);
-    if (option) {
-      props.onUpdateModelSelection(option.selection);
+    if (!option) {
+      return;
     }
+    const handoffPlan = getCrossProviderHandoffPlan({
+      serverConfig: props.serverConfig,
+      threadHasStarted:
+        props.selectedThread.latestTurn !== null || props.selectedThread.session !== null,
+      currentInstanceId: currentModelSelection.instanceId,
+      nextModelSelection: option.selection,
+    });
+    if (!handoffPlan) {
+      props.onUpdateModelSelection(option.selection);
+      return;
+    }
+    Alert.alert(
+      `Switch to ${handoffPlan.toLabel}?`,
+      `${handoffPlan.fromLabel} will write a summary of this conversation, then ${handoffPlan.toLabel} continues in this thread with that summary as context. The summary appears in the timeline.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Switch provider",
+          onPress: () => {
+            props.onStartProviderHandoff(option.selection);
+          },
+        },
+      ],
+    );
   }
 
   function handleOptionsMenuAction(event: string) {

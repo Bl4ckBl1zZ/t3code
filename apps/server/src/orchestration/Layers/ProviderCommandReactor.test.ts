@@ -47,6 +47,8 @@ import { TextGeneration, type TextGenerationShape } from "../../textGeneration/T
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
+import { HandoffSummaryCaptureLive } from "./HandoffSummaryCapture.ts";
+import { HandoffSummaryCapture } from "../Services/HandoffSummaryCapture.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
   providerErrorLabel,
@@ -61,6 +63,8 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+
+const HANDOFF_LIVE_SUMMARY = "## Task\nWe were refactoring the parser.";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -91,7 +95,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | HandoffSummaryCapture,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -148,6 +155,13 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    /**
+     * How the outgoing session behaves when the reactor asks it for a handoff
+     * summary. "capture" answers with text; "session-exited" dies mid-summary,
+     * which is what sends the reactor to the transcript fallback.
+     */
+    readonly handoffLiveSummary?: "capture" | "session-exited";
+    readonly handoffTranscriptSummary?: string | "fail";
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -227,12 +241,30 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: unknown) =>
-      Effect.succeed({
+    // Stands in for ProviderRuntimeIngestion feeding the capture: the reactor
+    // awaits the capture right after sendTurn resolves.
+    let resolveHandoffCapture: (() => Promise<void>) | null = null;
+    const sendTurn = vi.fn((turnInput: unknown) => {
+      const isHandoffPrompt =
+        typeof turnInput === "object" &&
+        turnInput !== null &&
+        "input" in turnInput &&
+        typeof turnInput.input === "string" &&
+        turnInput.input.includes("handed off from");
+      if (isHandoffPrompt && resolveHandoffCapture) {
+        const resolve = resolveHandoffCapture;
+        return Effect.promise(() => resolve()).pipe(
+          Effect.as({
+            threadId: ThreadId.make("thread-1"),
+            turnId: asTurnId("turn-handoff"),
+          }),
+        );
+      }
+      return Effect.succeed({
         threadId: ThreadId.make("thread-1"),
         turnId: asTurnId("turn-1"),
-      }),
-    );
+      });
+    });
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
@@ -295,6 +327,16 @@ describe("ProviderCommandReactor", () => {
           detail: "disabled in test harness",
         }),
       ),
+    );
+    const generateHandoffSummary = vi.fn<TextGenerationShape["generateHandoffSummary"]>((_) =>
+      input?.handoffTranscriptSummary !== undefined && input.handoffTranscriptSummary !== "fail"
+        ? Effect.succeed({ summary: input.handoffTranscriptSummary })
+        : Effect.fail(
+            new TextGenerationError({
+              operation: "generateHandoffSummary",
+              detail: "disabled in test harness",
+            }),
+          ),
     );
     const providerSnapshots = [
       {
@@ -404,9 +446,11 @@ describe("ProviderCommandReactor", () => {
         Layer.mock(TextGeneration, {
           generateBranchName,
           generateThreadTitle,
+          generateHandoffSummary,
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(HandoffSummaryCaptureLive),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -416,6 +460,20 @@ describe("ProviderCommandReactor", () => {
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    if (input?.handoffLiveSummary !== undefined) {
+      const capture = await runtime.runPromise(Effect.service(HandoffSummaryCapture));
+      const liveSummaryMode = input.handoffLiveSummary;
+      resolveHandoffCapture = async () => {
+        if (liveSummaryMode === "session-exited") {
+          await runtime!.runPromise(capture.fail(ThreadId.make("thread-1"), "session-exited"));
+          return;
+        }
+        await runtime!.runPromise(
+          capture.appendAssistantText(ThreadId.make("thread-1"), HANDOFF_LIVE_SUMMARY),
+        );
+        await runtime!.runPromise(capture.completeTurn(ThreadId.make("thread-1"), "completed"));
+      };
+    }
 
     await Effect.runPromise(
       engine.dispatch({
@@ -496,6 +554,7 @@ describe("ProviderCommandReactor", () => {
       refreshStatus,
       generateBranchName,
       generateThreadTitle,
+      generateHandoffSummary,
       runtimeSessions,
       stateDir,
       drain,
@@ -2810,5 +2869,164 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+  describe("cross-provider handoff", () => {
+    const claudeSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-5",
+    };
+
+    async function startThreadAndRequestHandoff(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+    ) {
+      const now = "2026-01-01T00:00:00.000Z";
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-before-handoff"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-1"),
+            role: "user",
+            text: "start the work",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        } as never),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length >= 1);
+      await harness.drain();
+
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.handoff.start",
+          commandId: CommandId.make("cmd-handoff-start"),
+          threadId: ThreadId.make("thread-1"),
+          toModelSelection: claudeSelection,
+          createdAt: now,
+        } as never),
+      );
+      await harness.drain();
+    }
+
+    it("summarizes with the live session, then swaps the model and stops the old session", async () => {
+      const harness = await createHarness({ handoffLiveSummary: "capture" });
+
+      await startThreadAndRequestHandoff(harness);
+      await waitFor(async () => {
+        const readModel = await harness.readModel();
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        return thread?.modelSelection.instanceId === claudeSelection.instanceId;
+      });
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.modelSelection).toEqual(claudeSelection);
+      expect(thread?.handoff ?? null).toBeNull();
+
+      // The summary the user can read in the timeline.
+      const activity = thread?.activities.find((entry) => entry.kind === "provider-handoff");
+      expect(activity).toBeDefined();
+      expect(activity?.tone).toBe("info");
+      const payload = activity?.payload as Record<string, unknown> | undefined;
+      expect(payload?.summaryMarkdown).toBe(HANDOFF_LIVE_SUMMARY);
+      expect(payload?.summarySource).toBe("live-session");
+
+      // Driver-specific resume state is useless to the incoming provider.
+      expect(harness.stopSession).toHaveBeenCalled();
+      // The live session answered, so the transcript fallback stayed unused.
+      expect(harness.generateHandoffSummary).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the transcript summarizer when there is no usable live summary", async () => {
+      const harness = await createHarness({
+        handoffLiveSummary: "session-exited",
+        handoffTranscriptSummary: "Transcript-derived summary.",
+      });
+
+      await startThreadAndRequestHandoff(harness);
+      await waitFor(async () => {
+        const readModel = await harness.readModel();
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        return thread?.modelSelection.instanceId === claudeSelection.instanceId;
+      });
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      const activity = thread?.activities.find((entry) => entry.kind === "provider-handoff");
+      const payload = activity?.payload as Record<string, unknown> | undefined;
+      expect(payload?.summaryMarkdown).toBe("Transcript-derived summary.");
+      expect(payload?.summarySource).toBe("transcript");
+      expect(harness.generateHandoffSummary).toHaveBeenCalled();
+    });
+
+    it("keeps the current provider when no summary can be produced", async () => {
+      const harness = await createHarness({
+        handoffLiveSummary: "session-exited",
+        handoffTranscriptSummary: "fail",
+      });
+
+      await startThreadAndRequestHandoff(harness);
+      await waitFor(async () => {
+        const readModel = await harness.readModel();
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        return (thread?.handoff ?? null) === null && thread?.activities.length !== 0;
+      });
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      // Switching without memory is worse than not switching at all.
+      expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex"));
+      expect(thread?.handoff ?? null).toBeNull();
+      const failure = thread?.activities.find((entry) => entry.kind === "provider-handoff.failed");
+      expect(failure).toBeDefined();
+      expect(failure?.tone).toBe("error");
+    });
+
+    it("injects the handoff context into the next turn without changing the stored message", async () => {
+      const harness = await createHarness({ handoffLiveSummary: "capture" });
+
+      await startThreadAndRequestHandoff(harness);
+      await waitFor(async () => {
+        const readModel = await harness.readModel();
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        return thread?.modelSelection.instanceId === claudeSelection.instanceId;
+      });
+
+      const sendTurnCallsBefore = harness.sendTurn.mock.calls.length;
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-after-handoff"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-2"),
+            role: "user",
+            text: "what were we doing?",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: "2026-01-01T00:01:00.000Z",
+        } as never),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length > sendTurnCallsBefore);
+      await harness.drain();
+
+      const lastCall = harness.sendTurn.mock.calls.at(-1)?.[0] as
+        | { readonly input?: string }
+        | undefined;
+      expect(lastCall?.input).toContain("<handoff-context");
+      expect(lastCall?.input).toContain(HANDOFF_LIVE_SUMMARY);
+      expect(lastCall?.input).toContain("what were we doing?");
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      const userMessage = thread?.messages.find((entry) => entry.id === asMessageId("message-2"));
+      // The persisted message is what the user typed, not what the provider saw.
+      expect(userMessage?.text).toBe("what were we doing?");
+    });
   });
 });

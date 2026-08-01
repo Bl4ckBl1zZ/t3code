@@ -23,6 +23,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildHandoffSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -85,7 +86,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateHandoffSummary",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -115,7 +117,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateHandoffSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -359,10 +362,32 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const generateHandoffSummary: TextGeneration.TextGeneration["Service"]["generateHandoffSummary"] =
+    Effect.fn("ClaudeTextGeneration.generateHandoffSummary")(function* (input) {
+      const { prompt, outputSchema } = buildHandoffSummaryPrompt({
+        transcript: input.transcript,
+        fromLabel: input.fromLabel,
+        toLabel: input.toLabel,
+      });
+
+      const generated = yield* runClaudeJson({
+        operation: "generateHandoffSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: generated.summary.trim(),
+      };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateHandoffSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

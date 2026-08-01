@@ -703,6 +703,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       ? stripTrailingExitCode(payload.detail).output
       : null
     : extractToolDetail(payload, title ?? activity.summary);
+  // The handoff summary is the whole point of the row: surface it as the
+  // expandable detail so the user can read exactly what the next provider was
+  // given.
+  const handoffSummary =
+    activity.kind === "provider-handoff" && typeof payload?.summaryMarkdown === "string"
+      ? payload.summaryMarkdown
+      : null;
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
@@ -719,7 +726,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
-  if (detail) {
+  if (handoffSummary) {
+    entry.detail = handoffSummary;
+  } else if (detail) {
     entry.detail = detail;
   }
   if (commandPreview.command) {

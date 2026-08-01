@@ -73,6 +73,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * between the default Codex and a custom Codex Personal).
    */
   lockedProvider: ProviderDriverKind | null;
+  /**
+   * When true the lock stops filtering: models from other providers stay
+   * selectable and are flagged as a handoff, because picking one starts a
+   * summarize-and-switch rather than an in-session model change.
+   */
+  allowCrossProviderHandoff?: boolean | undefined;
   lockedContinuationGroupKey?: string | null;
   /**
    * All configured provider instances in display order. Used to render
@@ -169,6 +175,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     () => new Map(instanceEntries.map((entry) => [entry.instanceId, entry])),
     [instanceEntries],
   );
+  // The lock still describes which provider the session is bound to; when
+  // handoff is available it only drives badges, not filtering.
+  const isLocked = props.lockedProvider !== null && props.allowCrossProviderHandoff !== true;
   const matchesLockedProvider = useCallback(
     (entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">): boolean => {
       if (props.lockedProvider === null) return true;
@@ -224,7 +233,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return out;
   }, [modelOptionsByInstance, entryByInstanceId, readyInstanceSet]);
 
-  const isLocked = props.lockedProvider !== null;
   const isSearching = searchQuery.trim().length > 0;
   const lockedDisabledInstanceIds = useMemo(() => {
     if (!isLocked) {
@@ -303,7 +311,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       // When searching, we only respect locked provider (by driver kind),
       // ignoring sidebar selection so account-scoped searches can find a
       // model before the user chooses a specific instance rail item.
-      if (props.lockedProvider !== null) {
+      if (isLocked) {
         const lockedProviderMatches: Array<(typeof rankedMatches)[number]> = [];
         for (const rankedModel of rankedMatches) {
           if (matchesLockedProvider(rankedModel.model)) {
@@ -338,7 +346,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         .map((rankedModel) => rankedModel.model);
     }
 
-    if (props.lockedProvider !== null) {
+    if (isLocked) {
       result = result.filter((m) => matchesLockedProvider(m));
       if (selectedInstanceId === "favorites") {
         result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
@@ -360,8 +368,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     favoritesSet,
     flatModels,
     instanceOrder,
+    isLocked,
     matchesLockedProvider,
-    props.lockedProvider,
     searchQuery,
     selectedInstanceId,
   ]);
@@ -651,6 +659,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         preferShortName={!isLocked}
                         useTriggerLabel={false}
                         showNewBadge={isModelPickerNewModel(model.driverKind, model.slug)}
+                        showHandoffBadge={
+                          props.allowCrossProviderHandoff === true &&
+                          props.lockedProvider !== null &&
+                          !matchesLockedProvider(model)
+                        }
                         jumpLabel={modelJumpLabelByKey.get(modelKey) ?? null}
                         disabledReason={disabledReason}
                         onToggleFavorite={() => toggleFavorite(model.instanceId, model.slug)}

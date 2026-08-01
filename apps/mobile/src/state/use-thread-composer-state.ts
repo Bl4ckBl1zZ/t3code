@@ -1,5 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo } from "react";
+import { Alert } from "react-native";
+import { AsyncResult } from "effect/unstable/reactivity";
 
 import {
   CommandId,
@@ -51,6 +53,8 @@ import {
   useThreadOutboxMessages,
 } from "./use-thread-outbox";
 import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
+import { threadEnvironment } from "./threads";
+import { useAtomCommand } from "./use-atom-command";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -89,6 +93,9 @@ export function useThreadComposerState() {
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const startThreadHandoff = useAtomCommand(threadEnvironment.startHandoff, {
+    reportFailure: false,
+  });
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -350,6 +357,29 @@ export function useThreadComposerState() {
     [selectedThreadKey],
   );
 
+  // A handoff cannot be queued as a draft setting: the server has to run the
+  // summarize-and-switch while the outgoing session is still alive, so this
+  // dispatches immediately and reports failure to the caller's Alert instead.
+  const onStartProviderHandoff = useCallback(
+    (value: ModelSelection) => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      void startThreadHandoff({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, toModelSelection: value },
+      }).then((result) => {
+        if (AsyncResult.isFailure(result)) {
+          Alert.alert(
+            "Could not switch providers",
+            "The handoff could not be started. Check your connection and try again.",
+          );
+        }
+      });
+    },
+    [selectedThreadShell, startThreadHandoff],
+  );
+
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
       if (!selectedThreadKey) {
@@ -393,6 +423,7 @@ export function useThreadComposerState() {
     onRemoveDraftImage,
     onSendMessage,
     onUpdateModelSelection,
+    onStartProviderHandoff,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,
   };

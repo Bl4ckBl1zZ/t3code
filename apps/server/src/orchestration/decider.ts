@@ -20,6 +20,7 @@ import {
   requireThreadAbsent,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
+import { buildHandoffContextBlock } from "./handoffContext.ts";
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -636,6 +637,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // The handoff owns the model selection until it completes; a racing
+      // settings sync (mobile drains a queued selection on reconnect) must not
+      // clobber the swap the reactor is about to make.
+      if (command.modelSelection !== undefined && thread.handoff != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is handing off to another provider; its model selection cannot be changed right now.`,
+        });
+      }
       const branch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&
@@ -702,6 +712,106 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.handoff.start": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (thread.handoff != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' already has a handoff in progress.`,
+        });
+      }
+      // A handoff summarizes an existing conversation. On a thread that never
+      // started there is nothing to summarize — clients should just change the
+      // model selection directly.
+      if (thread.messages.length === 0 && thread.session === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has not started; change the model selection instead of handing off.`,
+        });
+      }
+      if (
+        thread.modelSelection.instanceId === command.toModelSelection.instanceId &&
+        thread.modelSelection.model === command.toModelSelection.model
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is already using the requested model selection.`,
+        });
+      }
+      // Summarizing behind a live turn would either queue behind it or capture
+      // a half-finished state. The reactor re-checks this before it starts.
+      if (thread.session?.status === "running" || thread.session?.activeTurnId != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has a turn in progress; wait for it to finish before switching providers.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          handoff: {
+            requestId: command.commandId,
+            fromModelSelection: thread.modelSelection,
+            toModelSelection: command.toModelSelection,
+            startedAt: occurredAt,
+          },
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.handoff.complete": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const requestIsCurrent = thread.handoff?.requestId === command.requestId;
+      const handoff = thread.handoff;
+      const occurredAt = yield* nowIso;
+      const swapsModel =
+        requestIsCurrent &&
+        handoff != null &&
+        command.outcome === "completed" &&
+        command.summary !== undefined;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          ...(requestIsCurrent ? { handoff: null } : {}),
+          ...(swapsModel && handoff != null && command.summary !== undefined
+            ? {
+                modelSelection: handoff.toModelSelection,
+                pendingHandoffContext: buildHandoffContextBlock({
+                  summary: command.summary,
+                  from: handoff.fromModelSelection,
+                  to: handoff.toModelSelection,
+                }),
+              }
+            : {}),
+          updatedAt: requestIsCurrent ? occurredAt : thread.updatedAt,
+        },
+      };
+    }
+
     case "thread.runtime-mode.set": {
       yield* requireThread({
         readModel,
@@ -754,6 +864,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // The outgoing provider is mid-summary and the thread is about to swap
+      // models; accepting a turn now would send it to a session we are tearing
+      // down. Clients disable the composer, so this is the belt-and-braces.
+      if (targetThread.handoff != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is handing off to another provider; wait for the handoff to finish.`,
+        });
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -817,6 +936,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          // Carried on the event rather than read from the projection by the
+          // reactor: the clear below lands in the same batch, so there is no
+          // window where a retry could inject the summary twice.
+          ...(targetThread.pendingHandoffContext != null
+            ? { handoffContext: targetThread.pendingHandoffContext }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -858,7 +983,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+      const handoffContextClearEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (targetThread.pendingHandoffContext != null) {
+        handoffContextClearEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.meta-updated",
+          payload: {
+            threadId: command.threadId,
+            pendingHandoffContext: null,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      return [
+        ...lifecycleResetEvents,
+        userMessageEvent,
+        turnStartRequestedEvent,
+        ...handoffContextClearEvents,
+      ];
     }
 
     case "thread.turn.interrupt": {

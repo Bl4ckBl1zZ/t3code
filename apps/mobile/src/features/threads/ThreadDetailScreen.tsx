@@ -87,6 +87,7 @@ export interface ThreadDetailScreenProps {
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
+  readonly onStartThreadProviderHandoff: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateThreadInteractionMode: (interactionMode: ProviderInteractionMode) => void;
   readonly onRespondToApproval: (
@@ -461,6 +462,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               onSendMessage={handleSendMessage}
               onReconnectEnvironment={props.onReconnectEnvironment}
               onUpdateModelSelection={props.onUpdateThreadModelSelection}
+              onStartProviderHandoff={props.onStartThreadProviderHandoff}
               onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
               onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
               onExpandedChange={setComposerExpanded}
