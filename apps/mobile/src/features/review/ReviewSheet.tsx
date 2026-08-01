@@ -54,7 +54,7 @@ import { useThreadSelection } from "../../state/use-thread-selection";
 import { vcsEnvironment } from "../../state/vcs";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { ThreadGitMenu } from "../threads/ThreadGitControls";
-import { useReviewCacheForThread } from "./reviewState";
+import { setReviewSelectedFilePath, useReviewCacheForThread } from "./reviewState";
 import {
   isNativeReviewDiffDrawEvent,
   type NativeReviewDiffViewHandle,
@@ -481,6 +481,26 @@ export function ReviewSheet(props: ReviewSheetProps) {
     },
     [],
   );
+
+  // Consume a file preselected from outside the review (e.g. a changed-files
+  // row in the thread feed): once the section's diff is parsed, scroll to it.
+  // The path is cleared unconditionally so a stale entry can't re-trigger.
+  const preselectedFilePath = reviewCache.selectedFilePath;
+  useEffect(() => {
+    if (preselectedFilePath === null || reviewCache.threadKey === null) {
+      return;
+    }
+    if (parsedDiff.kind !== "files" || reviewFiles.length === 0) {
+      return;
+    }
+    setReviewSelectedFilePath(reviewCache.threadKey, null);
+    const target = reviewFiles.find(
+      (file) => file.path === preselectedFilePath || file.previousPath === preselectedFilePath,
+    );
+    if (target) {
+      handleSelectFile(target.id);
+    }
+  }, [handleSelectFile, parsedDiff.kind, preselectedFilePath, reviewCache.threadKey, reviewFiles]);
   const renderInspector = useCallback(
     () => (
       <ReviewFileNavigator

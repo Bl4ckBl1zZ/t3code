@@ -64,6 +64,12 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  clearProjectScriptRunPending,
+  markProjectScriptRunPending,
+  pendingProjectScriptRun,
+  selectRunningProjectScriptTerminal,
+} from "@t3tools/client-runtime/state/terminal";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
@@ -2825,6 +2831,43 @@ function ChatViewContent(props: ChatViewProps) {
       },
     ) => {
       if (!activeThreadId || !activeProject || !activeThread) return;
+      if (script.singleRun) {
+        const scriptRunScope = {
+          environmentId,
+          threadId: activeThreadId,
+          scriptId: script.id,
+        };
+        const runningTerminal = selectRunningProjectScriptTerminal(
+          activeThreadKnownSessions,
+          script.id,
+        );
+        const pendingRun = runningTerminal ? null : pendingProjectScriptRun(scriptRunScope);
+        const stopTerminalId = runningTerminal?.target.terminalId ?? pendingRun?.terminalId ?? null;
+        if (stopTerminalId !== null) {
+          // Toggle: interrupt the active (or still-launching) run with Ctrl-C
+          // instead of launching again.
+          const stopResult = await writeTerminal({
+            environmentId,
+            input: {
+              threadId: activeThreadId,
+              terminalId: stopTerminalId,
+              data: "\x03",
+            },
+          });
+          if (stopResult._tag === "Failure" && !isAtomCommandInterrupted(stopResult)) {
+            const error = squashAtomCommandFailure(stopResult);
+            setThreadError(
+              activeThreadId,
+              error instanceof Error ? error.message : `Failed to stop "${script.name}".`,
+            );
+          } else if (pendingRun) {
+            // The launch was interrupted before the server ever confirmed it;
+            // drop the optimistic entry so the control doesn't stay green.
+            clearProjectScriptRunPending(scriptRunScope);
+          }
+          return;
+        }
+      }
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -2884,8 +2927,20 @@ function ChatViewContent(props: ChatViewProps) {
         storeSetActiveTerminal(activeThreadRef, targetTerminalId);
       }
 
+      const scriptRunScope = {
+        environmentId,
+        threadId: activeThreadId,
+        scriptId: script.id,
+      };
+      if (script.singleRun) {
+        // Optimistically block re-launch until the server-side subprocess
+        // poll confirms the run (or the pending entry expires).
+        markProjectScriptRunPending(scriptRunScope, { terminalId: targetTerminalId });
+      }
+
       const openResult = await openTerminal({ environmentId, input: openTerminalInput });
       if (openResult._tag === "Failure") {
+        clearProjectScriptRunPending(scriptRunScope);
         if (!isAtomCommandInterrupted(openResult)) {
           const error = squashAtomCommandFailure(openResult);
           setThreadError(
@@ -2902,9 +2957,11 @@ function ChatViewContent(props: ChatViewProps) {
           threadId: activeThreadId,
           terminalId: targetTerminalId,
           data: `${script.command}\r`,
+          scriptId: script.id,
         },
       });
       if (writeResult._tag === "Failure" && !isAtomCommandInterrupted(writeResult)) {
+        clearProjectScriptRunPending(scriptRunScope);
         const error = squashAtomCommandFailure(writeResult);
         setThreadError(
           activeThreadId,
@@ -2916,6 +2973,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeProject,
       activeThread,
       activeThreadId,
+      activeThreadKnownSessions,
       activeThreadRef,
       gitCwd,
       setTerminalOpen,

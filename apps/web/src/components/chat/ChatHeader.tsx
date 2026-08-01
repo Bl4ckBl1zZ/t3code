@@ -16,6 +16,8 @@ import ProjectScriptsControl, {
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useKnownTerminalSessions } from "../../state/terminalSessions";
+import { useProjectScriptRunStates } from "../../state/projectScriptRuns";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
@@ -86,6 +88,16 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     primaryEnvironmentId,
   });
+  const knownTerminalSessions = useKnownTerminalSessions({
+    environmentId: activeThreadEnvironmentId,
+    threadId: activeThreadId,
+  });
+  const scriptRunStates = useProjectScriptRunStates({
+    environmentId: activeThreadEnvironmentId,
+    threadId: activeThreadId,
+    scripts: activeProjectScripts,
+    sessions: knownTerminalSessions,
+  });
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -146,6 +158,7 @@ export const ChatHeader = memo(function ChatHeader({
             fileScripts={fileScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
+            scriptRunStates={scriptRunStates}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}

@@ -1,7 +1,13 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  MessageId,
+  OrchestrationCheckpointSummary,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
@@ -76,7 +82,11 @@ import {
   createNativeReviewDiffTheme,
   NATIVE_REVIEW_DIFF_CONTENT_WIDTH,
 } from "../review/nativeReviewDiffAdapter";
-import { buildReviewParsedDiff } from "../review/reviewModel";
+import { buildReviewParsedDiff, getReviewSectionIdForCheckpoint } from "../review/reviewModel";
+import { setReviewSelectedFilePath, setReviewSelectedSectionId } from "../review/reviewState";
+import { scopedThreadKey } from "../../lib/scopedEntities";
+import { ChangedFilesCard } from "./ChangedFilesCard";
+import { shouldAutoExpandChangedFiles } from "./turnDiffTree";
 import { cn } from "../../lib/cn";
 import { deriveCenteredContentHorizontalPadding, type LayoutVariant } from "../../lib/layout";
 import {
@@ -149,6 +159,8 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  /** Per-turn checkpoint summaries keyed by the turn's terminal assistant message id. */
+  readonly turnDiffSummaries: ReadonlyMap<string, OrchestrationCheckpointSummary>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
@@ -819,15 +831,22 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills"> & {
+  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "turnDiffSummaries"> & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
+    readonly expandedChangedFiles: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: TurnId | null;
+    readonly latestTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
     readonly onToggleTurnFold: (turnId: TurnId) => void;
+    readonly onToggleChangedFiles: (entryId: string, turnId: TurnId, expanded: boolean) => void;
+    readonly onOpenTurnDiff: (
+      checkpoint: OrchestrationCheckpointSummary,
+      filePath?: string,
+    ) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -950,9 +969,11 @@ function renderFeedEntry(
       );
     }
 
+    const turnDiffSummary = props.turnDiffSummaries.get(message.id);
+
     // Skip empty assistant messages (no text, no attachments) — they would
     // render as an orphaned timestamp and break adjacent activity-group merging.
-    if (message.text.trim().length === 0 && attachments.length === 0) {
+    if (message.text.trim().length === 0 && attachments.length === 0 && !turnDiffSummary) {
       return null;
     }
 
@@ -992,15 +1013,28 @@ function renderFeedEntry(
             />
           );
         })}
+        {turnDiffSummary ? (
+          <ChangedFilesRow
+            entryId={message.id}
+            checkpoint={turnDiffSummary}
+            expandedChangedFiles={props.expandedChangedFiles}
+            latestTurnId={props.latestTurnId}
+            iconSubtleColor={iconSubtleColor}
+            onToggleChangedFiles={props.onToggleChangedFiles}
+            onOpenTurnDiff={props.onOpenTurnDiff}
+          />
+        ) : null}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
-            <CopyTextButton
-              accessibilityLabel="Copy message"
-              text={message.text}
-              tintColor={iconSubtleColor}
-              buttonSize={28}
-              iconSize={13}
-            />
+            {message.text.trim().length > 0 ? (
+              <CopyTextButton
+                accessibilityLabel="Copy message"
+                text={message.text}
+                tintColor={iconSubtleColor}
+                buttonSize={28}
+                iconSize={13}
+              />
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
@@ -1021,6 +1055,32 @@ function renderFeedEntry(
     />
   );
 }
+
+const ChangedFilesRow = memo(function ChangedFilesRow(props: {
+  readonly entryId: string;
+  readonly checkpoint: OrchestrationCheckpointSummary;
+  readonly expandedChangedFiles: Record<string, boolean>;
+  readonly latestTurnId: TurnId | null;
+  readonly iconSubtleColor: string | ColorValue;
+  readonly onToggleChangedFiles: (entryId: string, turnId: TurnId, expanded: boolean) => void;
+  readonly onOpenTurnDiff: (checkpoint: OrchestrationCheckpointSummary, filePath?: string) => void;
+}) {
+  const { checkpoint } = props;
+  const expanded =
+    props.expandedChangedFiles[checkpoint.turnId] ??
+    shouldAutoExpandChangedFiles(checkpoint.files, checkpoint.turnId === props.latestTurnId);
+  return (
+    <ChangedFilesCard
+      files={checkpoint.files}
+      expanded={expanded}
+      iconSubtleColor={props.iconSubtleColor}
+      onToggleExpanded={() =>
+        props.onToggleChangedFiles(props.entryId, checkpoint.turnId, !expanded)
+      }
+      onOpenDiff={(filePath) => props.onOpenTurnDiff(checkpoint, filePath)}
+    />
+  );
+});
 
 const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly startedAt: string }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -1335,13 +1395,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly expandedTurnIds: ReadonlySet<TurnId>;
+    readonly expandedChangedFiles: Record<string, boolean>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
+    expandedChangedFiles: {},
   });
-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  const {
+    copiedRowId,
+    expandedWorkGroups,
+    expandedWorkRows,
+    expandedTurnIds,
+    expandedChangedFiles,
+  } = interactionState;
   const [expandedImage, setExpandedImage] = useState<{
     uri: string;
     headers?: Record<string, string>;
@@ -1408,6 +1476,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     () => ({
       copiedRowId,
       expandedWorkRows,
+      expandedChangedFiles,
+      turnDiffSummaries: props.turnDiffSummaries,
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
@@ -1417,6 +1487,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [
       copiedRowId,
       expandedWorkRows,
+      expandedChangedFiles,
+      props.turnDiffSummaries,
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
@@ -1692,6 +1764,36 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
+  const onToggleChangedFiles = useCallback(
+    (entryId: string, turnId: TurnId, expanded: boolean) => {
+      suspendEndScrollMaintenanceForDisclosure(entryId);
+      setInteractionState((current) => ({
+        ...current,
+        expandedChangedFiles: {
+          ...current.expandedChangedFiles,
+          [turnId]: expanded,
+        },
+      }));
+    },
+    [suspendEndScrollMaintenanceForDisclosure],
+  );
+
+  const onOpenTurnDiff = useCallback(
+    (checkpoint: OrchestrationCheckpointSummary, filePath?: string) => {
+      void Haptics.selectionAsync();
+      // Preselect the turn's section (and the tapped file, if any) so the
+      // review opens on this checkpoint scrolled to that file.
+      const threadKey = scopedThreadKey(props.environmentId, props.threadId);
+      setReviewSelectedSectionId(threadKey, getReviewSectionIdForCheckpoint(checkpoint));
+      setReviewSelectedFilePath(threadKey, filePath ?? null);
+      navigation.navigate("ThreadReview", {
+        environmentId: props.environmentId,
+        threadId: props.threadId,
+      });
+    },
+    [navigation, props.environmentId, props.threadId],
+  );
+
   const onPressImage = useCallback((uri: string, headers?: Record<string, string>) => {
     setExpandedImage({ uri, headers });
   }, []);
@@ -1734,12 +1836,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         environmentId: props.environmentId,
         copiedRowId,
         expandedWorkRows,
+        expandedChangedFiles,
+        turnDiffSummaries: props.turnDiffSummaries,
         terminalAssistantMessageIds,
         unsettledTurnId,
+        latestTurnId: props.latestTurn?.turnId ?? null,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
         onToggleTurnFold,
+        onToggleChangedFiles,
+        onOpenTurnDiff,
         onPressImage,
         onMarkdownLinkPress,
         iconSubtleColor,
@@ -1753,6 +1860,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [
       copiedRowId,
       expandedWorkRows,
+      expandedChangedFiles,
       terminalAssistantMessageIds,
       unsettledTurnId,
       iconSubtleColor,
@@ -1767,8 +1875,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleTurnFold,
       onToggleWorkGroup,
       onToggleWorkRow,
+      onToggleChangedFiles,
+      onOpenTurnDiff,
       props.environmentId,
+      props.latestTurn,
       props.skills,
+      props.turnDiffSummaries,
     ],
   );
 

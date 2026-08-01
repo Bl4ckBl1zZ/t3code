@@ -6,6 +6,7 @@ import {
   MessageId,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationCheckpointSummary,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
@@ -105,6 +106,18 @@ export function useThreadComposerState() {
     () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
     [selectedThreadDetail],
   );
+  // Per-turn checkpoint summaries keyed by the turn's terminal assistant
+  // message, so the feed can show the changed-files card under it (same join
+  // the web timeline uses).
+  const selectedThreadTurnDiffs = useMemo(() => {
+    const byAssistantMessageId = new Map<string, OrchestrationCheckpointSummary>();
+    for (const checkpoint of selectedThreadDetail?.checkpoints ?? []) {
+      if (checkpoint.assistantMessageId && checkpoint.files.length > 0) {
+        byAssistantMessageId.set(checkpoint.assistantMessageId, checkpoint);
+      }
+    }
+    return byAssistantMessageId;
+  }, [selectedThreadDetail]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -372,6 +385,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    selectedThreadTurnDiffs,
     selectedThreadQueueCount,
     selectedThreadQueuedMessages,
     dispatchingQueuedMessageId,

@@ -98,6 +98,8 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly canOpenTerminal: boolean;
   readonly canOpenFiles: boolean;
   readonly projectScripts: ReadonlyArray<ProjectScript>;
+  /** Ids of single-run project scripts with an active (pending or running) run. */
+  readonly activeProjectScriptIds: ReadonlyArray<string>;
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
   readonly showActionControls?: boolean;
   readonly showDirectFileControl?: boolean;
@@ -259,13 +261,21 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         label: "Terminal",
         menu: {
           items: [
-            ...props.projectScripts.map((script) => ({
-              description: script.command,
-              icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
-              label: projectScriptMenuLabel(script),
-              onPress: () => void props.onRunProjectScript(script),
-              type: "action" as const,
-            })),
+            ...props.projectScripts.map((script) => {
+              const isActive = props.activeProjectScriptIds.includes(script.id);
+              return {
+                description: script.command,
+                icon: {
+                  name: isActive ? "stop.fill" : projectScriptMenuIcon(script.icon),
+                  type: "sfSymbol" as const,
+                },
+                label: isActive
+                  ? `Stop ${projectScriptMenuLabel(script)}`
+                  : projectScriptMenuLabel(script),
+                onPress: () => void props.onRunProjectScript(script),
+                type: "action" as const,
+              };
+            }),
             ...(props.projectScripts.length === 0
               ? [
                   {
@@ -378,6 +388,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       model.quickActionHint,
       model.quickActionIcon,
       model.runQuickAction,
+      props.activeProjectScriptIds,
       props.canOpenFiles,
       props.canOpenTerminal,
       props.gitStatus,
@@ -431,18 +442,23 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         >
           {props.projectScripts.length > 0 ? (
-            props.projectScripts.map((script) => (
-              <NativeHeaderToolbar.MenuAction
-                key={script.id}
-                icon={projectScriptMenuIcon(script.icon)}
-                onPress={() => void props.onRunProjectScript(script)}
-                subtitle={script.command}
-              >
-                <NativeHeaderToolbar.Label>
-                  {projectScriptMenuLabel(script)}
-                </NativeHeaderToolbar.Label>
-              </NativeHeaderToolbar.MenuAction>
-            ))
+            props.projectScripts.map((script) => {
+              const isActive = props.activeProjectScriptIds.includes(script.id);
+              return (
+                <NativeHeaderToolbar.MenuAction
+                  key={script.id}
+                  icon={isActive ? "stop.fill" : projectScriptMenuIcon(script.icon)}
+                  onPress={() => void props.onRunProjectScript(script)}
+                  subtitle={script.command}
+                >
+                  <NativeHeaderToolbar.Label>
+                    {isActive
+                      ? `Stop ${projectScriptMenuLabel(script)}`
+                      : projectScriptMenuLabel(script)}
+                  </NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              );
+            })
           ) : (
             <NativeHeaderToolbar.MenuAction
               icon="play"

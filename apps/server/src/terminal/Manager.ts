@@ -78,6 +78,12 @@ const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
+/**
+ * How long a script attribution survives without an observed subprocess.
+ * Covers the gap between writing the command and the subprocess poll first
+ * seeing it; past this, an idle terminal sheds its attribution.
+ */
+const SCRIPT_ATTRIBUTION_IDLE_GRACE_MS = 10_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
@@ -253,6 +259,10 @@ export interface TerminalSessionState {
   hasRunningSubprocess: boolean;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
+  /** Project script attributed to the terminal's current foreground work. */
+  activeScriptId: string | null;
+  /** Epoch ms when `activeScriptId` was attributed; bounds the launch grace window. */
+  activeScriptStartedAtMs: number | null;
   runtimeEnv: Record<string, string> | null;
 }
 
@@ -351,6 +361,7 @@ function summary(session: TerminalSessionState): TerminalSummary {
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     hasRunningSubprocess: session.hasRunningSubprocess,
+    activeScriptId: session.activeScriptId,
     label: terminalWireLabel(session),
     updatedAt: session.updatedAt,
   };
@@ -1700,6 +1711,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pid = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
+        session.activeScriptId = null;
+        session.activeScriptStartedAtMs = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
         session.pendingProcessEvents = [];
@@ -1772,6 +1785,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.pid = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
+      session.activeScriptId = null;
+      session.activeScriptStartedAtMs = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
       session.pendingProcessEvents = [];
@@ -1869,6 +1884,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.exitSignal = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
+      session.activeScriptId = null;
+      session.activeScriptStartedAtMs = null;
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -1946,6 +1963,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.process = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
+        session.activeScriptId = null;
+        session.activeScriptStartedAtMs = null;
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2054,6 +2073,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         processIds: next.processIds,
       });
       const nextChildLabel = next.hasRunningSubprocess ? next.childCommand : null;
+      const polledAtMs = DateTime.toEpochMillis(yield* DateTime.now);
       const event = yield* modifyManagerState((state) => {
         const liveSession: Option.Option<TerminalSessionState> = Option.fromNullishOr(
           state.sessions.get(toSessionKey(session.threadId, session.terminalId)),
@@ -2061,13 +2081,32 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (
           Option.isNone(liveSession) ||
           liveSession.value.status !== "running" ||
-          liveSession.value.pid !== terminalPid ||
-          (liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
-            liveSession.value.childCommandLabel === nextChildLabel)
+          liveSession.value.pid !== terminalPid
         ) {
           return [Option.none(), state] as const;
         }
 
+        // Shed script attribution once the terminal is observed idle: either
+        // the attributed subprocess finished, or it never materialized within
+        // the launch grace window (e.g. the command failed instantly).
+        const shedsScriptAttribution =
+          liveSession.value.activeScriptId !== null &&
+          !next.hasRunningSubprocess &&
+          (liveSession.value.hasRunningSubprocess ||
+            polledAtMs - (liveSession.value.activeScriptStartedAtMs ?? 0) >
+              SCRIPT_ATTRIBUTION_IDLE_GRACE_MS);
+        if (
+          !shedsScriptAttribution &&
+          liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
+          liveSession.value.childCommandLabel === nextChildLabel
+        ) {
+          return [Option.none(), state] as const;
+        }
+
+        if (shedsScriptAttribution) {
+          liveSession.value.activeScriptId = null;
+          liveSession.value.activeScriptStartedAtMs = null;
+        }
         liveSession.value.hasRunningSubprocess = next.hasRunningSubprocess;
         liveSession.value.childCommandLabel = nextChildLabel;
         const eventStamp = advanceEventSequence(liveSession.value);
@@ -2177,6 +2216,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         unsubscribeExit: null,
         hasRunningSubprocess: false,
         childCommandLabel: null,
+        activeScriptId: null,
+        activeScriptStartedAtMs: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
 
@@ -2509,6 +2550,27 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           cause,
         }),
     });
+
+    if (input.scriptId !== undefined) {
+      const startedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const event = yield* modifyManagerState((state) => {
+        session.activeScriptId = input.scriptId ?? null;
+        session.activeScriptStartedAtMs = startedAtMs;
+        const eventStamp = advanceEventSequence(session);
+        return [
+          {
+            type: "activity" as const,
+            threadId: session.threadId,
+            terminalId: session.terminalId,
+            sequence: eventStamp.sequence,
+            hasRunningSubprocess: session.hasRunningSubprocess,
+            label: terminalWireLabel(session),
+          },
+          state,
+        ] as const;
+      });
+      yield* publishEvent(event);
+    }
   });
 
   const resizeLocked = Effect.fn("terminal.resize")(function* (input: TerminalResizeInput) {
@@ -2589,6 +2651,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             unsubscribeExit: null,
             hasRunningSubprocess: false,
             childCommandLabel: null,
+            activeScriptId: null,
+            activeScriptStartedAtMs: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
           const createdSession = session;

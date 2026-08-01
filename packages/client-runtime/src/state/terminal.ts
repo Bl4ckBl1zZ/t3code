@@ -92,4 +92,5 @@ export function createTerminalEnvironmentAtoms<R, E>(
   };
 }
 
+export * from "./projectScriptRuns.ts";
 export * from "./terminalSession.ts";
