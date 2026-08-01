@@ -4580,7 +4580,7 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const onSend = async (e?: { preventDefault: () => void }, options?: { steer?: boolean }) => {
     e?.preventDefault();
     if (
       !activeThread ||
@@ -4683,10 +4683,17 @@ function ChatViewContent(props: ChatViewProps) {
     // waiting), a send becomes a queued message instead of an immediate turn.
     // Queueing behind an existing queue keeps ordering: a direct send racing
     // the drain would jump ahead of messages queued before it.
+    // Ctrl/Cmd+Enter opts out to steer the running turn: the message goes
+    // straight to the provider, and anything already queued stays queued.
     const activeQueueLength = activeThreadKey
       ? (useQueuedMessageStore.getState().queuesByThreadKey[activeThreadKey]?.length ?? 0)
       : 0;
-    if (isServerThread && activeThreadKey && (phase === "running" || activeQueueLength > 0)) {
+    if (
+      !options?.steer &&
+      isServerThread &&
+      activeThreadKey &&
+      (phase === "running" || activeQueueLength > 0)
+    ) {
       if (activeQueueLength >= MAX_QUEUED_MESSAGES_PER_THREAD) {
         toastManager.add(
           stackedThreadToast({

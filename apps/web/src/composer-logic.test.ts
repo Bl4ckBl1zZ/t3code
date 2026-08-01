@@ -8,21 +8,54 @@ import {
   isCollapsedCursorAdjacentToInlineToken,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
-  shouldSubmitComposerOnEnter,
+  resolveComposerEnterAction,
 } from "./composer-logic";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
-describe("shouldSubmitComposerOnEnter", () => {
-  it("submits plain Enter on desktop", () => {
-    expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: false })).toBe(true);
+describe("resolveComposerEnterAction", () => {
+  const keys = { shiftKey: false, ctrlKey: false, metaKey: false };
+
+  it("sends on plain Enter on desktop, so a running turn queues", () => {
+    expect(resolveComposerEnterAction({ ...keys, isMobileViewport: false })).toBe("send");
   });
 
   it("inserts a newline for plain Enter on mobile", () => {
-    expect(shouldSubmitComposerOnEnter({ isMobileViewport: true, shiftKey: false })).toBe(false);
+    expect(resolveComposerEnterAction({ ...keys, isMobileViewport: true })).toBe("newline");
   });
 
   it("inserts a newline for Shift+Enter", () => {
-    expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: true })).toBe(false);
+    expect(resolveComposerEnterAction({ ...keys, isMobileViewport: false, shiftKey: true })).toBe(
+      "newline",
+    );
+  });
+
+  it("steers on Ctrl+Enter", () => {
+    expect(resolveComposerEnterAction({ ...keys, isMobileViewport: false, ctrlKey: true })).toBe(
+      "steer",
+    );
+  });
+
+  it("steers on Cmd+Enter", () => {
+    expect(resolveComposerEnterAction({ ...keys, isMobileViewport: false, metaKey: true })).toBe(
+      "steer",
+    );
+  });
+
+  it("steers on Ctrl+Shift+Enter rather than inserting a newline", () => {
+    expect(
+      resolveComposerEnterAction({
+        ...keys,
+        isMobileViewport: false,
+        ctrlKey: true,
+        shiftKey: true,
+      }),
+    ).toBe("steer");
+  });
+
+  it("keeps Enter inert on mobile even with modifiers", () => {
+    expect(resolveComposerEnterAction({ ...keys, isMobileViewport: true, metaKey: true })).toBe(
+      "newline",
+    );
   });
 });
 
