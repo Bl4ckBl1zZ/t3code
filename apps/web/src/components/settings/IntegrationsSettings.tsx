@@ -11,6 +11,7 @@ import {
 import { invalidateVoicePreflight } from "../../voice/useWebVoiceInput";
 import { Button } from "../ui/button";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
 
 function statusLabel(status: OpenRouterIntegrationStatus | null): string {
   if (!status) return "Checking";
@@ -37,7 +38,7 @@ export function IntegrationsSettings() {
   }, []);
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Integrations">
+      <SettingsSection {...searchableSetting("integrations")}>
         <SettingsRow
           title="OpenRouter"
           description="Connect an account-wide OpenRouter credential for Voice Input."
