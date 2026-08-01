@@ -26,6 +26,7 @@ import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import type { QueuedThreadMessage } from "../../state/thread-outbox";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -66,6 +67,12 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly selectedThreadQueuedMessages: ReadonlyArray<QueuedThreadMessage>;
+  readonly dispatchingQueuedMessageId: string | null;
+  readonly onDeleteQueuedMessage: (message: QueuedThreadMessage) => void;
+  readonly onMoveQueuedMessage: (message: QueuedThreadMessage, direction: "up" | "down") => void;
+  readonly onUpdateQueuedMessageText: (message: QueuedThreadMessage, text: string) => void;
+  readonly onQueuedMessageEditingChange: (message: QueuedThreadMessage, editing: boolean) => void;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -429,6 +436,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               selectedThread={props.selectedThread}
               serverConfig={props.serverConfig}
               queueCount={props.selectedThreadQueueCount}
+              queuedMessages={props.selectedThreadQueuedMessages}
+              dispatchingQueuedMessageId={props.dispatchingQueuedMessageId}
+              onDeleteQueuedMessage={props.onDeleteQueuedMessage}
+              onMoveQueuedMessage={props.onMoveQueuedMessage}
+              onUpdateQueuedMessageText={props.onUpdateQueuedMessageText}
+              onQueuedMessageEditingChange={props.onQueuedMessageEditingChange}
               activeThreadBusy={props.activeThreadBusy}
               environmentId={props.environmentId}
               projectCwd={props.projectWorkspaceRoot}

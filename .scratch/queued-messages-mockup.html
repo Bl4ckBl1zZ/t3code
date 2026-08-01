@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Queued Messages — UI Mockup (Web + Mobile)</title>
+    <style>
+      :root {
+        --bg: #131316;
+        --surface: #1c1c21;
+        --surface-2: #232329;
+        --border: rgba(255, 255, 255, 0.09);
+        --border-strong: rgba(255, 255, 255, 0.14);
+        --fg: #e8e8ea;
+        --fg-dim: rgba(232, 232, 234, 0.85);
+        --muted: rgba(232, 232, 234, 0.55);
+        --muted-2: rgba(232, 232, 234, 0.38);
+        --primary: #e8674b;
+        --destructive: #e5484d;
+        --accent: rgba(255, 255, 255, 0.06);
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: #0d0d0f;
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        padding: 40px 24px 80px;
+      }
+      h1 {
+        font-size: 20px;
+        font-weight: 600;
+        text-align: center;
+        margin-bottom: 6px;
+      }
+      .subtitle {
+        text-align: center;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 40px;
+      }
+      .stage {
+        display: flex;
+        gap: 48px;
+        justify-content: center;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .panel-label {
+        text-align: center;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted-2);
+        margin-bottom: 14px;
+      }
+
+      /* ============ DESKTOP FRAME ============ */
+      .desktop-frame {
+        width: 760px;
+        background: var(--bg);
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        overflow: hidden;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+      }
+      .desktop-chrome {
+        display: flex;
+        gap: 6px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .desktop-body {
+        padding: 28px 40px 24px;
+      }
+
+      .working {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 22px;
+      }
+      .working .pulse-dots span {
+        display: inline-block;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--muted);
+        margin-right: 3px;
+        animation: pulse 1.2s infinite;
+      }
+      .working .pulse-dots span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .working .pulse-dots span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.25;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+
+      /* Queued strip */
+      .queue-strip {
+        max-width: 640px;
+        margin: 0 auto 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .queue-header {
+        display: flex;
+        justify-content: space-between;
+        padding: 0 4px;
+      }
+      .queue-header span {
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--muted);
+      }
+      .qrow {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 6px 10px;
+        transition: background 0.15s;
+      }
+      .qrow:hover {
+        background: rgba(255, 255, 255, 0.055);
+      }
+      .qrow:hover .qactions {
+        opacity: 1;
+      }
+      .qrow.dispatching {
+        border-color: rgba(232, 103, 75, 0.4);
+        background: rgba(232, 103, 75, 0.06);
+      }
+      .qrow.error {
+        border-color: rgba(229, 72, 77, 0.5);
+      }
+      .qicon {
+        display: flex;
+        align-items: center;
+        height: 24px;
+        flex-shrink: 0;
+        color: var(--muted-2);
+      }
+      .qbody {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 2px 0;
+      }
+      .qline {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .qtext {
+        font-size: 13.5px;
+        color: var(--fg-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .qbadge {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 10.5px;
+        color: var(--muted-2);
+        flex-shrink: 0;
+      }
+      .qerror-text {
+        font-size: 11.5px;
+        color: rgba(229, 72, 77, 0.9);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .qactions {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        flex-shrink: 0;
+        opacity: 0.55;
+        transition: opacity 0.15s;
+      }
+      .qbtn {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        border: none;
+        background: transparent;
+        color: rgba(232, 232, 234, 0.6);
+        cursor: pointer;
+        transition: all 0.12s;
+      }
+      .qbtn:hover {
+        background: var(--accent);
+        color: var(--fg);
+      }
+      .qbtn.danger:hover {
+        color: var(--destructive);
+      }
+      .qbtn[disabled] {
+        opacity: 0.25;
+        pointer-events: none;
+      }
+      .qbtn svg {
+        width: 13px;
+        height: 13px;
+      }
+      .qicon svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      /* editing row */
+      .qedit {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .qedit textarea {
+        width: 100%;
+        resize: none;
+        border-radius: 8px;
+        border: 1px solid var(--border-strong);
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        font-size: 13.5px;
+        padding: 6px 8px;
+        outline: none;
+      }
+      .qedit textarea:focus {
+        border-color: rgba(232, 103, 75, 0.6);
+      }
+      .qedit-hint {
+        font-size: 10.5px;
+        color: var(--muted-2);
+        padding-left: 2px;
+      }
+
+      .spinner {
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        border: 2px solid rgba(232, 103, 75, 0.25);
+        border-top-color: var(--primary);
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Composer */
+      .composer {
+        max-width: 640px;
+        margin: 0 auto;
+        border-radius: 22px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        padding: 16px 16px 12px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+      }
+      .composer-input {
+        color: var(--muted-2);
+        font-size: 14.5px;
+        padding: 2px 4px 26px;
+      }
+      .composer-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        color: var(--fg-dim);
+      }
+      .tb-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+      .tb-sep {
+        width: 1px;
+        height: 16px;
+        background: var(--border-strong);
+      }
+      .tb-chevron {
+        color: var(--muted-2);
+        font-size: 10px;
+      }
+      .tb-spring {
+        flex: 1;
+      }
+      .model-swatch {
+        width: 15px;
+        height: 15px;
+        border-radius: 4px;
+        background: radial-gradient(circle at 35% 35%, #f2a08d, #d0442a);
+      }
+
+      .queue-pill {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 13px;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .queue-pill:hover {
+        background: rgba(255, 255, 255, 0.09);
+        color: var(--fg);
+      }
+      .queue-pill svg {
+        width: 11px;
+        height: 11px;
+      }
+      .stop-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: none;
+        background: var(--destructive);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(229, 72, 77, 0.3);
+        transition: transform 0.15s;
+      }
+      .stop-btn:hover {
+        transform: scale(1.06);
+      }
+      .stop-btn svg {
+        width: 11px;
+        height: 11px;
+        fill: #fff;
+      }
+
+      .worktree-bar {
+        max-width: 640px;
+        margin: 8px auto 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.02);
+        padding: 8px 14px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+
+      /* ============ PHONE FRAME ============ */
+      .phone-frame {
+        width: 375px;
+        background: #000;
+        border-radius: 48px;
+        padding: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+      }
+      .phone-screen {
+        background: var(--bg);
+        border-radius: 40px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        height: 700px;
+        position: relative;
+      }
+      .notch {
+        width: 118px;
+        height: 30px;
+        background: #000;
+        border-radius: 0 0 18px 18px;
+        margin: 0 auto;
+        flex-shrink: 0;
+      }
+      .phone-header {
+        padding: 8px 18px 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .phone-back {
+        color: var(--primary);
+        font-size: 20px;
+        line-height: 1;
+      }
+      .phone-title {
+        flex: 1;
+      }
+      .phone-title .t {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .phone-title .s {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .phone-feed {
+        flex: 1;
+        padding: 16px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .bubble-user {
+        align-self: flex-end;
+        max-width: 78%;
+        background: var(--surface-2);
+        border-radius: 18px 18px 4px 18px;
+        padding: 10px 14px;
+        font-size: 13.5px;
+        color: var(--fg-dim);
+      }
+      .bubble-agent {
+        align-self: flex-start;
+        max-width: 85%;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .phone-working {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .phone-bottom {
+        padding: 8px 14px 18px;
+        background: linear-gradient(
+          to bottom,
+          rgba(19, 19, 22, 0) 0%,
+          rgba(13, 13, 15, 0.85) 40%,
+          rgba(13, 13, 15, 1) 100%
+        );
+      }
+      .phone-queue {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding-bottom: 8px;
+      }
+      .phone-queue-label {
+        font-size: 11px;
+        color: var(--muted);
+        padding: 0 4px;
+      }
+      .pqrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.045);
+        padding: 6px 10px;
+      }
+      .pqrow.dispatching {
+        border-color: rgba(232, 103, 75, 0.4);
+        background: rgba(232, 103, 75, 0.07);
+      }
+      .pqrow .qtext {
+        flex: 1;
+        font-size: 13px;
+      }
+      .pq-actions {
+        display: flex;
+        align-items: center;
+      }
+      .pq-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: none;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(232, 232, 234, 0.55);
+        cursor: pointer;
+      }
+      .pq-btn:active {
+        background: var(--accent);
+      }
+      .pq-btn[disabled] {
+        opacity: 0.25;
+      }
+      .pq-btn svg {
+        width: 12px;
+        height: 12px;
+      }
+      .pq-btn.danger {
+        color: rgba(229, 72, 77, 0.8);
+      }
+
+      .phone-composer {
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        background: rgba(35, 35, 41, 0.92);
+        padding: 12px 14px 10px;
+        backdrop-filter: blur(20px);
+      }
+      .phone-composer .composer-input {
+        padding-bottom: 18px;
+        font-size: 14px;
+      }
+      .phone-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .ptb-circle {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 1px solid var(--border-strong);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .ptb-pill {
+        height: 30px;
+        padding: 0 11px;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--fg-dim);
+      }
+      .ptb-stop {
+        border-color: rgba(229, 72, 77, 0.4);
+      }
+      .ptb-stop svg {
+        width: 9px;
+        height: 9px;
+        fill: var(--destructive);
+      }
+      .ptb-send {
+        margin-left: auto;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: var(--primary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 10px rgba(232, 103, 75, 0.35);
+        position: relative;
+      }
+      .ptb-send svg {
+        width: 14px;
+        height: 14px;
+        stroke: #fff;
+      }
+      .ptb-send .queue-tag {
+        position: absolute;
+        top: -7px;
+        right: -6px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-strong);
+        color: var(--muted);
+        font-size: 8.5px;
+        font-weight: 600;
+        padding: 1px 5px;
+        border-radius: 6px;
+        letter-spacing: 0.03em;
+      }
+      .home-indicator {
+        width: 130px;
+        height: 5px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.28);
+        margin: 6px auto 0;
+      }
+
+      .annotations {
+        max-width: 1200px;
+        margin: 48px auto 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 14px;
+      }
+      .anno {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        background: var(--surface);
+      }
+      .anno h3 {
+        font-size: 12.5px;
+        font-weight: 600;
+        margin-bottom: 5px;
+        color: var(--fg-dim);
+      }
+      .anno p {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Queued messages — above the composer</h1>
+    <div class="subtitle">
+      Left: message preview (1 line) &nbsp;·&nbsp; Right: move up / move down / edit / delete
+      &nbsp;·&nbsp; Top row is dispatching
+    </div>
+
+    <div class="stage">
+      <!-- ================= DESKTOP ================= -->
+      <div>
+        <div class="panel-label">Desktop / Web</div>
+        <div class="desktop-frame">
+          <div class="desktop-chrome">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+          </div>
+          <div class="desktop-body">
+            <div class="working">
+              <span class="pulse-dots"><span></span><span></span><span></span></span>
+              Working for 6m 18s
+            </div>
+
+            <!-- QUEUE STRIP -->
+            <div class="queue-strip">
+              <div class="queue-header"><span>3 queued — sends when the agent finishes</span></div>
+
+              <!-- dispatching row -->
+              <div class="qrow dispatching">
+                <div class="qicon"><div class="spinner"></div></div>
+                <div class="qbody">
+                  <div class="qline">
+                    <span class="qtext"
+                      >Also add unit tests for the new queue store edge cases</span
+                    >
+                  </div>
+                </div>
+                <div class="qactions" style="opacity: 1">
+                  <button class="qbtn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="m18 15-6-6-6 6" />
+                    </svg>
+                  </button>
+                  <button class="qbtn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
+                  <button class="qbtn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                    </svg>
+                  </button>
+                  <button class="qbtn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path
+                        d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- normal row, with image badge, hover shows controls -->
+              <div class="qrow">
+                <div class="qicon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                </div>
+                <div class="qbody">
+                  <div class="qline">
+                    <span class="qtext"
+                      >Then update the README screenshots to match the new layout</span
+                    >
+                    <span class="qbadge"
+                      ><svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="9" cy="9" r="2" />
+                        <path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" />
+                      </svg>
+                      2</span
+                    >
+                  </div>
+                </div>
+                <div class="qactions" style="opacity: 1">
+                  <button class="qbtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="m18 15-6-6-6 6" />
+                    </svg>
+                  </button>
+                  <button class="qbtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
+                  <button class="qbtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                    </svg>
+                  </button>
+                  <button class="qbtn danger">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path
+                        d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- editing row -->
+              <div class="qrow" style="border-color: var(--border-strong)">
+                <div class="qicon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                </div>
+                <div class="qedit">
+                  <textarea rows="2">
+When everything is green, open a PR with a summary of the queue feature</textarea
+                  >
+                  <span class="qedit-hint">⌘↵ save &nbsp;·&nbsp; esc cancel</span>
+                </div>
+                <div class="qactions" style="opacity: 1">
+                  <button class="qbtn" style="color: #7dc98a">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </button>
+                  <button class="qbtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- COMPOSER -->
+            <div class="composer">
+              <div class="composer-input">
+                Ask anything, @tag files/folders, $use skills, or / for commands
+              </div>
+              <div class="composer-toolbar">
+                <span class="tb-item"
+                  ><span class="model-swatch"></span> Claude Fable…
+                  <span class="tb-chevron">▾</span></span
+                >
+                <span class="tb-sep"></span>
+                <span class="tb-item">Medium · 200k <span class="tb-chevron">▾</span></span>
+                <span class="tb-sep"></span>
+                <span class="tb-item">🔒 Full access <span class="tb-chevron">▾</span></span>
+                <span class="tb-sep"></span>
+                <span class="tb-item">Build</span>
+                <span class="tb-item">☰ Tasks</span>
+                <span class="tb-spring"></span>
+                <button class="queue-pill">
+                  <svg viewBox="0 0 14 14" fill="none">
+                    <path
+                      d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                  Queue
+                </button>
+                <button class="stop-btn">
+                  <svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="worktree-bar">
+              <span>⎇ Worktree</span>
+              <span>⌥ t3code/queued-message-controls ▾</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= MOBILE ================= -->
+      <div>
+        <div class="panel-label">Mobile (iOS)</div>
+        <div class="phone-frame">
+          <div class="phone-screen">
+            <div class="notch"></div>
+            <div class="phone-header">
+              <span class="phone-back">‹</span>
+              <div class="phone-title">
+                <div class="t">queued-message-controls</div>
+                <div class="s">t3code · worktree</div>
+              </div>
+            </div>
+
+            <div class="phone-feed">
+              <div class="bubble-user">Add proper UI for queuing messages into a thread</div>
+              <div class="bubble-agent">
+                I'll implement the queued-message strip on both platforms. Starting with the store,
+                then the composer wiring…
+              </div>
+              <div class="phone-working">
+                <span class="pulse-dots"><span></span><span></span><span></span></span>
+                Working for 6m 18s
+              </div>
+            </div>
+
+            <div class="phone-bottom">
+              <!-- PHONE QUEUE STRIP -->
+              <div class="phone-queue">
+                <div class="phone-queue-label">2 queued — sends when the agent finishes</div>
+
+                <div class="pqrow dispatching">
+                  <div class="qicon"><div class="spinner"></div></div>
+                  <span class="qtext">Also add unit tests for the queue store</span>
+                  <div class="pq-actions">
+                    <button class="pq-btn" disabled>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6">
+                        <path d="m18 15-6-6-6 6" />
+                      </svg>
+                    </button>
+                    <button class="pq-btn" disabled>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6">
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </button>
+                    <button class="pq-btn" disabled>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                      </svg>
+                    </button>
+                    <button class="pq-btn" disabled>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                          d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="pqrow">
+                  <div class="qicon">
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                  </div>
+                  <span class="qtext">Update the README screenshots after</span>
+                  <div class="pq-actions">
+                    <button class="pq-btn">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6">
+                        <path d="m18 15-6-6-6 6" />
+                      </svg>
+                    </button>
+                    <button class="pq-btn" disabled>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6">
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </button>
+                    <button class="pq-btn">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                      </svg>
+                    </button>
+                    <button class="pq-btn danger">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                          d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- PHONE COMPOSER -->
+              <div class="phone-composer">
+                <div class="composer-input">Ask the repo agent, or run a command…</div>
+                <div class="phone-toolbar">
+                  <div class="ptb-circle">+</div>
+                  <div class="ptb-pill">
+                    <span class="model-swatch" style="width: 13px; height: 13px"></span> Fable 5
+                  </div>
+                  <div class="ptb-pill ptb-stop">
+                    <svg viewBox="0 0 12 12">
+                      <rect x="2" y="2" width="8" height="8" rx="1.5" />
+                    </svg>
+                  </div>
+                  <div class="ptb-send">
+                    <svg viewBox="0 0 14 14" fill="none">
+                      <path
+                        d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                        stroke-width="1.9"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                    <span class="queue-tag">QUEUE</span>
+                  </div>
+                </div>
+              </div>
+              <div class="home-indicator"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANNOTATIONS -->
+    <div class="annotations">
+      <div class="anno">
+        <h3>⏳ Row states</h3>
+        <p>
+          Clock = waiting · Spinner + tinted border = dispatching (controls lock) · Red border =
+          last dispatch failed, error shown inline, waits for edit/delete.
+        </p>
+      </div>
+      <div class="anno">
+        <h3>✏️ Inline edit</h3>
+        <p>
+          Pencil swaps the row into a textarea (desktop: ⌘↵ save, esc cancel; mobile: check/✕
+          buttons). While editing, the drain holds that message so a stale payload can never send.
+        </p>
+      </div>
+      <div class="anno">
+        <h3>↕ Reordering</h3>
+        <p>
+          Chevrons swap a row with its neighbor. First row's "up" and last row's "down" are
+          disabled. On mobile the order persists across restarts (timestamp swap in the outbox).
+        </p>
+      </div>
+      <div class="anno">
+        <h3>⬆ Queue affordance</h3>
+        <p>
+          While the agent runs, the send button becomes "Queue" — next to Stop on desktop, tagged on
+          the send button on mobile. Queue caps at 10 per thread.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
