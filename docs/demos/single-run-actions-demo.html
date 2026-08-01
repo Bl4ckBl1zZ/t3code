@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>T3 Code — Single-run Actions demo</title>
+    <style>
+      :root {
+        --bg: #101014;
+        --panel: #17171c;
+        --panel-2: #1d1d24;
+        --border: rgba(255, 255, 255, 0.09);
+        --border-soft: rgba(255, 255, 255, 0.055);
+        --fg: #e7e7ea;
+        --fg-muted: #9a9aa3;
+        --fg-faint: #6b6b74;
+        --accent: #7c8cf8;
+        --emerald: #34d399;
+        --emerald-dim: rgba(52, 211, 153, 0.12);
+        --emerald-border: rgba(52, 211, 153, 0.4);
+        --radius: 8px;
+        font-family: -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-size: 14px;
+        line-height: 1.45;
+        display: flex;
+        justify-content: center;
+        padding: 48px 20px 80px;
+      }
+      .stage {
+        width: 100%;
+        max-width: 760px;
+      }
+      h1 {
+        font-size: 17px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--fg-muted);
+        font-size: 13px;
+        margin: 0 0 28px;
+      }
+      .sub code {
+        background: var(--panel-2);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+
+      /* ── App chrome ─────────────────────────────── */
+      .window {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+      }
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--panel-2);
+      }
+      .dots {
+        display: flex;
+        gap: 6px;
+        margin-right: 6px;
+      }
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        opacity: 0.85;
+      }
+      .dot.r {
+        background: #ff5f57;
+      }
+      .dot.y {
+        background: #febc2e;
+      }
+      .dot.g {
+        background: #28c840;
+      }
+      .thread-title {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--fg);
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .thread-title span {
+        color: var(--fg-faint);
+        font-weight: 400;
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      /* ── Buttons ────────────────────────────────── */
+      .btn {
+        appearance: none;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        border-radius: 6px;
+        height: 26px;
+        padding: 0 9px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        cursor: pointer;
+        transition:
+          background 0.12s,
+          border-color 0.15s,
+          color 0.15s;
+        position: relative;
+      }
+      .btn:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .btn:active {
+        transform: translateY(0.5px);
+      }
+      .btn svg {
+        width: 14px;
+        height: 14px;
+        flex: none;
+      }
+      .btn.icon-only {
+        width: 26px;
+        padding: 0;
+        justify-content: center;
+      }
+
+      .group {
+        display: inline-flex;
+      }
+      .group .btn:first-child {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+      }
+      .group .btn:last-child {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+        margin-left: -1px;
+      }
+
+      /* Green active (pending or running) state — mirrors the emerald tokens */
+      .btn.run-active {
+        border-color: var(--emerald-border);
+        background: var(--emerald-dim);
+        color: var(--emerald);
+      }
+      .btn.run-active:hover {
+        background: rgba(52, 211, 153, 0.18);
+      }
+      .btn.run-active .pulse-ring {
+        position: absolute;
+        inset: -1px;
+        border-radius: 6px;
+        border: 1px solid var(--emerald-border);
+        animation: pulse 1.6s ease-out infinite;
+        pointer-events: none;
+      }
+      @keyframes pulse {
+        0% {
+          opacity: 0.7;
+          transform: scale(1);
+        }
+        70% {
+          opacity: 0;
+          transform: scale(1.18);
+        }
+        100% {
+          opacity: 0;
+        }
+      }
+
+      /* ── Dropdown menu ──────────────────────────── */
+      .menu-wrap {
+        position: relative;
+      }
+      .menu {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        min-width: 235px;
+        background: #202027;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 5px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        z-index: 30;
+        display: none;
+      }
+      .menu.open {
+        display: block;
+      }
+      .menu-item {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        width: 100%;
+        padding: 7px 9px;
+        border: 0;
+        background: transparent;
+        color: var(--fg);
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .menu-item:hover {
+        background: rgba(255, 255, 255, 0.07);
+      }
+      .menu-item svg {
+        width: 15px;
+        height: 15px;
+        color: var(--fg-muted);
+        flex: none;
+      }
+      .menu-item .kbd {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font-size: 11px;
+        font-family: ui-monospace, monospace;
+      }
+      .menu-item.run-active-item svg {
+        color: var(--emerald);
+      }
+      .menu-item .flag {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--fg-faint);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+      .menu-sep {
+        height: 1px;
+        background: var(--border-soft);
+        margin: 5px 4px;
+      }
+      .menu-label {
+        font-size: 11px;
+        color: var(--fg-faint);
+        padding: 5px 9px 3px;
+      }
+
+      /* ── Terminal pane ──────────────────────────── */
+      .terminal {
+        background: #0b0b0e;
+        border-top: 1px solid var(--border-soft);
+        padding: 14px 16px 18px;
+        min-height: 190px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12.5px;
+        color: #c9c9d1;
+        white-space: pre-wrap;
+      }
+      .terminal .t-head {
+        font-family: inherit;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--fg-faint);
+        font-size: 11px;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .t-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .t-status .led {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #55555e;
+      }
+      .t-status.busy .led {
+        background: var(--emerald);
+        animation: led 1.2s ease-in-out infinite;
+      }
+      @keyframes led {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      .terminal .line {
+        min-height: 18px;
+      }
+      .terminal .prompt {
+        color: #8b95f6;
+      }
+      .terminal .ok {
+        color: var(--emerald);
+      }
+      .terminal .dim {
+        color: #7b7b85;
+      }
+      .terminal .sigint {
+        color: #f87171;
+      }
+      .cursor {
+        display: inline-block;
+        width: 7px;
+        height: 14px;
+        background: #c9c9d1;
+        vertical-align: -2px;
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      /* ── Explainer / dialog card ────────────────── */
+      .row2 {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 20px;
+        margin-top: 24px;
+        align-items: start;
+      }
+      @media (max-width: 700px) {
+        .row2 {
+          grid-template-columns: 1fr;
+        }
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .card h2 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 10px;
+      }
+      .state-line {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 0;
+        font-size: 13px;
+        color: var(--fg-muted);
+      }
+      .state-line b {
+        color: var(--fg);
+        font-weight: 500;
+      }
+      .chip {
+        width: 90px;
+        flex: none;
+        display: inline-flex;
+        justify-content: center;
+      }
+
+      .switch-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid var(--border-soft);
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 13px;
+        margin-top: 8px;
+      }
+      .switch {
+        position: relative;
+        width: 34px;
+        height: 20px;
+        flex: none;
+        cursor: pointer;
+      }
+      .switch input {
+        display: none;
+      }
+      .switch .track {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: #3a3a44;
+        transition: background 0.15s;
+      }
+      .switch .thumb {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        transition: left 0.15s;
+      }
+      .switch input:checked + .track {
+        background: var(--emerald);
+      }
+      .switch input:checked + .track + .thumb {
+        left: 16px;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--fg-faint);
+        margin-top: 10px;
+      }
+      .log-note {
+        margin-top: 14px;
+        font-size: 12px;
+        color: var(--fg-faint);
+      }
+      .log-note code {
+        color: var(--fg-muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <h1>Single-run actions</h1>
+      <p class="sub">
+        Click <b>Dev</b> to run it. It goes green while running — click it again to stop (sends
+        <code>Ctrl-C</code>). While it's green, it cannot be launched a second time (try mashing it,
+        or use the dropdown). <b>Test</b> has no <code>singleRun</code> flag, so it keeps the old
+        behavior.
+      </p>
+
+      <div class="window">
+        <div class="titlebar">
+          <div class="dots">
+            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          </div>
+          <div class="thread-title">fix: normalize app icon glyph sizing <span>· t3code</span></div>
+          <div class="header-actions">
+            <div class="group">
+              <button id="primaryBtn" class="btn" aria-label="Run Dev">
+                <svg
+                  id="primaryIcon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="6 3 20 12 6 21 6 3" />
+                </svg>
+                <span id="primaryLabel">Dev</span>
+              </button>
+              <div class="menu-wrap">
+                <button id="chevBtn" class="btn icon-only" aria-label="Script actions">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                <div id="menu" class="menu">
+                  <div class="menu-label">Actions</div>
+                  <button class="menu-item" id="menuDev">
+                    <svg
+                      id="menuDevIcon"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polygon points="6 3 20 12 6 21 6 3" />
+                    </svg>
+                    <span id="menuDevLabel">Dev</span>
+                    <span class="kbd">⌘⇧D</span>
+                  </button>
+                  <button class="menu-item" id="menuTest">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M10 2v7.5L4.5 19a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 9.5V2" />
+                      <path d="M8.5 2h7" />
+                      <path d="M7 16h10" />
+                    </svg>
+                    <span>Test</span>
+                    <span class="flag">concurrent ok</span>
+                  </button>
+                  <div class="menu-sep"></div>
+                  <button class="menu-item">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                    <span>Add action</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="terminal">
+          <div class="t-head">
+            <span>Terminal 1</span>
+            <span class="t-status" id="tStatus"
+              ><span class="led"></span><span id="tStatusText">Ready</span></span
+            >
+          </div>
+          <div id="tBody">
+            <div class="line">
+              <span class="prompt">~/t3code %</span> <span class="cursor"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row2">
+        <div class="card">
+          <h2>Button states</h2>
+          <div class="state-line">
+            <span class="chip"
+              ><button class="btn" style="pointer-events: none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="6 3 20 12 6 21 6 3" /></svg
+                >Dev
+              </button></span
+            ><span><b>Idle</b> — click to run</span>
+          </div>
+          <div class="state-line">
+            <span class="chip"
+              ><button class="btn run-active" style="pointer-events: none">
+                <span class="pulse-ring"></span
+                ><svg
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <rect x="7" y="7" width="10" height="10" rx="1.5" /></svg
+                >Dev
+              </button></span
+            ><span
+              ><b>Pending</b> — launch sent, blocked instantly (covers the ~1s server poll
+              gap)</span
+            >
+          </div>
+          <div class="state-line">
+            <span class="chip"
+              ><button class="btn run-active" style="pointer-events: none">
+                <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">
+                  <rect x="7" y="7" width="10" height="10" rx="1.5" /></svg
+                >Dev
+              </button></span
+            ><span><b>Running</b> — server-confirmed; click to send <code>Ctrl-C</code></span>
+          </div>
+          <div class="log-note" id="eventLog">Event log: <code>—</code></div>
+        </div>
+
+        <div class="card">
+          <h2>Edit Action dialog</h2>
+          <div class="switch-row">
+            <span>Run automatically on worktree creation</span>
+            <label class="switch"
+              ><input type="checkbox" /><span class="track"></span><span class="thumb"></span
+            ></label>
+          </div>
+          <div class="switch-row">
+            <span>Only one run at a time (run again to stop)</span>
+            <label class="switch"
+              ><input type="checkbox" checked id="singleRunSwitch" /><span class="track"></span
+              ><span class="thumb"></span
+            ></label>
+          </div>
+          <p class="hint">
+            The new <code>singleRun</code> flag — persisted on the action and in
+            <code>t3.json</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // idle -> pending (optimistic, instant) -> running (server-confirmed ~900ms later) -> idle
+      let state = "idle";
+      let confirmTimer = null,
+        outputTimer = null,
+        blockedFlash = null;
+
+      const primaryBtn = document.getElementById("primaryBtn");
+      const primaryLabel = document.getElementById("primaryLabel");
+      const menu = document.getElementById("menu");
+      const chevBtn = document.getElementById("chevBtn");
+      const menuDev = document.getElementById("menuDev");
+      const menuDevLabel = document.getElementById("menuDevLabel");
+      const menuTest = document.getElementById("menuTest");
+      const tBody = document.getElementById("tBody");
+      const tStatus = document.getElementById("tStatus");
+      const tStatusText = document.getElementById("tStatusText");
+      const eventLog = document.getElementById("eventLog");
+      const singleRunSwitch = document.getElementById("singleRunSwitch");
+
+      const PLAY = '<polygon points="6 3 20 12 6 21 6 3"/>';
+      const STOP = '<rect x="7" y="7" width="10" height="10" rx="1.5"/>';
+
+      function setIcon(svgId, shape, filled) {
+        const svg = document.getElementById(svgId);
+        svg.innerHTML = shape;
+        svg.setAttribute("fill", filled ? "currentColor" : "none");
+      }
+
+      function log(msg) {
+        eventLog.innerHTML = "Event log: <code>" + msg + "</code>";
+      }
+
+      function line(html) {
+        const cursorLine = tBody.lastElementChild;
+        const el = document.createElement("div");
+        el.className = "line";
+        el.innerHTML = html;
+        tBody.insertBefore(el, cursorLine);
+        tBody.parentElement.scrollTop = tBody.parentElement.scrollHeight;
+      }
+
+      const devOutput = [
+        '<span class="dim">vite-plus v0.2.2 building…</span>',
+        '<span class="ok">✓</span> server ready on <span class="ok">http://localhost:5733</span>',
+        '<span class="dim">watching for file changes…</span>',
+        '<span class="dim">hmr update /src/components/ProjectScriptsControl.tsx</span>',
+        '<span class="dim">hmr update /src/state/projectScriptRuns.ts</span>',
+      ];
+      let outIdx = 0;
+
+      function render() {
+        const active = state !== "idle";
+        primaryBtn.classList.toggle("run-active", active);
+        primaryBtn.setAttribute("aria-label", active ? "Stop Dev" : "Run Dev");
+        setIcon("primaryIcon", active ? STOP : PLAY, active);
+        setIcon("menuDevIcon", active ? STOP : PLAY, active);
+        menuDevLabel.textContent = active ? "Stop Dev" : "Dev";
+        menuDev.classList.toggle("run-active-item", active);
+        const oldRing = primaryBtn.querySelector(".pulse-ring");
+        if (oldRing) oldRing.remove();
+        if (state === "pending") {
+          const ring = document.createElement("span");
+          ring.className = "pulse-ring";
+          primaryBtn.prepend(ring);
+        }
+        tStatus.classList.toggle("busy", active);
+        tStatusText.textContent =
+          state === "idle" ? "Ready" : state === "pending" ? "Starting…" : "Task running · vp dev";
+      }
+
+      function startRun(source) {
+        if (state !== "idle" && singleRunSwitch.checked) {
+          // The guard: no second concurrent launch of a single-run action.
+          log("blocked duplicate launch (" + source + ") — run already " + state);
+          primaryBtn.style.transition = "none";
+          primaryBtn.style.boxShadow = "0 0 0 3px rgba(52,211,153,.25)";
+          clearTimeout(blockedFlash);
+          blockedFlash = setTimeout(() => {
+            primaryBtn.style.transition = "";
+            primaryBtn.style.boxShadow = "";
+          }, 250);
+          return;
+        }
+        if (state !== "idle") {
+          // singleRun off: old behavior, new terminal
+          log("singleRun off → would open Terminal 2 and run again");
+          line('<span class="dim">(flag off: second run would spawn a new terminal)</span>');
+          return;
+        }
+        state = "pending";
+        log('terminal.write \\"vp dev\\\\r\\" · scriptId=dev → pending (optimistic)');
+        line('<span class="prompt">~/t3code %</span> vp dev');
+        render();
+        confirmTimer = setTimeout(() => {
+          if (state !== "pending") return;
+          state = "running";
+          log("metadata upsert: activeScriptId=dev, hasRunningSubprocess=true → running");
+          render();
+          outIdx = 0;
+          outputTimer = setInterval(() => {
+            if (outIdx < devOutput.length) line(devOutput[outIdx++]);
+          }, 700);
+        }, 900);
+      }
+
+      function stopRun() {
+        clearTimeout(confirmTimer);
+        clearInterval(outputTimer);
+        line('<span class="sigint">^C</span>');
+        log('toggle → terminal.write \\"\\\\x03\\" (Ctrl-C) → run stopped');
+        setTimeout(() => {
+          line('<span class="dim">vp dev exited (SIGINT)</span>');
+          state = "idle";
+          render();
+        }, 350);
+      }
+
+      function onActionClick(source) {
+        if (state === "idle") startRun(source);
+        else if (singleRunSwitch.checked) stopRun();
+        else startRun(source);
+        menu.classList.remove("open");
+      }
+
+      primaryBtn.addEventListener("click", () => onActionClick("button"));
+      menuDev.addEventListener("click", () => onActionClick("menu"));
+      menuTest.addEventListener("click", () => {
+        line(
+          '<span class="prompt">~/t3code %</span> vp test run <span class="dim">(no singleRun flag — runs concurrently, no toggle)</span>',
+        );
+        log("Test has no singleRun flag → normal launch, never blocks");
+        menu.classList.remove("open");
+      });
+      chevBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        menu.classList.toggle("open");
+      });
+      document.addEventListener("click", (e) => {
+        if (!menu.contains(e.target)) menu.classList.remove("open");
+      });
+      document.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === "KeyD") {
+          e.preventDefault();
+          onActionClick("keybinding ⌘⇧D");
+        }
+      });
+
+      render();
+    </script>
+  </body>
+</html>

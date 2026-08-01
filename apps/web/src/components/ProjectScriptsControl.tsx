@@ -9,6 +9,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import type { ProjectScriptRunState } from "@t3tools/client-runtime/state/terminal";
 import {
   BugIcon,
   ChevronDownIcon,
@@ -19,6 +20,7 @@ import {
   PlayIcon,
   PlusIcon,
   SettingsIcon,
+  SquareIcon,
   WrenchIcon,
 } from "lucide-react";
 import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
@@ -105,6 +107,8 @@ export interface NewProjectScriptInput {
   previewUrl: string | null;
   /** When true, automatically open the preview panel pointed at `previewUrl`. */
   autoOpenPreview: boolean;
+  /** When true, at most one run at a time; invoking again stops the active run. */
+  singleRun: boolean;
 }
 
 export type ProjectScriptActionResult = AtomCommandResult<void, unknown>;
@@ -117,6 +121,8 @@ interface ProjectScriptsControlProps {
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
+  /** Active run per single-run script id; clicking such a script stops it. */
+  scriptRunStates?: ReadonlyMap<string, ProjectScriptRunState>;
   onRunScript: (script: ProjectScript) => void;
   onAddScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateScript: (
@@ -131,6 +137,7 @@ export default function ProjectScriptsControl({
   fileScripts = NO_FILE_SCRIPTS,
   keybindings,
   preferredScriptId = null,
+  scriptRunStates,
   onRunScript,
   onAddScript,
   onUpdateScript,
@@ -148,6 +155,7 @@ export default function ProjectScriptsControl({
   const [icon, setIcon] = useState<ProjectScriptIcon>("play");
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(false);
+  const [singleRun, setSingleRun] = useState(false);
   const [keybinding, setKeybinding] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [autoOpenPreview, setAutoOpenPreview] = useState(false);
@@ -174,6 +182,10 @@ export default function ProjectScriptsControl({
     [fileScripts, scripts],
   );
   const isEditing = editingScriptId !== null;
+  const primaryRunState = primaryScript ? (scriptRunStates?.get(primaryScript.id) ?? null) : null;
+  const isPrimaryScriptActive = primaryRunState !== null;
+  const activeRunButtonClassName =
+    "border-emerald-600/50 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15 hover:text-emerald-600 dark:border-emerald-300/40 dark:bg-emerald-400/10 dark:text-emerald-300/90 dark:hover:bg-emerald-400/15 dark:hover:text-emerald-300/90";
   const dropdownItemClassName =
     "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground data-highlighted:hover:bg-accent data-highlighted:hover:text-accent-foreground data-highlighted:focus-visible:bg-accent data-highlighted:focus-visible:text-accent-foreground";
 
@@ -224,6 +236,7 @@ export default function ProjectScriptsControl({
         keybinding: keybindingRule?.key ?? null,
         previewUrl: trimmedPreviewUrl.length > 0 ? trimmedPreviewUrl : null,
         autoOpenPreview: trimmedPreviewUrl.length > 0 ? autoOpenPreview : false,
+        singleRun,
       } satisfies NewProjectScriptInput;
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : "Failed to save action.");
@@ -251,6 +264,7 @@ export default function ProjectScriptsControl({
     setIcon("play");
     setIconPickerOpen(false);
     setRunOnWorktreeCreate(false);
+    setSingleRun(false);
     setKeybinding("");
     setPreviewUrl("");
     setAutoOpenPreview(false);
@@ -266,6 +280,7 @@ export default function ProjectScriptsControl({
     setIcon(script.icon);
     setIconPickerOpen(false);
     setRunOnWorktreeCreate(script.runOnWorktreeCreate);
+    setSingleRun(script.singleRun ?? false);
     setKeybinding(keybindingValueForCommand(keybindings, commandForProjectScript(script.id)) ?? "");
     setPreviewUrl(script.previewUrl ?? "");
     setAutoOpenPreview(script.autoOpenPreview ?? false);
@@ -289,6 +304,7 @@ export default function ProjectScriptsControl({
       keybinding: null,
       previewUrl: fileScript.previewUrl ?? null,
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
+      singleRun: fileScript.singleRun ?? false,
     };
     const result = await onAddScript(payload);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -301,6 +317,7 @@ export default function ProjectScriptsControl({
       setIcon(payload.icon);
       setIconPickerOpen(false);
       setRunOnWorktreeCreate(payload.runOnWorktreeCreate);
+      setSingleRun(payload.singleRun);
       setKeybinding("");
       setPreviewUrl(payload.previewUrl ?? "");
       setAutoOpenPreview(payload.autoOpenPreview);
@@ -341,18 +358,30 @@ export default function ProjectScriptsControl({
                 <Button
                   size="xs"
                   variant="outline"
-                  className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
-                  aria-label={`Run ${primaryScript.name}`}
+                  className={`w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)] ${
+                    isPrimaryScriptActive ? activeRunButtonClassName : ""
+                  }`}
+                  aria-label={
+                    isPrimaryScriptActive
+                      ? `Stop ${primaryScript.name}`
+                      : `Run ${primaryScript.name}`
+                  }
                   onClick={() => onRunScript(primaryScript)}
                 />
               }
             >
-              <ScriptIcon icon={primaryScript.icon} />
+              {isPrimaryScriptActive ? (
+                <SquareIcon className="size-3 fill-current" />
+              ) : (
+                <ScriptIcon icon={primaryScript.icon} />
+              )}
               <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
                 {primaryScript.name}
               </span>
             </TooltipTrigger>
-            <TooltipPopup side="top">Run {primaryScript.name}</TooltipPopup>
+            <TooltipPopup side="top">
+              {isPrimaryScriptActive ? `Stop ${primaryScript.name}` : `Run ${primaryScript.name}`}
+            </TooltipPopup>
           </Tooltip>
           <GroupSeparator className="hidden @3xl/header-actions:block" />
           <Menu
@@ -371,13 +400,19 @@ export default function ProjectScriptsControl({
                   keybindings,
                   commandForProjectScript(script.id),
                 );
+                const isScriptActive = scriptRunStates?.has(script.id) ?? false;
                 return (
                   <MenuItem
                     key={script.id}
                     className={`group ${dropdownItemClassName}`}
+                    aria-label={isScriptActive ? `Stop ${script.name}` : `Run ${script.name}`}
                     onClick={() => onRunScript(script)}
                   >
-                    <ScriptIcon icon={script.icon} className="size-4" />
+                    {isScriptActive ? (
+                      <SquareIcon className="size-4 p-0.5 fill-current text-emerald-600 dark:text-emerald-300/90" />
+                    ) : (
+                      <ScriptIcon icon={script.icon} className="size-4" />
+                    )}
                     <span className="truncate">
                       {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
                     </span>
@@ -474,6 +509,7 @@ export default function ProjectScriptsControl({
           setCommand("");
           setIcon("play");
           setRunOnWorktreeCreate(false);
+          setSingleRun(false);
           setKeybinding("");
           setPreviewUrl("");
           setAutoOpenPreview(false);
@@ -580,6 +616,13 @@ export default function ProjectScriptsControl({
                 <Switch
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                <span>Only one run at a time (run again to stop)</span>
+                <Switch
+                  checked={singleRun}
+                  onCheckedChange={(checked) => setSingleRun(Boolean(checked))}
                 />
               </label>
               <label

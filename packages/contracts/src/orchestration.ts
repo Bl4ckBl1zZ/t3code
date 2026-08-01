@@ -207,6 +207,11 @@ export const ProjectScript = Schema.Struct({
    * the moment this script starts. Ignored without `previewUrl` or on web.
    */
   autoOpenPreview: Schema.optional(Schema.Boolean),
+  /**
+   * When true, at most one run of this script can be active per thread:
+   * launching it again while running stops the active run instead.
+   */
+  singleRun: Schema.optional(Schema.Boolean),
 });
 export type ProjectScript = typeof ProjectScript.Type;
 

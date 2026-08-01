@@ -40,6 +40,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "name",
       "previewUrl",
       "runOnWorktreeCreate",
+      "singleRun",
     ]);
   });
 

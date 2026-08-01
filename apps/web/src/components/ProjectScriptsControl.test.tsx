@@ -1,4 +1,5 @@
 import type { ProjectScript, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { ProjectScriptRunState } from "@t3tools/client-runtime/state/terminal";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -13,11 +14,15 @@ const PRIMARY_SCRIPT: ProjectScript = {
   runOnWorktreeCreate: false,
 };
 
-function renderControl(scripts: ReadonlyArray<ProjectScript>) {
+function renderControl(
+  scripts: ReadonlyArray<ProjectScript>,
+  scriptRunStates?: ReadonlyMap<string, ProjectScriptRunState>,
+) {
   return renderToStaticMarkup(
     <ProjectScriptsControl
       scripts={scripts}
       keybindings={EMPTY_KEYBINDINGS}
+      scriptRunStates={scriptRunStates}
       onRunScript={() => {}}
       onAddScript={async () => undefined as never}
       onUpdateScript={async () => undefined as never}
@@ -52,6 +57,18 @@ describe("ProjectScriptsControl compact controls", () => {
     expect(html).toContain(
       'class="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5"',
     );
+  });
+
+  it("turns the primary control into a green Stop toggle while the script runs", () => {
+    const html = renderControl(
+      [{ ...PRIMARY_SCRIPT, singleRun: true }],
+      new Map([["dev", { status: "running", terminalId: "term-1" }]]),
+    );
+
+    const stopButton = buttonTag(html, "Stop Dev");
+    expect(stopButton).toBeDefined();
+    expect(stopButton).toContain("emerald");
+    expect(buttonTag(html, "Run Dev")).toBeUndefined();
   });
 
   it("keeps the standalone Add control compact and expands it with its label", () => {

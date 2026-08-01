@@ -1,5 +1,8 @@
 import { DEFAULT_TERMINAL_ID, EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { type KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
+import {
+  clearProjectScriptRunPending,
+  type KnownTerminalSession,
+} from "@t3tools/client-runtime/state/terminal";
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
@@ -615,17 +618,28 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       return;
     }
     sentInitialInputKeyRef.current = launchTargetKey;
+    const launchScriptId = pendingLaunch?.scriptId;
     void writeTerminal({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
         terminalId,
         data: initialInput,
+        ...(launchScriptId ? { scriptId: launchScriptId } : {}),
       },
+    }).then((result) => {
+      if (result._tag === "Failure" && launchScriptId) {
+        clearProjectScriptRunPending({
+          environmentId: selectedThread.environmentId,
+          threadId: selectedThread.id,
+          scriptId: launchScriptId,
+        });
+      }
     });
   }, [
     launchTargetKey,
     pendingLaunch?.initialInput,
+    pendingLaunch?.scriptId,
     selectedThread,
     terminal.version,
     terminalId,

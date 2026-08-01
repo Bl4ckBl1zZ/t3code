@@ -5,9 +5,24 @@ import {
   useNavigation,
   type StaticScreenProps,
 } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import {
+  markProjectScriptRunPending,
+  projectScriptRunsVersion,
+  selectProjectScriptRunState,
+  selectRunningProjectScriptTerminal,
+  subscribeProjectScriptRuns,
+} from "@t3tools/client-runtime/state/terminal";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -53,6 +68,7 @@ import {
 } from "./ThreadGitControls";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { terminalEnvironment } from "../../state/terminal";
 import { useSelectedThreadGitActions } from "../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-state";
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
@@ -307,6 +323,39 @@ function ThreadRouteContent(
       }),
     [knownTerminalSessions, selectedThreadProject?.workspaceRoot],
   );
+  const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
+  const projectScriptRunsStoreVersion = useSyncExternalStore(
+    subscribeProjectScriptRuns,
+    projectScriptRunsVersion,
+    projectScriptRunsVersion,
+  );
+  const activeProjectScriptIds = useMemo(() => {
+    if (!selectedThread) {
+      return [];
+    }
+    const active: string[] = [];
+    for (const script of selectedThreadProject?.scripts ?? []) {
+      if (!script.singleRun) continue;
+      const runState = selectProjectScriptRunState({
+        scope: {
+          environmentId: selectedThread.environmentId,
+          threadId: selectedThread.id,
+          scriptId: script.id,
+        },
+        sessions: knownTerminalSessions,
+      });
+      if (runState.status !== "idle") {
+        active.push(script.id);
+      }
+    }
+    return active;
+    // projectScriptRunsStoreVersion invalidates when the shared pending store changes.
+  }, [
+    knownTerminalSessions,
+    selectedThread,
+    selectedThreadProject?.scripts,
+    projectScriptRunsStoreVersion,
+  ]);
   const selectedThreadDetailWorktreePath = selectedThreadDetail?.worktreePath ?? null;
   const handleReconnectEnvironment = useCallback(() => {
     if (!environmentId) {
@@ -538,6 +587,44 @@ function ThreadRouteContent(
         return;
       }
 
+      const scriptRunScope = {
+        environmentId: selectedThread.environmentId,
+        threadId: selectedThread.id,
+        scriptId: script.id,
+      };
+      if (script.singleRun) {
+        const runningTerminal = selectRunningProjectScriptTerminal(
+          knownTerminalSessions,
+          script.id,
+        );
+        if (runningTerminal) {
+          // Toggle: interrupt the active run (Ctrl-C) instead of launching again.
+          terminalDebugLog("project-script:stop", {
+            scriptId: script.id,
+            terminalId: runningTerminal.target.terminalId,
+          });
+          await writeTerminal({
+            environmentId: selectedThread.environmentId,
+            input: {
+              threadId: selectedThread.id,
+              terminalId: runningTerminal.target.terminalId,
+              data: "\x03",
+            },
+          });
+          return;
+        }
+        if (
+          selectProjectScriptRunState({ scope: scriptRunScope, sessions: knownTerminalSessions })
+            .status === "pending"
+        ) {
+          terminalDebugLog("project-script:abort", {
+            scriptId: script.id,
+            reason: "launch-pending",
+          });
+          return;
+        }
+      }
+
       const targetTerminalId = resolveProjectScriptTerminalId({
         existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
         hasRunningTerminal: terminalMenuSessions.some(
@@ -556,6 +643,11 @@ function ThreadRouteContent(
         project: { cwd: selectedThreadProject.workspaceRoot },
         worktreePath: preferredWorktreePath,
       });
+      if (script.singleRun) {
+        // Optimistically block re-launch until the server confirms the run
+        // (or the pending entry expires).
+        markProjectScriptRunPending(scriptRunScope, { terminalId: targetTerminalId });
+      }
       stagePendingTerminalLaunch({
         target: {
           environmentId: selectedThread.environmentId,
@@ -567,6 +659,7 @@ function ThreadRouteContent(
           worktreePath: preferredWorktreePath,
           env,
           initialInput: `${script.command}\r`,
+          scriptId: script.id,
         },
       });
       terminalDebugLog("project-script:staged", {
@@ -583,11 +676,13 @@ function ThreadRouteContent(
       });
     },
     [
+      knownTerminalSessions,
       navigation,
       selectedThread,
       selectedThreadDetailWorktreePath,
       selectedThreadProject,
       terminalMenuSessions,
+      writeTerminal,
     ],
   );
   const threadGitControlProps = {
@@ -609,6 +704,7 @@ function ThreadRouteContent(
     canOpenTerminal: Boolean(selectedThreadProject?.workspaceRoot),
     canOpenFiles: Boolean(selectedThreadProject?.workspaceRoot),
     projectScripts: selectedThreadProject?.scripts ?? [],
+    activeProjectScriptIds,
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,
     onOpenTerminal: handleOpenTerminal,

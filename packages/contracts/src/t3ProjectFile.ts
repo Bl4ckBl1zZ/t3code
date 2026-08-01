@@ -53,6 +53,12 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, automatically open the preview panel at `previewUrl` the moment the script starts.",
     }),
   ),
+  singleRun: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, at most one run of this script can be active at a time; launching it again while running stops the active run instead.",
+    }),
+  ),
 }).annotate({
   description: "A project script that team members can import into T3 Code.",
 });

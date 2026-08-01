@@ -60,6 +60,12 @@ export type TerminalAttachInput = Schema.Codec.Encoded<typeof TerminalAttachInpu
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   data: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
+  /**
+   * Project script id when this write launches a project script command.
+   * Attributes the terminal's subprocess activity to that script so clients
+   * can surface per-script running state.
+   */
+  scriptId: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(128))),
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
@@ -120,6 +126,11 @@ export const TerminalSummary = Schema.Struct({
   exitCode: Schema.NullOr(Schema.Int),
   exitSignal: Schema.NullOr(Schema.Int),
   hasRunningSubprocess: Schema.Boolean,
+  /**
+   * Project script this terminal is currently attributed to (set when a
+   * script command is written, cleared once the subprocess goes idle).
+   */
+  activeScriptId: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   /** Server-computed display title (idle shell vs subprocess command). */
   label: Schema.String.check(Schema.isMaxLength(128)),
   updatedAt: Schema.String,
