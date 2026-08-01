@@ -70,7 +70,8 @@ import {
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import {
-  voiceMicButtonProps,
+  voiceComboButtonProps,
+  VoiceComboBadge,
   VoiceRecordingBar,
   VoiceRecoveryRow,
 } from "../voice/VoiceComposerControls";
@@ -315,10 +316,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
 
-  const sendLabel =
-    props.connectionState !== "connected" || props.activeThreadBusy || props.queueCount > 0
-      ? "Queue"
-      : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
@@ -372,7 +369,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     },
   });
   const voiceBusy = voice.busy;
-  const toggleVoice = voice.toggle;
 
   const composerTrigger = useMemo<ComposerTrigger | null>(() => {
     if (composerSelection.start !== composerSelection.end) {
@@ -770,7 +766,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           state={voice.state}
           subscribeLevel={voice.subscribeLevel}
           onCancel={() => void voice.cancel()}
-          onStop={toggleVoice}
           onCleanupChange={voice.setCleanup}
         />
 
@@ -873,17 +868,21 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
               <View className="flex-row gap-1">
-                <ControlPill {...voiceMicButtonProps(voice.state)} onPress={toggleVoice} />
+                {/* Combined send/record button: mic when empty, send arrow when the draft has
+                    content (hold still dictates — the badge hints at it), stop while recording.
+                    A running thread keeps its own stop pill alongside. */}
                 {showStopAction ? (
                   <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
-                ) : (
+                ) : null}
+                <VoiceComboBadge visible={canSend && !voiceBusy}>
                   <ControlPill
-                    icon="arrow.up"
-                    variant="primary"
-                    disabled={!canSend || voiceBusy}
-                    onPress={handleSend}
+                    {...voiceComboButtonProps(voice.state, canSend && !voiceBusy)}
+                    {...voice.comboPressProps({
+                      canSend: canSend && !voiceBusy,
+                      onSend: () => void handleSend(),
+                    })}
                   />
-                )}
+                </VoiceComboBadge>
               </View>
             </Animated.View>
           ) : null}
@@ -934,20 +933,21 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     showChevron={false}
                   />
                 ) : null}
+              </ComposerToolbarScroller>
+              {/* Combined send/record button pinned outside the scroller so it's always
+                  reachable while the keyboard is up. It stays mounted through the whole voice
+                  lifecycle (mic → send arrow → stop) so a hold-to-record release always lands
+                  on the same pressable. */}
+              <VoiceComboBadge visible={canSend && !voiceBusy}>
                 <ComposerToolbarButton
-                  {...voiceMicButtonProps(voice.state)}
-                  onPress={toggleVoice}
+                  {...voiceComboButtonProps(voice.state, canSend && !voiceBusy)}
+                  {...voice.comboPressProps({
+                    canSend: canSend && !voiceBusy,
+                    onSend: () => void handleSend(),
+                  })}
                   showChevron={false}
                 />
-              </ComposerToolbarScroller>
-              <ComposerToolbarButton
-                accessibilityLabel={sendLabel}
-                icon="arrow.up"
-                variant="primary"
-                disabled={!canSend || voiceBusy}
-                onPress={handleSend}
-                showChevron={false}
-              />
+              </VoiceComboBadge>
             </ComposerToolbarRow>
             <VoiceRecoveryRow
               recovery={voice.recovery}

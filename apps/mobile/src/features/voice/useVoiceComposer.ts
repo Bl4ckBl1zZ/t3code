@@ -81,6 +81,46 @@ export function useVoiceComposer(input: {
     void voice.toggle();
   }, [voice]);
 
+  // Combined send/record button gesture. Tap: send when the draft has content, start recording
+  // when it's empty, stop when recording. Hold: always records — even over a non-empty draft —
+  // and releasing stops + transcribes. If the finger lifts before the async start reaches
+  // "recording" (permission prompt, preflight), the recording keeps going and a tap stops it —
+  // stopping mid-start would capture nothing.
+  const voiceStateRef = useRef(voice.state);
+  voiceStateRef.current = voice.state;
+  const holdRef = useRef(false);
+  const comboPressProps = useCallback(
+    (button: { readonly canSend: boolean; readonly onSend: () => void }) =>
+      ({
+        delayLongPress: 200,
+        onPress: () => {
+          if (holdRef.current) return;
+          if (voiceStateRef.current.type === "recording") {
+            toggle();
+            return;
+          }
+          if (button.canSend) {
+            button.onSend();
+            return;
+          }
+          toggle();
+        },
+        onLongPress: () => {
+          if (voiceStateRef.current.type !== "idle" && voiceStateRef.current.type !== "failed") {
+            return;
+          }
+          holdRef.current = true;
+          toggle();
+        },
+        onPressOut: () => {
+          if (!holdRef.current) return;
+          holdRef.current = false;
+          if (voiceStateRef.current.type === "recording") toggle();
+        },
+      }) as const,
+    [toggle],
+  );
+
   const voiceState = voice.state;
   const voiceRetry = voice.retry;
   const voiceCancel = voice.cancel;
@@ -154,6 +194,7 @@ export function useVoiceComposer(input: {
     state: voice.state,
     busy,
     toggle,
+    comboPressProps,
     cancel: voice.cancel,
     retry: voice.retry,
     setCleanup: voice.setCleanup,

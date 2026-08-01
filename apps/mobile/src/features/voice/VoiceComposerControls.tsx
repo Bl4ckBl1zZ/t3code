@@ -1,7 +1,7 @@
 import type { VoiceInputState } from "@t3tools/client-runtime/voice";
 import { VOICE_INPUT_MAX_DURATION_SECONDS } from "@t3tools/contracts/voice";
 import * as Haptics from "expo-haptics";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import Animated, {
   cancelAnimation,
@@ -22,9 +22,11 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 
+import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPill } from "../../components/ControlPill";
 import { cn } from "../../lib/cn";
+import { useThemeColor } from "../../lib/useThemeColor";
 
 const COUNTDOWN_THRESHOLD_SECONDS = 15;
 const HAPTIC_COUNTDOWN_SECONDS = 3;
@@ -46,9 +48,17 @@ const LEVEL_BAR_PROFILES = Array.from({ length: LEVEL_BAR_COUNT }, (_, index) =>
   };
 });
 
-export function voiceMicButtonProps(state: VoiceInputState): {
-  readonly icon: "mic" | "stop.fill";
-  readonly variant?: "danger";
+/**
+ * Visuals for the combined send/record button: mic when idle and empty, send arrow when the
+ * draft has content, stop while recording. Hold always records regardless of mode (the press
+ * handlers come from useVoiceComposer's comboPressProps).
+ */
+export function voiceComboButtonProps(
+  state: VoiceInputState,
+  canSend: boolean,
+): {
+  readonly icon: "mic" | "stop.fill" | "arrow.up";
+  readonly variant?: "danger" | "primary";
   readonly disabled: boolean;
   readonly accessibilityLabel: string;
 } {
@@ -57,16 +67,54 @@ export function voiceMicButtonProps(state: VoiceInputState): {
     state.type === "requesting_permission" ||
     state.type === "stopping" ||
     state.type === "transcribing";
+  if (recording) {
+    return {
+      icon: "stop.fill",
+      variant: "danger",
+      disabled: false,
+      accessibilityLabel: "Stop recording and transcribe",
+    };
+  }
+  if (canSend && !busy) {
+    return {
+      icon: "arrow.up",
+      variant: "primary",
+      disabled: false,
+      accessibilityLabel: "Send. Hold to dictate",
+    };
+  }
   return {
-    icon: recording ? "stop.fill" : "mic",
-    ...(recording ? { variant: "danger" as const } : {}),
+    icon: "mic",
     disabled: busy,
-    accessibilityLabel: recording
-      ? "Stop recording and transcribe"
-      : state.type === "transcribing"
+    accessibilityLabel:
+      state.type === "transcribing"
         ? "Transcribing voice input"
-        : "Dictate message",
+        : "Dictate message. Hold to record",
   };
+}
+
+/**
+ * Corner mic badge for the combo button's send mode — the visual hint that holding the send
+ * button still dictates. Wraps the button; the badge ignores touches.
+ */
+export function VoiceComboBadge(props: {
+  readonly visible: boolean;
+  readonly children: ReactNode;
+}) {
+  const iconSubtle = useThemeColor("--color-icon-subtle");
+  return (
+    <View>
+      {props.children}
+      {props.visible ? (
+        <View
+          pointerEvents="none"
+          className="absolute -bottom-0.5 -right-0.5 size-4 items-center justify-center rounded-full border border-border bg-screen"
+        >
+          <SymbolView name="mic" size={9} tintColor={iconSubtle} type="monochrome" />
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 function useElapsedSeconds(startedAt: number | null): number {
@@ -252,7 +300,6 @@ export function VoiceRecordingBar(props: {
   readonly state: VoiceInputState;
   readonly subscribeLevel: (listener: (level: number) => void) => () => void;
   readonly onCancel: () => void;
-  readonly onStop: () => void;
   readonly onCleanupChange: (cleanup: boolean) => void;
 }) {
   const recording = props.state.type === "recording" ? props.state : null;
@@ -294,16 +341,12 @@ export function VoiceRecordingBar(props: {
             </Text>
           </Pressable>
           <View className="flex-1" />
+          {/* The composer mic morphs into the stop control while recording, so the bar only
+              carries cancel — a second stop pill here reads as a duplicate. */}
           <ControlPill
             icon="xmark"
             accessibilityLabel="Cancel recording"
             onPress={props.onCancel}
-          />
-          <ControlPill
-            icon="stop.fill"
-            variant="danger"
-            accessibilityLabel="Stop recording and transcribe"
-            onPress={props.onStop}
           />
         </Animated.View>
       ) : (

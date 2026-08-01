@@ -56,7 +56,8 @@ import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useCreateProjectThread } from "./use-project-actions";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import {
-  voiceMicButtonProps,
+  voiceComboButtonProps,
+  VoiceComboBadge,
   VoiceRecordingBar,
   VoiceRecoveryRow,
 } from "../voice/VoiceComposerControls";
@@ -126,7 +127,6 @@ export function NewTaskDraftScreen(props: {
     },
   });
   const voiceBusy = voice.busy;
-  const toggleVoice = voice.toggle;
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
@@ -1035,11 +1035,6 @@ export function NewTaskDraftScreen(props: {
         showChevron={false}
         disabled={isIncomingShareTransferPending}
       />
-      <ComposerToolbarButton
-        {...voiceMicButtonProps(voice.state)}
-        onPress={toggleVoice}
-        showChevron={false}
-      />
       <ControlPillMenu
         actions={modelMenuActions}
         onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
@@ -1087,17 +1082,31 @@ export function NewTaskDraftScreen(props: {
     </>
   );
 
-  const startButton = (
-    <ComposerToolbarButton
-      accessibilityLabel={
-        flow.submitting ? "Starting task" : environmentConnected ? "Start task" : "Queue task"
-      }
-      icon={environmentConnected ? "arrow.up" : "tray.and.arrow.up"}
-      onPress={() => void handleStart()}
-      variant="primary"
-      showChevron={false}
-      disabled={!canStart}
-    />
+  // Mic pinned outside the scroller (next to Start) so dictation is always reachable while
+  // the keyboard is up, matching the ChatGPT composer. It stays mounted through the whole
+  // voice lifecycle (morphing into the stop control) so a hold-to-record release always
+  // lands on the same pressable, and so there is exactly one stop button on screen.
+  // Combined start/record button: mic when the prompt is empty, start arrow (queue tray when
+  // disconnected) when it has content, stop while recording. Hold always records; the corner
+  // badge hints at it in start mode. Pinned outside the scroller so it's always reachable.
+  const comboVisual = voiceComboButtonProps(voice.state, canStart);
+  const startComboButton = (
+    <VoiceComboBadge visible={canStart}>
+      <ComposerToolbarButton
+        {...comboVisual}
+        {...(comboVisual.icon === "arrow.up" && !environmentConnected
+          ? {
+              icon: "tray.and.arrow.up" as const,
+              accessibilityLabel: "Queue task. Hold to dictate",
+            }
+          : {})}
+        {...voice.comboPressProps({
+          canSend: canStart,
+          onSend: () => void handleStart(),
+        })}
+        showChevron={false}
+      />
+    </VoiceComboBadge>
   );
 
   const voiceRecoveryControls = (
@@ -1106,7 +1115,6 @@ export function NewTaskDraftScreen(props: {
         state={voice.state}
         subscribeLevel={voice.subscribeLevel}
         onCancel={() => void voice.cancel()}
-        onStop={toggleVoice}
         onCleanupChange={voice.setCleanup}
       />
       <VoiceRecoveryRow
@@ -1172,15 +1180,15 @@ export function NewTaskDraftScreen(props: {
               ) : null}
               <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
               {!isExpanded ? (
-                <View className="flex-row gap-1">
-                  <ControlPill {...voiceMicButtonProps(voice.state)} onPress={toggleVoice} />
+                <VoiceComboBadge visible={canStart}>
                   <ControlPill
-                    icon="arrow.up"
-                    variant="primary"
-                    disabled={!canStart}
-                    onPress={() => void handleStart()}
+                    {...voiceComboButtonProps(voice.state, canStart)}
+                    {...voice.comboPressProps({
+                      canSend: canStart,
+                      onSend: () => void handleStart(),
+                    })}
                   />
-                </View>
+                </VoiceComboBadge>
               ) : null}
             </ComposerSurface>
 
@@ -1194,7 +1202,7 @@ export function NewTaskDraftScreen(props: {
                   >
                     {toolbarPills}
                   </ComposerToolbarScroller>
-                  {startButton}
+                  {startComboButton}
                 </ComposerToolbarRow>
               </>
             ) : null}
@@ -1230,7 +1238,7 @@ export function NewTaskDraftScreen(props: {
             >
               {toolbarPills}
             </ComposerToolbarScroller>
-            {startButton}
+            {startComboButton}
           </ComposerToolbarRow>
         </View>
       </KeyboardAvoidingView>

@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>T3 Voice Composer — UI/UX Preview</title>
+    <style>
+      :root {
+        --screen: #0a0a0a;
+        --surface: rgba(44, 44, 46, 0.96);
+        --surface-border: rgba(255, 255, 255, 0.08);
+        --subtle: rgba(255, 255, 255, 0.08);
+        --subtle-strong: rgba(255, 255, 255, 0.14);
+        --foreground: #f2f2f4;
+        --foreground-muted: #9a9aa2;
+        --icon: #d9d9de;
+        --primary: #ffffff;
+        --primary-fg: #111114;
+        --danger: #f0938d;
+        --danger-bg: rgba(240, 147, 141, 0.12);
+        --accent: #d9856a;
+        --radius-pill: 999px;
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #17171a;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+        color: var(--foreground);
+        user-select: none;
+      }
+
+      /* ---------- phone frame ---------- */
+      .phone {
+        position: relative;
+        margin: 24px auto;
+        width: min(400px, calc(100vw - 24px));
+        height: min(760px, calc(100vh - 48px));
+        background: var(--screen);
+        border-radius: 44px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+      }
+
+      .status-pill {
+        margin: 18px auto 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 18px;
+        border-radius: var(--radius-pill);
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--foreground);
+        font-weight: 600;
+        font-size: 14px;
+        max-width: 85%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .spinner {
+        width: 16px;
+        height: 16px;
+        flex: none;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.25);
+        border-top-color: rgba(255, 255, 255, 0.85);
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .feed {
+        flex: 1;
+      }
+
+      /* ---------- composer chrome ---------- */
+      .composer-area {
+        padding: 8px 14px calc(16px + env(safe-area-inset-bottom));
+        background: linear-gradient(
+          to bottom,
+          rgba(0, 0, 0, 0) 0%,
+          rgba(0, 0, 0, 0.85) 40%,
+          rgba(0, 0, 0, 0.95) 100%
+        );
+      }
+
+      /* recording / transcribing / recovery rows sit above the pill */
+      .voice-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 8px 10px;
+        min-height: 30px;
+      }
+      .voice-row[hidden] {
+        display: none;
+      }
+
+      .voice-row.enter {
+        animation: rowIn 260ms cubic-bezier(0.2, 0.9, 0.3, 1);
+      }
+      @keyframes rowIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .voice-row.exit {
+        animation: rowOut 140ms ease forwards;
+      }
+      @keyframes rowOut {
+        to {
+          opacity: 0;
+        }
+      }
+
+      .rec-dot {
+        width: 7px;
+        height: 7px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--danger);
+        animation: pulse 1.7s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+
+      .meter {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        height: 16px;
+      }
+      .meter .bar {
+        width: 3px;
+        height: 16px;
+        border-radius: 3px;
+        background: var(--danger);
+        transform: scaleY(0.19);
+        transform-origin: center;
+      }
+
+      .clock {
+        font-size: 12px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--danger);
+        min-width: 34px;
+        transition: transform 120ms ease;
+      }
+      .clock.tick {
+        transform: scale(1.12);
+      }
+
+      .cleanup-chip {
+        border: 0;
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 10px;
+        border-radius: var(--radius-pill);
+        background: var(--subtle);
+        color: var(--foreground-muted);
+        cursor: pointer;
+      }
+      .cleanup-chip.on {
+        background: var(--danger-bg);
+        color: var(--danger);
+      }
+
+      .spacer {
+        flex: 1;
+      }
+
+      /* transcribing dots */
+      .dots {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        height: 16px;
+      }
+      .dots i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--foreground-muted);
+        animation: dot 740ms ease-in-out infinite;
+      }
+      .dots i:nth-child(2) {
+        animation-delay: 140ms;
+      }
+      .dots i:nth-child(3) {
+        animation-delay: 280ms;
+      }
+      @keyframes dot {
+        0%,
+        100% {
+          opacity: 0.3;
+          transform: scale(0.8);
+        }
+        43% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      .muted {
+        font-size: 12px;
+        color: var(--foreground-muted);
+      }
+
+      /* recovery chip */
+      .recovery {
+        justify-content: flex-end;
+        gap: 14px;
+      }
+      .recovery button {
+        border: 0;
+        background: none;
+        padding: 0;
+        font: inherit;
+        font-size: 12px;
+        color: var(--accent);
+        cursor: pointer;
+      }
+
+      /* round icon buttons */
+      .circle {
+        width: 44px;
+        height: 44px;
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        border: 1px solid var(--surface-border);
+        background: var(--subtle);
+        color: var(--icon);
+        cursor: pointer;
+        padding: 0;
+        transition:
+          transform 150ms ease,
+          background 180ms ease,
+          box-shadow 180ms ease;
+        touch-action: none;
+      }
+      .circle:active {
+        opacity: 0.72;
+      }
+      .circle.small {
+        width: 34px;
+        height: 34px;
+      }
+      .circle.primary {
+        background: var(--primary);
+        color: var(--primary-fg);
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+      .circle.primary:disabled {
+        background: var(--subtle-strong);
+        color: var(--foreground-muted);
+        opacity: 0.55;
+        cursor: default;
+      }
+      .circle.danger {
+        background: var(--danger);
+        color: #2b1512;
+        border-color: rgba(255, 255, 255, 0.14);
+      }
+      .circle svg {
+        width: 17px;
+        height: 17px;
+        display: block;
+      }
+
+      /* combined send/record button: mode-* classes flip icon + color */
+      .circle.combo {
+        position: relative;
+      }
+      .circle.combo.mode-send {
+        background: var(--primary);
+        color: var(--primary-fg);
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+      .circle.combo.mode-stop,
+      .circle.combo.held {
+        background: var(--danger);
+        color: #2b1512;
+      }
+      .circle.combo.held {
+        transform: scale(1.18);
+        box-shadow: 0 0 0 8px var(--danger-bg);
+      }
+      /* while text is present, hint that hold = voice: tiny mic badge on the send button */
+      .circle.combo.mode-send::after {
+        content: "";
+        position: absolute;
+        right: -1px;
+        bottom: -1px;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        background: var(--screen) center / 9px 9px no-repeat
+          url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%239a9aa2" stroke-width="2.6" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3.5"/></svg>');
+        border: 1px solid rgba(255, 255, 255, 0.14);
+      }
+      .circle.combo.held::after,
+      .circle.combo.mode-stop::after {
+        display: none;
+      }
+
+      /* ---------- pill / card surface ---------- */
+      .surface {
+        background: var(--surface);
+        border: 1px solid var(--surface-border);
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+        transition:
+          border-radius 220ms ease,
+          padding 220ms ease;
+      }
+      .surface.collapsed {
+        border-radius: var(--radius-pill);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 5px 5px 18px;
+      }
+      .surface.expanded {
+        border-radius: 20px;
+        padding: 12px 14px;
+      }
+      /* expanded card: the combo button moves to the toolbar row, so the pill's
+     inline trailing controls unmount (mirrors the native composer) */
+      .surface.expanded .trailing {
+        display: none;
+      }
+
+      .editor {
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        outline: 0;
+        background: none;
+        resize: none;
+        color: var(--foreground);
+        font: inherit;
+        font-size: 16px;
+        line-height: 1.4;
+        caret-color: #7aa2ff;
+      }
+      .surface.collapsed .editor {
+        height: 26px;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .surface.expanded .editor {
+        width: 100%;
+        min-height: 80px;
+        max-height: 160px;
+        overflow-y: auto;
+      }
+      .editor:empty::before {
+        content: attr(data-placeholder);
+        color: var(--foreground-muted);
+        pointer-events: none;
+      }
+
+      .trailing {
+        display: flex;
+        gap: 5px;
+        flex: none;
+      }
+
+      /* expanded toolbar row */
+      .toolbar {
+        display: none;
+        align-items: center;
+        gap: 6px;
+        padding-top: 10px;
+      }
+      .composer-area.expanded .toolbar {
+        display: flex;
+        animation: rowIn 200ms ease;
+      }
+
+      .toolbar .scroller {
+        flex: 1;
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+      }
+      .toolbar .scroller::-webkit-scrollbar {
+        display: none;
+      }
+
+      .tb-pill {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 44px;
+        padding: 0 14px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--surface-border);
+        background: var(--subtle);
+        color: var(--foreground);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .tb-pill:active {
+        opacity: 0.72;
+      }
+      .tb-pill svg {
+        width: 15px;
+        height: 15px;
+        color: var(--icon);
+      }
+      .tb-pill .chev {
+        width: 10px;
+        height: 10px;
+        color: var(--foreground-muted);
+      }
+      .tb-pill .spark {
+        color: var(--accent);
+      }
+
+      .hint {
+        text-align: center;
+        color: #6b6b74;
+        font-size: 12px;
+        line-height: 1.6;
+        padding: 14px 24px 0;
+      }
+      .hint b {
+        color: #9a9aa2;
+        font-weight: 600;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="phone">
+      <div class="status-pill">
+        <span class="spinner"></span>Failed to connect. Retrying David&rsquo;s&hellip;
+      </div>
+      <div class="feed"></div>
+
+      <div class="composer-area" id="composerArea">
+        <!-- recording bar -->
+        <div class="voice-row" id="recordingRow" hidden>
+          <span class="rec-dot"></span>
+          <div class="meter" id="meter" aria-hidden="true"></div>
+          <span class="clock" id="clock">0:00</span>
+          <button class="cleanup-chip on" id="cleanupChip" type="button">Cleanup on</button>
+          <span class="spacer"></span>
+          <button
+            class="circle small"
+            id="cancelRecording"
+            type="button"
+            aria-label="Cancel recording"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+            >
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- transcribing bar -->
+        <div class="voice-row" id="transcribingRow" hidden>
+          <div class="dots"><i></i><i></i><i></i></div>
+          <span class="muted">Transcribing…</span>
+          <span class="spacer"></span>
+          <button
+            class="circle small"
+            id="cancelTranscribing"
+            type="button"
+            aria-label="Cancel transcription"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+            >
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- recovery chip -->
+        <div class="voice-row recovery" id="recoveryRow" hidden>
+          <span class="muted" id="recoveryLabel">Cleaned up</span>
+          <button id="useRawBtn" type="button">Use raw</button>
+          <button id="undoBtn" type="button">Undo</button>
+        </div>
+
+        <!-- pill -->
+        <div class="surface collapsed" id="surface">
+          <div
+            class="editor"
+            id="editor"
+            contenteditable="true"
+            data-placeholder="Ask the repo agent, or run a command…"
+          ></div>
+          <div class="trailing">
+            <button class="circle combo" id="comboBtn" type="button" aria-label="Dictate message">
+              <svg
+                class="micIcon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="9" y="2.5" width="6" height="11" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <path d="M12 18v3.5" />
+              </svg>
+              <svg
+                class="sendIcon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="display: none"
+              >
+                <path d="M12 20V5M5.5 11.5L12 5l6.5 6.5" />
+              </svg>
+              <svg class="stopIcon" viewBox="0 0 24 24" fill="currentColor" style="display: none">
+                <rect x="6.5" y="6.5" width="11" height="11" rx="2.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- expanded toolbar -->
+        <div class="toolbar">
+          <div class="scroller">
+            <button
+              class="tb-pill"
+              type="button"
+              aria-label="Add attachment"
+              style="width: 44px; padding: 0; justify-content: center"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            <button class="tb-pill" type="button">
+              <svg class="spark" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z" />
+              </svg>
+              Claude Fable 5
+              <svg
+                class="chev"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            <button class="tb-pill" type="button">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              >
+                <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4.8v4.4M8 14.8v4.4" />
+              </svg>
+              Medium · 200k
+              <svg
+                class="chev"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+          </div>
+          <!-- pinned combo button: always reachable, never scrolled away -->
+          <button class="circle combo" id="comboBtn2" type="button" aria-label="Dictate message">
+            <svg
+              class="micIcon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="9" y="2.5" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0" />
+              <path d="M12 18v3.5" />
+            </svg>
+            <svg
+              class="sendIcon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              style="display: none"
+            >
+              <path d="M12 20V5M5.5 11.5L12 5l6.5 6.5" />
+            </svg>
+            <svg class="stopIcon" viewBox="0 0 24 24" fill="currentColor" style="display: none">
+              <rect x="6.5" y="6.5" width="11" height="11" rx="2.5" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="hint">
+      One button: <b>tap</b> sends when there&rsquo;s text, starts/stops recording when empty
+      &middot; <b>hold</b> always records, release to transcribe (Snapchat-style)<br />
+      Works with text already in the box and while the editor is focused &middot; grant mic
+      permission for a live meter
+    </div>
+
+    <script>
+      (() => {
+        "use strict";
+
+        /* ---------- constants mirroring the app ---------- */
+        const MAX_DURATION_S = 120;
+        const COUNTDOWN_THRESHOLD_S = 15;
+        const RECOVERY_AUTO_DISMISS_MS = 6000;
+        const HOLD_DELAY_MS = 200;
+        const BAR_COUNT = 14;
+
+        // Dome profile mirrored around the center, alternating response exponents.
+        const PROFILES = Array.from({ length: BAR_COUNT }, (_, i) => {
+          const centered = Math.sin((Math.PI * (i + 0.5)) / BAR_COUNT);
+          return {
+            weight: 0.3 + 0.7 * centered,
+            exponent: i % 2 === 0 ? 0.8 : 1.3,
+            opacity: 0.5 + 0.5 * centered,
+          };
+        });
+
+        const FAKE_RAW = [
+          "um so basically can you like add a retry button to the to the upload flow",
+          "okay refactor the settings screen and uh make the toggles use the new switch component",
+          "so I want the composer to um autosave the draft every few seconds I guess",
+        ];
+        const FAKE_CLEAN = [
+          "Add a retry button to the upload flow.",
+          "Refactor the settings screen and make the toggles use the new switch component.",
+          "Make the composer autosave the draft every few seconds.",
+        ];
+
+        /* ---------- elements ---------- */
+        const $ = (id) => document.getElementById(id);
+        const area = $("composerArea"),
+          surface = $("surface"),
+          editor = $("editor");
+        const recordingRow = $("recordingRow"),
+          transcribingRow = $("transcribingRow"),
+          recoveryRow = $("recoveryRow");
+        const meter = $("meter"),
+          clock = $("clock"),
+          cleanupChip = $("cleanupChip");
+        const recoveryLabel = $("recoveryLabel"),
+          useRawBtn = $("useRawBtn"),
+          undoBtn = $("undoBtn");
+        const comboButtons = [$("comboBtn"), $("comboBtn2")];
+
+        const bars = PROFILES.map((p) => {
+          const bar = document.createElement("span");
+          bar.className = "bar";
+          bar.style.opacity = p.opacity;
+          meter.appendChild(bar);
+          return bar;
+        });
+
+        /* ---------- state ---------- */
+        let state = "idle"; // idle | recording | transcribing
+        let cleanup = true;
+        let startedAt = 0;
+        let clockTimer = null;
+        let transcribeTimer = null;
+        let recovery = null; // { raw, clean, start, end, usingRaw }
+        let recoveryTimer = null;
+        let takeIndex = 0;
+        let savedRange = null;
+
+        /* ---------- mic level: real audio when possible, simulated otherwise ---------- */
+        let audioCtx = null,
+          analyser = null,
+          mediaStream = null,
+          levelRaf = 0;
+        let level = 0,
+          displayLevel = 0;
+
+        async function startLevelSource() {
+          try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            audioCtx.createMediaStreamSource(mediaStream).connect(analyser);
+          } catch {
+            analyser = null; // simulated fallback
+          }
+        }
+        function stopLevelSource() {
+          if (mediaStream) {
+            mediaStream.getTracks().forEach((t) => t.stop());
+            mediaStream = null;
+          }
+          if (audioCtx) {
+            audioCtx.close().catch(() => {});
+            audioCtx = null;
+          }
+          analyser = null;
+        }
+
+        const timeData = new Uint8Array(512);
+        function readLevel(t) {
+          if (analyser) {
+            analyser.getByteTimeDomainData(timeData);
+            let sum = 0;
+            for (let i = 0; i < timeData.length; i++) {
+              const v = (timeData[i] - 128) / 128;
+              sum += v * v;
+            }
+            return Math.min(1, Math.sqrt(sum / timeData.length) * 4);
+          }
+          // speech-like envelope: syllable pulses with pauses
+          const s = Math.max(
+            0,
+            Math.sin(t / 260) * 0.6 + Math.sin(t / 97) * 0.35 + Math.sin(t / 41) * 0.15,
+          );
+          return Math.max(0.04, Math.min(1, s * (Math.sin(t / 1400) > -0.4 ? 1 : 0.1)));
+        }
+
+        function meterLoop(t) {
+          level = readLevel(t);
+          // fast attack / slow release
+          displayLevel += (level - displayLevel) * (level > displayLevel ? 0.5 : 0.12);
+          bars.forEach((bar, i) => {
+            const p = PROFILES[i];
+            const v = Math.min(1, Math.pow(displayLevel, p.exponent) * p.weight);
+            bar.style.transform = `scaleY(${(3 + v * 13) / 16})`;
+          });
+          levelRaf = requestAnimationFrame(meterLoop);
+        }
+
+        /* ---------- helpers ---------- */
+        const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+        const draftText = () => editor.innerText.replace(/ /g, " ");
+
+        function setDraft(text, caret) {
+          editor.innerText = text;
+          updateSend();
+          // restore caret
+          editor.focus();
+          const range = document.createRange();
+          const node = editor.firstChild || editor;
+          const offset = editor.firstChild ? Math.min(caret, editor.firstChild.length) : 0;
+          range.setStart(node, offset);
+          range.collapse(true);
+          const sel = getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+
+        function caretOffset() {
+          const sel = getSelection();
+          if (!sel.rangeCount || !editor.contains(sel.anchorNode)) return draftText().length;
+          const range = sel.getRangeAt(0).cloneRange();
+          range.selectNodeContents(editor);
+          range.setEnd(sel.getRangeAt(0).endContainer, sel.getRangeAt(0).endOffset);
+          return range.toString().length;
+        }
+
+        // One button, three modes: mic (idle, empty draft), send (idle, has text), stop (recording).
+        // Hold always records regardless of mode — that's the combined-button gesture.
+        function comboMode() {
+          if (state === "recording") return "stop";
+          if (state === "idle" && draftText().trim().length > 0) return "send";
+          return "mic";
+        }
+        function updateSend() {
+          const mode = comboMode();
+          comboButtons.forEach((button) => {
+            button.classList.toggle("mode-send", mode === "send");
+            button.classList.toggle("mode-stop", mode === "stop");
+            button.disabled = state === "transcribing";
+            button.setAttribute(
+              "aria-label",
+              mode === "send"
+                ? "Send (hold to dictate)"
+                : mode === "stop"
+                  ? "Stop recording and transcribe"
+                  : "Dictate message (hold to record)",
+            );
+            button.querySelectorAll("svg").forEach((svg) => {
+              const shown =
+                (mode === "send" && svg.classList.contains("sendIcon")) ||
+                (mode === "stop" && svg.classList.contains("stopIcon")) ||
+                (mode === "mic" && svg.classList.contains("micIcon"));
+              svg.style.display = shown ? "block" : "none";
+            });
+          });
+        }
+
+        function show(row) {
+          row.hidden = false;
+          row.classList.remove("exit");
+          row.classList.add("enter");
+        }
+        function hide(row) {
+          if (row.hidden) return;
+          row.classList.remove("enter");
+          row.classList.add("exit");
+          setTimeout(() => {
+            row.hidden = true;
+            row.classList.remove("exit");
+          }, 140);
+        }
+
+        const vibrate = (ms) => {
+          if (navigator.vibrate) navigator.vibrate(ms);
+        };
+
+        /* ---------- lifecycle ---------- */
+        async function startRecording() {
+          if (state !== "idle") return;
+          state = "recording";
+          // anchor the insertion point when recording starts (like useVoiceComposer)
+          savedRange = caretOffset();
+          dismissRecovery();
+          vibrate(10);
+          hide(transcribingRow);
+          show(recordingRow);
+          updateSend();
+          startedAt = performance.now();
+          clock.textContent = "0:00";
+          clock.classList.remove("tick");
+          clockTimer = setInterval(tickClock, 250);
+          await startLevelSource();
+          if (state === "recording") {
+            displayLevel = 0;
+            levelRaf = requestAnimationFrame(meterLoop);
+          } else stopLevelSource(); // cancelled while permission prompt was up
+        }
+
+        let lastCountdownSecond = null;
+        function tickClock() {
+          const elapsed = Math.floor((performance.now() - startedAt) / 1000);
+          const remaining = Math.max(0, MAX_DURATION_S - elapsed);
+          if (remaining <= COUNTDOWN_THRESHOLD_S) {
+            clock.textContent = `-${fmt(remaining)}`;
+            if (lastCountdownSecond !== remaining) {
+              lastCountdownSecond = remaining;
+              clock.classList.add("tick");
+              setTimeout(() => clock.classList.remove("tick"), 130);
+              if (remaining <= 3 && remaining > 0) vibrate(8);
+            }
+            if (remaining === 0) stopRecording(); // duration cap auto-stop
+          } else {
+            clock.textContent = fmt(elapsed);
+          }
+        }
+
+        function teardownRecording() {
+          clearInterval(clockTimer);
+          cancelAnimationFrame(levelRaf);
+          stopLevelSource();
+          lastCountdownSecond = null;
+        }
+
+        function stopRecording() {
+          if (state !== "recording") return;
+          state = "transcribing";
+          vibrate(15);
+          teardownRecording();
+          hide(recordingRow);
+          show(transcribingRow);
+          // mic morphs back; the transcribing row carries its own cancel
+          transcribeTimer = setTimeout(finishTranscription, 1400 + Math.random() * 900);
+        }
+
+        function finishTranscription() {
+          state = "idle";
+          hide(transcribingRow);
+          updateSend();
+          vibrate([10, 40, 10]);
+
+          const raw = FAKE_RAW[takeIndex % FAKE_RAW.length];
+          const clean = FAKE_CLEAN[takeIndex % FAKE_CLEAN.length];
+          takeIndex++;
+          const inserted = cleanup ? clean : raw;
+
+          // insert at the anchored caret, joining with spaces like insertVoiceTranscript
+          const draft = draftText();
+          const at = Math.min(savedRange ?? draft.length, draft.length);
+          const before = draft.slice(0, at),
+            after = draft.slice(at);
+          const prefix = before && !/\s$/.test(before) ? " " : "";
+          const suffix = after && !/^\s/.test(after) ? " " : "";
+          const text = before + prefix + inserted + suffix + after;
+          const caret = (before + prefix + inserted).length;
+          setDraft(text, caret);
+
+          recovery = {
+            raw,
+            clean,
+            start: (before + prefix).length,
+            end: caret,
+            usingRaw: !cleanup,
+          };
+          recoveryLabel.textContent = cleanup && raw !== clean ? "Cleaned up" : "Transcript added";
+          useRawBtn.style.display = cleanup && raw !== clean ? "" : "none";
+          show(recoveryRow);
+          armRecoveryDismiss();
+        }
+
+        function cancelVoice() {
+          clearTimeout(transcribeTimer);
+          teardownRecording();
+          state = "idle";
+          hide(recordingRow);
+          hide(transcribingRow);
+          updateSend();
+        }
+
+        /* ---------- recovery ---------- */
+        function armRecoveryDismiss() {
+          clearTimeout(recoveryTimer);
+          recoveryTimer = setTimeout(dismissRecovery, RECOVERY_AUTO_DISMISS_MS);
+        }
+        function dismissRecovery() {
+          clearTimeout(recoveryTimer);
+          recovery = null;
+          hide(recoveryRow);
+        }
+        useRawBtn.addEventListener("click", () => {
+          if (!recovery) return;
+          const draft = draftText();
+          const replacement = recovery.usingRaw ? recovery.clean : recovery.raw;
+          const text = draft.slice(0, recovery.start) + replacement + draft.slice(recovery.end);
+          recovery.end = recovery.start + replacement.length;
+          recovery.usingRaw = !recovery.usingRaw;
+          useRawBtn.textContent = recovery.usingRaw ? "Use cleaned" : "Use raw";
+          setDraft(text, recovery.end);
+          armRecoveryDismiss();
+        });
+        undoBtn.addEventListener("click", () => {
+          if (!recovery) return;
+          const draft = draftText();
+          // remove the insertion plus the joining space we added before it
+          let start = recovery.start;
+          if (start > 0 && draft[start - 1] === " ") start--;
+          setDraft(draft.slice(0, start) + draft.slice(recovery.end), start);
+          dismissRecovery();
+        });
+
+        /* ---------- combined send/record gesture ----------
+     Tap:  send when there's text, start recording when empty, stop when recording.
+     Hold: always records (even over a non-empty draft), release stops + transcribes. */
+        function send() {
+          setDraft("", 0);
+          dismissRecovery();
+          vibrate(10);
+          editor.blur();
+        }
+
+        comboButtons.forEach((button) => {
+          let holdTimer = null,
+            holding = false,
+            pressed = false;
+
+          button.addEventListener("pointerdown", (event) => {
+            event.preventDefault(); // keep editor focus — dictation must work while focused
+            if (state === "transcribing") return;
+            pressed = true;
+            try {
+              button.setPointerCapture(event.pointerId);
+            } catch {
+              /* synthetic pointers */
+            }
+            holdTimer = setTimeout(() => {
+              if (!pressed || state !== "idle") return;
+              holding = true;
+              button.classList.add("held");
+              startRecording();
+            }, HOLD_DELAY_MS);
+          });
+
+          const release = () => {
+            clearTimeout(holdTimer);
+            if (!pressed) return;
+            pressed = false;
+            button.classList.remove("held");
+            if (holding) {
+              holding = false;
+              // If the recording never reached "recording" (permission prompt), keep it
+              // going and let a tap stop it — stopping mid-start captures nothing.
+              if (state === "recording") stopRecording();
+              return;
+            }
+            if (state === "recording") {
+              stopRecording();
+              return;
+            }
+            if (state !== "idle") return;
+            if (draftText().trim().length > 0) send();
+            else startRecording();
+          };
+          button.addEventListener("pointerup", release);
+          button.addEventListener("pointercancel", () => {
+            clearTimeout(holdTimer);
+            pressed = false;
+            button.classList.remove("held");
+            if (holding) {
+              holding = false;
+              if (state === "recording") cancelVoice();
+            }
+          });
+        });
+
+        /* ---------- rest of the chrome ---------- */
+        cleanupChip.addEventListener("click", () => {
+          cleanup = !cleanup;
+          cleanupChip.classList.toggle("on", cleanup);
+          cleanupChip.textContent = `Cleanup ${cleanup ? "on" : "off"}`;
+        });
+        $("cancelRecording").addEventListener("click", cancelVoice);
+        $("cancelTranscribing").addEventListener("click", cancelVoice);
+
+        editor.addEventListener("input", () => {
+          updateSend();
+          if (recovery) dismissRecovery();
+        });
+        editor.addEventListener("focus", () => {
+          surface.classList.replace("collapsed", "expanded");
+          area.classList.add("expanded");
+        });
+        editor.addEventListener("blur", () => {
+          // collapse only when focus truly leaves the composer chrome
+          setTimeout(() => {
+            if (area.contains(document.activeElement)) return;
+            surface.classList.replace("expanded", "collapsed");
+            area.classList.remove("expanded");
+          }, 80);
+        });
+
+        updateSend();
+      })();
+    </script>
+  </body>
+</html>
