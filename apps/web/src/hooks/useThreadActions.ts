@@ -3,7 +3,6 @@ import {
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
-  scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";

@@ -397,7 +397,10 @@ export default function ProjectScriptsControl({
             >
               {isPrimaryScriptActive ? (
                 <SquareIcon
-                  className={cn("fill-current", isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3")}
+                  className={cn(
+                    "fill-current",
+                    isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3",
+                  )}
                 />
               ) : (
                 <ScriptIcon

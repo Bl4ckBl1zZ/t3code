@@ -5119,7 +5119,7 @@ function ChatViewContent(props: ChatViewProps) {
       ? (useQueuedMessageStore.getState().queuesByThreadKey[activeThreadKey]?.length ?? 0)
       : 0;
     if (
-      !options?.steer &&
+      dispatchMode !== "steer" &&
       isServerThread &&
       activeThreadKey &&
       (phase === "running" || activeQueueLength > 0)
@@ -5645,7 +5645,7 @@ function ChatViewContent(props: ChatViewProps) {
           role: "user",
           text: outgoingMessageText,
           ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-          turnId: null,
+          runId: null,
           createdAt: messageCreatedAt,
           updatedAt: messageCreatedAt,
           streaming: false,
@@ -5719,7 +5719,9 @@ function ChatViewContent(props: ChatViewProps) {
     phase === "ready" &&
     !isSendBusy &&
     !isConnecting &&
-    !threadDetailLoading &&
+    // A server thread whose projection has not arrived yet is still loading;
+    // draining into it would race the hydration.
+    !(isServerThread && serverProjection === null) &&
     !activeEnvironmentUnavailable &&
     activePendingApproval === null &&
     pendingUserInputs.length === 0;

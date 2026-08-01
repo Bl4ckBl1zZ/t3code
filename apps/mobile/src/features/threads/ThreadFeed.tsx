@@ -1489,12 +1489,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
   });
-  const {
-    copiedRowId,
-    expandedWorkGroups,
-    expandedWorkRows,
-    expandedTurnIds,
-  } = interactionState;
+  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
   const [expandedImage, setExpandedImage] = useState<{
     uri: string;
     headers?: Record<string, string>;
@@ -1831,7 +1826,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [suspendEndScrollMaintenanceForDisclosure],
   );
-
 
   const onPressImage = useCallback((uri: string, headers?: Record<string, string>) => {
     setExpandedImage({ uri, headers });

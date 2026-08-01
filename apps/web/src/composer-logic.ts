@@ -12,23 +12,15 @@ export interface ComposerTrigger {
 }
 
 /**
- * What Enter does in the composer. "send" follows the normal path, which queues behind a
- * running turn; "steer" bypasses the queue so the message reaches the provider mid-turn.
- * Shift+Enter stays a newline — it is the only way to type one.
+ * Whether Enter submits. Mobile keeps Enter as a newline (its send button is the
+ * only submit path) and Shift+Enter is the way to type one on desktop. What the
+ * submit then *does* — send, queue, or steer — is `resolveComposerDispatchMode`.
  */
-export type ComposerEnterAction = "newline" | "send" | "steer";
-
-export function resolveComposerEnterAction(input: {
+export function shouldSubmitComposerOnEnter(input: {
   isMobileViewport: boolean;
   shiftKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-}): ComposerEnterAction {
-  // Mobile keeps Enter as a newline; its send button is the only submit path.
-  if (input.isMobileViewport) return "newline";
-  if (input.ctrlKey || input.metaKey) return "steer";
-  if (input.shiftKey) return "newline";
-  return "send";
+}): boolean {
+  return !input.isMobileViewport && !input.shiftKey;
 }
 
 const isInlineTokenSegment = (

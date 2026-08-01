@@ -150,7 +150,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             type="submit"
             className="flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-3 text-xs font-medium text-muted-foreground shadow-xs transition-all duration-150 hover:bg-muted/70 hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
             {...pointerFocusProps}
-            disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+            disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
             aria-label="Queue message"
             title={`Queue message — ${steerShortcutLabel()} to steer the running turn`}
           >

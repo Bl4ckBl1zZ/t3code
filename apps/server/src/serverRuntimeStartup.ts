@@ -565,7 +565,9 @@ export const make = (options?: StartupOptions) =>
                 )
               : Effect.void,
           ),
-          Effect.catch((cause) => Effect.logWarning("Unable to compact the event store", { cause })),
+          Effect.catch((cause) =>
+            Effect.logWarning("Unable to compact the event store", { cause }),
+          ),
         ),
       );
 
