@@ -29,6 +29,10 @@ const EMPTY_REVIEW_SELECTED_SECTION_ID_ATOM = Atom.make<string | null>(null).pip
   Atom.keepAlive,
   Atom.withLabel("mobile:review:selected-section-id:null"),
 );
+const EMPTY_REVIEW_SELECTED_FILE_PATH_ATOM = Atom.make<string | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:review:selected-file-path:null"),
+);
 const EMPTY_REVIEW_ASYNC_STATE_ATOM = Atom.make(EMPTY_REVIEW_ASYNC_STATE).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:review:async-state:null"),
@@ -56,6 +60,17 @@ const reviewSelectedSectionIdByThreadKeyAtom = Atom.family((threadKey: string) =
   Atom.make<string | null>(null).pipe(
     Atom.keepAlive,
     Atom.withLabel(`mobile:review:selected-section-id:${threadKey}`),
+  ),
+);
+
+/**
+ * File path preselected from outside the review (e.g. a changed-files row in
+ * the thread feed); consumed once by the review sheet to scroll to that file.
+ */
+const reviewSelectedFilePathByThreadKeyAtom = Atom.family((threadKey: string) =>
+  Atom.make<string | null>(null).pipe(
+    Atom.keepAlive,
+    Atom.withLabel(`mobile:review:selected-file-path:${threadKey}`),
   ),
 );
 
@@ -99,6 +114,7 @@ export interface ReviewCacheForThread {
   readonly gitSections: ReadonlyArray<ReviewDiffPreviewSource>;
   readonly turnDiffById: Readonly<Record<string, string>>;
   readonly selectedSectionId: string | null;
+  readonly selectedFilePath: string | null;
   readonly asyncState: ReviewAsyncState;
   readonly expandedFileIdsBySection: Readonly<Record<string, ReadonlyArray<string> | undefined>>;
   readonly revealedLargeFileIdsBySection: Readonly<
@@ -141,6 +157,11 @@ export function useReviewCacheForThread(input: {
       ? reviewSelectedSectionIdByThreadKeyAtom(threadKey)
       : EMPTY_REVIEW_SELECTED_SECTION_ID_ATOM,
   );
+  const selectedFilePath = useAtomValue(
+    threadKey
+      ? reviewSelectedFilePathByThreadKeyAtom(threadKey)
+      : EMPTY_REVIEW_SELECTED_FILE_PATH_ATOM,
+  );
   const asyncState = useAtomValue(
     threadKey ? reviewAsyncStateByThreadKeyAtom(threadKey) : EMPTY_REVIEW_ASYNC_STATE_ATOM,
   );
@@ -163,6 +184,7 @@ export function useReviewCacheForThread(input: {
     gitSections,
     turnDiffById,
     selectedSectionId,
+    selectedFilePath,
     asyncState,
     expandedFileIdsBySection,
     revealedLargeFileIdsBySection,
@@ -188,6 +210,10 @@ export function setReviewTurnDiff(threadKey: string, sectionId: string, diff: st
 
 export function setReviewSelectedSectionId(threadKey: string, sectionId: string | null): void {
   appAtomRegistry.set(reviewSelectedSectionIdByThreadKeyAtom(threadKey), sectionId);
+}
+
+export function setReviewSelectedFilePath(threadKey: string, filePath: string | null): void {
+  appAtomRegistry.set(reviewSelectedFilePathByThreadKeyAtom(threadKey), filePath);
 }
 
 function updateReviewAsyncState(

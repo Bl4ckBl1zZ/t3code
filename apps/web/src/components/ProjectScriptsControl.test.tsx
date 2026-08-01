@@ -22,7 +22,7 @@ function renderControl(
     <ProjectScriptsControl
       scripts={scripts}
       keybindings={EMPTY_KEYBINDINGS}
-      scriptRunStates={scriptRunStates}
+      {...(scriptRunStates ? { scriptRunStates } : {})}
       onRunScript={() => {}}
       onAddScript={async () => undefined as never}
       onUpdateScript={async () => undefined as never}

@@ -269,7 +269,9 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
                   name: isActive ? "stop.fill" : projectScriptMenuIcon(script.icon),
                   type: "sfSymbol" as const,
                 },
-                label: isActive ? `Stop ${script.name}` : projectScriptMenuLabel(script),
+                label: isActive
+                  ? `Stop ${projectScriptMenuLabel(script)}`
+                  : projectScriptMenuLabel(script),
                 onPress: () => void props.onRunProjectScript(script),
                 type: "action" as const,
               };
@@ -450,7 +452,9 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
                   subtitle={script.command}
                 >
                   <NativeHeaderToolbar.Label>
-                    {isActive ? `Stop ${script.name}` : projectScriptMenuLabel(script)}
+                    {isActive
+                      ? `Stop ${projectScriptMenuLabel(script)}`
+                      : projectScriptMenuLabel(script)}
                   </NativeHeaderToolbar.Label>
                 </NativeHeaderToolbar.MenuAction>
               );

@@ -270,6 +270,8 @@
         border-top: 1px solid var(--border-soft);
         padding: 14px 16px 18px;
         min-height: 190px;
+        max-height: 260px;
+        overflow-y: auto;
         font-family: ui-monospace, "SF Mono", Menlo, monospace;
         font-size: 12.5px;
         color: #c9c9d1;
@@ -622,6 +624,7 @@
       let state = "idle";
       let confirmTimer = null,
         outputTimer = null,
+        exitTimer = null,
         blockedFlash = null;
 
       const primaryBtn = document.getElementById("primaryBtn");
@@ -685,7 +688,13 @@
         }
         tStatus.classList.toggle("busy", active);
         tStatusText.textContent =
-          state === "idle" ? "Ready" : state === "pending" ? "Starting…" : "Task running · vp dev";
+          state === "idle"
+            ? "Ready"
+            : state === "pending"
+              ? "Starting…"
+              : state === "stopping"
+                ? "Stopping…"
+                : "Task running · vp dev";
       }
 
       function startRun(source) {
@@ -724,11 +733,15 @@
       }
 
       function stopRun() {
+        if (state === "stopping") return;
         clearTimeout(confirmTimer);
         clearInterval(outputTimer);
+        clearTimeout(exitTimer);
+        state = "stopping";
+        render();
         line('<span class="sigint">^C</span>');
         log('toggle → terminal.write \\"\\\\x03\\" (Ctrl-C) → run stopped');
-        setTimeout(() => {
+        exitTimer = setTimeout(() => {
           line('<span class="dim">vp dev exited (SIGINT)</span>');
           state = "idle";
           render();

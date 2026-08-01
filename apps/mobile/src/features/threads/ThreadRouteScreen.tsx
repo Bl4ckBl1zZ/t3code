@@ -17,7 +17,9 @@ import {
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import {
+  clearProjectScriptRunPending,
   markProjectScriptRunPending,
+  pendingProjectScriptRun,
   projectScriptRunsVersion,
   selectProjectScriptRunState,
   selectRunningProjectScriptTerminal,
@@ -597,30 +599,28 @@ function ThreadRouteContent(
           knownTerminalSessions,
           script.id,
         );
-        if (runningTerminal) {
-          // Toggle: interrupt the active run (Ctrl-C) instead of launching again.
+        const pendingRun = runningTerminal ? null : pendingProjectScriptRun(scriptRunScope);
+        const stopTerminalId = runningTerminal?.target.terminalId ?? pendingRun?.terminalId ?? null;
+        if (stopTerminalId !== null) {
+          // Toggle: interrupt the active (or still-launching) run with Ctrl-C
+          // instead of launching again.
           terminalDebugLog("project-script:stop", {
             scriptId: script.id,
-            terminalId: runningTerminal.target.terminalId,
+            terminalId: stopTerminalId,
           });
-          await writeTerminal({
+          const stopResult = await writeTerminal({
             environmentId: selectedThread.environmentId,
             input: {
               threadId: selectedThread.id,
-              terminalId: runningTerminal.target.terminalId,
+              terminalId: stopTerminalId,
               data: "\x03",
             },
           });
-          return;
-        }
-        if (
-          selectProjectScriptRunState({ scope: scriptRunScope, sessions: knownTerminalSessions })
-            .status === "pending"
-        ) {
-          terminalDebugLog("project-script:abort", {
-            scriptId: script.id,
-            reason: "launch-pending",
-          });
+          if (stopResult._tag !== "Failure" && pendingRun) {
+            // The launch was interrupted before the server ever confirmed it;
+            // drop the optimistic entry so the control doesn't stay active.
+            clearProjectScriptRunPending(scriptRunScope);
+          }
           return;
         }
       }

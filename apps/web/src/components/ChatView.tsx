@@ -2841,13 +2841,16 @@ function ChatViewContent(props: ChatViewProps) {
           activeThreadKnownSessions,
           script.id,
         );
-        if (runningTerminal) {
-          // Toggle: interrupt the active run (Ctrl-C) instead of launching again.
+        const pendingRun = runningTerminal ? null : pendingProjectScriptRun(scriptRunScope);
+        const stopTerminalId = runningTerminal?.target.terminalId ?? pendingRun?.terminalId ?? null;
+        if (stopTerminalId !== null) {
+          // Toggle: interrupt the active (or still-launching) run with Ctrl-C
+          // instead of launching again.
           const stopResult = await writeTerminal({
             environmentId,
             input: {
               threadId: activeThreadId,
-              terminalId: runningTerminal.target.terminalId,
+              terminalId: stopTerminalId,
               data: "\x03",
             },
           });
@@ -2857,10 +2860,11 @@ function ChatViewContent(props: ChatViewProps) {
               activeThreadId,
               error instanceof Error ? error.message : `Failed to stop "${script.name}".`,
             );
+          } else if (pendingRun) {
+            // The launch was interrupted before the server ever confirmed it;
+            // drop the optimistic entry so the control doesn't stay green.
+            clearProjectScriptRunPending(scriptRunScope);
           }
-          return;
-        }
-        if (pendingProjectScriptRun(scriptRunScope)) {
           return;
         }
       }

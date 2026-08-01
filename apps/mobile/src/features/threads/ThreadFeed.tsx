@@ -83,7 +83,7 @@ import {
   NATIVE_REVIEW_DIFF_CONTENT_WIDTH,
 } from "../review/nativeReviewDiffAdapter";
 import { buildReviewParsedDiff, getReviewSectionIdForCheckpoint } from "../review/reviewModel";
-import { setReviewSelectedSectionId } from "../review/reviewState";
+import { setReviewSelectedFilePath, setReviewSelectedSectionId } from "../review/reviewState";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ChangedFilesCard } from "./ChangedFilesCard";
 import { shouldAutoExpandChangedFiles } from "./turnDiffTree";
@@ -843,7 +843,10 @@ function renderFeedEntry(
     readonly onToggleWorkRow: (rowId: string) => void;
     readonly onToggleTurnFold: (turnId: TurnId) => void;
     readonly onToggleChangedFiles: (entryId: string, turnId: TurnId, expanded: boolean) => void;
-    readonly onOpenTurnDiff: (checkpoint: OrchestrationCheckpointSummary) => void;
+    readonly onOpenTurnDiff: (
+      checkpoint: OrchestrationCheckpointSummary,
+      filePath?: string,
+    ) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -1023,13 +1026,15 @@ function renderFeedEntry(
         ) : null}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
-            <CopyTextButton
-              accessibilityLabel="Copy message"
-              text={message.text}
-              tintColor={iconSubtleColor}
-              buttonSize={28}
-              iconSize={13}
-            />
+            {message.text.trim().length > 0 ? (
+              <CopyTextButton
+                accessibilityLabel="Copy message"
+                text={message.text}
+                tintColor={iconSubtleColor}
+                buttonSize={28}
+                iconSize={13}
+              />
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
@@ -1058,7 +1063,7 @@ const ChangedFilesRow = memo(function ChangedFilesRow(props: {
   readonly latestTurnId: TurnId | null;
   readonly iconSubtleColor: string | ColorValue;
   readonly onToggleChangedFiles: (entryId: string, turnId: TurnId, expanded: boolean) => void;
-  readonly onOpenTurnDiff: (checkpoint: OrchestrationCheckpointSummary) => void;
+  readonly onOpenTurnDiff: (checkpoint: OrchestrationCheckpointSummary, filePath?: string) => void;
 }) {
   const { checkpoint } = props;
   const expanded =
@@ -1072,7 +1077,7 @@ const ChangedFilesRow = memo(function ChangedFilesRow(props: {
       onToggleExpanded={() =>
         props.onToggleChangedFiles(props.entryId, checkpoint.turnId, !expanded)
       }
-      onOpenDiff={() => props.onOpenTurnDiff(checkpoint)}
+      onOpenDiff={(filePath) => props.onOpenTurnDiff(checkpoint, filePath)}
     />
   );
 });
@@ -1774,13 +1779,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onOpenTurnDiff = useCallback(
-    (checkpoint: OrchestrationCheckpointSummary) => {
+    (checkpoint: OrchestrationCheckpointSummary, filePath?: string) => {
       void Haptics.selectionAsync();
-      // Preselect the turn's section so the review opens on this checkpoint.
-      setReviewSelectedSectionId(
-        scopedThreadKey(props.environmentId, props.threadId),
-        getReviewSectionIdForCheckpoint(checkpoint),
-      );
+      // Preselect the turn's section (and the tapped file, if any) so the
+      // review opens on this checkpoint scrolled to that file.
+      const threadKey = scopedThreadKey(props.environmentId, props.threadId);
+      setReviewSelectedSectionId(threadKey, getReviewSectionIdForCheckpoint(checkpoint));
+      setReviewSelectedFilePath(threadKey, filePath ?? null);
       navigation.navigate("ThreadReview", {
         environmentId: props.environmentId,
         threadId: props.threadId,
