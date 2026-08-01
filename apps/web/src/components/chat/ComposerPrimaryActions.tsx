@@ -1,5 +1,6 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import { formatShortcutLabel } from "~/keybindings";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
@@ -54,6 +55,17 @@ export const formatPendingPrimaryActionLabel = (input: {
 const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
   event.preventDefault();
 };
+
+// Steering is keyboard-only, so the queue button carries the hint for it.
+const steerShortcutLabel = () =>
+  formatShortcutLabel({
+    key: "enter",
+    modKey: true,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  });
 
 export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
@@ -142,6 +154,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             {...pointerFocusProps}
             disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
             aria-label="Queue message"
+            title={`Queue message — ${steerShortcutLabel()} to steer the running turn`}
           >
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path

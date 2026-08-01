@@ -123,7 +123,11 @@ export function useVoiceComposer(input: {
           toggle();
         },
         onLongPress: () => {
-          if (voiceStateRef.current.type !== "idle" && voiceStateRef.current.type !== "failed") {
+          // "completed" is a resting state: the controller stays in it after a transcription
+          // finishes (nothing resets it to idle), and start() accepts it just like idle/failed.
+          // Excluding it here left hold-to-record dead after the first successful dictation.
+          const stateType = voiceStateRef.current.type;
+          if (stateType !== "idle" && stateType !== "failed" && stateType !== "completed") {
             return;
           }
           holdRef.current = true;
