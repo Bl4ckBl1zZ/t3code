@@ -1172,7 +1172,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
     }
     if (phase === "running") {
-      return "running";
+      // The Queue affordance appears next to Stop when there is content.
+      return `running:${composerSendState.hasSendableContent}`;
     }
     if (showPlanFollowUpPrompt) {
       return prompt.trim().length > 0 ? "plan:refine" : "plan:implement";
@@ -1256,8 +1257,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
+  // A running phase no longer disables the collapsed send action: sending
+  // while the agent works queues the message instead of starting a turn.
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||

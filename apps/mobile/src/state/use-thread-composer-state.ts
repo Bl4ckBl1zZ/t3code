@@ -39,8 +39,18 @@ import {
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
-import { useThreadOutboxMessages } from "./use-thread-outbox";
+import {
+  enqueueThreadOutboxMessage,
+  removeThreadOutboxMessage,
+  updateThreadOutboxMessage,
+} from "./thread-outbox";
+import type { QueuedThreadMessage } from "./thread-outbox";
+import {
+  holdEditingQueuedMessage,
+  releaseEditingQueuedMessage,
+  useThreadOutboxMessages,
+} from "./use-thread-outbox";
+import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -78,6 +88,7 @@ export function useThreadComposerState() {
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -180,6 +191,57 @@ export function useThreadComposerState() {
     });
     return messageId;
   }, [selectedThreadDetail, selectedThreadShell]);
+
+  const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
+    removeThreadOutboxMessage(message).catch((error: unknown) => {
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to delete the queued message.",
+      );
+    });
+  }, []);
+
+  // The outbox orders by createdAt, so moving a message swaps timestamps with
+  // its neighbor — the order change persists through restart for free.
+  const onMoveQueuedMessage = useCallback(
+    (message: QueuedThreadMessage, direction: "up" | "down") => {
+      const index = selectedThreadQueuedMessages.findIndex(
+        (candidate) => candidate.messageId === message.messageId,
+      );
+      const neighborIndex = direction === "up" ? index - 1 : index + 1;
+      const neighbor = selectedThreadQueuedMessages[neighborIndex];
+      if (index === -1 || !neighbor) {
+        return;
+      }
+      void Promise.all([
+        updateThreadOutboxMessage({ ...message, createdAt: neighbor.createdAt }),
+        updateThreadOutboxMessage({ ...neighbor, createdAt: message.createdAt }),
+      ]).catch((error: unknown) => {
+        setPendingConnectionError(
+          error instanceof Error ? error.message : "Failed to reorder the queued messages.",
+        );
+      });
+    },
+    [selectedThreadQueuedMessages],
+  );
+
+  const onUpdateQueuedMessageText = useCallback((message: QueuedThreadMessage, text: string) => {
+    updateThreadOutboxMessage({ ...message, text }).catch((error: unknown) => {
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to update the queued message.",
+      );
+    });
+  }, []);
+
+  const onQueuedMessageEditingChange = useCallback(
+    (message: QueuedThreadMessage, editing: boolean) => {
+      if (editing) {
+        holdEditingQueuedMessage(message.messageId);
+      } else {
+        releaseEditingQueuedMessage(message.messageId);
+      }
+    },
+    [],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -302,6 +364,12 @@ export function useThreadComposerState() {
   return {
     selectedThreadFeed,
     selectedThreadQueueCount,
+    selectedThreadQueuedMessages,
+    dispatchingQueuedMessageId,
+    onDeleteQueuedMessage,
+    onMoveQueuedMessage,
+    onUpdateQueuedMessageText,
+    onQueuedMessageEditingChange,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
