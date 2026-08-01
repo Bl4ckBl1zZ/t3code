@@ -105,7 +105,10 @@ export function useVoiceComposer(input: {
   const comboPressProps = useCallback(
     (button: { readonly canSend: boolean; readonly onSend: () => void }) =>
       ({
-        delayLongPress: 200,
+        // 200ms classified natural thumb taps (~200-350ms) as holds: the send never fired and
+        // the hold-started recording was stopped again on release, so the button appeared
+        // dead whenever the draft had text. 500ms matches the iOS system long-press.
+        delayLongPress: 500,
         onPress: () => {
           if (holdRef.current) return;
           stopOnRecordingRef.current = false;
