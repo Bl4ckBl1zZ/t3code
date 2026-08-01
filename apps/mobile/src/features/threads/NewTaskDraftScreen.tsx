@@ -1109,7 +1109,12 @@ export function NewTaskDraftScreen(props: {
         onStop={toggleVoice}
         onCleanupChange={voice.setCleanup}
       />
-      <VoiceRecoveryRow recovery={voice.recovery} onUseRaw={voice.useRaw} onUndo={voice.undo} />
+      <VoiceRecoveryRow
+        recovery={voice.recovery}
+        onUseRaw={voice.useRaw}
+        onUndo={voice.undo}
+        onDismiss={voice.clearRecovery}
+      />
     </>
   );
 

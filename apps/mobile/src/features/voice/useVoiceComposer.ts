@@ -1,5 +1,5 @@
 import { useNavigation } from "@react-navigation/native";
-import { voiceInputErrorMessage } from "@t3tools/client-runtime/voice";
+import { voiceInputErrorMessage, type VoiceInputState } from "@t3tools/client-runtime/voice";
 import {
   insertVoiceTranscript,
   replaceVoiceInsertionWithRaw,
@@ -84,8 +84,16 @@ export function useVoiceComposer(input: {
   const voiceState = voice.state;
   const voiceRetry = voice.retry;
   const voiceCancel = voice.cancel;
+  // One alert per failure: without this guard, any effect re-run while the state is still
+  // "failed" (re-renders churning dependency identities) stacks duplicate alerts.
+  const alertedFailureRef = useRef<VoiceInputState | null>(null);
   useEffect(() => {
-    if (voiceState.type !== "failed") return;
+    if (voiceState.type !== "failed") {
+      alertedFailureRef.current = null;
+      return;
+    }
+    if (alertedFailureRef.current === voiceState) return;
+    alertedFailureRef.current = voiceState;
     if (voiceState.stage === "permission") {
       if (voiceState.error.permanent) {
         Alert.alert(
@@ -123,6 +131,9 @@ export function useVoiceComposer(input: {
     setRecovery(replacement.recovery);
   }, [recovery]);
 
+  // Stable identity: the recovery chip's auto-dismiss timer effect-depends on this.
+  const clearRecovery = useCallback(() => setRecovery(null), []);
+
   const undo = useCallback(() => {
     if (!recovery) return;
     const current = latest.current;
@@ -148,7 +159,7 @@ export function useVoiceComposer(input: {
     setCleanup: voice.setCleanup,
     subscribeLevel: voice.subscribeLevel,
     recovery,
-    clearRecovery: () => setRecovery(null),
+    clearRecovery,
     useRaw,
     undo,
   };

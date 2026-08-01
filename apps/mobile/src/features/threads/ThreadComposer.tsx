@@ -953,6 +953,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               recovery={voice.recovery}
               onUseRaw={voice.useRaw}
               onUndo={voice.undo}
+              onDismiss={voice.clearRecovery}
             />
           </Animated.View>
         ) : null}

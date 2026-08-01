@@ -117,12 +117,21 @@ export function useMobileVoiceInput(input: {
     };
   }, []);
 
+  // Stable identities: failure alerts effect-depend on these, and a fresh function per render
+  // would re-fire the alert on every re-render while the state stays "failed".
+  const cancel = useCallback(() => controllerRef.current?.cancel() ?? Promise.resolve(), []);
+  const retry = useCallback(() => controllerRef.current?.retry() ?? Promise.resolve(false), []);
+  const setCleanup = useCallback(
+    (cleanup: boolean) => controllerRef.current?.setRecordingCleanup(cleanup) ?? false,
+    [],
+  );
+
   return {
     state,
     toggle,
     subscribeLevel,
-    cancel: () => controllerRef.current?.cancel() ?? Promise.resolve(),
-    retry: () => controllerRef.current?.retry() ?? Promise.resolve(false),
-    setCleanup: (cleanup: boolean) => controllerRef.current?.setRecordingCleanup(cleanup) ?? false,
+    cancel,
+    retry,
+    setCleanup,
   };
 }

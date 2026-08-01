@@ -1285,6 +1285,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     readonly identity: string;
   } | null>(null);
   const [voiceRecovery, setVoiceRecovery] = useState<VoiceInsertionRecovery | null>(null);
+  // The recovery chip auto-dismisses so it never lingers in the action row; hovering it
+  // pauses the countdown so nobody loses "Undo" mid-reach.
+  const voiceRecoveryHoveredRef = useRef(false);
+  useEffect(() => {
+    if (!voiceRecovery) return;
+    const id = window.setInterval(() => {
+      if (!voiceRecoveryHoveredRef.current) {
+        setVoiceRecovery(null);
+      }
+    }, 6_000);
+    return () => window.clearInterval(id);
+  }, [voiceRecovery]);
   const composerVoiceIdentity = `${environmentId}:${draftId ?? activeThreadId ?? "new"}`;
   const voice = useWebVoiceInput({
     onCompleted: (result) => {
@@ -3361,7 +3373,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
                 {voiceRecovery ? (
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <div
+                    className="flex items-center gap-1 text-xs text-muted-foreground animate-voice-chip-in motion-reduce:animate-none"
+                    onMouseEnter={() => {
+                      voiceRecoveryHoveredRef.current = true;
+                    }}
+                    onMouseLeave={() => {
+                      voiceRecoveryHoveredRef.current = false;
+                    }}
+                  >
                     <span>
                       {voiceRecovery.rawText === voiceRecovery.cleanedText ? "Added" : "Cleaned up"}
                     </span>
