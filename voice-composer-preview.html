@@ -755,9 +755,20 @@
         let level = 0,
           displayLevel = 0;
 
+        // Generation token: if teardown runs while getUserMedia is still pending (release
+        // during the permission prompt), the late resolution must release its own stream or
+        // the mic indicator stays on until the page unloads.
+        let levelSourceGeneration = 0;
+
         async function startLevelSource() {
+          const generation = ++levelSourceGeneration;
           try {
-            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (generation !== levelSourceGeneration) {
+              stream.getTracks().forEach((t) => t.stop());
+              return;
+            }
+            mediaStream = stream;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = 512;
@@ -767,6 +778,7 @@
           }
         }
         function stopLevelSource() {
+          levelSourceGeneration++;
           if (mediaStream) {
             mediaStream.getTracks().forEach((t) => t.stop());
             mediaStream = null;
@@ -811,7 +823,7 @@
 
         /* ---------- helpers ---------- */
         const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-        const draftText = () => editor.innerText.replace(/ /g, " ");
+        const draftText = () => editor.innerText.replace(/\u00a0/g, " ");
 
         function setDraft(text, caret) {
           editor.innerText = text;
@@ -868,7 +880,15 @@
           });
         }
 
+        // A show that lands inside hide's 140 ms exit window must cancel the pending
+        // timeout, or the stale timer re-hides the freshly shown row.
+        const hideTimers = new Map();
         function show(row) {
+          const pending = hideTimers.get(row);
+          if (pending !== undefined) {
+            clearTimeout(pending);
+            hideTimers.delete(row);
+          }
           row.hidden = false;
           row.classList.remove("exit");
           row.classList.add("enter");
@@ -877,10 +897,14 @@
           if (row.hidden) return;
           row.classList.remove("enter");
           row.classList.add("exit");
-          setTimeout(() => {
-            row.hidden = true;
-            row.classList.remove("exit");
-          }, 140);
+          hideTimers.set(
+            row,
+            setTimeout(() => {
+              hideTimers.delete(row);
+              row.hidden = true;
+              row.classList.remove("exit");
+            }, 140),
+          );
         }
 
         const vibrate = (ms) => {
@@ -942,6 +966,7 @@
           hide(recordingRow);
           show(transcribingRow);
           // mic morphs back; the transcribing row carries its own cancel
+          updateSend();
           transcribeTimer = setTimeout(finishTranscription, 1400 + Math.random() * 900);
         }
 

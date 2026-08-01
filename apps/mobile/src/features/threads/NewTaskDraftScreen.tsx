@@ -1082,30 +1082,25 @@ export function NewTaskDraftScreen(props: {
     </>
   );
 
-  // Mic pinned outside the scroller (next to Start) so dictation is always reachable while
-  // the keyboard is up, matching the ChatGPT composer. It stays mounted through the whole
-  // voice lifecycle (morphing into the stop control) so a hold-to-record release always
-  // lands on the same pressable, and so there is exactly one stop button on screen.
   // Combined start/record button: mic when the prompt is empty, start arrow (queue tray when
   // disconnected) when it has content, stop while recording. Hold always records; the corner
   // badge hints at it in start mode. Pinned outside the scroller so it's always reachable.
-  const comboVisual = voiceComboButtonProps(voice.state, canStart);
+  const rawComboVisual = voiceComboButtonProps(voice.state, canStart);
+  const comboVisual =
+    rawComboVisual.icon === "arrow.up" && !environmentConnected
+      ? {
+          ...rawComboVisual,
+          icon: "tray.and.arrow.up" as const,
+          accessibilityLabel: "Queue task. Hold to dictate",
+        }
+      : rawComboVisual;
+  const comboPress = voice.comboPressProps({
+    canSend: canStart,
+    onSend: () => void handleStart(),
+  });
   const startComboButton = (
     <VoiceComboBadge visible={canStart}>
-      <ComposerToolbarButton
-        {...comboVisual}
-        {...(comboVisual.icon === "arrow.up" && !environmentConnected
-          ? {
-              icon: "tray.and.arrow.up" as const,
-              accessibilityLabel: "Queue task. Hold to dictate",
-            }
-          : {})}
-        {...voice.comboPressProps({
-          canSend: canStart,
-          onSend: () => void handleStart(),
-        })}
-        showChevron={false}
-      />
+      <ComposerToolbarButton {...comboVisual} {...comboPress} showChevron={false} />
     </VoiceComboBadge>
   );
 
@@ -1181,13 +1176,7 @@ export function NewTaskDraftScreen(props: {
               <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
               {!isExpanded ? (
                 <VoiceComboBadge visible={canStart}>
-                  <ControlPill
-                    {...voiceComboButtonProps(voice.state, canStart)}
-                    {...voice.comboPressProps({
-                      canSend: canStart,
-                      onSend: () => void handleStart(),
-                    })}
-                  />
+                  <ControlPill {...comboVisual} {...comboPress} />
                 </VoiceComboBadge>
               ) : null}
             </ComposerSurface>
