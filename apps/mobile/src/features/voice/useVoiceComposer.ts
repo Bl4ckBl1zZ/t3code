@@ -81,6 +81,67 @@ export function useVoiceComposer(input: {
     void voice.toggle();
   }, [voice]);
 
+  // Combined send/record button gesture. Tap: send when the draft has content, start recording
+  // when it's empty, stop when recording. Hold: always records — even over a non-empty draft —
+  // and releasing stops + transcribes. If the finger lifts before the async start reaches
+  // "recording" (permission prompt, preflight), the release is remembered and the recording
+  // stops as soon as startup completes — Pressability suppresses onPress after a completed
+  // long press, so no tap event arrives to stop it otherwise.
+  const voiceStateRef = useRef(voice.state);
+  voiceStateRef.current = voice.state;
+  const holdRef = useRef(false);
+  const stopOnRecordingRef = useRef(false);
+  const voiceStateType = voice.state.type;
+  useEffect(() => {
+    if (voiceStateType === "recording") {
+      if (!stopOnRecordingRef.current) return;
+      stopOnRecordingRef.current = false;
+      toggle();
+      return;
+    }
+    // Startup failed or was cancelled before reaching "recording": nothing left to stop.
+    if (voiceStateType !== "requesting_permission") stopOnRecordingRef.current = false;
+  }, [voiceStateType, toggle]);
+  const comboPressProps = useCallback(
+    (button: { readonly canSend: boolean; readonly onSend: () => void }) =>
+      ({
+        delayLongPress: 200,
+        onPress: () => {
+          if (holdRef.current) return;
+          stopOnRecordingRef.current = false;
+          if (voiceStateRef.current.type === "recording") {
+            toggle();
+            return;
+          }
+          if (button.canSend) {
+            button.onSend();
+            return;
+          }
+          toggle();
+        },
+        onLongPress: () => {
+          if (voiceStateRef.current.type !== "idle" && voiceStateRef.current.type !== "failed") {
+            return;
+          }
+          holdRef.current = true;
+          stopOnRecordingRef.current = false;
+          toggle();
+        },
+        onPressOut: () => {
+          if (!holdRef.current) return;
+          holdRef.current = false;
+          if (voiceStateRef.current.type === "recording") {
+            toggle();
+            return;
+          }
+          // Startup (preflight / permission prompt) hasn't reached "recording" yet: remember
+          // the release so the effect above stops the recording the moment it starts.
+          stopOnRecordingRef.current = true;
+        },
+      }) as const,
+    [toggle],
+  );
+
   const voiceState = voice.state;
   const voiceRetry = voice.retry;
   const voiceCancel = voice.cancel;
@@ -154,6 +215,7 @@ export function useVoiceComposer(input: {
     state: voice.state,
     busy,
     toggle,
+    comboPressProps,
     cancel: voice.cancel,
     retry: voice.retry,
     setCleanup: voice.setCleanup,
