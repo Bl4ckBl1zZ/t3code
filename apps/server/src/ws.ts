@@ -332,6 +332,10 @@ const ServerWsRpcGroup = WsRpcGroup;
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 
+// Thread resume needs no such bound: the v2 replay reads this thread's own
+// event range (`readAgentEvents({ threadId, ... })`) rather than the global
+// range, so a stale cursor never decodes other threads' payloads.
+
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,

@@ -339,6 +339,8 @@ const dispatchLiveOrchestrationCommand = (
   );
 
 const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
+  // Project commands only read the project list, and the v2 project service
+  // reads project rows directly, so this never hydrates thread bodies.
   const projects = yield* ProjectService.ProjectService;
   return yield* projects.snapshot;
 });

@@ -39,6 +39,8 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import { forkParked, ServerActivation } from "./serverActivation.ts";
+import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -355,247 +357,277 @@ export function runOrderedV2StartupPhases<
   });
 }
 
-export const make = Effect.gen(function* () {
-  const serverConfig = yield* ServerConfig.ServerConfig;
-  const keybindings = yield* Keybindings.Keybindings;
-  const projectionMaintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
-  const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
-  const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
-  const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
-  const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
-  const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
-  const serverSettings = yield* ServerSettings.ServerSettingsService;
-  const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const crypto = yield* Crypto.Crypto;
+/**
+ * A managed self-update boots the new binary as a trial that must prove it can
+ * reach a healthy state before the launcher commits it. Long-running roots are
+ * therefore forked *parked* and released only at the activation boundary, so a
+ * trial that is rolled back never performs a durable side effect.
+ */
+interface StartupOptions {
+  readonly activate?: Effect.Effect<void>;
+  readonly awaitAuxiliaryParked?: Effect.Effect<void>;
+  readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
+}
 
-  const commandGate = yield* makeCommandGate;
-  const httpListening = yield* Deferred.make<void>();
-  const effectWorkerFiber = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
+/** Resolves at the activation boundary, or immediately when this is not a trial. */
+const awaitServerActivation = ServerActivation.pipe(
+  Effect.flatMap((activation) => activation ?? Effect.void),
+);
 
-  yield* Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      yield* commandGate.failCommandReady(
-        new ServerRuntimeStartupError({
-          mode: serverConfig.mode,
-          host: serverConfig.host ?? null,
-          port: serverConfig.port,
-          cause: "Server runtime is shutting down.",
+export const make = (options?: StartupOptions) =>
+  Effect.gen(function* () {
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const keybindings = yield* Keybindings.Keybindings;
+    const projectionMaintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+    const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+    const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+    const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+    const crypto = yield* Crypto.Crypto;
+    const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
+
+    const commandGate = yield* makeCommandGate;
+    const httpListening = yield* Deferred.make<void>();
+    const effectWorkerFiber = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
+
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        yield* commandGate.failCommandReady(
+          new ServerRuntimeStartupError({
+            mode: serverConfig.mode,
+            host: serverConfig.host ?? null,
+            port: serverConfig.port,
+            cause: "Server runtime is shutting down.",
+          }),
+        );
+        const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
+        if (workerFiber !== null) {
+          yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
+        }
+        yield* providerSessions.shutdown;
+        const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
+        yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("V2 orchestration shutdown reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      ),
+    );
+
+    const startup = Effect.gen(function* () {
+      yield* Effect.logDebug("startup phase: starting keybindings runtime");
+      yield* runStartupPhase(
+        "keybindings.start",
+        keybindings.start.pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to start keybindings runtime", {
+              path: error.configPath,
+              detail: error.detail,
+              cause: error.cause,
+            }),
+          ),
+        ),
+      );
+
+      yield* Effect.logDebug("startup phase: starting server settings runtime");
+      yield* runStartupPhase(
+        "settings.start",
+        serverSettings.start.pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to start server settings runtime", {
+              path: error.settingsPath,
+              operation: error.operation,
+              providerInstanceId: error.providerInstanceId,
+              environmentVariable: error.environmentVariable,
+              cause: error.cause,
+            }),
+          ),
+        ),
+      );
+
+      const welcomeBase = yield* resolveWelcomeBase;
+      const environment = yield* serverEnvironment.getDescriptor;
+      const legacyMigrationThreadCount = yield* legacyV1ThreadImporter.pendingThreadCount;
+      if (legacyMigrationThreadCount > 0) {
+        yield* lifecycleEvents.publish({
+          version: 1,
+          type: "legacyThreadMigration",
+          payload: {
+            status: "running",
+            totalThreadCount: legacyMigrationThreadCount,
+          },
+        });
+      }
+      const { recovery, bootstrap: bootstrapTargets } = yield* runOrderedV2StartupPhases({
+        importLegacyShells: runStartupPhase(
+          "orchestration-v2.legacy-v1.import-shells",
+          legacyV1ThreadImporter.reconcileShells.pipe(
+            Effect.tap((summary) =>
+              summary.importedThreadCount === 0
+                ? Effect.void
+                : Effect.logInfo("Imported legacy v1 thread shells", summary),
+            ),
+          ),
+        ),
+        verify: runStartupPhase(
+          "orchestration-v2.projections.verify",
+          projectionMaintenance.verify.pipe(
+            Effect.tap((verification) =>
+              verification.valid
+                ? Effect.void
+                : Effect.logWarning(
+                    "V2 orchestration projection metadata or structure is invalid; rebuilding",
+                    {
+                      expectedSequence: verification.expectedSequence,
+                      projectionSequence: verification.projectionSequence,
+                      schemaVersion: verification.schemaVersion,
+                      missingThreadCount: verification.missingThreadIds.length,
+                      unexpectedThreadCount: verification.unexpectedThreadIds.length,
+                      unreadableThreadCount: verification.unreadableThreadIds.length,
+                    },
+                  ),
+            ),
+          ),
+        ),
+        rebuild: runStartupPhase(
+          "orchestration-v2.projections.rebuild",
+          projectionMaintenance.rebuild,
+        ),
+        recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+        startEffectWorker: runStartupPhase(
+          "orchestration-v2.effect-worker.start",
+          startEffectWorkerWithRelay({
+            // The worker drains the durable effect outbox, which is exactly what
+            // an uncommitted trial must not do, so park it until activation. The
+            // fiber still starts here so shutdown owns a handle to interrupt.
+            runWorker: awaitServerActivation.pipe(Effect.andThen(EffectWorker.runDaemon)),
+            startRelay: agentAwarenessRelay.start(),
+            workerFiberRef: effectWorkerFiber,
+          }),
+        ),
+        autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
+          ? runStartupPhase(
+              "welcome.autobootstrap",
+              resolveAutoBootstrapWelcomeTargets.pipe(Effect.provideService(Crypto.Crypto, crypto)),
+            )
+          : Effect.succeed({})
+        ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
+      });
+      yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
+
+      const importPendingTranscripts = legacyV1ThreadImporter.importPendingTranscripts.pipe(
+        Effect.tap((summary) =>
+          summary.importedThreadCount === 0
+            ? Effect.void
+            : Effect.logInfo("Hydrated legacy v1 thread transcripts", summary),
+        ),
+      );
+      yield* forkParked(
+        legacyMigrationThreadCount > 0
+          ? importPendingTranscripts.pipe(
+              Effect.tap(() =>
+                lifecycleEvents.publish({
+                  version: 1,
+                  type: "legacyThreadMigration",
+                  payload: {
+                    status: "complete",
+                    totalThreadCount: legacyMigrationThreadCount,
+                  },
+                }),
+              ),
+            )
+          : importPendingTranscripts,
+      );
+
+      // Off the startup path: the first run after an upgrade deletes the whole
+      // superseded-event and legacy-v1 backlog (potentially millions of rows,
+      // paced in small batches), and nothing at boot depends on it.
+      yield* forkParked(
+        projectionMaintenance.compactEventStore.pipe(
+          Effect.tap((summary) =>
+            summary.deletedEventCount === 0 && summary.deletedReceiptCount === 0
+              ? Effect.void
+              : Effect.logInfo("Compacted orchestration event store", summary),
+          ),
+          Effect.tap((summary) =>
+            // Freed pages are reused, so the file stops growing regardless; only
+            // an offline VACUUM shrinks it, which is not safe to run on the
+            // synchronous sqlite connection while serving.
+            summary.reclaimableBytes >= 512 * 1024 * 1024
+              ? Effect.logInfo(
+                  "state.sqlite has substantial reclaimable free space; an offline VACUUM would shrink the file",
+                  { reclaimableBytes: summary.reclaimableBytes },
+                )
+              : Effect.void,
+          ),
+          Effect.catch((cause) => Effect.logWarning("Unable to compact the event store", { cause })),
+        ),
+      );
+
+      yield* forkParked(
+        Effect.gen(function* () {
+          yield* Effect.logDebug("startup phase: recording startup heartbeat");
+          yield* recordStartupHeartbeat.pipe(
+            Effect.annotateSpans({ "startup.phase": "heartbeat.record" }),
+            Effect.withSpan("server.startup.heartbeat.record"),
+            Effect.ignoreCause({ log: true }),
+          );
+          if (serverConfig.startupPresentation === "headless") {
+            const accessInfo = yield* issueHeadlessServeAccessInfo();
+            yield* runStartupPhase(
+              "headless.output",
+              Console.log(formatHeadlessServeOutput(accessInfo)),
+            );
+          } else {
+            const startupBrowserTarget = yield* resolveStartupBrowserTarget;
+            if (serverConfig.mode !== "desktop") {
+              yield* Effect.logInfo(
+                "Authentication required. Open T3 Code using the pairing URL.",
+              ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));
+            }
+            yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));
+          }
         }),
       );
-      const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
-      if (workerFiber !== null) {
-        yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
-      }
-      yield* providerSessions.shutdown;
-      const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
-      yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("V2 orchestration shutdown reconciliation failed", {
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    ),
-  );
-
-  const startup = Effect.gen(function* () {
-    yield* Effect.logDebug("startup phase: starting keybindings runtime");
-    yield* runStartupPhase(
-      "keybindings.start",
-      keybindings.start.pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("failed to start keybindings runtime", {
-            path: error.configPath,
-            detail: error.detail,
-            cause: error.cause,
-          }),
-        ),
-        Effect.forkScoped,
-      ),
-    );
-
-    yield* Effect.logDebug("startup phase: starting server settings runtime");
-    yield* runStartupPhase(
-      "settings.start",
-      serverSettings.start.pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("failed to start server settings runtime", {
-            path: error.settingsPath,
-            operation: error.operation,
-            providerInstanceId: error.providerInstanceId,
-            environmentVariable: error.environmentVariable,
-            cause: error.cause,
-          }),
-        ),
-        Effect.forkScoped,
-      ),
-    );
-
-    const welcomeBase = yield* resolveWelcomeBase;
-    const environment = yield* serverEnvironment.getDescriptor;
-    const legacyMigrationThreadCount = yield* legacyV1ThreadImporter.pendingThreadCount;
-    if (legacyMigrationThreadCount > 0) {
-      yield* lifecycleEvents.publish({
-        version: 1,
-        type: "legacyThreadMigration",
-        payload: {
-          status: "running",
-          totalThreadCount: legacyMigrationThreadCount,
-        },
-      });
-    }
-    const { recovery, bootstrap: bootstrapTargets } = yield* runOrderedV2StartupPhases({
-      importLegacyShells: runStartupPhase(
-        "orchestration-v2.legacy-v1.import-shells",
-        legacyV1ThreadImporter.reconcileShells.pipe(
-          Effect.tap((summary) =>
-            summary.importedThreadCount === 0
-              ? Effect.void
-              : Effect.logInfo("Imported legacy v1 thread shells", summary),
-          ),
-        ),
-      ),
-      verify: runStartupPhase(
-        "orchestration-v2.projections.verify",
-        projectionMaintenance.verify.pipe(
-          Effect.tap((verification) =>
-            verification.valid
-              ? Effect.void
-              : Effect.logWarning(
-                  "V2 orchestration projection metadata or structure is invalid; rebuilding",
-                  {
-                    expectedSequence: verification.expectedSequence,
-                    projectionSequence: verification.projectionSequence,
-                    schemaVersion: verification.schemaVersion,
-                    missingThreadCount: verification.missingThreadIds.length,
-                    unexpectedThreadCount: verification.unexpectedThreadIds.length,
-                    unreadableThreadCount: verification.unreadableThreadIds.length,
-                  },
-                ),
-          ),
-        ),
-      ),
-      rebuild: runStartupPhase(
-        "orchestration-v2.projections.rebuild",
-        projectionMaintenance.rebuild,
-      ),
-      recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
-      startEffectWorker: runStartupPhase(
-        "orchestration-v2.effect-worker.start",
-        startEffectWorkerWithRelay({
-          runWorker: EffectWorker.runDaemon,
-          startRelay: agentAwarenessRelay.start(),
-          workerFiberRef: effectWorkerFiber,
-        }),
-      ),
-      autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
-        ? runStartupPhase(
-            "welcome.autobootstrap",
-            resolveAutoBootstrapWelcomeTargets.pipe(Effect.provideService(Crypto.Crypto, crypto)),
-          )
-        : Effect.succeed({})
-      ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
-    });
-    yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
-
-    yield* Effect.logDebug("Accepting commands");
-    yield* commandGate.signalCommandReady;
-    const importPendingTranscripts = legacyV1ThreadImporter.importPendingTranscripts.pipe(
-      Effect.tap((summary) =>
-        summary.importedThreadCount === 0
-          ? Effect.void
-          : Effect.logInfo("Hydrated legacy v1 thread transcripts", summary),
-      ),
-    );
-    yield* (
-      legacyMigrationThreadCount > 0
-        ? importPendingTranscripts.pipe(
-            Effect.tap(() =>
-              lifecycleEvents.publish({
-                version: 1,
-                type: "legacyThreadMigration",
-                payload: {
-                  status: "complete",
-                  totalThreadCount: legacyMigrationThreadCount,
-                },
-              }),
-            ),
-          )
-        : importPendingTranscripts
-    ).pipe(Effect.forkScoped);
-
-    // Off the startup path: the first run after an upgrade deletes the whole
-    // superseded-event and legacy-v1 backlog (potentially millions of rows,
-    // paced in small batches), and nothing at boot depends on it.
-    yield* projectionMaintenance.compactEventStore.pipe(
-      Effect.tap((summary) =>
-        summary.deletedEventCount === 0 && summary.deletedReceiptCount === 0
-          ? Effect.void
-          : Effect.logInfo("Compacted orchestration event store", summary),
-      ),
-      Effect.tap((summary) =>
-        // Freed pages are reused, so the file stops growing regardless; only
-        // an offline VACUUM shrinks it, which is not safe to run on the
-        // synchronous sqlite connection while serving.
-        summary.reclaimableBytes >= 512 * 1024 * 1024
-          ? Effect.logInfo(
-              "state.sqlite has substantial reclaimable free space; an offline VACUUM would shrink the file",
-              { reclaimableBytes: summary.reclaimableBytes },
-            )
-          : Effect.void,
-      ),
-      Effect.catch((cause) => Effect.logWarning("Unable to compact the event store", { cause })),
-      Effect.forkScoped,
-    );
-
-    yield* Effect.logDebug("startup phase: publishing welcome event", {
-      environmentId: environment.environmentId,
-      cwd: welcomeBase.cwd,
-      projectName: welcomeBase.projectName,
-      bootstrapProjectId: bootstrapTargets.bootstrapProjectId,
-      bootstrapThreadId: bootstrapTargets.bootstrapThreadId,
-    });
-    yield* runStartupPhase(
-      "welcome.publish",
-      lifecycleEvents.publish({
-        version: 1,
-        type: "welcome",
-        payload: {
-          environment,
-          ...welcomeBase,
-          ...bootstrapTargets,
-        },
-      }),
-    );
-  }).pipe(
-    Effect.annotateSpans({
-      "server.mode": serverConfig.mode,
-      "server.port": serverConfig.port,
-      "server.host": serverConfig.host ?? "default",
-    }),
-    Effect.withSpan("server.startup", { kind: "server", root: true }),
-  );
-
-  yield* Effect.forkScoped(
-    Effect.gen(function* () {
-      const startupExit = yield* Effect.exit(startup);
-      if (Exit.isFailure(startupExit)) {
-        const error = new ServerRuntimeStartupError({
-          mode: serverConfig.mode,
-          host: serverConfig.host ?? null,
-          port: serverConfig.port,
-          cause: startupExit.cause,
-        });
-        yield* Effect.logError("server runtime startup failed", {
-          cause: Cause.pretty(startupExit.cause),
-        });
-        yield* commandGate.failCommandReady(error);
-        return;
-      }
 
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
-      yield* Effect.logDebug("startup phase: publishing ready event");
+      yield* runStartupPhase(
+        "auxiliary-roots.parked",
+        options?.awaitAuxiliaryParked ?? Effect.void,
+      );
+
+      // This is the prepared boundary. Every dependency has been acquired and
+      // every runtime root has confirmed that it is parked before this request.
+      const updateOutcome = yield* launcher.prepareTrial;
+      yield* Effect.logDebug("startup phase: publishing welcome event", {
+        environmentId: environment.environmentId,
+        cwd: welcomeBase.cwd,
+        projectName: welcomeBase.projectName,
+        bootstrapProjectId: bootstrapTargets.bootstrapProjectId,
+        bootstrapThreadId: bootstrapTargets.bootstrapThreadId,
+      });
+      yield* runStartupPhase(
+        "welcome.publish",
+        lifecycleEvents.publish({
+          version: 1,
+          type: "welcome",
+          payload: {
+            environment,
+            ...welcomeBase,
+            ...bootstrapTargets,
+          },
+        }),
+      );
+      yield* options?.activate ?? Effect.void;
+
+      yield* Effect.logDebug("Accepting commands");
+      yield* commandGate.signalCommandReady;
       yield* runStartupPhase(
         "ready.publish",
         lifecycleEvents.publish({
@@ -603,39 +635,49 @@ export const make = Effect.gen(function* () {
           type: "ready",
           payload: {
             at: DateTime.formatIso(yield* DateTime.now),
-            environment: yield* serverEnvironment.getDescriptor,
+            environment,
+            ...(updateOutcome === undefined ? {} : { updateOutcome }),
           },
         }),
       );
-
-      yield* Effect.logDebug("startup phase: recording startup heartbeat");
-      yield* launchStartupHeartbeat;
-      if (serverConfig.startupPresentation === "headless") {
-        yield* Effect.logDebug("startup phase: headless access info");
-        const accessInfo = yield* issueHeadlessServeAccessInfo();
-        yield* runStartupPhase(
-          "headless.output",
-          Console.log(formatHeadlessServeOutput(accessInfo)),
-        );
-      } else {
-        yield* Effect.logDebug("startup phase: browser open check");
-        const startupBrowserTarget = yield* resolveStartupBrowserTarget;
-        if (serverConfig.mode !== "desktop") {
-          yield* Effect.logInfo(
-            "Authentication required. Open T3 Code using the pairing URL.",
-          ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));
-        }
-        yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));
-      }
       yield* Effect.logDebug("startup phase: complete");
-    }),
-  );
+    }).pipe(
+      Effect.annotateSpans({
+        "server.mode": serverConfig.mode,
+        "server.port": serverConfig.port,
+        "server.host": serverConfig.host ?? "default",
+      }),
+      Effect.withSpan("server.startup", { kind: "server", root: true }),
+    );
 
-  return {
-    awaitCommandReady: commandGate.awaitCommandReady,
-    markHttpListening: Deferred.succeed(httpListening, undefined),
-    enqueueCommand: commandGate.enqueueCommand,
-  } satisfies ServerRuntimeStartup["Service"];
-});
+    yield* Effect.forkScoped(
+      Effect.exit(startup).pipe(
+        Effect.flatMap((startupExit) => {
+          if (Exit.isSuccess(startupExit)) return Effect.void;
+          const error = new ServerRuntimeStartupError({
+            mode: serverConfig.mode,
+            host: serverConfig.host ?? null,
+            port: serverConfig.port,
+            cause: startupExit.cause,
+          });
+          return Effect.logError("server runtime startup failed", {
+            cause: startupExit.cause,
+          }).pipe(
+            Effect.andThen(commandGate.failCommandReady(error)),
+            Effect.andThen(options?.abort?.(error) ?? Effect.void),
+          );
+        }),
+      ),
+    );
 
-export const layer = Layer.effect(ServerRuntimeStartup, make);
+    return {
+      awaitCommandReady: commandGate.awaitCommandReady,
+      markHttpListening: Deferred.succeed(httpListening, undefined),
+      enqueueCommand: commandGate.enqueueCommand,
+    } satisfies ServerRuntimeStartup["Service"];
+  });
+
+export const layerWithOptions = (options?: StartupOptions) =>
+  Layer.effect(ServerRuntimeStartup, make(options));
+
+export const layer = layerWithOptions();
