@@ -1,4 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
+import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
+import {
+  deriveThreadActivityRun,
+  deriveThreadRuntime,
+} from "@t3tools/client-runtime/state/thread-execution";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
@@ -6,7 +11,6 @@ import {
   MessageId,
   type EnvironmentId,
   type ModelSelection,
-  type OrchestrationCheckpointSummary,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
@@ -38,7 +42,10 @@ import {
   useComposerDraft,
 } from "./use-composer-drafts";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
-import { useSelectedThreadDetail } from "../state/use-thread-detail";
+import {
+  useSelectedThreadProjection,
+  useSelectedThreadVisibleTurnItems,
+} from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import {
   enqueueThreadOutboxMessage,
@@ -86,7 +93,8 @@ export function useThreadDraftForThread(input: {
 
 export function useThreadComposerState() {
   const { selectedThread: selectedThreadShell } = useThreadSelection();
-  const selectedThreadDetail = useSelectedThreadDetail();
+  const selectedThreadProjection = useSelectedThreadProjection();
+  const selectedThreadVisibleTurnItems = useSelectedThreadVisibleTurnItems();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
@@ -103,59 +111,56 @@ export function useThreadComposerState() {
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
   const selectedThreadFeed = useMemo(
-    () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
-    [selectedThreadDetail],
+    () => buildThreadFeed(selectedThreadVisibleTurnItems),
+    [selectedThreadVisibleTurnItems],
   );
-  // Per-turn checkpoint summaries keyed by the turn's terminal assistant
-  // message, so the feed can show the changed-files card under it (same join
-  // the web timeline uses).
-  const selectedThreadTurnDiffs = useMemo(() => {
-    const byAssistantMessageId = new Map<string, OrchestrationCheckpointSummary>();
-    for (const checkpoint of selectedThreadDetail?.checkpoints ?? []) {
-      if (checkpoint.assistantMessageId && checkpoint.files.length > 0) {
-        byAssistantMessageId.set(checkpoint.assistantMessageId, checkpoint);
-      }
-    }
-    return byAssistantMessageId;
-  }, [selectedThreadDetail]);
-
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
-  const selectedThread = selectedThreadDetail ?? selectedThreadShell;
+  const selectedThread = selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
+  const selectedThreadRuntime = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveThreadRuntime(selectedThreadProjection.projection)
+        : (selectedThreadShell?.runtime ?? null),
+    [selectedThreadProjection, selectedThreadShell?.runtime],
+  );
+  const selectedThreadActivityRun = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveThreadActivityRun(selectedThreadProjection.projection)
+        : (selectedThreadShell?.latestRun ?? null),
+    [selectedThreadProjection, selectedThreadShell?.latestRun],
+  );
 
   const selectedThreadSessionActivity = useMemo(() => {
-    const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-    if (!selectedThread?.session) {
+    if (!selectedThreadRuntime) {
       return null;
     }
 
     return {
-      orchestrationStatus: selectedThread.session.status,
-      activeTurnId: selectedThread.session.activeTurnId ?? undefined,
+      orchestrationStatus: selectedThreadRuntime.status,
+      activeRunId: selectedThreadRuntime.activeRunId ?? undefined,
     };
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [selectedThreadRuntime]);
 
   const activeWorkStartedAt = useMemo(() => {
-    const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-    if (!selectedThread) {
+    if (!selectedThreadShell) {
       return null;
     }
-
     return deriveActiveWorkStartedAt(
-      selectedThread.latestTurn,
+      selectedThreadActivityRun,
       selectedThreadSessionActivity,
       null,
     );
-  }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
+  }, [selectedThreadActivityRun, selectedThreadSessionActivity, selectedThreadShell]);
 
-  const activeThreadBusy =
-    !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
+  const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
+  const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
 
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
@@ -164,7 +169,7 @@ export function useThreadComposerState() {
 
     const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
     const draft = getComposerDraftSnapshot(threadKey);
-    const thread = selectedThreadDetail ?? selectedThreadShell;
+    const thread = selectedThreadShell;
     const text = draft.text.trim();
     const attachments = draft.attachments;
     if (text.length === 0 && attachments.length === 0) {
@@ -203,7 +208,7 @@ export function useThreadComposerState() {
       );
     });
     return messageId;
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [selectedThreadShell]);
 
   const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
     removeThreadOutboxMessage(message).catch((error: unknown) => {
@@ -385,7 +390,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
-    selectedThreadTurnDiffs,
+    selectedThreadActivityRun,
     selectedThreadQueueCount,
     selectedThreadQueuedMessages,
     dispatchingQueuedMessageId,
@@ -400,6 +405,7 @@ export function useThreadComposerState() {
     runtimeMode,
     interactionMode,
     activeThreadBusy,
+    interruptibleRunId,
     onChangeDraftMessage,
     onPickDraftImages,
     onPasteIntoDraft,

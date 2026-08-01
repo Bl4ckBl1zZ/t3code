@@ -72,6 +72,17 @@ import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { cn } from "~/lib/utils";
+import {
+  THREAD_DETAILS_PANEL_CHEVRON_CLASS,
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+  THREAD_DETAILS_PANEL_ROW_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
+} from "./chat/threadDetailsPanelStyles";
 
 const SCRIPT_ICONS: Array<{ id: ProjectScriptIcon; label: string }> = [
   { id: "play", label: "Play" },
@@ -116,6 +127,7 @@ export type ProjectScriptActionResult = AtomCommandResult<void, unknown>;
 const NO_FILE_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
 
 interface ProjectScriptsControlProps {
+  displayMode?: "toolbar" | "panel";
   scripts: ReadonlyArray<ProjectScript>;
   /** Scripts declared in the project's checked-in t3.json, offered for import. */
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
@@ -133,6 +145,7 @@ interface ProjectScriptsControlProps {
 }
 
 export default function ProjectScriptsControl({
+  displayMode = "toolbar",
   scripts,
   fileScripts = NO_FILE_SCRIPTS,
   keybindings,
@@ -143,6 +156,9 @@ export default function ProjectScriptsControl({
   onUpdateScript,
   onDeleteScript,
 }: ProjectScriptsControlProps) {
+  const isPanel = displayMode === "panel";
+  const ActionGroup = isPanel ? "div" : Group;
+  const panelAnchorRef = React.useRef<HTMLDivElement | null>(null);
   const addScriptFormId = React.useId();
   const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
   const [actionsMenuOpen, setActionsMenuOpen] = useState({
@@ -351,16 +367,25 @@ export default function ProjectScriptsControl({
   return (
     <>
       {primaryScript ? (
-        <Group aria-label="Project scripts">
+        <ActionGroup
+          role="group"
+          aria-label="Project scripts"
+          {...(isPanel
+            ? { className: THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS, ref: panelAnchorRef }
+            : {})}
+        >
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
                   size="xs"
-                  variant="outline"
-                  className={`w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)] ${
-                    isPrimaryScriptActive ? activeRunButtonClassName : ""
-                  }`}
+                  variant={isPanel ? "ghost" : "outline"}
+                  className={cn(
+                    isPanel
+                      ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS
+                      : "w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]",
+                    isPrimaryScriptActive && activeRunButtonClassName,
+                  )}
                   aria-label={
                     isPrimaryScriptActive
                       ? `Stop ${primaryScript.name}`
@@ -371,11 +396,21 @@ export default function ProjectScriptsControl({
               }
             >
               {isPrimaryScriptActive ? (
-                <SquareIcon className="size-3 fill-current" />
+                <SquareIcon
+                  className={cn("fill-current", isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3")}
+                />
               ) : (
-                <ScriptIcon icon={primaryScript.icon} />
+                <ScriptIcon
+                  icon={primaryScript.icon}
+                  {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
+                />
               )}
-              <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+              <span
+                className={cn(
+                  "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                  isPanel && "not-sr-only ml-0.5 truncate",
+                )}
+              >
                 {primaryScript.name}
               </span>
             </TooltipTrigger>
@@ -383,18 +418,35 @@ export default function ProjectScriptsControl({
               {isPrimaryScriptActive ? `Stop ${primaryScript.name}` : `Run ${primaryScript.name}`}
             </TooltipPopup>
           </Tooltip>
-          <GroupSeparator className="hidden @3xl/header-actions:block" />
+          {isPanel ? (
+            <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+          ) : (
+            <GroupSeparator className="hidden @3xl/header-actions:block" />
+          )}
           <Menu
             highlightItemOnHover={false}
             open={actionsMenuOpen.scripts}
             onOpenChange={(open) => setActionsMenuOpen({ scripts: open, imports: false })}
           >
             <MenuTrigger
-              render={<Button size="icon-xs" variant="outline" aria-label="Script actions" />}
+              render={
+                <Button
+                  size={isPanel ? "sm" : "icon-xs"}
+                  variant={isPanel ? "ghost" : "outline"}
+                  className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS : undefined}
+                  aria-label="Script actions"
+                />
+              }
             >
-              <ChevronDownIcon className="size-4" />
+              <ChevronDownIcon
+                className={isPanel ? THREAD_DETAILS_PANEL_CHEVRON_CLASS : "size-4"}
+              />
             </MenuTrigger>
-            <MenuPopup align="end">
+            <MenuPopup
+              align="end"
+              {...(isPanel ? { anchor: panelAnchorRef } : {})}
+              className={isPanel ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS : undefined}
+            >
               {scripts.map((script) => {
                 const shortcutLabel = shortcutLabelForCommand(
                   keybindings,
@@ -447,11 +499,11 @@ export default function ProjectScriptsControl({
               {importMenuItems}
               <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
                 <PlusIcon className="size-4" />
-                Add action
+                {isPanel ? "Add project script" : "Add action"}
               </MenuItem>
             </MenuPopup>
           </Menu>
-        </Group>
+        </ActionGroup>
       ) : importableScripts.length > 0 ? (
         <Menu
           highlightItemOnHover={false}
@@ -479,19 +531,28 @@ export default function ProjectScriptsControl({
             render={
               <Button
                 size="xs"
-                variant="outline"
-                className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
-                aria-label="Add action"
+                variant={isPanel ? "ghost" : "outline"}
+                className={
+                  isPanel
+                    ? THREAD_DETAILS_PANEL_ROW_CLASS
+                    : "w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
+                }
+                aria-label={isPanel ? "Add project script" : "Add action"}
                 onClick={openAddDialog}
               />
             }
           >
             <PlusIcon className="size-3.5" />
-            <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-              Add action
+            <span
+              className={cn(
+                "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                isPanel && "not-sr-only ml-0.5",
+              )}
+            >
+              {isPanel ? "Add project script" : "Add action"}
             </span>
           </TooltipTrigger>
-          <TooltipPopup side="top">Add action</TooltipPopup>
+          <TooltipPopup side="top">{isPanel ? "Add project script" : "Add action"}</TooltipPopup>
         </Tooltip>
       )}
 

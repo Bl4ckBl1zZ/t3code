@@ -1,12 +1,14 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type {
-  EnvironmentId,
-  MessageId,
-  OrchestrationCheckpointSummary,
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import {
   ThreadId,
-  TurnId,
+  type EnvironmentId,
+  type MessageId,
+  type OrchestrationV2ProjectedTurnItem,
+  type RunId,
 } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
@@ -33,6 +35,7 @@ import {
 } from "react-native-nitro-markdown";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Linking,
   Platform,
@@ -82,13 +85,10 @@ import {
   createNativeReviewDiffTheme,
   NATIVE_REVIEW_DIFF_CONTENT_WIDTH,
 } from "../review/nativeReviewDiffAdapter";
-import { buildReviewParsedDiff, getReviewSectionIdForCheckpoint } from "../review/reviewModel";
-import { setReviewSelectedFilePath, setReviewSelectedSectionId } from "../review/reviewState";
-import { scopedThreadKey } from "../../lib/scopedEntities";
-import { ChangedFilesCard } from "./ChangedFilesCard";
-import { shouldAutoExpandChangedFiles } from "./turnDiffTree";
+import { buildReviewParsedDiff } from "../review/reviewModel";
 import { cn } from "../../lib/cn";
 import { deriveCenteredContentHorizontalPadding, type LayoutVariant } from "../../lib/layout";
+import { uuidv4 } from "../../lib/uuid";
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,
@@ -101,8 +101,9 @@ import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons
 import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
 import {
   deriveThreadFeedPresentation,
+  threadFeedRunIsUnsettled,
   type ThreadFeedEntry,
-  type ThreadFeedLatestTurn,
+  type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -113,7 +114,13 @@ import {
 } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
+import { waitForThreadShellReady } from "./threadForkNavigation";
+import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -157,13 +164,12 @@ function isFreshTimestamp(input: string): boolean {
 export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
-  /** Per-turn checkpoint summaries keyed by the turn's terminal assistant message id. */
-  readonly turnDiffSummaries: ReadonlyMap<string, OrchestrationCheckpointSummary>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
-  readonly latestTurn: ThreadFeedLatestTurn | null;
+  readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
@@ -171,11 +177,96 @@ export interface ThreadFeedProps {
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
+  readonly topAccessory?: ReactNode;
   readonly contentMaxWidth?: number;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+}
+
+async function waitForThreadShell(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): Promise<boolean> {
+  const atom = environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, threadId));
+  return waitForThreadShellReady({
+    read: () => appAtomRegistry.get(atom) !== null,
+  });
+}
+
+function AssistantForkButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly iconColor: ColorValue;
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+  readonly sourceTitle: string;
+}) {
+  const support = useV2ItemSupport({
+    environmentId: props.environmentId,
+    sourceThreadId: props.projectedItem.sourceThreadId,
+    sourceItemId: props.projectedItem.sourceItemId,
+  });
+  const forkFromRun = useAtomCommand(threadEnvironment.forkFromRun, "fork from response");
+  const navigation = useNavigation();
+  const [busy, setBusy] = useState(false);
+  const canFork = canForkProjectedAssistantItem({
+    projectedItem: props.projectedItem,
+    capabilities: support.providerSession?.capabilities,
+  });
+  const runId = props.projectedItem.item.runId;
+
+  if (!canFork || runId === null) return null;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Fork from this response"
+      disabled={busy}
+      onPress={() => {
+        const targetThreadId = ThreadId.make(uuidv4());
+        setBusy(true);
+        void Haptics.selectionAsync();
+        void forkFromRun({
+          environmentId: props.environmentId,
+          input: {
+            sourceThreadId: props.projectedItem.sourceThreadId,
+            targetThreadId,
+            runId,
+            title: `${props.sourceTitle} fork`,
+            creationSource: "mobile",
+          },
+        })
+          .then(async (result) => {
+            if (result._tag !== "Success") return;
+            const targetThreadReady = await waitForThreadShell(props.environmentId, targetThreadId);
+            if (!targetThreadReady) {
+              Alert.alert(
+                "Fork created",
+                "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
+              );
+              return;
+            }
+            navigation.navigate("Thread", {
+              environmentId: props.environmentId,
+              threadId: targetThreadId,
+            });
+          })
+          .finally(() => setBusy(false));
+      }}
+      className="h-7 w-7 items-center justify-center disabled:opacity-40"
+    >
+      {busy ? (
+        <ActivityIndicator size="small" />
+      ) : (
+        <SymbolView
+          name="arrow.triangle.branch"
+          size={13}
+          tintColor={props.iconColor}
+          type="monochrome"
+        />
+      )}
+    </Pressable>
+  );
 }
 
 function MessageAttachmentImage(props: {
@@ -831,22 +922,16 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "turnDiffSummaries"> & {
+  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "threadId" | "workspaceRoot"> & {
     readonly copiedRowId: string | null;
+    readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
-    readonly expandedChangedFiles: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
-    readonly unsettledTurnId: TurnId | null;
-    readonly latestTurnId: TurnId | null;
+    readonly unsettledTurnId: RunId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
-    readonly onToggleWorkRow: (rowId: string) => void;
-    readonly onToggleTurnFold: (turnId: TurnId) => void;
-    readonly onToggleChangedFiles: (entryId: string, turnId: TurnId, expanded: boolean) => void;
-    readonly onOpenTurnDiff: (
-      checkpoint: OrchestrationCheckpointSummary,
-      filePath?: string,
-    ) => void;
+    readonly onToggleWorkRow: (rowId: string, anchorKey?: string) => void;
+    readonly onToggleTurnFold: (runId: RunId) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -855,6 +940,7 @@ function renderFeedEntry(
     readonly reviewCommentColors: ReviewCommentColors;
     readonly reviewCommentBubbleWidth: number;
     readonly userBubbleMaxWidth: number;
+    readonly threadTitle: string;
   },
 ) {
   const entry = info.item;
@@ -864,12 +950,12 @@ function renderFeedEntry(
     return <WorkingTimelineRow startedAt={entry.createdAt} />;
   }
 
-  if (entry.type === "turn-fold") {
+  if (entry.type === "run-fold") {
     return (
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded }}
-        onPress={() => props.onToggleTurnFold(entry.turnId)}
+        onPress={() => props.onToggleTurnFold(entry.runId)}
         hitSlop={4}
         className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-neutral-200/80 px-2 dark:border-white/[0.08]"
       >
@@ -908,7 +994,7 @@ function renderFeedEntry(
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
-      message.turnId === props.unsettledTurnId;
+      message.runId === props.unsettledTurnId;
     const showAssistantMeta =
       message.role === "assistant" &&
       props.terminalAssistantMessageIds.has(message.id) &&
@@ -917,11 +1003,17 @@ function renderFeedEntry(
 
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
+      const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
       return (
         <Animated.View
           className="mb-5 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
+          {message.createdBy === "agent" ? (
+            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
+              Sent by another agent
+            </Text>
+          ) : null}
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
             style={{
@@ -952,6 +1044,30 @@ function renderFeedEntry(
             })}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+            {intentBadge ? (
+              <View
+                accessible
+                accessibilityRole="text"
+                accessibilityLabel={intentBadge.accessibilityLabel}
+                className={cn(
+                  "rounded-full border px-1.5 py-0.5",
+                  intentBadge.tone === "queued"
+                    ? "border-amber-500/25 bg-amber-500/10 dark:border-amber-400/25 dark:bg-amber-400/10"
+                    : "border-sky-500/25 bg-sky-500/10 dark:border-sky-400/25 dark:bg-sky-400/10",
+                )}
+              >
+                <Text
+                  className={cn(
+                    "font-t3-medium text-2xs tracking-wide",
+                    intentBadge.tone === "queued"
+                      ? "text-amber-700 dark:text-amber-300"
+                      : "text-sky-700 dark:text-sky-300",
+                  )}
+                >
+                  {intentBadge.label}
+                </Text>
+              </View>
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
@@ -969,11 +1085,9 @@ function renderFeedEntry(
       );
     }
 
-    const turnDiffSummary = props.turnDiffSummaries.get(message.id);
-
     // Skip empty assistant messages (no text, no attachments) — they would
     // render as an orphaned timestamp and break adjacent activity-group merging.
-    if (message.text.trim().length === 0 && attachments.length === 0 && !turnDiffSummary) {
+    if (message.text.trim().length === 0 && attachments.length === 0) {
       return null;
     }
 
@@ -1013,19 +1127,14 @@ function renderFeedEntry(
             />
           );
         })}
-        {turnDiffSummary ? (
-          <ChangedFilesRow
-            entryId={message.id}
-            checkpoint={turnDiffSummary}
-            expandedChangedFiles={props.expandedChangedFiles}
-            latestTurnId={props.latestTurnId}
-            iconSubtleColor={iconSubtleColor}
-            onToggleChangedFiles={props.onToggleChangedFiles}
-            onOpenTurnDiff={props.onOpenTurnDiff}
-          />
-        ) : null}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
+            <AssistantForkButton
+              environmentId={props.environmentId}
+              iconColor={iconSubtleColor}
+              projectedItem={message.projectedItem}
+              sourceTitle={props.threadTitle}
+            />
             {message.text.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
@@ -1048,39 +1157,18 @@ function renderFeedEntry(
     <ThreadWorkLog
       activities={entry.activities}
       copiedRowId={props.copiedRowId}
+      currentThreadId={props.threadId}
+      environmentId={props.environmentId}
+      expanded={props.expandedWorkGroups[entry.id] ?? false}
       expandedRows={props.expandedWorkRows}
       iconSubtleColor={iconSubtleColor}
       onCopyRow={props.onCopyWorkRow}
-      onToggleRow={props.onToggleWorkRow}
+      onToggleGroup={() => props.onToggleWorkGroup(entry.id)}
+      onToggleRow={(rowId) => props.onToggleWorkRow(rowId, entry.id)}
+      workspaceRoot={props.workspaceRoot}
     />
   );
 }
-
-const ChangedFilesRow = memo(function ChangedFilesRow(props: {
-  readonly entryId: string;
-  readonly checkpoint: OrchestrationCheckpointSummary;
-  readonly expandedChangedFiles: Record<string, boolean>;
-  readonly latestTurnId: TurnId | null;
-  readonly iconSubtleColor: string | ColorValue;
-  readonly onToggleChangedFiles: (entryId: string, turnId: TurnId, expanded: boolean) => void;
-  readonly onOpenTurnDiff: (checkpoint: OrchestrationCheckpointSummary, filePath?: string) => void;
-}) {
-  const { checkpoint } = props;
-  const expanded =
-    props.expandedChangedFiles[checkpoint.turnId] ??
-    shouldAutoExpandChangedFiles(checkpoint.files, checkpoint.turnId === props.latestTurnId);
-  return (
-    <ChangedFilesCard
-      files={checkpoint.files}
-      expanded={expanded}
-      iconSubtleColor={props.iconSubtleColor}
-      onToggleExpanded={() =>
-        props.onToggleChangedFiles(props.entryId, checkpoint.turnId, !expanded)
-      }
-      onOpenDiff={(filePath) => props.onOpenTurnDiff(checkpoint, filePath)}
-    />
-  );
-});
 
 const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly startedAt: string }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -1380,9 +1468,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foldSettleFrameRef = useRef<number | null>(null);
   const foldSettleSecondFrameRef = useRef<number | null>(null);
+  const previousLatestTurnRef = useRef(props.latestRun);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const headerMaterialVisibleRef = useRef(false);
-  const previousLatestTurnRef = useRef(props.latestTurn);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
   const [viewportWidth, setViewportWidth] = useState(() =>
@@ -1394,21 +1482,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
-    readonly expandedTurnIds: ReadonlySet<TurnId>;
-    readonly expandedChangedFiles: Record<string, boolean>;
+    readonly expandedTurnIds: ReadonlySet<RunId>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
-    expandedChangedFiles: {},
   });
   const {
     copiedRowId,
     expandedWorkGroups,
     expandedWorkRows,
     expandedTurnIds,
-    expandedChangedFiles,
   } = interactionState;
   const [expandedImage, setExpandedImage] = useState<{
     uri: string;
@@ -1475,9 +1560,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const listAppearanceData = useMemo(
     () => ({
       copiedRowId,
+      expandedWorkGroups,
       expandedWorkRows,
-      expandedChangedFiles,
-      turnDiffSummaries: props.turnDiffSummaries,
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
@@ -1486,9 +1570,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }),
     [
       copiedRowId,
+      expandedWorkGroups,
       expandedWorkRows,
-      expandedChangedFiles,
-      props.turnDiffSummaries,
       iconSubtleColor,
       markdownStyles,
       reviewCommentColors,
@@ -1563,31 +1646,20 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     reportHeaderMaterialVisibility(false);
   }, [props.threadId, reportHeaderMaterialVisibility]);
 
-  const expandedWorkGroupIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const [groupId, expanded] of Object.entries(expandedWorkGroups)) {
-      if (expanded) {
-        ids.add(groupId);
-      }
-    }
-    return ids;
-  }, [expandedWorkGroups]);
   const presentedFeed = useMemo(
     () =>
       deriveThreadFeedPresentation(
         props.feed,
-        props.latestTurn,
+        props.latestRun,
         expandedTurnIds,
-        expandedWorkGroupIds,
+        new Set(
+          Object.entries(expandedWorkGroups)
+            .filter(([, expanded]) => expanded)
+            .map(([groupId]) => groupId),
+        ),
         props.activeWorkStartedAt,
       ),
-    [
-      expandedTurnIds,
-      expandedWorkGroupIds,
-      props.activeWorkStartedAt,
-      props.feed,
-      props.latestTurn,
-    ],
+    [expandedTurnIds, expandedWorkGroups, props.activeWorkStartedAt, props.feed, props.latestRun],
   );
 
   // The empty↔filled key below remounts the list, which resets its imperative
@@ -1616,29 +1688,25 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [presentedFeed, props.anchorMessageId, anchorTopInset],
   );
   const terminalAssistantMessageIds = useMemo(() => {
-    const terminalIdsByTurn = new Map<TurnId, string>();
+    const terminalIdsByTurn = new Map<RunId, string>();
     for (const entry of props.feed) {
-      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
-        terminalIdsByTurn.set(entry.message.turnId, entry.message.id);
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.runId) {
+        terminalIdsByTurn.set(entry.message.runId, entry.message.id);
       }
     }
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
-  const unsettledTurnId =
-    props.latestTurn &&
-    (props.latestTurn.completedAt === null || props.latestTurn.state === "running")
-      ? props.latestTurn.turnId
-      : null;
+  const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
 
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
-    previousLatestTurnRef.current = props.latestTurn;
-    if (!props.latestTurn || !previous) {
+    previousLatestTurnRef.current = props.latestRun;
+    if (!props.latestRun || !previous) {
       return;
     }
-    if (props.latestTurn.turnId === previous.turnId) {
-      if (previous.state === "running" && props.latestTurn.state === "interrupted") {
-        const interruptedTurnId = props.latestTurn.turnId;
+    if (props.latestRun.runId === previous.runId) {
+      if (previous.status === "running" && props.latestRun.status === "interrupted") {
+        const interruptedTurnId = props.latestRun.runId;
         setInteractionState((current) => ({
           ...current,
           expandedTurnIds: new Set(current.expandedTurnIds).add(interruptedTurnId),
@@ -1647,14 +1715,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       return;
     }
     setInteractionState((current) => {
-      if (!current.expandedTurnIds.has(previous.turnId)) {
+      if (!current.expandedTurnIds.has(previous.runId)) {
         return current;
       }
       const next = new Set(current.expandedTurnIds);
-      next.delete(previous.turnId);
+      next.delete(previous.runId);
       return { ...current, expandedTurnIds: next };
     });
-  }, [props.latestTurn]);
+  }, [props.latestRun]);
 
   useEffect(() => {
     return () => {
@@ -1735,8 +1803,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleWorkRow = useCallback(
-    (rowId: string) => {
-      suspendEndScrollMaintenanceForDisclosure(rowId);
+    (rowId: string, anchorKey?: string) => {
+      suspendEndScrollMaintenanceForDisclosure(anchorKey ?? null);
       setInteractionState((current) => ({
         ...current,
         expandedWorkRows: {
@@ -1749,14 +1817,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleTurnFold = useCallback(
-    (turnId: TurnId) => {
-      suspendEndScrollMaintenanceForDisclosure(`turn-fold:${turnId}`);
+    (runId: RunId) => {
+      suspendEndScrollMaintenanceForDisclosure(`run-fold:${runId}`);
       setInteractionState((current) => {
         const next = new Set(current.expandedTurnIds);
-        if (next.has(turnId)) {
-          next.delete(turnId);
+        if (next.has(runId)) {
+          next.delete(runId);
         } else {
-          next.add(turnId);
+          next.add(runId);
         }
         return { ...current, expandedTurnIds: next };
       });
@@ -1764,35 +1832,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
-  const onToggleChangedFiles = useCallback(
-    (entryId: string, turnId: TurnId, expanded: boolean) => {
-      suspendEndScrollMaintenanceForDisclosure(entryId);
-      setInteractionState((current) => ({
-        ...current,
-        expandedChangedFiles: {
-          ...current.expandedChangedFiles,
-          [turnId]: expanded,
-        },
-      }));
-    },
-    [suspendEndScrollMaintenanceForDisclosure],
-  );
-
-  const onOpenTurnDiff = useCallback(
-    (checkpoint: OrchestrationCheckpointSummary, filePath?: string) => {
-      void Haptics.selectionAsync();
-      // Preselect the turn's section (and the tapped file, if any) so the
-      // review opens on this checkpoint scrolled to that file.
-      const threadKey = scopedThreadKey(props.environmentId, props.threadId);
-      setReviewSelectedSectionId(threadKey, getReviewSectionIdForCheckpoint(checkpoint));
-      setReviewSelectedFilePath(threadKey, filePath ?? null);
-      navigation.navigate("ThreadReview", {
-        environmentId: props.environmentId,
-        threadId: props.threadId,
-      });
-    },
-    [navigation, props.environmentId, props.threadId],
-  );
 
   const onPressImage = useCallback((uri: string, headers?: Record<string, string>) => {
     setExpandedImage({ uri, headers });
@@ -1811,7 +1850,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const getFixedItemSize = useCallback(
     (entry: ThreadFeedEntry) => {
       switch (entry.type) {
-        case "turn-fold":
+        case "run-fold":
           return TURN_FOLD_HEIGHT;
         case "work-toggle":
           return WORK_GROUP_TOGGLE_HEIGHT;
@@ -1834,19 +1873,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        threadId: props.threadId,
         copiedRowId,
+        expandedWorkGroups,
         expandedWorkRows,
-        expandedChangedFiles,
-        turnDiffSummaries: props.turnDiffSummaries,
         terminalAssistantMessageIds,
         unsettledTurnId,
-        latestTurnId: props.latestTurn?.turnId ?? null,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
         onToggleTurnFold,
-        onToggleChangedFiles,
-        onOpenTurnDiff,
         onPressImage,
         onMarkdownLinkPress,
         iconSubtleColor,
@@ -1855,12 +1891,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         reviewCommentColors,
         reviewCommentBubbleWidth,
         userBubbleMaxWidth,
+        threadTitle: props.threadTitle,
         skills: props.skills,
+        workspaceRoot: props.workspaceRoot,
       }),
     [
       copiedRowId,
+      expandedWorkGroups,
       expandedWorkRows,
-      expandedChangedFiles,
       terminalAssistantMessageIds,
       unsettledTurnId,
       iconSubtleColor,
@@ -1875,12 +1913,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleTurnFold,
       onToggleWorkGroup,
       onToggleWorkRow,
-      onToggleChangedFiles,
-      onOpenTurnDiff,
       props.environmentId,
-      props.latestTurn,
+      props.threadId,
+      props.threadTitle,
       props.skills,
-      props.turnDiffSummaries,
+      props.workspaceRoot,
     ],
   );
 
@@ -2005,7 +2042,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onScroll={handleScroll}
             scrollEventThrottle={16}
             ListHeaderComponent={
-              usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />
+              <>
+                {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
+                {props.topAccessory}
+              </>
             }
             contentContainerStyle={{
               paddingTop: 12,

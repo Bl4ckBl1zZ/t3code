@@ -1,4 +1,4 @@
-import type { ApprovalRequestId } from "@t3tools/contracts";
+import type { RuntimeRequestId } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -16,14 +16,10 @@ export interface PendingUserInputCardProps {
   readonly pendingUserInput: PendingUserInput;
   readonly drafts: Record<string, PendingUserInputDraftAnswer>;
   readonly answers: Record<string, string> | null;
-  readonly respondingUserInputId: ApprovalRequestId | null;
-  readonly onSelectOption: (
-    requestId: ApprovalRequestId,
-    questionId: string,
-    label: string,
-  ) => void;
+  readonly respondingUserInputId: RuntimeRequestId | null;
+  readonly onSelectOption: (requestId: RuntimeRequestId, questionId: string, label: string) => void;
   readonly onChangeCustomAnswer: (
-    requestId: ApprovalRequestId,
+    requestId: RuntimeRequestId,
     questionId: string,
     customAnswer: string,
   ) => void;
@@ -31,6 +27,9 @@ export interface PendingUserInputCardProps {
 }
 
 export function PendingUserInputCard(props: PendingUserInputCardProps) {
+  // A dead provider process cannot receive an answer, so the card stays
+  // readable but inert instead of accepting input that would go nowhere.
+  const canRespond = props.pendingUserInput.responseCapability === "live";
   const questions = props.pendingUserInput.questions;
   const [rawQuestionIndex, setRawQuestionIndex] = useState(0);
   const autoAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,7 +53,8 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const isLastQuestion = questionIndex === questions.length - 1;
   const responding = props.respondingUserInputId === props.pendingUserInput.requestId;
   const currentAnswered = Boolean(draft?.customAnswer?.trim().length || draft?.selectedOptionLabel);
-  const primaryEnabled = isLastQuestion ? props.answers !== null && !responding : currentAnswered;
+  const primaryEnabled =
+    canRespond && (isLastQuestion ? props.answers !== null && !responding : currentAnswered);
 
   const goToQuestion = (index: number) => {
     if (autoAdvanceTimeoutRef.current) {
@@ -87,6 +87,12 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       <Text className="font-t3-bold text-lg text-neutral-950 dark:text-neutral-50">
         Fill in the pending answers
       </Text>
+      {!canRespond ? (
+        <Text className="font-sans text-sm leading-5 text-neutral-600 dark:text-neutral-400">
+          The provider process for this request is no longer available. Interrupt or restart the run
+          to continue.
+        </Text>
+      ) : null}
       <View key={question.id} className="gap-2 pt-1">
         <View className="flex-row items-center justify-between">
           <Text className="font-t3-bold text-xs uppercase tracking-[1px] text-neutral-500 dark:text-neutral-500">
@@ -108,6 +114,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
             return (
               <Pressable
                 key={option.label}
+                disabled={!canRespond}
                 className={cn(
                   "rounded-full border px-3 py-2.5 ",
                   selected
@@ -131,6 +138,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           })}
         </View>
         <TextInput
+          editable={canRespond}
           value={draft?.customAnswer ?? ""}
           onChangeText={(value) =>
             props.onChangeCustomAnswer(props.pendingUserInput.requestId, question.id, value)

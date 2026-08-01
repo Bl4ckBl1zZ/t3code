@@ -22,6 +22,10 @@
     "./voice": {
       "types": "./src/voice.ts",
       "import": "./src/voice.ts"
+    },
+    "./legacy-orchestration": {
+      "types": "./src/orchestration.ts",
+      "import": "./src/orchestration.ts"
     }
   },
   "scripts": {
