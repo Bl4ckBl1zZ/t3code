@@ -212,10 +212,19 @@ export function useThreadComposerState() {
       if (index === -1 || !neighbor) {
         return;
       }
-      void Promise.all([
-        updateThreadOutboxMessage({ ...message, createdAt: neighbor.createdAt }),
-        updateThreadOutboxMessage({ ...neighbor, createdAt: message.createdAt }),
-      ]).catch((error: unknown) => {
+      // The two writes are not atomic: if the second fails after the first
+      // succeeded, both messages would share a createdAt and their order after
+      // reload would depend on storage enumeration. Sequence them and restore
+      // the first message on a second-write failure.
+      void (async () => {
+        await updateThreadOutboxMessage({ ...message, createdAt: neighbor.createdAt });
+        try {
+          await updateThreadOutboxMessage({ ...neighbor, createdAt: message.createdAt });
+        } catch (error) {
+          await updateThreadOutboxMessage(message).catch(() => undefined);
+          throw error;
+        }
+      })().catch((error: unknown) => {
         setPendingConnectionError(
           error instanceof Error ? error.message : "Failed to reorder the queued messages.",
         );

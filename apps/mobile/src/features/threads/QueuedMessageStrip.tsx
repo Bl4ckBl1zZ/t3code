@@ -135,7 +135,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     >
       <View className="size-5 items-center justify-center">
         {isDispatching ? (
-          <ActivityIndicator size="small" />
+          <ActivityIndicator size="small" accessibilityLabel="Sending queued message" />
         ) : (
           <SymbolView name="clock" size={12} tintColor={iconSubtle} type="monochrome" />
         )}
@@ -197,6 +197,17 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     </Animated.View>
   );
 });
+
+/**
+ * Pre-measure estimate of the strip's height so the feed's initial bottom inset
+ * accounts for it before onComposerLayout reports the real overlay height —
+ * otherwise content sits under the strip and jumps once measurement lands.
+ * Header line (~16) + per-row height (~36) + gaps (6) + bottom padding (8).
+ */
+export function estimatedQueuedMessageStripHeight(messageCount: number): number {
+  if (messageCount === 0) return 0;
+  return 16 + messageCount * 42 + 8;
+}
 
 /**
  * Queued messages waiting for the running turn (or reconnect) to finish,

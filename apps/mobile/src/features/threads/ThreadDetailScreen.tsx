@@ -26,6 +26,7 @@ import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { estimatedQueuedMessageStripHeight } from "./QueuedMessageStrip";
 import type { QueuedThreadMessage } from "../../state/thread-outbox";
 import type {
   PendingApproval,
@@ -208,7 +209,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   })();
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
-  const composerOverlapHeight = composerChrome + composerBottomInset;
+  // Include the queue strip in the estimate: the feed uses this inset until
+  // onComposerLayout measures the real overlay, and a too-small estimate lets
+  // content sit under the strip and jump when measurement lands.
+  const composerOverlapHeight =
+    composerChrome +
+    composerBottomInset +
+    estimatedQueuedMessageStripHeight(props.selectedThreadQueuedMessages.length);
   const estimatedOverlayHeight = composerOverlapHeight;
   // The overlay's measured height includes the home-indicator inset (the
   // composer pads it), but contentInsetAdjustmentBehavior="automatic" makes

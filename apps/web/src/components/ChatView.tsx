@@ -1518,6 +1518,10 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  // Lets async continuations (queued-message drain) detect navigation away
+  // from the thread they captured before mutating per-thread UI state.
+  const activeThreadKeyRef = useRef(activeThreadKey);
+  activeThreadKeyRef.current = activeThreadKey;
   const activeThreadQueuedMessages = useQueuedMessageStore((store) =>
     activeThreadKey ? (store.queuesByThreadKey[activeThreadKey] ?? null) : null,
   );
@@ -5089,6 +5093,10 @@ function ChatViewContent(props: ChatViewProps) {
   // and a mid-queue interrupt stops the drain naturally.
   // ------------------------------------------------------------------
   const queuedDrainBusyRef = useRef(false);
+  // Bumped when a drain pass finishes. The busy ref isn't reactive, so without
+  // this an effect run skipped while busy (e.g. after switching threads mid-
+  // drain) would never re-fire and the new thread's queue would sit undrained.
+  const [queuedDrainPass, setQueuedDrainPass] = useState(0);
   const drainQueuedHead = useCallback(async () => {
     if (queuedDrainBusyRef.current || sendInFlightRef.current) return;
     if (!activeThread || !activeThreadKey || !isServerThread) return;
@@ -5141,11 +5149,25 @@ function ChatViewContent(props: ChatViewProps) {
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
         modelSelection: head.modelSelection,
+        // Match the direct-send path: if the local checkout moved to another
+        // branch while the message waited, record the branch it actually runs
+        // on so the mismatch banner clears after the queued turn.
+        ...(localCheckoutBranchMismatch
+          ? { branch: localCheckoutBranchMismatch.currentBranch }
+          : {}),
         runtimeMode,
         interactionMode,
       });
       if (settingsResult._tag === "Failure") {
         throw squashAtomCommandFailure(settingsResult);
+      }
+
+      // Navigation may have changed the active thread while the awaits above
+      // were in flight; the optimistic row and timeline anchor below belong to
+      // the captured thread, not whichever one is active now.
+      if (activeThreadKeyRef.current !== activeThreadKey) {
+        resetLocalDispatch();
+        return;
       }
 
       // Anchor the timeline to the new row exactly like a direct send.
@@ -5225,6 +5247,7 @@ function ChatViewContent(props: ChatViewProps) {
       sendInFlightRef.current = false;
       setQueuedMessageDispatching(null);
       queuedDrainBusyRef.current = false;
+      setQueuedDrainPass((pass) => pass + 1);
     }
   }, [
     activeThread,
@@ -5233,6 +5256,7 @@ function ChatViewContent(props: ChatViewProps) {
     environmentId,
     interactionMode,
     isServerThread,
+    localCheckoutBranchMismatch,
     persistThreadSettingsForNextTurn,
     removeQueuedMessage,
     resetLocalDispatch,
@@ -5260,6 +5284,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadQueuedMessages,
     canDrainQueuedMessages,
     drainQueuedHead,
+    queuedDrainPass,
     queuedMessageEditingIds,
   ]);
 
