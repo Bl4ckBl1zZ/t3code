@@ -26,6 +26,8 @@ import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { estimatedQueuedMessageStripHeight } from "./QueuedMessageStrip";
+import type { QueuedThreadMessage } from "../../state/thread-outbox";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -66,6 +68,12 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly selectedThreadQueuedMessages: ReadonlyArray<QueuedThreadMessage>;
+  readonly dispatchingQueuedMessageId: string | null;
+  readonly onDeleteQueuedMessage: (message: QueuedThreadMessage) => void;
+  readonly onMoveQueuedMessage: (message: QueuedThreadMessage, direction: "up" | "down") => void;
+  readonly onUpdateQueuedMessageText: (message: QueuedThreadMessage, text: string) => void;
+  readonly onQueuedMessageEditingChange: (message: QueuedThreadMessage, editing: boolean) => void;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -201,7 +209,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   })();
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
-  const composerOverlapHeight = composerChrome + composerBottomInset;
+  // Include the queue strip in the estimate: the feed uses this inset until
+  // onComposerLayout measures the real overlay, and a too-small estimate lets
+  // content sit under the strip and jump when measurement lands.
+  const composerOverlapHeight =
+    composerChrome +
+    composerBottomInset +
+    estimatedQueuedMessageStripHeight(props.selectedThreadQueuedMessages.length);
   const estimatedOverlayHeight = composerOverlapHeight;
   // The overlay's measured height includes the home-indicator inset (the
   // composer pads it), but contentInsetAdjustmentBehavior="automatic" makes
@@ -429,6 +443,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               selectedThread={props.selectedThread}
               serverConfig={props.serverConfig}
               queueCount={props.selectedThreadQueueCount}
+              queuedMessages={props.selectedThreadQueuedMessages}
+              dispatchingQueuedMessageId={props.dispatchingQueuedMessageId}
+              onDeleteQueuedMessage={props.onDeleteQueuedMessage}
+              onMoveQueuedMessage={props.onMoveQueuedMessage}
+              onUpdateQueuedMessageText={props.onUpdateQueuedMessageText}
+              onQueuedMessageEditingChange={props.onQueuedMessageEditingChange}
               activeThreadBusy={props.activeThreadBusy}
               environmentId={props.environmentId}
               projectCwd={props.projectWorkspaceRoot}

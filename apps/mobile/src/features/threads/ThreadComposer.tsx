@@ -67,7 +67,9 @@ import {
   providerOptionsConfigurationLabel,
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
+import type { QueuedThreadMessage } from "../../state/thread-outbox";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
+import { QueuedMessageStrip } from "./QueuedMessageStrip";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import {
   voiceComboButtonProps,
@@ -107,6 +109,12 @@ export interface ThreadComposerProps {
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
+  readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
+  readonly dispatchingQueuedMessageId: string | null;
+  readonly onDeleteQueuedMessage: (message: QueuedThreadMessage) => void;
+  readonly onMoveQueuedMessage: (message: QueuedThreadMessage, direction: "up" | "down") => void;
+  readonly onUpdateQueuedMessageText: (message: QueuedThreadMessage, text: string) => void;
+  readonly onQueuedMessageEditingChange: (message: QueuedThreadMessage, editing: boolean) => void;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
@@ -769,6 +777,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           onCleanupChange={voice.setCleanup}
         />
 
+        <QueuedMessageStrip
+          messages={props.queuedMessages}
+          dispatchingMessageId={props.dispatchingQueuedMessageId}
+          onDelete={props.onDeleteQueuedMessage}
+          onMove={props.onMoveQueuedMessage}
+          onSaveText={props.onUpdateQueuedMessageText}
+          onEditingChange={props.onQueuedMessageEditingChange}
+        />
+
         <ComposerSurface
           isDarkMode={isDarkMode}
           style={
@@ -958,15 +975,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </Animated.View>
         ) : null}
 
-        {/* Queue count */}
-        {props.queueCount > 0 ? (
-          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
-            <Text className="pt-2 text-xs text-foreground-muted">
-              {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send
-              automatically.
-            </Text>
-          </Animated.View>
-        ) : null}
+        {/* Queue details now render as the QueuedMessageStrip above the surface. */}
       </Animated.View>
 
       <ImageViewing

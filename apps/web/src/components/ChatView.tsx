@@ -238,6 +238,13 @@ import {
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { QueuedMessageStrip } from "./chat/QueuedMessageStrip";
+import {
+  disposeQueuedComposerMessage,
+  MAX_QUEUED_MESSAGES_PER_THREAD,
+  useQueuedMessageStore,
+  type QueuedComposerMessage,
+} from "../queuedMessageStore";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
@@ -1263,6 +1270,16 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setInteractionMode,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const enqueueQueuedMessage = useQueuedMessageStore((store) => store.enqueue);
+  const removeQueuedMessage = useQueuedMessageStore((store) => store.remove);
+  const moveQueuedMessage = useQueuedMessageStore((store) => store.move);
+  const updateQueuedMessagePrompt = useQueuedMessageStore((store) => store.updatePrompt);
+  const holdQueuedMessageEditing = useQueuedMessageStore((store) => store.holdEditing);
+  const releaseQueuedMessageEditing = useQueuedMessageStore((store) => store.releaseEditing);
+  const setQueuedMessageDispatching = useQueuedMessageStore((store) => store.setDispatching);
+  const setQueuedMessageDispatchError = useQueuedMessageStore((store) => store.setDispatchError);
+  const queuedMessageDispatchingId = useQueuedMessageStore((store) => store.dispatchingMessageId);
+  const queuedMessageEditingIds = useQueuedMessageStore((store) => store.editingMessageIds);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
@@ -1501,6 +1518,13 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  // Lets async continuations (queued-message drain) detect navigation away
+  // from the thread they captured before mutating per-thread UI state.
+  const activeThreadKeyRef = useRef(activeThreadKey);
+  activeThreadKeyRef.current = activeThreadKey;
+  const activeThreadQueuedMessages = useQueuedMessageStore((store) =>
+    activeThreadKey ? (store.queuesByThreadKey[activeThreadKey] ?? null) : null,
+  );
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -4655,6 +4679,65 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
+    // While the agent is running (or earlier queued messages are still
+    // waiting), a send becomes a queued message instead of an immediate turn.
+    // Queueing behind an existing queue keeps ordering: a direct send racing
+    // the drain would jump ahead of messages queued before it.
+    const activeQueueLength = activeThreadKey
+      ? (useQueuedMessageStore.getState().queuesByThreadKey[activeThreadKey]?.length ?? 0)
+      : 0;
+    if (isServerThread && activeThreadKey && (phase === "running" || activeQueueLength > 0)) {
+      if (activeQueueLength >= MAX_QUEUED_MESSAGES_PER_THREAD) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Queue is full",
+            description: `Up to ${MAX_QUEUED_MESSAGES_PER_THREAD} messages can wait per thread. Edit or delete a queued message instead.`,
+          }),
+        );
+        return;
+      }
+      const queued: QueuedComposerMessage = {
+        id: newMessageId(),
+        createdAt: new Date().toISOString(),
+        prompt: promptForSend,
+        images: [...composerImages],
+        terminalContexts: [...sendableComposerTerminalContexts],
+        elementContexts: [...composerElementContexts],
+        previewAnnotations: [...composerPreviewAnnotations],
+        reviewComments: [...composerReviewComments],
+        modelSelection: ctxSelectedModelSelection,
+        provider: ctxSelectedProvider,
+        model: ctxSelectedModel,
+        providerModels: ctxSelectedProviderModels,
+        promptEffort: ctxSelectedPromptEffort,
+        lastDispatchError: null,
+      };
+      if (!enqueueQueuedMessage(activeThreadKey, queued)) {
+        return;
+      }
+      if (expiredTerminalContextCount > 0) {
+        const toastCopy = buildExpiredTerminalContextToastCopy(
+          expiredTerminalContextCount,
+          "omitted",
+        );
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: toastCopy.title,
+            description: toastCopy.description,
+          }),
+        );
+      }
+      promptRef.current = "";
+      // The queued message now owns the image File/blob handles; clearing the
+      // draft leaves previews intact because clearComposerContent does not
+      // revoke them.
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
+
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
@@ -4950,6 +5033,44 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  const onDeleteQueuedMessage = useCallback(
+    (messageId: MessageId) => {
+      if (!activeThreadKey) return;
+      const removed = removeQueuedMessage(activeThreadKey, messageId);
+      if (removed) {
+        disposeQueuedComposerMessage(removed);
+      }
+    },
+    [activeThreadKey, removeQueuedMessage],
+  );
+
+  const onMoveQueuedMessage = useCallback(
+    (messageId: MessageId, direction: "up" | "down") => {
+      if (!activeThreadKey) return;
+      moveQueuedMessage(activeThreadKey, messageId, direction);
+    },
+    [activeThreadKey, moveQueuedMessage],
+  );
+
+  const onSaveQueuedMessagePrompt = useCallback(
+    (messageId: MessageId, prompt: string) => {
+      if (!activeThreadKey) return;
+      updateQueuedMessagePrompt(activeThreadKey, messageId, prompt);
+    },
+    [activeThreadKey, updateQueuedMessagePrompt],
+  );
+
+  const onQueuedMessageEditingChange = useCallback(
+    (messageId: MessageId, editing: boolean) => {
+      if (editing) {
+        holdQueuedMessageEditing(messageId);
+      } else {
+        releaseQueuedMessageEditing(messageId);
+      }
+    },
+    [holdQueuedMessageEditing, releaseQueuedMessageEditing],
+  );
+
   const onInterrupt = async () => {
     if (!activeThread) return;
     const result = await interruptThreadTurn({
@@ -4964,6 +5085,208 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   };
+
+  // ------------------------------------------------------------------
+  // Queued-message drain: when the active thread goes idle, dispatch the
+  // head of its queue as a normal turn. One message per pass — the next one
+  // waits for the thread to come back to "ready" so ordering is preserved
+  // and a mid-queue interrupt stops the drain naturally.
+  // ------------------------------------------------------------------
+  const queuedDrainBusyRef = useRef(false);
+  // Bumped when a drain pass finishes. The busy ref isn't reactive, so without
+  // this an effect run skipped while busy (e.g. after switching threads mid-
+  // drain) would never re-fire and the new thread's queue would sit undrained.
+  const [queuedDrainPass, setQueuedDrainPass] = useState(0);
+  const drainQueuedHead = useCallback(async () => {
+    if (queuedDrainBusyRef.current || sendInFlightRef.current) return;
+    if (!activeThread || !activeThreadKey || !isServerThread) return;
+    const store = useQueuedMessageStore.getState();
+    const queue = store.queuesByThreadKey[activeThreadKey] ?? [];
+    const head = queue[0];
+    if (!head) return;
+    // A failed head stays parked (its row shows the error) until the user
+    // edits or deletes it; auto-retrying would hammer the same failure.
+    if (head.lastDispatchError !== null) return;
+    if (store.editingMessageIds[head.id]) return;
+
+    queuedDrainBusyRef.current = true;
+    setQueuedMessageDispatching(head.id);
+    sendInFlightRef.current = true;
+    beginLocalDispatch({ preparingWorktree: false });
+
+    const threadIdForSend = activeThread.id;
+    try {
+      const messageTextWithContexts = appendElementContextsToPrompt(
+        appendTerminalContextsToPrompt(head.prompt, [...head.terminalContexts]),
+        [...head.elementContexts],
+      );
+      const messageTextWithPreviewAnnotations = head.previewAnnotations.reduce(
+        (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
+        messageTextWithContexts,
+      );
+      const messageTextForSend = appendReviewCommentsToPrompt(messageTextWithPreviewAnnotations, [
+        ...head.reviewComments,
+      ]);
+      const outgoingMessageText = formatOutgoingPrompt({
+        provider: head.provider,
+        model: head.model,
+        models: head.providerModels,
+        effort: head.promptEffort,
+        text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      });
+      const messageCreatedAt = new Date().toISOString();
+      const turnAttachments = await Promise.all(
+        head.images.map(async (image) => ({
+          type: "image" as const,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        })),
+      );
+
+      const settingsResult = await persistThreadSettingsForNextTurn({
+        threadId: threadIdForSend,
+        createdAt: messageCreatedAt,
+        modelSelection: head.modelSelection,
+        // Match the direct-send path: if the local checkout moved to another
+        // branch while the message waited, record the branch it actually runs
+        // on so the mismatch banner clears after the queued turn.
+        ...(localCheckoutBranchMismatch
+          ? { branch: localCheckoutBranchMismatch.currentBranch }
+          : {}),
+        runtimeMode,
+        interactionMode,
+      });
+      if (settingsResult._tag === "Failure") {
+        throw squashAtomCommandFailure(settingsResult);
+      }
+
+      // Navigation may have changed the active thread while the awaits above
+      // were in flight; the optimistic row and timeline anchor below belong to
+      // the captured thread, not whichever one is active now.
+      if (activeThreadKeyRef.current !== activeThreadKey) {
+        resetLocalDispatch();
+        return;
+      }
+
+      // Anchor the timeline to the new row exactly like a direct send.
+      isAtEndRef.current = true;
+      timelineScrollModeRef.current = "anchoring-new-turn";
+      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+      pendingTimelineAnchorRef.current = head.id;
+      activeTimelineAnchorIndexRef.current = null;
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+      setTimelineAnchor({
+        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+        messageId: head.id,
+      });
+      const optimisticAttachments = head.images.map((image) => ({
+        type: "image" as const,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        previewUrl: image.previewUrl,
+      }));
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: head.id,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          turnId: null,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+      setThreadError(threadIdForSend, null);
+
+      const startResult = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          message: {
+            messageId: head.id,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: turnAttachments,
+          },
+          modelSelection: head.modelSelection,
+          titleSeed: activeThread.title,
+          runtimeMode,
+          interactionMode,
+          createdAt: messageCreatedAt,
+        },
+      });
+      if (startResult._tag === "Failure") {
+        setOptimisticUserMessages((existing) =>
+          existing.filter((message) => message.id !== head.id),
+        );
+        if (isAtomCommandInterrupted(startResult)) {
+          resetLocalDispatch();
+        } else {
+          throw squashAtomCommandFailure(startResult);
+        }
+      } else {
+        // Delivered: the optimistic row owns the preview URLs now, so remove
+        // the queue entry without disposing them.
+        removeQueuedMessage(activeThreadKey, head.id);
+      }
+    } catch (error) {
+      setQueuedMessageDispatchError(
+        activeThreadKey,
+        head.id,
+        error instanceof Error ? error.message : "Failed to send queued message.",
+      );
+      resetLocalDispatch();
+    } finally {
+      sendInFlightRef.current = false;
+      setQueuedMessageDispatching(null);
+      queuedDrainBusyRef.current = false;
+      setQueuedDrainPass((pass) => pass + 1);
+    }
+  }, [
+    activeThread,
+    activeThreadKey,
+    beginLocalDispatch,
+    environmentId,
+    interactionMode,
+    isServerThread,
+    localCheckoutBranchMismatch,
+    persistThreadSettingsForNextTurn,
+    removeQueuedMessage,
+    resetLocalDispatch,
+    runtimeMode,
+    setQueuedMessageDispatchError,
+    setQueuedMessageDispatching,
+    setThreadError,
+    startThreadTurn,
+  ]);
+
+  const canDrainQueuedMessages =
+    phase === "ready" &&
+    !isSendBusy &&
+    !isConnecting &&
+    !threadDetailLoading &&
+    !activeEnvironmentUnavailable &&
+    activePendingApproval === null &&
+    pendingUserInputs.length === 0;
+
+  useEffect(() => {
+    if (!canDrainQueuedMessages) return;
+    if (!activeThreadQueuedMessages || activeThreadQueuedMessages.length === 0) return;
+    void drainQueuedHead();
+  }, [
+    activeThreadQueuedMessages,
+    canDrainQueuedMessages,
+    drainQueuedHead,
+    queuedDrainPass,
+    queuedMessageEditingIds,
+  ]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -5892,6 +6215,16 @@ function ChatViewContent(props: ChatViewProps) {
                   )}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
                     <ThreadSyncStatusPill phase={threadSyncPhase} />
+                  ) : null}
+                  {activeThreadQueuedMessages && activeThreadQueuedMessages.length > 0 ? (
+                    <QueuedMessageStrip
+                      queue={activeThreadQueuedMessages}
+                      dispatchingMessageId={queuedMessageDispatchingId}
+                      onDelete={onDeleteQueuedMessage}
+                      onMove={onMoveQueuedMessage}
+                      onSavePrompt={onSaveQueuedMessagePrompt}
+                      onEditingChange={onQueuedMessageEditingChange}
+                    />
                   ) : null}
                   <div
                     className="relative"
