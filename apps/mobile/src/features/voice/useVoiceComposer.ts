@@ -131,6 +131,9 @@ export function useVoiceComposer(input: {
     setRecovery(replacement.recovery);
   }, [recovery]);
 
+  // Stable identity: the recovery chip's auto-dismiss timer effect-depends on this.
+  const clearRecovery = useCallback(() => setRecovery(null), []);
+
   const undo = useCallback(() => {
     if (!recovery) return;
     const current = latest.current;
@@ -156,7 +159,7 @@ export function useVoiceComposer(input: {
     setCleanup: voice.setCleanup,
     subscribeLevel: voice.subscribeLevel,
     recovery,
-    clearRecovery: () => setRecovery(null),
+    clearRecovery,
     useRaw,
     undo,
   };
