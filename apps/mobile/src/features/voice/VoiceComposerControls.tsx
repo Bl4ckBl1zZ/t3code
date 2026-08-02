@@ -2,7 +2,7 @@ import type { VoiceInputState } from "@t3tools/client-runtime/voice";
 import { VOICE_INPUT_MAX_DURATION_SECONDS } from "@t3tools/contracts/voice";
 import * as Haptics from "expo-haptics";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable, View } from "react-native";
 import Animated, {
   cancelAnimation,
   Easing,
@@ -284,6 +284,130 @@ function TranscribingDots() {
       <TranscribingDot delayMs={140} />
       <TranscribingDot delayMs={280} />
     </View>
+  );
+}
+
+const WAVE_BAR_COUNT = 32;
+const WAVE_BAR_WIDTH = 3;
+const WAVE_SAMPLE_INTERVAL_MS = 100;
+
+function WaveBar(props: { readonly history: SharedValue<number[]>; readonly index: number }) {
+  const { history, index } = props;
+  const style = useAnimatedStyle(() => {
+    const value = history.value[index] ?? 0;
+    return {
+      height: withTiming(
+        LEVEL_BAR_MIN_HEIGHT + value * (LEVEL_BAR_MAX_HEIGHT - LEVEL_BAR_MIN_HEIGHT),
+        { duration: WAVE_SAMPLE_INTERVAL_MS },
+      ),
+    };
+  });
+  return (
+    <Animated.View
+      className="rounded-full bg-foreground-muted"
+      style={[style, { width: WAVE_BAR_WIDTH }]}
+    />
+  );
+}
+
+/**
+ * Scrolling level history that fills the pill while recording: quiet samples read as a dotted
+ * line, speech as bars, with the newest sample entering on the right — the system voice-memo
+ * look. One shared array drives every bar; sampling is peak-hold per interval so short
+ * transients still register.
+ */
+function VoiceWaveform(props: {
+  readonly subscribeLevel: (listener: (level: number) => void) => () => void;
+}) {
+  const history = useSharedValue<number[]>(Array.from({ length: WAVE_BAR_COUNT }, () => 0));
+  const peak = useRef(0);
+  useEffect(
+    () =>
+      props.subscribeLevel((next) => {
+        peak.current = Math.max(peak.current, Math.min(1, Math.max(0, next)));
+      }),
+    [props.subscribeLevel],
+  );
+  useEffect(() => {
+    const id = setInterval(() => {
+      history.value = [...history.value.slice(1), peak.current];
+      peak.current = 0;
+    }, WAVE_SAMPLE_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [history]);
+  return (
+    <View
+      className="min-w-0 flex-1 flex-row items-center justify-between px-2"
+      style={{ height: LEVEL_BAR_MAX_HEIGHT }}
+      aria-hidden
+    >
+      {Array.from({ length: WAVE_BAR_COUNT }, (_, index) => (
+        // Bars are fixed positional slots in the scrolling history.
+        <WaveBar key={index} history={history} index={index} />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * In-pill replacement for the composer row while Voice Input is active: cancel on the left, a
+ * scrolling waveform (recording) or "Transcribing" + spinner (stopping/transcribing) in the
+ * middle, and stop / send on the right. Send while recording stops the capture and queues the
+ * message to go out as soon as the transcript lands.
+ */
+export function VoiceInlineComposer(props: {
+  readonly state: VoiceInputState;
+  readonly subscribeLevel: (listener: (level: number) => void) => () => void;
+  readonly onCancel: () => void;
+  readonly onStop: () => void;
+  readonly onSend: () => void;
+  readonly sendQueued: boolean;
+}) {
+  const iconSubtle = useThemeColor("--color-icon-subtle");
+  const recording = props.state.type === "recording";
+  return (
+    <Animated.View
+      entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
+      exiting={FadeOut.duration(120).reduceMotion(ReduceMotion.System)}
+      className="min-w-0 flex-1 flex-row items-center gap-1"
+      accessibilityRole="toolbar"
+      accessibilityLabel={
+        recording ? "Voice recording controls" : "Voice transcription in progress"
+      }
+    >
+      <ControlPill
+        icon="xmark"
+        accessibilityLabel={recording ? "Cancel recording" : "Cancel transcription"}
+        onPress={props.onCancel}
+      />
+      {recording ? (
+        <VoiceWaveform subscribeLevel={props.subscribeLevel} />
+      ) : (
+        <View className="min-w-0 flex-1 flex-row items-center justify-center">
+          <Text className="text-base text-foreground-muted" numberOfLines={1}>
+            {props.sendQueued ? "Transcribing, will send" : "Transcribing"}
+          </Text>
+        </View>
+      )}
+      {recording ? (
+        <ControlPill
+          icon="stop.fill"
+          accessibilityLabel="Stop recording and transcribe"
+          onPress={props.onStop}
+        />
+      ) : (
+        <View className="h-11 w-11 items-center justify-center">
+          <ActivityIndicator size="small" color={iconSubtle} />
+        </View>
+      )}
+      <ControlPill
+        icon="arrow.up"
+        variant="primary"
+        disabled={props.sendQueued}
+        accessibilityLabel={recording ? "Stop and send" : "Send when transcription finishes"}
+        onPress={props.onSend}
+      />
+    </Animated.View>
   );
 }
 
