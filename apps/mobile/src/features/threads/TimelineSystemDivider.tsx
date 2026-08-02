@@ -30,7 +30,13 @@ export function TimelineSystemDivider(props: {
   const stacked = props.layout === "stacked";
 
   const icon = props.busy ? (
-    <ActivityIndicator size={11} color={danger ? "#ef4444" : iconSubtle} />
+    // iOS only accepts "small"/"large"; scale the 20px small spinner down to
+    // match the 11px symbol footprint.
+    <ActivityIndicator
+      size="small"
+      color={danger ? "#ef4444" : iconSubtle}
+      style={{ width: 11, height: 11, transform: [{ scale: 0.55 }] }}
+    />
   ) : props.symbol ? (
     <SymbolView
       name={props.symbol}

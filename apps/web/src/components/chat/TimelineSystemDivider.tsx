@@ -16,8 +16,14 @@ export function TimelineSystemDivider(props: {
   const Icon = props.icon;
   const content = (
     <>
-      {Icon ? <Icon className={cn("size-3 shrink-0", props.busy && "animate-spin")} /> : null}
-      <span className={cn("font-medium", props.busy && "animate-pulse")}>{props.label}</span>
+      {Icon ? (
+        <Icon
+          className={cn("size-3 shrink-0", props.busy && "animate-spin motion-reduce:animate-none")}
+        />
+      ) : null}
+      <span className={cn("font-medium", props.busy && "animate-pulse motion-reduce:animate-none")}>
+        {props.label}
+      </span>
       {props.detail ? <span className="max-w-80 truncate opacity-70">· {props.detail}</span> : null}
     </>
   );

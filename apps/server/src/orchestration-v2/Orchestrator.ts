@@ -635,6 +635,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* eventSink.writeWithEffects({ events: withIds, effects });
     });
 
+  /**
+   * Compensating events for pending state broadcast outside a command's
+   * buffered batch (currently the pending provider-switch handoff). If the
+   * command is rejected after the broadcast, the rejection path flushes these
+   * so clients don't render an in-flight row forever; on success the entry is
+   * dropped because the command's own events settle the same ids.
+   */
+  const pendingDispatchCompensations = new Map<
+    OrchestrationV2Command["commandId"],
+    ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">>
+  >();
+
+  const settlePendingDispatchCompensation = (
+    commandId: OrchestrationV2Command["commandId"],
+    outcome: "committed" | "rejected",
+  ) =>
+    Effect.gen(function* () {
+      const compensation = pendingDispatchCompensations.get(commandId);
+      pendingDispatchCompensations.delete(commandId);
+      if (compensation === undefined || outcome === "committed") {
+        return;
+      }
+      // Best effort: a failed compensation write must not mask the original
+      // dispatch failure.
+      yield* writeSystemEvents(compensation).pipe(Effect.catchCause(() => Effect.void));
+    });
+
   const startNextQueuedRun = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const projection = yield* projectionStore.getThreadProjection(threadId);
@@ -3270,9 +3297,76 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // a model), and without these events clients see nothing at all between
       // sending the message and the handoff finishing. The ready entity and
       // completed turn item emitted at the end of dispatch carry the same ids,
-      // so they upsert over these pending rows.
-      if (pendingProviderSwitchHandoff !== null) {
+      // so they upsert over these pending rows. Only the plain provider-switch
+      // path broadcasts: when a fork or merge-back transfer is also pending,
+      // the completed turn item at the end of dispatch is keyed on that
+      // handoff's id instead, and a pending row for the switch handoff would
+      // never be settled.
+      if (
+        pendingProviderSwitchHandoff !== null &&
+        pendingForkTransfer === undefined &&
+        pendingMergeBackTransfer === undefined
+      ) {
         const pendingRootNodeId = idAllocator.derive.rootNode({ runId });
+        const pendingHandoffTurnItem: OrchestrationV2TurnItem = {
+          id: idAllocator.derive.runSignalTurnItem({
+            runId,
+            signal: `context-handoff:${pendingProviderSwitchHandoff.id}`,
+          }),
+          threadId: command.threadId,
+          runId,
+          nodeId: pendingRootNodeId,
+          providerThreadId: ensuredProviderThread.id,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: ordinal * 100 - 1,
+          status: "running",
+          title: "Provider handoff",
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "handoff",
+          contextHandoffId: pendingProviderSwitchHandoff.id,
+          fromProviderThreadIds: pendingProviderSwitchHandoff.fromProviderThreadIds,
+          toProviderThreadId: pendingProviderSwitchHandoff.toProviderThreadId,
+          fromProviderInstanceIds: Array.from(
+            new Set(providerSwitchCoveredRuns.map((run) => run.providerInstanceId)),
+          ),
+          toProviderInstanceId: modelSelection.instanceId,
+          fromModelSelections: Array.from(
+            new Map(
+              providerSwitchCoveredRuns.map((run) => [
+                `${run.modelSelection.instanceId} ${run.modelSelection.model}`,
+                run.modelSelection,
+              ]),
+            ).values(),
+          ),
+          toModel: modelSelection.model,
+          strategy: pendingProviderSwitchHandoff.strategy,
+        };
+        // If the command is rejected after this broadcast, the pending rows
+        // would otherwise spin forever: register compensating failed-status
+        // events for the rejection path to flush.
+        pendingDispatchCompensations.set(command.commandId, [
+          {
+            type: "context-handoff.updated",
+            threadId: command.threadId,
+            runId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: { ...pendingProviderSwitchHandoff, status: "failed" },
+          },
+          {
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            runId,
+            nodeId: pendingRootNodeId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: { ...pendingHandoffTurnItem, status: "failed" },
+          },
+        ]);
         yield* mapDispatchError(command)(
           writeSystemEvents([
             {
@@ -3290,43 +3384,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               nodeId: pendingRootNodeId,
               providerInstanceId: modelSelection.instanceId,
               occurredAt: now,
-              payload: {
-                id: idAllocator.derive.runSignalTurnItem({
-                  runId,
-                  signal: `context-handoff:${pendingProviderSwitchHandoff.id}`,
-                }),
-                threadId: command.threadId,
-                runId,
-                nodeId: pendingRootNodeId,
-                providerThreadId: ensuredProviderThread.id,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: ordinal * 100 - 1,
-                status: "running",
-                title: "Provider handoff",
-                startedAt: now,
-                completedAt: null,
-                updatedAt: now,
-                type: "handoff",
-                contextHandoffId: pendingProviderSwitchHandoff.id,
-                fromProviderThreadIds: pendingProviderSwitchHandoff.fromProviderThreadIds,
-                toProviderThreadId: pendingProviderSwitchHandoff.toProviderThreadId,
-                fromProviderInstanceIds: Array.from(
-                  new Set(providerSwitchCoveredRuns.map((run) => run.providerInstanceId)),
-                ),
-                toProviderInstanceId: modelSelection.instanceId,
-                fromModelSelections: Array.from(
-                  new Map(
-                    providerSwitchCoveredRuns.map((run) => [
-                      `${run.modelSelection.instanceId} ${run.modelSelection.model}`,
-                      run.modelSelection,
-                    ]),
-                  ).values(),
-                ),
-                toModel: modelSelection.model,
-                strategy: pendingProviderSwitchHandoff.strategy,
-              } satisfies OrchestrationV2TurnItem,
+              payload: pendingHandoffTurnItem,
             },
           ]),
         );
@@ -5914,6 +5972,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.catch((cause) =>
         Effect.gen(function* () {
           const rejectedAt = yield* DateTime.now;
+          yield* settlePendingDispatchCompensation(command.commandId, "rejected");
           yield* eventSink
             .commitRejectedCommand({
               commandId: command.commandId,
@@ -5951,6 +6010,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
       })
       .pipe(
+        Effect.tapError(() => settlePendingDispatchCompensation(command.commandId, "rejected")),
         Effect.mapError(
           (cause) =>
             new OrchestratorDispatchError({
@@ -5960,6 +6020,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
+    yield* settlePendingDispatchCompensation(
+      command.commandId,
+      committed.receipt.status === "rejected" ? "rejected" : "committed",
+    );
 
     if (committed.receipt.status === "rejected") {
       return yield* new OrchestratorCommandPreviouslyRejectedError({
