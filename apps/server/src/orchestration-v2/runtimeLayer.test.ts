@@ -590,7 +590,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(retry.snapshotSequence, first.snapshotSequence);
 
       const providerSessionId = retry.projection.providerThreads[0]?.providerSessionId;
-      assert.isNotNull(providerSessionId);
+      assert.exists(providerSessionId);
       yield* providerSessions.close(providerSessionId!);
       yield* orchestrator.hydrateProviderThreadSnapshot(hydrationInput);
       const reopened = yield* orchestrator.getThreadProjection(threadId);

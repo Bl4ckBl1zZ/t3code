@@ -428,11 +428,25 @@ interface ActiveHermesTool {
   name: string | null;
   input: unknown;
   output: unknown | undefined;
+  outputRisk: unknown | undefined;
+  outputRedacted: boolean;
   title: string | null;
   status: OrchestrationV2TurnItem["status"];
   startedAt: DateTime.Utc | null;
   completedAt: DateTime.Utc | null;
 }
+
+/**
+ * Compose the projected tool output from the raw provider output plus any
+ * output-risk annotation. Keeping the annotation in a dedicated field means
+ * repeated `tool.output_risk` events cannot nest wrappers and a later
+ * `tool.complete` cannot discard the annotation.
+ */
+const projectedToolOutput = (tool: ActiveHermesTool): unknown | undefined => {
+  const raw = tool.outputRedacted ? "[REDACTED BY HERMES]" : tool.output;
+  if (tool.outputRisk === undefined) return raw;
+  return { result: raw ?? null, outputRisk: tool.outputRisk };
+};
 
 interface HermesThreadState {
   readonly binding: HermesSessionBinding;
@@ -1271,7 +1285,7 @@ export function makeHermesServeAdapterV2(
           type: "dynamic_tool",
           toolName: tool.name,
           input: tool.input,
-          ...(tool.output === undefined ? {} : { output: tool.output }),
+          ...(projectedToolOutput(tool) === undefined ? {} : { output: projectedToolOutput(tool) }),
         };
         yield* emit({ type: "turn_item.updated", driver: HERMES_PROVIDER, turnItem });
       });
@@ -1282,7 +1296,7 @@ export function makeHermesServeAdapterV2(
         completed: boolean,
       ) {
         const turn = active.providerTurn;
-        if (turn === null) return;
+        if (turn === null || active.assistantText.length === 0) return;
         const now = yield* DateTime.now;
         const nativeMessageId =
           active.assistantNativeId ??
@@ -1719,6 +1733,8 @@ export function makeHermesServeAdapterV2(
             name,
             input: {},
             output: undefined,
+            outputRisk: undefined,
+            outputRedacted: false,
             title: name,
             status: eventType === "tool.generating" ? "pending" : "running",
             startedAt: null,
@@ -1811,10 +1827,8 @@ export function makeHermesServeAdapterV2(
           },
           { maxChars: 10_000 },
         );
-        tool.output =
-          payload.redacted === true
-            ? { result: "[REDACTED BY HERMES]", outputRisk: riskDetails }
-            : { result: tool.output, outputRisk: riskDetails };
+        tool.outputRisk = riskDetails;
+        if (payload.redacted === true) tool.outputRedacted = true;
         yield* toolArtifacts(state, active, tool);
       });
 
@@ -2489,6 +2503,10 @@ export function makeHermesServeAdapterV2(
           importedTurnItems: new Map(hydrated.turnItems.map((item) => [String(item.id), item])),
           runtimeRequests: new Map(),
         };
+        const superseded = statesByProviderThread.get(String(providerThread.id));
+        if (superseded !== undefined && superseded.liveSessionId !== liveSessionId) {
+          statesByLiveSession.delete(superseded.liveSessionId);
+        }
         statesByProviderThread.set(String(providerThread.id), state);
         statesByLiveSession.set(liveSessionId, state);
         if (externalRunActive) {
@@ -2988,9 +3006,7 @@ export function makeHermesServeAdapterV2(
                           content_base64: contentBase64,
                           filename: attachment.name,
                         },
-                        {
-                          operationId: `hermes:image:${turnInput.attemptId}:${attachmentOrdinal}`,
-                        },
+                        mutationOptions(`hermes:image:${turnInput.attemptId}:${attachmentOrdinal}`),
                       ),
                     );
                     return null;
@@ -3009,9 +3025,7 @@ export function makeHermesServeAdapterV2(
                           content_base64: contentBase64,
                           filename: attachment.name,
                         },
-                        {
-                          operationId: `hermes:pdf:${turnInput.attemptId}:${attachmentOrdinal}`,
-                        },
+                        mutationOptions(`hermes:pdf:${turnInput.attemptId}:${attachmentOrdinal}`),
                       ),
                     );
                     return null;
@@ -3029,9 +3043,7 @@ export function makeHermesServeAdapterV2(
                         name: attachment.name,
                         data_url: `data:${attachment.mimeType};base64,${contentBase64}`,
                       },
-                      {
-                        operationId: `hermes:file:${turnInput.attemptId}:${attachmentOrdinal}`,
-                      },
+                      mutationOptions(`hermes:file:${turnInput.attemptId}:${attachmentOrdinal}`),
                     ),
                   );
                   // The gateway stages the file and hands back a reference token
@@ -3166,10 +3178,15 @@ export function makeHermesServeAdapterV2(
             }
           }).pipe(
             Effect.tapError(() =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 const state = stateForProviderThread(turnInput.providerThread);
-                if (state?.activeTurn?.providerTurn === null) state.activeTurn = null;
-              }),
+                if (state === undefined || state.activeTurn === null) return;
+                if (state.activeTurn.providerTurn === null) {
+                  state.activeTurn = null;
+                  return;
+                }
+                yield* finalizeTurn(state, "failed", "Hermes turn start failed after submission.");
+              }).pipe(Effect.ignore),
             ),
             Effect.mapError(
               (cause) =>

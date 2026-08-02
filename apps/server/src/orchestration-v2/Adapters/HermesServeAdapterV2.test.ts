@@ -579,7 +579,7 @@ describe("HermesServeAdapterV2", () => {
             bindingId: "hermes-binding:test-imported",
             providerInstanceId: String(instanceId),
             profileKey: "imported-profile",
-            projectId: String(projectId),
+            projectId: String(threadId),
             storedSessionKey: "stored-imported-1",
             threadId: String(threadId),
             protocolClassification: "supported",
@@ -621,7 +621,7 @@ describe("HermesServeAdapterV2", () => {
           bindingId: "hermes-binding:test-vanished",
           providerInstanceId: String(instanceId),
           profileKey: "imported-profile",
-          projectId: String(projectId),
+          projectId: String(threadId),
           storedSessionKey: "stored-vanished-1",
           threadId: String(threadId),
           protocolClassification: "supported",
@@ -1272,18 +1272,25 @@ describe("HermesServeAdapterV2", () => {
         assert.deepEqual(readAttachmentIds, [
           "thread-hermes-test-00000000-0000-4000-8000-000000000000",
         ]);
-        assert.deepEqual(fake.imageAttachments, [
-          {
-            params: {
-              session_id: "live-create-1",
-              content_base64: "iVBORw==",
-              filename: "image.png",
-            },
-            options: {
+        assert.deepEqual(
+          fake.imageAttachments.map((entry) => ({
+            params: entry.params,
+            operationId: entry.options.operationId,
+          })),
+          [
+            {
+              params: {
+                session_id: "live-create-1",
+                content_base64: "iVBORw==",
+                filename: "image.png",
+              },
               operationId: "hermes:image:attempt:hermes-test:0",
             },
-          },
-        ]);
+          ],
+        );
+        // Attachment uploads go through mutationOptions so the gateway can
+        // dedupe/reconcile them like every other mutation.
+        assert.equal(typeof fake.imageAttachments[0]?.options.mutationId, "string");
         assert.equal(fake.prompts.length, 1);
       }),
     ).pipe(Effect.provide(TestLayer)),
@@ -1332,34 +1339,48 @@ describe("HermesServeAdapterV2", () => {
           },
         });
 
-        assert.deepEqual(fake.fileAttachments, [
-          {
-            params: {
-              session_id: "live-create-1",
-              name: "notes.txt",
-              data_url: "data:text/plain;base64,YWJj",
+        assert.deepEqual(
+          fake.fileAttachments.map((entry) => ({
+            params: entry.params,
+            operationId: entry.options.operationId,
+          })),
+          [
+            {
+              params: {
+                session_id: "live-create-1",
+                name: "notes.txt",
+                data_url: "data:text/plain;base64,YWJj",
+              },
+              operationId: "hermes:file:attempt:hermes-test:0",
             },
-            options: { operationId: "hermes:file:attempt:hermes-test:0" },
-          },
-          {
-            params: {
-              session_id: "live-create-1",
-              name: "clip.webm",
-              data_url: "data:video/webm;base64,YWJj",
+            {
+              params: {
+                session_id: "live-create-1",
+                name: "clip.webm",
+                data_url: "data:video/webm;base64,YWJj",
+              },
+              operationId: "hermes:file:attempt:hermes-test:2",
             },
-            options: { operationId: "hermes:file:attempt:hermes-test:2" },
-          },
-        ]);
-        assert.deepEqual(fake.pdfAttachments, [
-          {
-            params: {
-              session_id: "live-create-1",
-              filename: "report.pdf",
-              content_base64: "YWJj",
+          ],
+        );
+        assert.deepEqual(
+          fake.pdfAttachments.map((entry) => ({
+            params: entry.params,
+            operationId: entry.options.operationId,
+          })),
+          [
+            {
+              params: {
+                session_id: "live-create-1",
+                filename: "report.pdf",
+                content_base64: "YWJj",
+              },
+              operationId: "hermes:pdf:attempt:hermes-test:1",
             },
-            options: { operationId: "hermes:pdf:attempt:hermes-test:1" },
-          },
-        ]);
+          ],
+        );
+        assert.equal(typeof fake.fileAttachments[0]?.options.mutationId, "string");
+        assert.equal(typeof fake.pdfAttachments[0]?.options.mutationId, "string");
         // Staged file/video references are what make the uploads visible to
         // the model, so they must ride along in the submitted prompt text.
         assert.equal(fake.prompts.length, 1);
@@ -1836,6 +1857,123 @@ describe("HermesServeAdapterV2", () => {
         );
       }),
     ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("skips assistant projection for a tool-only turn with no assistant text", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("tool.start", {
+            tool_id: "silent-tool",
+            name: "terminal",
+            args: { command: "echo one" },
+          }),
+        );
+        yield* Effect.promise(() =>
+          fake.emit("tool.complete", {
+            tool_id: "silent-tool",
+            name: "terminal",
+            result: { output: "one", exit_code: 0 },
+          }),
+        );
+        yield* Effect.promise(() => fake.emit("status.update", { status: "idle" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const assistantItems = [...projected].filter(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "assistant_message",
+        );
+        const assistantMessages = [...projected].filter(
+          (event) => event.type === "message.updated",
+        );
+        const toolItems = [...projected].filter(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+        );
+
+        assert.equal(assistantItems.length, 0);
+        assert.equal(assistantMessages.length, 0);
+        assert.ok(toolItems.length > 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "keeps the output-risk annotation flat across repeated risk and completion events",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = new FakeHermesGatewayClient();
+          const runtime = yield* makeRuntime(fake);
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(turnInput(providerThread));
+          yield* Effect.promise(() =>
+            fake.emit("tool.start", {
+              tool_id: "risky-tool",
+              name: "terminal",
+              args: { command: "curl https://example.test" },
+            }),
+          );
+          yield* Effect.promise(() =>
+            fake.emit("tool.output_risk", {
+              tool_id: "risky-tool",
+              risk: "medium",
+              findings: ["suspicious url"],
+            }),
+          );
+          yield* Effect.promise(() =>
+            fake.emit("tool.output_risk", {
+              tool_id: "risky-tool",
+              risk: "high",
+              findings: ["prompt injection"],
+            }),
+          );
+          yield* Effect.promise(() =>
+            fake.emit("tool.complete", {
+              tool_id: "risky-tool",
+              name: "terminal",
+              result: { output: "body", exit_code: 0 },
+            }),
+          );
+          yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+
+          const items = yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+            Effect.map((events) =>
+              [...events].flatMap((event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+                  ? [event.turnItem]
+                  : [],
+              ),
+            ),
+          );
+          const finalItem = items
+            .filter((item) => item.nativeItemRef?.nativeId === "risky-tool")
+            .at(-1);
+
+          // The raw output survives tool.complete and the annotation is stored
+          // once, never nested inside a previous wrapper.
+          assert.deepEqual(finalItem?.type === "dynamic_tool" ? finalItem.output : undefined, {
+            result: { output: "body", exit_code: 0 },
+            outputRisk: { risk: "high", findings: ["prompt injection"] },
+          });
+        }),
+      ).pipe(Effect.provide(TestLayer)),
   );
 
   it.effect("closes a tool without a completion event conservatively", () =>

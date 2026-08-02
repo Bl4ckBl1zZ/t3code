@@ -604,6 +604,32 @@ it.effect("still generates a title for launches that skip workspace preparation"
   }),
 );
 
+it.effect("rejects skipping workspace preparation for a worktree strategy", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:no-workspace-worktree",
+        thread: "thread:launch:no-workspace-worktree",
+        message: "This combination is invalid",
+        workspace: { type: "worktree", baseRef: "main" },
+        prepareWorkspace: false,
+      });
+      const failure = yield* launches.launch(input).pipe(Effect.flip);
+      assert.equal(failure.operation, "provision-worktree");
+      assert.match(
+        String(failure.cause),
+        /Skipping workspace preparation is incompatible with a worktree workspace strategy\./u,
+      );
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      const projection = yield* threads.getThreadProjection(input.threadId).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(projection));
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 for (const failurePoint of ["worktree", "setup"] as const) {
   it.effect(
     `${failurePoint} failure keeps the thread and message visible and emits failure items`,

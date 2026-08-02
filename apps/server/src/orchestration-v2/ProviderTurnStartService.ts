@@ -537,7 +537,7 @@ export const layer: Layer.Layer<
               .filter((item) => item.runId === run.id)
               .map((item) => item.ordinal),
           ) + 1;
-        yield* eventSink.writeIfRunCurrent({
+        const failedWrite = yield* eventSink.writeIfRunCurrent({
           threadId: projection.thread.id,
           runId: run.id,
           activeAttemptId: attempt.id,
@@ -602,6 +602,15 @@ export const layer: Layer.Layer<
             },
           ],
         });
+        if (!failedWrite.committed) {
+          // The guarded write was rejected, so the run was never terminalized.
+          // Report the rejection so the worker keeps the pending
+          // terminalization queued instead of recording a phantom success.
+          return yield* new ProviderTurnStartError({
+            runId: input.runId,
+            cause: `Run ${input.runId} terminal failure projection was rejected because the run is no longer current.`,
+          });
+        }
         yield* Effect.logWarning("Provider turn start permanently failed", {
           threadId: input.threadId,
           runId: input.runId,

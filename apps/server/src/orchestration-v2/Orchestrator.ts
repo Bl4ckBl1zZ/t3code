@@ -1062,6 +1062,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (
       command.type === "thread.metadata.update" &&
       command.pinned === true &&
+      // Promotion to the Work inbox main role clears settled/snoozed state as
+      // part of the same update, so the Main thread may always be pinned.
+      command.workInboxRole !== "main" &&
       (thread.settledOverride === "settled" || thread.snoozedUntil != null)
     ) {
       return yield* new OrchestratorDispatchError({
@@ -6140,6 +6143,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const threadId = input.threadId;
         const projection = yield* projectionStore.getThreadProjection(threadId);
         const modelSelection = projection.thread.modelSelection;
+        // Archived and deleted threads must not resurrect provider sessions.
+        if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) {
+          return;
+        }
         if (modelSelection.instanceId !== input.providerInstanceId) {
           return;
         }
