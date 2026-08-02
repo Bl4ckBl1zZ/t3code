@@ -4,6 +4,7 @@ import {
   CommandId,
   EnvironmentId,
   IsoDateTime,
+  isQueuedTurnsUnsupportedDispatchError,
   MessageId,
   ModelSelection,
   ProjectId,
@@ -153,7 +154,6 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
-  readonly threadBusy: boolean;
 }): ThreadOutboxDeliveryAction {
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
@@ -169,7 +169,10 @@ export function resolveThreadOutboxDeliveryAction(input: {
   if (!input.threadExists) {
     return input.shellStatus === "live" ? "remove" : "wait";
   }
-  return input.environmentConnected && !input.threadBusy ? "send" : "wait";
+  // Busy threads are no longer held locally: the turn dispatches with
+  // dispatchMode "queue" and the server persists it as a queued run, which
+  // syncs to every client instead of living only on this device.
+  return input.environmentConnected ? "send" : "wait";
 }
 
 /**
@@ -219,6 +222,11 @@ export function resolveThreadOutboxFailureAction(input: {
   if (
     input.stage === "settings-sync" ||
     input.interrupted ||
+    // The server rejects a queue-while-busy dispatch when the provider lacks
+    // queued-turn support. Classify from the dispatch error itself (not any
+    // pre-send busy snapshot, which can be stale): keep the message and retry
+    // so it delivers normally once the thread goes idle.
+    isQueuedTurnsUnsupportedDispatchError(input.error) ||
     shouldRetryThreadOutboxDelivery(input.error)
   ) {
     return "retry";

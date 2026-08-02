@@ -5,6 +5,7 @@ import {
   OrchestrationV2ThreadProjection,
   ProviderInstanceId,
   ProviderTurnId,
+  QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -182,13 +183,7 @@ function unsupported(
 const ensureQueuedMessages: CommandPolicyV2Shape["ensureQueuedMessages"] = (input) =>
   input.capabilities.turns.supportsQueuedMessages
     ? Effect.void
-    : Effect.fail(
-        unsupported(
-          input,
-          "queued_messages",
-          "providerInstanceId does not support app-owned queued turns",
-        ),
-      );
+    : Effect.fail(unsupported(input, "queued_messages", QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL));
 
 const decideSteeringExecution: CommandPolicyV2Shape["decideSteeringExecution"] = (input) => {
   if (!input.forceRestart && input.capabilities.turns.supportsActiveSteering) {

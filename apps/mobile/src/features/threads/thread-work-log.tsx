@@ -9,7 +9,12 @@ import { AppText as Text } from "../../components/AppText";
 import { T3_CODE_BRAND_MARK_SOURCE } from "../../components/brandAssets";
 import { scaledTypographyLineHeight } from "../../lib/appearancePreferences";
 import { cn } from "../../lib/cn";
-import type { ThreadFeedActivity } from "../../lib/threadActivity";
+import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
+import {
+  activityFileDiffStats,
+  sumActivityFileDiffStats,
+  type ThreadFeedActivity,
+} from "../../lib/threadActivity";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useV2ItemSupport } from "../../state/v2-item-support";
@@ -77,6 +82,128 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): AppSymbolName {
     case "zap":
       return { ios: "bolt", android: "bolt" };
   }
+}
+
+// Path presentation for file rows: trailing directories stay muted while the
+// filename carries full foreground weight, mirroring the web timeline.
+function splitDisplayPath(
+  path: string,
+  workspaceRoot: string | null | undefined,
+): { readonly prefix: string; readonly name: string } {
+  const relative = resolveWorkspaceRelativeFilePath(workspaceRoot, path) ?? path;
+  const segments = relative.replaceAll("\\", "/").split("/").filter(Boolean);
+  const name = segments.at(-1) ?? relative;
+  const dirSegments = segments.slice(0, -1);
+  const shownDirs = dirSegments.slice(-2);
+  const prefix =
+    shownDirs.length === 0
+      ? ""
+      : `${dirSegments.length > shownDirs.length ? "…/" : ""}${shownDirs.join("/")}/`;
+  return { prefix, name };
+}
+
+function WorkRowDiffStat(props: { readonly additions: number; readonly deletions: number }) {
+  if (props.additions <= 0 && props.deletions <= 0) {
+    return null;
+  }
+  return (
+    <View className="shrink-0 flex-row items-center gap-1 pl-1">
+      {props.additions > 0 ? (
+        <Text className="font-mono text-2xs text-emerald-600 dark:text-emerald-400">
+          +{props.additions}
+        </Text>
+      ) : null}
+      {props.deletions > 0 ? (
+        <Text className="font-mono text-2xs text-rose-600 dark:text-rose-400">
+          −{props.deletions}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+// Checkpoint rows render as a "changed files" summary card: a header with the
+// file count and total diffstat, expanding to one row per file.
+function ChangedFilesSummaryCard(props: {
+  readonly expanded: boolean;
+  readonly files: ReadonlyArray<{
+    readonly path: string;
+    readonly kind: string;
+    readonly additions: number;
+    readonly deletions: number;
+  }>;
+  readonly iconSubtleColor: import("react-native").ColorValue;
+  readonly onToggle: () => void;
+  readonly pressedBackground: string;
+  readonly workspaceRoot?: string | null;
+}) {
+  const totalAdditions = props.files.reduce((sum, file) => sum + file.additions, 0);
+  const totalDeletions = props.files.reduce((sum, file) => sum + file.deletions, 0);
+
+  return (
+    <View className="mb-2 overflow-hidden rounded-xl border border-neutral-300/60 bg-card dark:border-white/[0.1]">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: props.expanded }}
+        accessibilityLabel={`${props.files.length} changed ${props.files.length === 1 ? "file" : "files"}`}
+        accessibilityHint={
+          props.expanded ? "Double tap to hide files." : "Double tap to show files."
+        }
+        hitSlop={4}
+        onPress={() => {
+          triggerDisclosureFeedback();
+          props.onToggle();
+        }}
+        style={({ pressed }) => ({
+          backgroundColor: pressed ? props.pressedBackground : "transparent",
+        })}
+        className="min-h-9 flex-row items-center gap-1.5 px-2 py-1"
+      >
+        <View className="h-4 w-4 items-center justify-center">
+          <SymbolView
+            name={
+              props.expanded
+                ? { ios: "chevron.up", android: "keyboard_arrow_up" }
+                : { ios: "chevron.down", android: "keyboard_arrow_down" }
+            }
+            size={11}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
+          />
+        </View>
+        <Text className="font-t3-medium text-xs text-foreground">
+          {props.files.length} changed {props.files.length === 1 ? "file" : "files"}
+        </Text>
+        <WorkRowDiffStat additions={totalAdditions} deletions={totalDeletions} />
+        <View className="flex-1" />
+        <Text className="text-2xs text-foreground-muted opacity-60">
+          {props.expanded ? "Hide files" : "Show files"}
+        </Text>
+      </Pressable>
+
+      {props.expanded ? (
+        <View className="border-t border-neutral-300/60 px-2 py-1 dark:border-white/[0.08]">
+          {props.files.map((file) => {
+            const displayPath = splitDisplayPath(file.path, props.workspaceRoot);
+            return (
+              <View key={file.path} className="min-h-8 flex-row items-center gap-1.5">
+                <Text className="min-w-0 flex-1 font-mono text-xs" numberOfLines={1}>
+                  <Text className="text-foreground-muted opacity-60">{displayPath.prefix}</Text>
+                  <Text className="text-foreground">{displayPath.name}</Text>
+                </Text>
+                {file.kind !== "modified" ? (
+                  <Text className="shrink-0 text-3xs uppercase text-foreground-muted opacity-60">
+                    {file.kind}
+                  </Text>
+                ) : null}
+                <WorkRowDiffStat additions={file.additions} deletions={file.deletions} />
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 function WorkRowIcon(props: {
@@ -236,6 +363,7 @@ export function ThreadWorkLog(props: {
   const visibleRows =
     hasOverflow && !props.expanded ? rows.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES) : rows;
   const hiddenCount = rows.length - visibleRows.length;
+  const hiddenStats = sumActivityFileDiffStats(rows.slice(0, hiddenCount));
   const onlyToolRows = rows.every((row) => row.toolLike);
   const overflowNoun = threadWorkLogOverflowNoun(onlyToolRows, hiddenCount);
 
@@ -254,6 +382,34 @@ export function ThreadWorkLog(props: {
           const detail = compactActivityDetail(row.detail);
           const displayText = detail ? `${row.summary} ${detail}` : row.summary;
           const textIsDestructive = row.icon === "alert" || row.icon === "warning";
+          const item = row.projectedItem.item;
+          const filePath =
+            item.type === "file_change"
+              ? splitDisplayPath(item.fileName, props.workspaceRoot)
+              : null;
+          const diffStats = activityFileDiffStats(row);
+          // The icon already communicates the tool kind on these rows, so the
+          // detail (command text, search pattern, path) is the whole row.
+          const hideSummaryLabel =
+            detail !== null && (item.type === "command_execution" || item.type === "file_search");
+
+          if (item.type === "checkpoint" && item.files.length > 0) {
+            return (
+              <Animated.View
+                key={row.id}
+                {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
+              >
+                <ChangedFilesSummaryCard
+                  expanded={expanded}
+                  files={item.files}
+                  iconSubtleColor={props.iconSubtleColor}
+                  onToggle={() => props.onToggleRow(row.id)}
+                  pressedBackground={pressedBackground}
+                  workspaceRoot={props.workspaceRoot}
+                />
+              </Animated.View>
+            );
+          }
 
           return (
             <Animated.View
@@ -291,21 +447,41 @@ export function ThreadWorkLog(props: {
                     <WorkRowIcon row={row} iconSubtleColor={props.iconSubtleColor} />
                   </View>
 
-                  <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
-                    <Text
-                      className={cn(
-                        "font-t3-medium text-foreground",
-                        textIsDestructive && "text-rose-600 dark:text-rose-400",
-                      )}
-                    >
-                      {row.summary}
+                  {filePath ? (
+                    <Text className="min-w-0 flex-1 font-mono text-xs" numberOfLines={1}>
+                      <Text className="text-foreground-muted opacity-60">{filePath.prefix}</Text>
+                      <Text className="text-foreground">{filePath.name}</Text>
                     </Text>
-                    {detail ? (
-                      <Text className="text-foreground-muted opacity-60"> {detail}</Text>
-                    ) : null}
-                  </Text>
+                  ) : hideSummaryLabel ? (
+                    <Text
+                      className="min-w-0 flex-1 font-mono text-xs text-foreground-muted"
+                      numberOfLines={1}
+                    >
+                      {detail}
+                    </Text>
+                  ) : (
+                    <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
+                      <Text
+                        className={cn(
+                          "font-t3-medium text-foreground",
+                          textIsDestructive && "text-rose-600 dark:text-rose-400",
+                        )}
+                      >
+                        {row.summary}
+                      </Text>
+                      {detail ? (
+                        <Text className="text-foreground-muted opacity-60"> {detail}</Text>
+                      ) : null}
+                    </Text>
+                  )}
 
                   <View className="shrink-0 flex-row items-center gap-px">
+                    {diffStats ? (
+                      <WorkRowDiffStat
+                        additions={diffStats.additions}
+                        deletions={diffStats.deletions}
+                      />
+                    ) : null}
                     {props.copiedRowId === row.id ? (
                       <Text className="pr-1 font-t3-medium text-3xs text-emerald-600 dark:text-emerald-400">
                         Copied
@@ -325,22 +501,21 @@ export function ThreadWorkLog(props: {
                         />
                       ) : null}
                     </View>
-                    <View className="h-4 w-4 items-center justify-center">
-                      {row.status ? (
+                    {/* Success is the default outcome — only surface deviations. */}
+                    {row.status === "failure" || row.status === "neutral" ? (
+                      <View className="h-4 w-4 items-center justify-center">
                         <SymbolView
                           name={
                             row.status === "failure"
                               ? { ios: "xmark", android: "close" }
-                              : row.status === "success"
-                                ? { ios: "checkmark", android: "check" }
-                                : { ios: "minus", android: "remove" }
+                              : { ios: "minus", android: "remove" }
                           }
                           size={11}
                           tintColor={row.status === "failure" ? "#e11d48" : props.iconSubtleColor}
                           type="monochrome"
                         />
-                      ) : null}
-                    </View>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
               </Pressable>
@@ -400,6 +575,15 @@ export function ThreadWorkLog(props: {
               ? `Show fewer ${overflowNoun}`
               : `+${hiddenCount} previous ${overflowNoun}`}
           </Text>
+          {!props.expanded ? (
+            <>
+              <View className="flex-1" />
+              <WorkRowDiffStat
+                additions={hiddenStats.additions}
+                deletions={hiddenStats.deletions}
+              />
+            </>
+          ) : null}
         </Pressable>
       ) : null}
     </View>
@@ -408,7 +592,9 @@ export function ThreadWorkLog(props: {
 
 export function ThreadWorkGroupToggle(props: {
   readonly expanded: boolean;
+  readonly hiddenAdditions?: number;
   readonly hiddenCount: number;
+  readonly hiddenDeletions?: number;
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly onlyToolActivities: boolean;
   readonly onToggle: () => void;
@@ -446,6 +632,15 @@ export function ThreadWorkGroupToggle(props: {
         <Text className="font-t3-medium text-xs text-foreground opacity-80">
           {props.expanded ? `Show fewer ${noun}` : `+${props.hiddenCount} previous ${noun}`}
         </Text>
+        {!props.expanded ? (
+          <>
+            <View className="flex-1" />
+            <WorkRowDiffStat
+              additions={props.hiddenAdditions ?? 0}
+              deletions={props.hiddenDeletions ?? 0}
+            />
+          </>
+        ) : null}
       </Pressable>
     </View>
   );
