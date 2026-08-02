@@ -437,6 +437,27 @@ function IosHomeHeader(props: HomeHeaderProps) {
       {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
+            accessibilityLabel={`Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`}
+            icon="chevron.up.chevron.down"
+            title={`T3 ${props.workspace === "work" ? "Work" : "Code"}`}
+            separateBackground
+          >
+            <NativeHeaderToolbar.MenuAction
+              isOn={props.workspace === "work"}
+              onPress={() => props.onWorkspaceChange("work")}
+              subtitle="Create, learn, and explore"
+            >
+              <NativeHeaderToolbar.Label>T3 Work</NativeHeaderToolbar.Label>
+            </NativeHeaderToolbar.MenuAction>
+            <NativeHeaderToolbar.MenuAction
+              isOn={props.workspace === "code"}
+              onPress={() => props.onWorkspaceChange("code")}
+              subtitle="Build, debug, and ship"
+            >
+              <NativeHeaderToolbar.Label>T3 Code</NativeHeaderToolbar.Label>
+            </NativeHeaderToolbar.MenuAction>
+          </NativeHeaderToolbar.Menu>
+          <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter and sort threads"
             icon={
               hasCustomListOptions
