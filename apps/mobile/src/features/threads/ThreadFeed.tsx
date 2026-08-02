@@ -120,6 +120,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
+import { isScheduledTaskMessageId } from "./scheduledTaskMessageBadge";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -1004,6 +1005,7 @@ function renderFeedEntry(
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
       const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
+      const automationBadge = isScheduledTaskMessageId(message.id);
       return (
         <Animated.View
           className="mb-5 items-end"
@@ -1044,6 +1046,18 @@ function renderFeedEntry(
             })}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+            {automationBadge ? (
+              <View
+                accessible
+                accessibilityRole="text"
+                accessibilityLabel="Sent by an automation"
+                className="rounded-full border border-violet-500/25 bg-violet-500/10 px-1.5 py-0.5 dark:border-violet-400/25 dark:bg-violet-400/10"
+              >
+                <Text className="font-t3-medium text-2xs tracking-wide text-violet-700 dark:text-violet-300">
+                  Automation
+                </Text>
+              </View>
+            ) : null}
             {intentBadge ? (
               <View
                 accessible
