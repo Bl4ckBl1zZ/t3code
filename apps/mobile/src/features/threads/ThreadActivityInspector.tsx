@@ -12,6 +12,7 @@ import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
+import { InlineUnifiedDiff } from "./InlineUnifiedDiff";
 import { buildThreadActivityFileParams } from "./threadActivityFileNavigation";
 
 export function ThreadActivityInspector(props: {
@@ -75,6 +76,54 @@ export function ThreadActivityInspector(props: {
           </ScrollView>
         </View>
       ))}
+
+      {model.diff !== null ? (
+        <View className="gap-1">
+          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+            Patch
+          </Text>
+          <InlineUnifiedDiff
+            cacheScope={`thread-activity:${row.sourceThreadId}:${row.sourceItemId}`}
+            diff={model.diff}
+            maxHeight={320}
+          />
+        </View>
+      ) : null}
+
+      {model.checkpointFiles !== null && model.checkpointFiles.length > 0 ? (
+        <View className="gap-1">
+          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+            Changed files
+          </Text>
+          <View className="overflow-hidden rounded-lg border border-neutral-300/50 dark:border-white/[0.1]">
+            {model.checkpointFiles.map((file, index) => (
+              <View
+                key={`${file.path}:${index}`}
+                className={
+                  index > 0
+                    ? "flex-row items-center gap-2 border-t border-neutral-300/40 px-2.5 py-1.5 dark:border-white/[0.06]"
+                    : "flex-row items-center gap-2 px-2.5 py-1.5"
+                }
+              >
+                <Text
+                  className="min-w-0 flex-1 text-2xs leading-4 text-foreground"
+                  numberOfLines={1}
+                  style={{ fontFamily: "ui-monospace" }}
+                >
+                  {file.path}
+                </Text>
+                <Text className="text-2xs text-foreground-muted">{file.kind}</Text>
+                <Text className="text-2xs tabular-nums text-emerald-600 dark:text-emerald-400">
+                  +{file.additions}
+                </Text>
+                <Text className="text-2xs tabular-nums text-red-500 dark:text-red-400">
+                  −{file.deletions}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
 
       {model.fileLinks.length > 0 ? (
         <View className="gap-1">

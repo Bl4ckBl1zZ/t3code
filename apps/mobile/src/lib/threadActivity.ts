@@ -23,6 +23,8 @@ import type {
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
+import { isV2LifecycleTimelineItem } from "./threadLifecycle";
+
 export type PendingApproval = ThreadPendingApproval;
 export type PendingUserInput = ThreadPendingUserInput;
 
@@ -92,10 +94,18 @@ type RawThreadFeedEntry =
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly activity: ThreadFeedActivity;
+    }
+  | {
+      readonly type: "lifecycle";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly row: OrchestrationV2ProjectedTurnItem;
     };
 
 export type ThreadFeedEntry =
   | Extract<RawThreadFeedEntry, { type: "message" }>
+  | Extract<RawThreadFeedEntry, { type: "lifecycle" }>
   | {
       readonly type: "working";
       readonly id: string;
@@ -710,6 +720,16 @@ export function buildThreadFeed(
           updatedAt,
           projectedItem: row,
         },
+      });
+      continue;
+    }
+    if (isV2LifecycleTimelineItem(item)) {
+      entries.push({
+        type: "lifecycle",
+        id: `lifecycle:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        row,
       });
       continue;
     }

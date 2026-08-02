@@ -121,6 +121,7 @@ import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
 import { isScheduledTaskMessageId } from "./scheduledTaskMessageBadge";
+import { ThreadLifecycleRow } from "./ThreadLifecycleRow";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -949,6 +950,10 @@ function renderFeedEntry(
 
   if (entry.type === "working") {
     return <WorkingTimelineRow startedAt={entry.createdAt} />;
+  }
+
+  if (entry.type === "lifecycle") {
+    return <ThreadLifecycleRow entry={entry} environmentId={props.environmentId} />;
   }
 
   if (entry.type === "run-fold") {
