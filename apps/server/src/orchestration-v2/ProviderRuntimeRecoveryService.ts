@@ -253,6 +253,45 @@ export const make = Effect.gen(function* () {
           });
         }
       }
+      // Pending provider-switch handoffs are broadcast before their command
+      // commits (Orchestrator.dispatchMessage), and the in-memory rejection
+      // compensation does not survive a process stop. A non-terminal handoff
+      // item whose run never materialized can only be such an orphan — a
+      // committed command lands the run and the terminal item in one batch —
+      // so failing it here cannot mark a committed command as failed.
+      for (const item of projection.turnItems) {
+        if (item.type !== "handoff") continue;
+        if (item.status !== "pending" && item.status !== "running" && item.status !== "waiting") {
+          continue;
+        }
+        if (item.runId !== null && projection.runs.some((run) => run.id === item.runId)) {
+          continue;
+        }
+        events.push({
+          id: yield* allocateEventId(),
+          type: "turn-item.updated",
+          threadId: projection.thread.id,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+          providerInstanceId: item.toProviderInstanceId,
+          occurredAt: now,
+          payload: { ...item, status: "failed", completedAt: now, updatedAt: now },
+        });
+        const orphanedHandoff = projection.contextHandoffs.find(
+          (candidate) => candidate.id === item.contextHandoffId && candidate.status === "pending",
+        );
+        if (orphanedHandoff !== undefined) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "context-handoff.updated",
+            threadId: projection.thread.id,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            providerInstanceId: item.toProviderInstanceId,
+            occurredAt: now,
+            payload: { ...orphanedHandoff, status: "failed", updatedAt: now },
+          });
+        }
+      }
       for (const providerThread of projection.providerThreads.filter(
         (candidate) => candidate.status === "active",
       )) {

@@ -92,6 +92,7 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
     providerThreads: [],
     runs: [],
     nodes: [],
+    ...({ turnItems: [], contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(
@@ -128,6 +129,77 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("fails orphaned pending handoffs whose command never committed", () => {
+  const threadId = ThreadId.make("thread_recovery_handoff");
+  let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
+    null;
+  const committed = vi.fn(
+    (input: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0]) => {
+      committedInput = input;
+      return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
+    },
+  );
+  const projection = {
+    thread: { id: threadId },
+    runtimeRequests: [],
+    providerSessions: [],
+    providerThreads: [],
+    runs: [],
+    nodes: [],
+    turnItems: [
+      {
+        id: TurnItemId.make("turn-item_pending_handoff"),
+        type: "handoff",
+        status: "running",
+        runId: RunId.make("run_never_created"),
+        nodeId: null,
+        contextHandoffId: "context-handoff_orphaned",
+        toProviderInstanceId: ProviderInstanceId.make("codex"),
+      },
+    ],
+    contextHandoffs: [{ id: "context-handoff_orphaned", status: "pending" }],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layer = ProviderRuntimeRecovery.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getShellSnapshot: () =>
+            Effect.succeed({
+              schemaVersion: 2,
+              snapshotSequence: 0,
+              threads: [{ id: threadId }],
+              archivedThreads: [],
+            } as never),
+          getThreadProjection: () => Effect.succeed(projection),
+        }),
+        Layer.mock(EventSink.EventSinkV2)({ commitCommand: committed }),
+        IdAllocator.layer,
+        Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.succeed(false) }),
+        Layer.mock(EffectOutbox.EffectOutboxV2)({
+          reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+        }),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).recover;
+    const command = committedInput;
+    assert.isNotNull(command);
+    if (command === null) return;
+    const itemEvent = command.events.find((event) => event.type === "turn-item.updated");
+    assert.isDefined(itemEvent);
+    if (itemEvent?.type === "turn-item.updated") {
+      assert.equal(itemEvent.payload.status, "failed");
+      assert.isNotNull(itemEvent.payload.completedAt);
+    }
+    const handoffEvent = command.events.find((event) => event.type === "context-handoff.updated");
+    assert.isDefined(handoffEvent);
+    if (handoffEvent?.type === "context-handoff.updated") {
+      assert.equal(handoffEvent.payload.status, "failed");
+    }
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("uses the same reconciliation path to cancel runtime requests during shutdown", () => {
   const threadId = ThreadId.make("thread_shutdown_requests");
   let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
@@ -146,6 +218,7 @@ it.effect("uses the same reconciliation path to cancel runtime requests during s
     providerThreads: [],
     runs: [],
     nodes: [],
+    ...({ turnItems: [], contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(
@@ -202,6 +275,7 @@ it.effect("preserves a waiting run while its replay-safe checkpoint capture is u
     providerSessions: [],
     providerThreads: [],
     runs: [{ id: runId, status: "waiting" }],
+    ...({ turnItems: [], contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(
@@ -267,6 +341,7 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
     subagents: [],
     messages: [],
     turnItems: [],
+    ...({ contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(
@@ -345,6 +420,7 @@ it.effect("cancels accepted queued work instead of replaying it after restart", 
     subagents: [],
     messages: [],
     turnItems: [],
+    ...({ contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(
@@ -460,6 +536,7 @@ it.effect(
           status: "running",
         },
       ],
+      ...({ contextHandoffs: [] } as object),
     } as unknown as OrchestrationV2ThreadProjection;
     const layer = ProviderRuntimeRecovery.layer.pipe(
       Layer.provide(

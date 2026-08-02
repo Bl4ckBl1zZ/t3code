@@ -3364,7 +3364,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             nodeId: pendingRootNodeId,
             providerInstanceId: modelSelection.instanceId,
             occurredAt: now,
-            payload: { ...pendingHandoffTurnItem, status: "failed" },
+            payload: { ...pendingHandoffTurnItem, status: "failed", completedAt: now },
           },
         ]);
         yield* mapDispatchError(command)(
