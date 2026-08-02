@@ -38,6 +38,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { HtmlEmbedBlock, isHtmlEmbedLanguage } from "./chat/HtmlEmbedBlock";
 import { MarkdownMedia } from "./chat/MarkdownMedia";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import { CHAT_FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
@@ -1528,6 +1529,13 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
       }
 
       const language = extractFenceLanguage(codeBlock.className);
+      if (isHtmlEmbedLanguage(language)) {
+        return (
+          <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
+            <HtmlEmbedBlock code={codeBlock.code} theme={resolvedTheme} />
+          </RenderErrorBoundary>
+        );
+      }
       const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
       return (
         <MarkdownCodeBlock

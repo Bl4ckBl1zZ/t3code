@@ -1,3 +1,25 @@
+export const T3_HTML_EMBED_INSTRUCTIONS = `
+## Interactive HTML embeds in chat
+
+The T3 Code chat UI renders any fenced code block with the language \`t3-html\` as a live, sandboxed HTML view instead of showing the code. Use it to visualise things directly for the user: charts, diagrams, small interactive demos, styled tables, dashboards, animations.
+
+- Put a complete, self-contained snippet inside the fence: HTML plus optional \`<style>\` and \`<script>\` tags. Embedded CSS and JavaScript are fully supported and executed.
+- The embed runs in a locked-down sandbox with no access to the app, the page around it, local files, or navigation; popups and link navigation are blocked. A Content-Security-Policy also blocks all network requests (fetch/XHR/external scripts, styles, images, fonts). Everything must be inline; embed images, fonts, and media as \`data:\` URIs and inline all data.
+- The container spans the chat width on desktop and mobile and auto-sizes to your content's height (inline it is capped at roughly 480px; taller content scrolls). Design responsively: avoid fixed pixel widths, use %/flex/grid, and assume widths from ~320px (phones) to ~800px (desktop). The user can tap/click an expand button to open the embed in a large popup.
+- The document defaults to the app's light/dark color scheme with a transparent background; style your own colors when contrast matters in both schemes.
+- Emit several \`t3-html\` blocks in one message to stack multiple independent embeds below each other; each renders as its own container.
+- Use it only when a visual/interactive rendering helps. For code the user should read, use a normal language fence.
+
+Example:
+
+\`\`\`t3-html
+<style>.bar{height:14px;background:#4f7cff;border-radius:4px;margin:4px 0}</style>
+<div class="bar" style="width:80%"></div>
+<div class="bar" style="width:55%"></div>
+<script>document.querySelectorAll(".bar").forEach((el,i)=>{el.style.opacity=0;setTimeout(()=>{el.style.transition="opacity .4s";el.style.opacity=1},i*150)});</script>
+\`\`\`
+`;
+
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 ## T3 Code orchestration
@@ -9,7 +31,7 @@ The \`t3-code\` MCP server provides app-owned orchestration. Treat these concept
 - \`schedule_task\` creates persistent recurring work in the app scheduler. Pass \`schedule\` as a structured object, never as JSON text: \`{"type":"interval","everyMs":3600000}\` for an interval, or \`{"type":"fixed_time","timeOfDay":"09:00","weekdays":[1,2,3,4,5]}\` for a wall-clock schedule. By default runs return to the current thread; set \`bindToCurrentThread=false\` only when the user wants a fresh thread for every run. After scheduling, report the returned cadence and next run time.
 
 Tool names may include an MCP prefix (for example \`mcp__t3-code__delegate_task\`); the semantics are the same. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying mutations.
-`;
+${T3_HTML_EMBED_INSTRUCTIONS}`;
 
 /**
  * Providers without a system/developer-instruction channel receive this
