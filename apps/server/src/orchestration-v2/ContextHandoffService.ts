@@ -63,6 +63,47 @@ export interface ContextHandoffServiceV2Shape {
     readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly createdAt: DateTime.Utc;
   }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
+  /**
+   * Allocates the handoff and returns it in `pending` status without running
+   * summary generation. Callers broadcast the pending entity so clients can
+   * visualize the in-flight handoff, then finish with
+   * `completeProviderHandoff` (potentially slow: AI summary).
+   */
+  readonly beginProviderHandoff: (input: {
+    readonly threadId: ThreadId;
+    readonly targetRunId: RunId;
+    readonly transferId: NonNullable<OrchestrationV2ContextHandoff["transferId"]>;
+    readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+    readonly toProviderThreadId: ProviderThreadId;
+    readonly fromProviderInstanceId: ProviderInstanceId;
+    readonly toProviderInstanceId: ProviderInstanceId;
+    readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+    readonly strategy: Extract<
+      OrchestrationV2ContextHandoff["strategy"],
+      "delta_since_target_last_seen" | "full_thread_summary"
+    >;
+    readonly createdAt: DateTime.Utc;
+  }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
+  /**
+   * Generates the summary for a pending provider handoff and returns the
+   * `ready` entity. Summary generation falls back to a deterministic template
+   * internally, so this never fails on AI unavailability.
+   */
+  readonly completeProviderHandoff: (input: {
+    readonly handoff: OrchestrationV2ContextHandoff;
+    readonly fromProviderInstanceId: ProviderInstanceId;
+    readonly toProviderInstanceId: ProviderInstanceId;
+    readonly strategy: Extract<
+      OrchestrationV2ContextHandoff["strategy"],
+      "delta_since_target_last_seen" | "full_thread_summary"
+    >;
+    readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly completedAt: DateTime.Utc;
+    /** Working directory for AI summary generation; null skips AI compaction. */
+    readonly cwd?: string | null;
+    /** Model to compact the transcript with; null skips AI compaction. */
+    readonly summaryModelSelection?: ModelSelection | null;
+  }) => Effect.Effect<OrchestrationV2ContextHandoff>;
   readonly prepareProviderHandoff: (input: {
     readonly threadId: ThreadId;
     readonly targetRunId: RunId;
@@ -491,6 +532,94 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
       },
     );
 
+    const beginProviderHandoff = Effect.fn("orchestrationV2.contextHandoff.beginProviderHandoff")(
+      function* (input: {
+        readonly threadId: ThreadId;
+        readonly targetRunId: RunId;
+        readonly transferId: NonNullable<OrchestrationV2ContextHandoff["transferId"]>;
+        readonly fromProviderThreadIds: ReadonlyArray<ProviderThreadId>;
+        readonly toProviderThreadId: ProviderThreadId;
+        readonly fromProviderInstanceId: ProviderInstanceId;
+        readonly toProviderInstanceId: ProviderInstanceId;
+        readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
+        readonly strategy: Extract<
+          OrchestrationV2ContextHandoff["strategy"],
+          "delta_since_target_last_seen" | "full_thread_summary"
+        >;
+        readonly createdAt: DateTime.Utc;
+      }) {
+        const handoffId = yield* idAllocator.allocate
+          .contextHandoff({
+            threadId: input.threadId,
+            fromProviderInstanceId: input.fromProviderInstanceId,
+            toProviderInstanceId: input.toProviderInstanceId,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ContextHandoffPrepareError({
+                  threadId: input.threadId,
+                  targetRunId: input.targetRunId,
+                  fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+                  toProviderThreadId: input.toProviderThreadId,
+                  cause,
+                }),
+            ),
+          );
+        return {
+          id: handoffId,
+          transferId: input.transferId,
+          threadId: input.threadId,
+          targetRunId: input.targetRunId,
+          fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
+          toProviderThreadId: input.toProviderThreadId,
+          coveredRunOrdinals: input.coveredRunOrdinals,
+          strategy: input.strategy,
+          status: "pending",
+          summaryMessageId: null,
+          summaryText: "",
+          createdByProviderInstanceId: null,
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        } satisfies OrchestrationV2ContextHandoff;
+      },
+    );
+
+    const completeProviderHandoff = Effect.fn(
+      "orchestrationV2.contextHandoff.completeProviderHandoff",
+    )(function* (input: {
+      readonly handoff: OrchestrationV2ContextHandoff;
+      readonly fromProviderInstanceId: ProviderInstanceId;
+      readonly toProviderInstanceId: ProviderInstanceId;
+      readonly strategy: Extract<
+        OrchestrationV2ContextHandoff["strategy"],
+        "delta_since_target_last_seen" | "full_thread_summary"
+      >;
+      readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+      readonly completedAt: DateTime.Utc;
+      readonly cwd?: string | null;
+      readonly summaryModelSelection?: ModelSelection | null;
+    }) {
+      const summaryText = yield* makeProviderHandoffSummaryText({
+        threadId: input.handoff.threadId,
+        fromProviderInstanceId: input.fromProviderInstanceId,
+        toProviderInstanceId: input.toProviderInstanceId,
+        coveredRunOrdinals: input.handoff.coveredRunOrdinals,
+        strategy: input.strategy,
+        items: input.items,
+        ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+        ...(input.summaryModelSelection === undefined
+          ? {}
+          : { summaryModelSelection: input.summaryModelSelection }),
+      });
+      return {
+        ...input.handoff,
+        status: "ready",
+        summaryText,
+        updatedAt: input.completedAt,
+      } satisfies OrchestrationV2ContextHandoff;
+    });
+
     const prepareProviderHandoff = Effect.fn(
       "orchestrationV2.contextHandoff.prepareProviderHandoff",
     )(function* (input: {
@@ -511,46 +640,27 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
       readonly cwd?: string | null;
       readonly summaryModelSelection?: ModelSelection | null;
     }) {
-      const handoffId = yield* idAllocator.allocate
-        .contextHandoff({
-          threadId: input.threadId,
-          fromProviderInstanceId: input.fromProviderInstanceId,
-          toProviderInstanceId: input.toProviderInstanceId,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ContextHandoffPrepareError({
-                threadId: input.threadId,
-                targetRunId: input.targetRunId,
-                fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
-                toProviderThreadId: input.toProviderThreadId,
-                cause,
-              }),
-          ),
-        );
-      return {
-        id: handoffId,
-        transferId: input.transferId,
-        threadId: input.threadId,
-        targetRunId: input.targetRunId,
-        fromProviderThreadIds: Array.from(input.fromProviderThreadIds),
-        toProviderThreadId: input.toProviderThreadId,
-        coveredRunOrdinals: input.coveredRunOrdinals,
+      const pending = yield* beginProviderHandoff(input);
+      return yield* completeProviderHandoff({
+        handoff: pending,
+        fromProviderInstanceId: input.fromProviderInstanceId,
+        toProviderInstanceId: input.toProviderInstanceId,
         strategy: input.strategy,
-        status: "ready",
-        summaryMessageId: null,
-        summaryText: yield* makeProviderHandoffSummaryText(input),
-        createdByProviderInstanceId: null,
-        createdAt: input.createdAt,
-        updatedAt: input.createdAt,
-      } satisfies OrchestrationV2ContextHandoff;
+        items: input.items,
+        completedAt: input.createdAt,
+        ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+        ...(input.summaryModelSelection === undefined
+          ? {}
+          : { summaryModelSelection: input.summaryModelSelection }),
+      });
     });
 
     return ContextHandoffServiceV2.of({
       prepareLegacyImport,
       prepare,
       prepareForkDelta,
+      beginProviderHandoff,
+      completeProviderHandoff,
       prepareProviderHandoff,
     });
   },

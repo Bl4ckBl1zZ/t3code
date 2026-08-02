@@ -26,6 +26,14 @@ const FINAL_RESULT_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]
   "failed",
 ]);
 
+// A handoff turn item is broadcast in a non-terminal status while the
+// orchestrator is still generating the handoff summary for the target model.
+const HANDOFF_IN_FLIGHT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
+  "pending",
+  "running",
+  "waiting",
+]);
+
 // Once a subagent stops, its last streamed result says more than the stale
 // progress line; while it runs, live progress comes first.
 const TERMINAL_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
@@ -54,6 +62,10 @@ export type LifecyclePresentation =
       readonly detail: string | null;
       readonly tone: "neutral" | "danger";
       readonly symbol: "xmark" | "minus" | "bolt" | "arrow.triangle.branch";
+      /** Stacked puts the detail on its own line under the label (handoffs). */
+      readonly layout: "inline" | "stacked";
+      /** In-flight system work (e.g. handoff summary being generated). */
+      readonly busy: boolean;
       readonly actionLabel: string | null;
       readonly openThreadId: ThreadId | null;
     }
@@ -119,6 +131,8 @@ export function resolveLifecyclePresentation(
         detail: item.message ?? null,
         tone: "danger",
         symbol: "xmark",
+        layout: "inline",
+        busy: false,
         actionLabel: null,
         openThreadId: null,
       };
@@ -133,6 +147,8 @@ export function resolveLifecyclePresentation(
         detail: item.summary ?? tokenDetail,
         tone: "neutral",
         symbol: "minus",
+        layout: "inline",
+        busy: false,
         actionLabel: null,
         openThreadId: null,
       };
@@ -160,12 +176,21 @@ export function resolveLifecyclePresentation(
               ),
             );
       const target = endpointLabel(item.toProviderInstanceId, toModel);
+      // The item streams in as `running` while the orchestrator prepares the
+      // handoff summary (possibly an AI call), then flips to `completed`.
+      const preparing = HANDOFF_IN_FLIGHT_STATUSES.has(item.status);
       return {
         kind: "divider",
-        label: "Context handoff",
+        label: preparing
+          ? "Preparing context handoff"
+          : item.status === "failed"
+            ? "Context handoff failed"
+            : "Context handoff",
         detail: fromEndpoints.length > 0 ? `${fromEndpoints.join(", ")} → ${target}` : target,
         tone: item.status === "failed" ? "danger" : "neutral",
         symbol: "bolt",
+        layout: "stacked",
+        busy: preparing,
         actionLabel: null,
         openThreadId: null,
       };
@@ -178,6 +203,8 @@ export function resolveLifecyclePresentation(
         detail: null,
         tone: "neutral",
         symbol: "arrow.triangle.branch",
+        layout: "inline",
+        busy: false,
         actionLabel: sourceThreadId !== null ? "Open source conversation" : "Open fork",
         openThreadId: sourceThreadId ?? item.targetThreadId,
       };

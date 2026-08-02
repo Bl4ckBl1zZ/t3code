@@ -132,7 +132,7 @@ describe("active-turn primary action", () => {
       }),
     );
 
-    expect(markup).toContain('aria-label="Send message to steer active turn"');
+    expect(markup).toContain('aria-label="Queue message after active turn"');
     expect(markup).not.toContain('aria-label="Stop generation"');
   });
 });

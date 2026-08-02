@@ -105,6 +105,33 @@ describe("resolveLifecyclePresentation", () => {
     });
   });
 
+  it("renders an in-flight handoff as a busy preparing divider", () => {
+    const presentation = resolveLifecyclePresentation(
+      item({
+        type: "handoff",
+        status: "running",
+        contextHandoffId: "handoff-1",
+        fromProviderThreadIds: [],
+        toProviderThreadId: "pt-2",
+        fromProviderInstanceIds: ["claude"],
+        toProviderInstanceId: "codex",
+        fromModelSelections: [{ instanceId: "claude", model: "claude-opus-5" }],
+        toModel: "gpt-6",
+        strategy: "full_thread_summary",
+        runId: "run-2",
+      }),
+      RUNS,
+    );
+    expect(presentation).toMatchObject({
+      kind: "divider",
+      label: "Preparing context handoff",
+      detail: "claude-opus-5 → gpt-6",
+      layout: "stacked",
+      busy: true,
+      tone: "neutral",
+    });
+  });
+
   it("marks failed handoffs as danger", () => {
     const presentation = resolveLifecyclePresentation(
       item({

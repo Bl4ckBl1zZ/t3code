@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Context Handoff — Pending State Mock</title>
+    <style>
+      :root {
+        --bg: #fafafa;
+        --surface: #ffffff;
+        --text: #1a1a1a;
+        --text-secondary: #6b6b6b;
+        --text-tertiary: #9a9a9a;
+        --hairline: #e4e4e4;
+        --bubble: #ededed;
+        --claude: #d97757;
+        --accent: #1a1a1a;
+        --green: #2e9e5b;
+        --red: #d64545;
+        --mono: ui-monospace, "SF Mono", Menlo, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: var(--sans);
+        background: #f0f0ee;
+        color: var(--text);
+        padding: 40px 24px 80px;
+        -webkit-font-smoothing: antialiased;
+      }
+      h1 {
+        font-size: 20px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .subtitle {
+        color: var(--text-secondary);
+        font-size: 13px;
+        margin-bottom: 28px;
+      }
+      .demo-grid {
+        display: flex;
+        gap: 32px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: center;
+      }
+      .panel-label {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+        margin: 0 0 10px 4px;
+      }
+
+      /* ---------- Desktop frame ---------- */
+      .desktop-frame {
+        width: 760px;
+        max-width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--hairline);
+        border-radius: 14px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+        overflow: hidden;
+      }
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--hairline);
+        background: var(--surface);
+      }
+      .traffic {
+        display: flex;
+        gap: 6px;
+      }
+      .traffic span {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: #dcdcdc;
+      }
+      .thread-title {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        margin-left: 8px;
+      }
+      .header-chip {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        border: 1px solid var(--hairline);
+        border-radius: 99px;
+        padding: 4px 10px;
+        background: var(--bg);
+      }
+      .header-chip .chip-spinner {
+        display: none;
+      }
+      .header-chip.working .chip-spinner {
+        display: inline-block;
+      }
+
+      .timeline {
+        padding: 28px 32px 20px;
+        min-height: 340px;
+      }
+
+      /* User bubble */
+      .msg-user {
+        display: flex;
+        justify-content: flex-end;
+        margin: 14px 0;
+        animation: rise 0.25s ease both;
+      }
+      .msg-user .bubble {
+        background: var(--bubble);
+        border-radius: 18px;
+        padding: 9px 15px;
+        font-size: 14px;
+        max-width: 70%;
+      }
+
+      /* Assistant */
+      .msg-assistant {
+        margin: 14px 0;
+        font-size: 14px;
+        line-height: 1.55;
+        max-width: 85%;
+        animation: rise 0.25s ease both;
+      }
+
+      /* ---------- Handoff divider row ---------- */
+      .handoff-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 22px 0;
+        animation: rise 0.3s ease both;
+      }
+      .handoff-row .line {
+        flex: 1;
+        height: 1px;
+        background: var(--hairline);
+      }
+      .handoff-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12.5px;
+        white-space: nowrap;
+        padding: 4px 6px;
+        border-radius: 8px;
+        transition: background 0.2s;
+      }
+      .handoff-pill .bolt {
+        color: var(--text-secondary);
+        display: inline-flex;
+      }
+      .handoff-label {
+        font-weight: 600;
+        color: var(--text);
+      }
+      .handoff-dot {
+        color: var(--text-tertiary);
+      }
+      .model {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-secondary);
+      }
+      .claude-mark {
+        color: var(--claude);
+        font-size: 12px;
+      }
+      .gpt-mark {
+        font-size: 11px;
+      }
+      .arrow {
+        color: var(--text-tertiary);
+        font-size: 11px;
+      }
+
+      /* Pending state */
+      .handoff-row.pending .bolt svg {
+        animation: spin 1.6s linear infinite;
+        transform-origin: center;
+      }
+      .handoff-row.pending .handoff-label {
+        background: linear-gradient(90deg, var(--text) 30%, #b0b0b0 50%, var(--text) 70%);
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: shimmer 1.8s linear infinite;
+      }
+      .handoff-row.pending .line {
+        background: linear-gradient(90deg, var(--hairline), #c8c8c8, var(--hairline));
+        background-size: 200% 100%;
+        animation: shimmer 2.4s linear infinite;
+      }
+      .handoff-sub {
+        text-align: center;
+        font-size: 12px;
+        color: var(--text-tertiary);
+        margin: -14px 0 18px;
+        height: 16px;
+        animation: rise 0.3s ease both;
+      }
+      .handoff-sub .dots::after {
+        content: "";
+        animation: ellipsis 1.4s steps(4) infinite;
+      }
+
+      /* Done: expandable summary */
+      .handoff-pill.expandable {
+        cursor: pointer;
+      }
+      .handoff-pill.expandable:hover {
+        background: rgba(0, 0, 0, 0.045);
+      }
+      .chevron {
+        color: var(--text-tertiary);
+        font-size: 10px;
+        transition: transform 0.18s;
+        display: none;
+      }
+      .handoff-row.done .chevron {
+        display: inline;
+      }
+      .handoff-row.done.open .chevron {
+        transform: rotate(90deg);
+      }
+      .handoff-summary {
+        display: none;
+        margin: -10px auto 18px;
+        max-width: 520px;
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: var(--text-secondary);
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .handoff-summary.open {
+        display: block;
+        animation: rise 0.2s ease both;
+      }
+      .handoff-summary .sum-title {
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+        margin-bottom: 6px;
+      }
+
+      /* Failed */
+      .handoff-row.failed .handoff-label {
+        color: var(--red);
+      }
+      .handoff-row.failed .bolt {
+        color: var(--red);
+      }
+      .retry-btn {
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--text);
+        border: 1px solid var(--hairline);
+        background: var(--surface);
+        border-radius: 99px;
+        padding: 2px 10px;
+        cursor: pointer;
+        margin-left: 4px;
+        font-family: inherit;
+      }
+      .retry-btn:hover {
+        background: var(--bg);
+      }
+
+      /* Streaming assistant */
+      .caret {
+        display: inline-block;
+        width: 7px;
+        height: 15px;
+        background: var(--text);
+        vertical-align: -2px;
+        animation: blink 1s steps(1) infinite;
+        border-radius: 1px;
+      }
+
+      /* Composer */
+      .composer {
+        border-top: 1px solid var(--hairline);
+        background: var(--surface);
+        padding: 12px 16px;
+      }
+      .composer-box {
+        border: 1px solid var(--hairline);
+        border-radius: 12px;
+        padding: 10px 14px;
+        font-size: 14px;
+        color: var(--text-tertiary);
+        background: var(--bg);
+      }
+
+      /* ---------- Mobile frame ---------- */
+      .mobile-frame {
+        width: 320px;
+        background: var(--bg);
+        border: 1px solid #d8d8d8;
+        border-radius: 38px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+        position: relative;
+      }
+      .mobile-notch {
+        width: 100px;
+        height: 24px;
+        background: #111;
+        border-radius: 99px;
+        margin: 10px auto 0;
+      }
+      .mobile-header {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 12px 16px 10px;
+        border-bottom: 1px solid var(--hairline);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .mobile-header .chip-spinner {
+        display: none;
+      }
+      .mobile-header.working .chip-spinner {
+        display: inline-block;
+      }
+      .mobile-timeline {
+        padding: 18px 16px;
+        min-height: 380px;
+      }
+      .mobile-timeline .handoff-sub {
+        font-size: 11px;
+      }
+
+      /* Mobile: stacked two-line handoff pill */
+      .handoff-pill.stacked {
+        flex-direction: column;
+        gap: 3px;
+        padding: 5px 10px;
+      }
+      .handoff-pill.stacked .pill-top,
+      .handoff-pill.stacked .pill-bottom {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .handoff-pill.stacked {
+        font-size: 12px;
+      }
+      .handoff-pill.stacked .pill-bottom {
+        font-size: 11.5px;
+      }
+      .mobile-composer {
+        border-top: 1px solid var(--hairline);
+        background: var(--surface);
+        padding: 10px 14px 26px;
+      }
+      .outbox-status {
+        display: none;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        color: var(--text-tertiary);
+        margin-bottom: 8px;
+        justify-content: flex-end;
+      }
+      .outbox-status.visible {
+        display: flex;
+        animation: rise 0.25s ease both;
+      }
+
+      /* Spinner */
+      .chip-spinner,
+      .mini-spinner {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        border: 1.5px solid #d0d0d0;
+        border-top-color: var(--text-secondary);
+        animation: spin 0.9s linear infinite;
+      }
+      .mini-spinner {
+        width: 10px;
+        height: 10px;
+      }
+
+      /* Controls */
+      .controls {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(10px);
+        border-top: 1px solid var(--hairline);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px;
+        z-index: 10;
+      }
+      .controls button {
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        border: 1px solid var(--hairline);
+        border-radius: 99px;
+        padding: 7px 16px;
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .controls button:hover {
+        background: var(--bg);
+      }
+      .controls button.primary {
+        background: var(--text);
+        color: #fff;
+        border-color: var(--text);
+      }
+      .controls .state-note {
+        font-size: 12px;
+        color: var(--text-tertiary);
+        min-width: 220px;
+      }
+
+      @keyframes shimmer {
+        from {
+          background-position: 200% 0;
+        }
+        to {
+          background-position: -200% 0;
+        }
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      @keyframes ellipsis {
+        0% {
+          content: "";
+        }
+        25% {
+          content: ".";
+        }
+        50% {
+          content: "..";
+        }
+        75% {
+          content: "...";
+        }
+      }
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Context handoff — pending → ready visualization</h1>
+    <p class="subtitle">
+      Press <strong>Replay</strong> to simulate: send message → preparing handoff (shimmer) →
+      divider settles (expandable summary) → response streams. <strong>Show failure</strong> demos
+      the error variant.
+    </p>
+
+    <div class="demo-grid">
+      <!-- ================= DESKTOP ================= -->
+      <div>
+        <p class="panel-label">Desktop / Web</p>
+        <div class="desktop-frame">
+          <div class="titlebar">
+            <div class="traffic"><span></span><span></span><span></span></div>
+            <span class="thread-title">refactor auth middleware</span>
+            <span class="header-chip" id="d-chip">
+              <span class="chip-spinner"></span>
+              <span class="gpt-mark">⬡</span> GPT-5.6-Sol
+            </span>
+          </div>
+          <div class="timeline" id="d-timeline">
+            <div class="msg-assistant" style="animation: none">
+              Done — the middleware now validates tokens before hitting the session store, and I
+              added tests for the expiry path.
+            </div>
+            <!-- injected content goes here -->
+          </div>
+          <div class="composer"><div class="composer-box">Message GPT-5.6-Sol…</div></div>
+        </div>
+      </div>
+
+      <!-- ================= MOBILE ================= -->
+      <div>
+        <p class="panel-label">Mobile</p>
+        <div class="mobile-frame">
+          <div class="mobile-notch"></div>
+          <div class="mobile-header" id="m-header">
+            <span class="chip-spinner"></span>
+            <span>refactor auth middleware</span>
+          </div>
+          <div class="mobile-timeline" id="m-timeline">
+            <div class="msg-assistant" style="animation: none; font-size: 13.5px">
+              Done — the middleware now validates tokens before hitting the session store.
+            </div>
+          </div>
+          <div class="mobile-composer">
+            <div class="outbox-status" id="m-outbox">
+              <span class="mini-spinner"></span>
+              <span>Handing off context to GPT-5.6-Sol<span class="dots"></span></span>
+            </div>
+            <div class="composer-box" style="font-size: 13px">Message…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="primary" onclick="replay(false)">▶ Replay</button>
+      <button onclick="replay(true)">Show failure</button>
+      <span class="state-note" id="state-note"></span>
+    </div>
+
+    <script>
+      const BOLT_SVG =
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg>';
+
+      const SUMMARY_TEXT =
+        "User is refactoring auth middleware in an Express service. Claude Fable 5 moved token validation ahead of the session-store lookup, added expiry-path tests (all passing), and left one open question about refresh-token rotation. The user's last request was to also cover the CSRF path.";
+
+      function handoffRowHTML(state, opts) {
+        if (opts && opts.stacked)
+          return `
+    <div class="handoff-row ${state}" data-role="handoff">
+      <div class="line"></div>
+      <span class="handoff-pill stacked ${state === "done" ? "expandable" : ""}" onclick="toggleSummary(this)">
+        <span class="pill-top">
+          <span class="bolt">${BOLT_SVG}</span>
+          <span class="handoff-label">${
+            state === "pending"
+              ? "Preparing context handoff"
+              : state === "failed"
+                ? "Context handoff failed"
+                : "Context handoff"
+          }</span>
+          <span class="chevron">▸</span>
+        </span>
+        <span class="pill-bottom">
+          <span class="model"><span class="claude-mark">✳</span> Claude Fable 5</span>
+          <span class="arrow">→</span>
+          <span class="model"><span class="gpt-mark">⬡</span> GPT-5.6-Sol</span>
+          ${state === "failed" ? '<button class="retry-btn" onclick="event.stopPropagation(); replay(false)">Retry</button>' : ""}
+        </span>
+      </span>
+      <div class="line"></div>
+    </div>
+    ${state === "pending" ? '<div class="handoff-sub" data-role="sub">Summarizing conversation for GPT-5.6-Sol<span class="dots"></span></div>' : ""}
+    ${state === "done" ? `<div class="handoff-summary" data-role="summary"><div class="sum-title">Handoff summary · full_thread_summary</div>${SUMMARY_TEXT}</div>` : ""}
+  `;
+        return `
+    <div class="handoff-row ${state}" data-role="handoff">
+      <div class="line"></div>
+      <span class="handoff-pill ${state === "done" ? "expandable" : ""}" onclick="toggleSummary(this)">
+        <span class="bolt">${BOLT_SVG}</span>
+        <span class="handoff-label">${
+          state === "pending"
+            ? "Preparing context handoff"
+            : state === "failed"
+              ? "Context handoff failed"
+              : "Context handoff"
+        }</span>
+        <span class="handoff-dot">·</span>
+        <span class="model"><span class="claude-mark">✳</span> Claude Fable 5</span>
+        <span class="arrow">→</span>
+        <span class="model"><span class="gpt-mark">⬡</span> GPT-5.6-Sol</span>
+        <span class="chevron">▸</span>
+        ${state === "failed" ? '<button class="retry-btn" onclick="event.stopPropagation(); replay(false)">Retry</button>' : ""}
+      </span>
+      <div class="line"></div>
+    </div>
+    ${state === "pending" ? '<div class="handoff-sub" data-role="sub">Summarizing conversation for GPT-5.6-Sol<span class="dots"></span></div>' : ""}
+    ${state === "done" ? `<div class="handoff-summary" data-role="summary"><div class="sum-title">Handoff summary · full_thread_summary</div>${SUMMARY_TEXT}</div>` : ""}
+  `;
+      }
+
+      function toggleSummary(pill) {
+        const row = pill.closest(".handoff-row");
+        if (!row.classList.contains("done")) return;
+        row.classList.toggle("open");
+        const summary = row.parentElement.querySelector('[data-role="summary"]');
+        if (summary) summary.classList.toggle("open");
+      }
+
+      const dTimeline = document.getElementById("d-timeline");
+      const mTimeline = document.getElementById("m-timeline");
+      const dChip = document.getElementById("d-chip");
+      const mHeader = document.getElementById("m-header");
+      const mOutbox = document.getElementById("m-outbox");
+      const note = document.getElementById("state-note");
+      let timers = [];
+
+      function clearInjected() {
+        timers.forEach(clearTimeout);
+        timers = [];
+        [dTimeline, mTimeline].forEach((t) =>
+          t.querySelectorAll("[data-injected]").forEach((el) => el.remove()),
+        );
+        dChip.classList.remove("working");
+        mHeader.classList.remove("working");
+        mOutbox.classList.remove("visible");
+      }
+      function at(ms, fn) {
+        timers.push(setTimeout(fn, ms));
+      }
+      function inject(parent, html) {
+        const wrap = document.createElement("div");
+        wrap.dataset.injected = "1";
+        wrap.innerHTML = html;
+        parent.appendChild(wrap);
+        return wrap;
+      }
+
+      function replay(fail) {
+        clearInjected();
+        note.textContent = "1/4 — user message sent (optimistic)";
+
+        // 1. user bubble appears instantly on both
+        inject(dTimeline, '<div class="msg-user"><div class="bubble">hi</div></div>');
+        inject(
+          mTimeline,
+          '<div class="msg-user"><div class="bubble" style="font-size:13.5px">hi</div></div>',
+        );
+
+        // 2. pending handoff divider — debounced ~300ms so instant handoffs never flash it
+        at(400, () => {
+          note.textContent = "2/4 — handoff pending: shimmer divider, spinning icon, working chips";
+          window._dPending = inject(dTimeline, handoffRowHTML("pending"));
+          window._mPending = inject(mTimeline, handoffRowHTML("pending", { stacked: true }));
+          dChip.classList.add("working");
+          mHeader.classList.add("working");
+          mOutbox.classList.add("visible");
+        });
+
+        // 3. settle to done (or failed)
+        at(3400, () => {
+          window._dPending.remove();
+          window._mPending.remove();
+          mOutbox.classList.remove("visible");
+          if (fail) {
+            note.textContent = "3/4 — handoff failed: error divider with retry";
+            inject(dTimeline, handoffRowHTML("failed"));
+            inject(mTimeline, handoffRowHTML("failed", { stacked: true }));
+            dChip.classList.remove("working");
+            mHeader.classList.remove("working");
+            return;
+          }
+          note.textContent = "3/4 — handoff ready: static divider (click it to expand the summary)";
+          inject(dTimeline, handoffRowHTML("done"));
+          inject(mTimeline, handoffRowHTML("done", { stacked: true }));
+        });
+
+        // 4. assistant streams
+        if (!fail)
+          at(4000, () => {
+            note.textContent = "4/4 — GPT-5.6-Sol responds with handed-off context";
+            const text =
+              "Hi! Picking up where Claude Fable 5 left off — the auth middleware refactor with passing expiry tests. Want me to cover the CSRF path next?";
+            const dEl = inject(
+              dTimeline,
+              '<div class="msg-assistant"><span class="stream"></span><span class="caret"></span></div>',
+            );
+            const mEl = inject(
+              mTimeline,
+              '<div class="msg-assistant" style="font-size:13.5px"><span class="stream"></span><span class="caret"></span></div>',
+            );
+            let i = 0;
+            const step = () => {
+              i += 2;
+              [dEl, mEl].forEach(
+                (el) => (el.querySelector(".stream").textContent = text.slice(0, i)),
+              );
+              if (i < text.length) timers.push(setTimeout(step, 18));
+              else {
+                [dEl, mEl].forEach((el) => el.querySelector(".caret").remove());
+                dChip.classList.remove("working");
+                mHeader.classList.remove("working");
+              }
+            };
+            step();
+          });
+      }
+
+      replay(false);
+    </script>
+  </body>
+</html>

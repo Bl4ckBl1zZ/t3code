@@ -407,6 +407,9 @@ const config: ExpoConfig = {
       {
         ios: {
           deploymentTarget: IOS_DEPLOYMENT_TARGET,
+          // Reuse compiled objects across archives when ccache is installed
+          // (no-op otherwise); CI persists ~/Library/Caches/ccache between runs.
+          ccacheEnabled: true,
           // AppCheckCore 11.3+ includes Swift and needs module maps for these Objective-C dependencies.
           extraPods: [
             { name: "GoogleUtilities", modular_headers: true },
@@ -429,6 +432,13 @@ const config: ExpoConfig = {
             iosNotificationsMode === "development" ? "sandbox" : "production",
           T3CODE_IOS_ASSOCIATED_DOMAINS: isIosAssociatedDomainsEnabled ? "1" : "0",
           T3CODE_IOS_SHARING_EXTENSION: isIosSharingExtensionEnabled ? "1" : "0",
+          // The widget and sharing extensions bake CFBundleVersion from this
+          // at prebuild; without it in the sandbox snapshot they archive as
+          // '1' and Xcode rejects the mismatch with the parent app's injected
+          // build number.
+          ...(managedIosBuildNumber
+            ? { T3CODE_IOS_BUILD_NUMBER: managedIosBuildNumber }
+            : {}),
         },
       },
     ],

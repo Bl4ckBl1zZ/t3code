@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable, View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
@@ -17,44 +17,78 @@ export function TimelineSystemDivider(props: {
   readonly detail?: string | null;
   readonly tone?: "neutral" | "danger";
   readonly symbol?: SymbolName;
+  /** Stacked puts the detail on its own centered line under the label. */
+  readonly layout?: "inline" | "stacked";
+  /** In-flight system work: swaps the symbol for a spinner. */
+  readonly busy?: boolean;
   readonly actionLabel?: string | null;
   readonly onAction?: () => void;
 }) {
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const danger = props.tone === "danger";
   const pressable = props.onAction !== undefined;
+  const stacked = props.layout === "stacked";
+
+  const icon = props.busy ? (
+    // iOS only accepts "small"/"large"; scale the 20px small spinner down to
+    // match the 11px symbol footprint.
+    <ActivityIndicator
+      size="small"
+      color={danger ? "#ef4444" : iconSubtle}
+      style={{ width: 11, height: 11, transform: [{ scale: 0.55 }] }}
+    />
+  ) : props.symbol ? (
+    <SymbolView
+      name={props.symbol}
+      size={11}
+      tintColor={danger ? "#ef4444" : iconSubtle}
+      type="monochrome"
+    />
+  ) : null;
+  const labelText = (
+    <Text
+      className={cn(
+        "shrink-0 font-t3-medium text-2xs",
+        danger ? "text-red-600 dark:text-red-400" : "text-foreground-muted",
+      )}
+      numberOfLines={1}
+    >
+      {props.label}
+    </Text>
+  );
+  const detailText = props.detail ? (
+    <Text className="shrink text-2xs text-foreground-muted opacity-70" numberOfLines={1}>
+      {props.detail}
+    </Text>
+  ) : null;
 
   const pill = (
     <View
       className={cn(
-        "max-w-[86%] flex-row items-center gap-1.5 rounded-full border px-3 py-1.5",
+        "max-w-[86%] rounded-full border",
+        stacked
+          ? "items-center gap-0.5 rounded-[14px] px-3.5 py-2"
+          : "flex-row items-center gap-1.5 px-3 py-1.5",
         danger
           ? "border-red-500/25 bg-red-500/10"
           : "border-neutral-300/50 bg-card dark:border-white/[0.08]",
       )}
     >
-      {props.symbol ? (
-        <SymbolView
-          name={props.symbol}
-          size={11}
-          tintColor={danger ? "#ef4444" : iconSubtle}
-          type="monochrome"
-        />
-      ) : null}
-      <Text
-        className={cn(
-          "shrink-0 font-t3-medium text-2xs",
-          danger ? "text-red-600 dark:text-red-400" : "text-foreground-muted",
-        )}
-        numberOfLines={1}
-      >
-        {props.label}
-      </Text>
-      {props.detail ? (
-        <Text className="shrink text-2xs text-foreground-muted opacity-70" numberOfLines={1}>
-          {props.detail}
-        </Text>
-      ) : null}
+      {stacked ? (
+        <>
+          <View className="flex-row items-center gap-1.5">
+            {icon}
+            {labelText}
+          </View>
+          {detailText}
+        </>
+      ) : (
+        <>
+          {icon}
+          {labelText}
+          {detailText}
+        </>
+      )}
       {pressable ? (
         <SymbolView name="arrow.right" size={10} tintColor={iconSubtle} type="monochrome" />
       ) : null}

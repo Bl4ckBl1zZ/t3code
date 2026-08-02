@@ -223,6 +223,38 @@ it.layer(AiSummaryTestLayer)("ContextHandoffService AI provider handoff", (it) =
   );
 });
 
+it.layer(AiSummaryTestLayer)("ContextHandoffService pending provider handoff", (it) => {
+  it.effect("begins in pending status without a summary, then completes to ready", () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffServiceV2;
+      const pending = yield* service.beginProviderHandoff(providerHandoffInput);
+
+      assert.equal(pending.status, "pending");
+      assert.equal(pending.summaryText, "");
+      assert.equal(pending.strategy, "full_thread_summary");
+
+      const ready = yield* service.completeProviderHandoff({
+        handoff: pending,
+        fromProviderInstanceId: providerHandoffInput.fromProviderInstanceId,
+        toProviderInstanceId: providerHandoffInput.toProviderInstanceId,
+        strategy: providerHandoffInput.strategy,
+        items: providerHandoffInput.items,
+        completedAt: DateTime.makeUnsafe("2026-01-02T00:00:30.000Z"),
+        cwd: providerHandoffInput.cwd,
+        summaryModelSelection: providerHandoffInput.summaryModelSelection,
+      });
+
+      assert.equal(ready.id, pending.id);
+      assert.equal(ready.status, "ready");
+      assert.include(ready.summaryText, "AI compacted summary (codex -> claudeAgent)");
+      assert.deepStrictEqual(
+        DateTime.toEpochMillis(ready.createdAt),
+        DateTime.toEpochMillis(pending.createdAt),
+      );
+    }),
+  );
+});
+
 it.layer(TestLayer)("ContextHandoffService AI fallback", (it) => {
   it.effect("falls back to the template summary when generation fails", () =>
     Effect.gen(function* () {
