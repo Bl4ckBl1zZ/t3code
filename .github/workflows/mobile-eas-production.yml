@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build-and-submit:
     name: Build iOS app locally and submit to TestFlight
-    runs-on: macos-latest-xlarge
+    runs-on: macos-latest
     timeout-minutes: 120
     environment:
       name: production
