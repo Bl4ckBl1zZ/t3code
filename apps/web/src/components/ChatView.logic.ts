@@ -230,7 +230,14 @@ export function readFileAsDataUrl(file: File): Promise<string> {
 export function resolveSendEnvMode(input: {
   requestedEnvMode: DraftThreadEnvMode;
   isGitRepo: boolean;
+  isProjectlessConversation?: boolean;
 }): DraftThreadEnvMode {
+  // A projectless conversation (T3 Work) routes through a backing project that
+  // exists only to own the thread: there is no checkout to branch from, and the
+  // launch path sends prepareWorkspace: false. Honouring a requested worktree
+  // there would demand a base branch that cannot exist and, if sent, is
+  // rejected server-side as an incompatible workspace strategy.
+  if (input.isProjectlessConversation === true) return "local";
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
