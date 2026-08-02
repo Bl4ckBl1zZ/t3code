@@ -3,7 +3,7 @@ import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CircleAlertIcon, XIcon } from "lucide-react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { presentProviderError } from "./providerErrorPresentation";
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
