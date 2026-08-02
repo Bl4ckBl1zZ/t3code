@@ -438,7 +438,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
-  queueShortcutLabel: string;
+  steerShortcutLabel: string;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -457,7 +457,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       ) : null}
       {props.isRunning && props.hasSendableContent ? (
         <span className="hidden text-[11px] text-muted-foreground/70 sm:inline">
-          <kbd className="font-mono">{props.queueShortcutLabel}</kbd> to queue
+          <kbd className="font-mono">{props.steerShortcutLabel}</kbd> to steer
         </span>
       ) : null}
       <ComposerPrimaryActions
@@ -2052,7 +2052,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
         return;
       }
-      onSend(event, dispatchMode ?? resolveComposerDispatchMode({ phase, queueModifier: false }));
+      onSend(event, dispatchMode ?? resolveComposerDispatchMode({ phase, steerModifier: false }));
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
@@ -2126,7 +2126,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         undefined,
         resolveComposerDispatchMode({
           phase,
-          queueModifier: event.metaKey || event.ctrlKey,
+          steerModifier: event.metaKey || event.ctrlKey,
         }),
       );
       return true;
@@ -3504,7 +3504,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
-                  queueShortcutLabel={isMacPlatform(navigator.platform) ? "⌘↵" : "Ctrl+Enter"}
+                  steerShortcutLabel={isMacPlatform(navigator.platform) ? "⌘↵" : "Ctrl+Enter"}
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}

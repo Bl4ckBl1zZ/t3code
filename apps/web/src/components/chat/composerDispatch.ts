@@ -6,10 +6,10 @@ export type ActiveTurnComposerAction = Exclude<ComposerDispatchMode, "auto">;
 /** One policy seam for the future configurable active-turn default action. */
 export function resolveComposerDispatchMode(input: {
   readonly phase: SessionPhase;
-  readonly queueModifier: boolean;
+  readonly steerModifier: boolean;
   readonly activeTurnDefault?: ActiveTurnComposerAction;
 }): ComposerDispatchMode {
   if (input.phase !== "running") return "auto";
-  if (input.queueModifier) return "queue";
-  return input.activeTurnDefault ?? "steer";
+  if (input.steerModifier) return "steer";
+  return input.activeTurnDefault ?? "queue";
 }

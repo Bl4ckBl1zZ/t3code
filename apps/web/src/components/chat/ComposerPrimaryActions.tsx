@@ -223,7 +223,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               : isSendBusy
                 ? "Sending"
                 : isRunning
-                  ? "Send message to steer active turn"
+                  ? "Queue message after active turn"
                   : "Send message"
       }
     >
@@ -253,7 +253,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   return (
     <Tooltip>
       <TooltipTrigger render={sendButton} />
-      <TooltipPopup side="top">Send now to steer the active turn</TooltipPopup>
+      <TooltipPopup side="top">Queue to send after the active turn</TooltipPopup>
     </Tooltip>
   );
 });
