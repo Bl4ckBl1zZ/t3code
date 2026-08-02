@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   build-and-submit:
-    name: Build and submit iOS app via EAS
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    name: Build iOS app locally and submit to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 120
     environment:
       name: production
     env:
@@ -55,6 +55,40 @@ jobs:
           # tool dir, and pnpm 11 hard-fails that install on dtrace-provider's
           # ignored build script (no allowBuilds config outside the repo).
           packager: npm
+
+      - name: Install ccache
+        # expo-build-properties has ccacheEnabled on for iOS; the compiler
+        # wrappers only engage when the binary is present. Caches live in
+        # $HOME, outside the git-clean EAS build sandbox, so restoring them
+        # here still benefits the sandboxed compile.
+        run: brew install ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-ios-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ccache-ios-${{ runner.os }}-
+
+      - name: Restore CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: cocoapods-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-
+
+      - name: Install EAS local build worker
+        # eas-cli spawns the local build worker through `npm exec`, which
+        # evaluates apps/mobile/package.json and hard-fails on the
+        # react-native-nitro-markdown override/dependency conflict (EOVERRIDE).
+        # Preinstall the worker globally from $HOME and point eas-cli at the
+        # binary directly so npm never runs inside the repo.
+        run: |
+          cd "$HOME"
+          npm install -g eas-cli-local-build-plugin
+          echo "EAS_LOCAL_BUILD_PLUGIN_PATH=$(command -v eas-cli-local-build-plugin)" >> "$GITHUB_ENV"
 
       - name: Materialize local iOS signing credentials
         working-directory: apps/mobile
@@ -116,7 +150,24 @@ jobs:
             fs.writeFileSync("eas.json", JSON.stringify(easJson, null, 2));
           '
 
-      - name: Build on EAS and submit to TestFlight
+      - name: Sync extension build number
+        # The widget and sharing extensions bake their CFBundleVersion from
+        # T3CODE_IOS_BUILD_NUMBER at prebuild, while EAS injects its remote,
+        # auto-incremented build number into the main app only. The local build
+        # sandbox sees just the EAS environment (not this shell), so push the
+        # upcoming number into the EAS production environment before building;
+        # a mismatch fails the archive at signing validation.
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          current="$(eas build:version:get --platform ios --non-interactive | sed -n 's/.*buildNumber - //p')"
+          next=$((current + 1))
+          eas env:update production --variable-name T3CODE_IOS_BUILD_NUMBER --value "$next" --non-interactive
+          echo "Synced T3CODE_IOS_BUILD_NUMBER to $next"
+
+      - name: Build iOS app locally
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -124,5 +175,28 @@ jobs:
           eas build \
             --platform ios \
             --profile production \
-            --auto-submit \
+            --local \
+            --non-interactive \
+            --output build-production.ipa
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats || true
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-production-ipa
+          path: apps/mobile/build-production.ipa
+          if-no-files-found: error
+
+      - name: Submit to TestFlight
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas submit \
+            --platform ios \
+            --profile production \
+            --path build-production.ipa \
             --non-interactive
