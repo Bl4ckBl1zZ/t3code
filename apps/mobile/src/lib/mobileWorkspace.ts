@@ -75,6 +75,53 @@ export function isMobileWorkspaceThread(
   return workspace === "work" ? isHermes : !isHermes;
 }
 
+/**
+ * Sections of the T3 Work inbox, mirroring the web sidebar: Main is the
+ * always-pinned thread, "needs you" is blocked-on-you work, and everything
+ * else is ordinary active work.
+ */
+export type MobileWorkInboxSection = "main" | "needs-you" | "active";
+
+export function mobileWorkInboxSection(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "workInboxRole"
+  >,
+): MobileWorkInboxSection {
+  if (thread.workInboxRole === "main") return "main";
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "needs-you";
+  return "active";
+}
+
+/**
+ * Main is pinned by definition and cannot be unpinned, and parked or finished
+ * work is not inbox work — so neither offers the pin affordance.
+ */
+export function canPinMobileWorkThread(input: {
+  readonly thread: Pick<
+    EnvironmentThreadShell,
+    | "archivedAt"
+    | "environmentId"
+    | "lineage"
+    | "providerInstanceId"
+    | "modelSelection"
+    | "runtime"
+    | "workInboxRole"
+  >;
+  readonly providerDrivers: ReadonlyMap<string, ProviderDriverKind>;
+  readonly isSnoozed: boolean;
+  readonly isSettled: boolean;
+}): boolean {
+  return (
+    input.thread.workInboxRole !== "main" &&
+    input.thread.archivedAt === null &&
+    input.thread.lineage.relationshipToParent !== "subagent" &&
+    isHermesThread(input.thread, input.providerDrivers) &&
+    !input.isSnoozed &&
+    !input.isSettled
+  );
+}
+
 export interface HermesConversationTarget {
   readonly project: EnvironmentProject;
   readonly modelSelection: ModelSelection;

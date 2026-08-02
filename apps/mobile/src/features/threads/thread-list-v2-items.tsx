@@ -96,8 +96,11 @@ const SIDEBAR_V2_ROW_RADIUS = 12;
 export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
   readonly label: string;
   readonly pane?: "screen" | "sidebar";
+  /** "attention" marks blocked-on-you work, matching the web work inbox. */
+  readonly tone?: "default" | "attention";
 }) {
   const borderColor = useThemeColor("--color-border");
+  const attention = props.tone === "attention";
   return (
     <View
       className={cn(
@@ -105,8 +108,19 @@ export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivid
         props.pane === "sidebar" ? "px-3" : "px-5",
       )}
     >
-      <Text className="text-xs font-t3-medium text-foreground-tertiary">{props.label}</Text>
-      <View className="h-px flex-1" style={{ backgroundColor: borderColor }} />
+      <Text
+        className={cn(
+          "text-xs font-t3-medium",
+          attention ? "text-amber-600 dark:text-amber-400" : "text-foreground-tertiary",
+        )}
+      >
+        {props.label}
+      </Text>
+      {attention ? (
+        <View className="h-px flex-1 bg-amber-500/20 dark:bg-amber-400/15" />
+      ) : (
+        <View className="h-px flex-1" style={{ backgroundColor: borderColor }} />
+      )}
     </View>
   );
 });
