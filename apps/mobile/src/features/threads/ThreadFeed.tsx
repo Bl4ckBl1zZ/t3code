@@ -982,7 +982,9 @@ function renderFeedEntry(
     return (
       <ThreadWorkGroupToggle
         expanded={entry.expanded}
+        hiddenAdditions={entry.hiddenAdditions}
         hiddenCount={entry.hiddenCount}
+        hiddenDeletions={entry.hiddenDeletions}
         iconSubtleColor={iconSubtleColor}
         onlyToolActivities={entry.onlyToolActivities}
         onToggle={() => props.onToggleWorkGroup(entry.groupId)}

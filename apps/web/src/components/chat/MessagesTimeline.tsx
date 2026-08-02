@@ -34,7 +34,6 @@ import {
   providerErrorPresentation,
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolNeutralStatus,
-  workEntryIndicatesToolSuccess,
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
@@ -70,6 +69,7 @@ import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
@@ -2296,9 +2296,15 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
 }
 
 function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,
+  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles" | "itemType">,
   workspaceRoot: string | undefined,
 ) {
+  // File changes read as their path (with a diffstat rendered separately) —
+  // the raw diff text in `detail` is inspector material, not a preview.
+  if (workEntry.itemType === "file_change" && (workEntry.changedFiles?.length ?? 0) > 0) {
+    const [filePath] = workEntry.changedFiles!;
+    return filePath ? formatWorkspaceRelativePath(filePath, workspaceRoot) : null;
+  }
   // Prefer stdout/detail so completed shell/monitor results are visible collapsed
   // (command alone hid ls listings behind expand-only inspector JSON).
   if (workEntry.detail?.trim()) {
@@ -2459,9 +2465,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       : "font-medium text-foreground/82";
   const turnSettled = !activity.activeTurnInProgress;
   const showNeutralIndicator = !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
-  const showSuccessIndicator =
-    workEntryIndicatesToolSuccess(workEntry) ||
-    (turnSettled && workEntryIndicatesToolNeutralStatus(workEntry));
+  const projected = workEntry.projectedItem?.item;
+  const fileDiffStat =
+    projected?.type === "file_change"
+      ? { additions: projected.additions ?? 0, deletions: projected.deletions ?? 0 }
+      : null;
   const rowToggleProps = canExpand
     ? {
         role: "button" as const,
@@ -2516,6 +2524,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-px text-muted-foreground/55">
+            {fileDiffStat && hasNonZeroStat(fileDiffStat) ? (
+              <DiffStatLabel
+                additions={fileDiffStat.additions}
+                deletions={fileDiffStat.deletions}
+                layout="inline"
+                className="pe-1 text-[11px]"
+              />
+            ) : null}
             <span
               className="flex size-4 shrink-0 items-center justify-center"
               aria-hidden={!canExpand}
@@ -2544,21 +2560,6 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     <XIcon className="block size-3 shrink-0 text-destructive" aria-hidden />
                   </TooltipTrigger>
                   <TooltipPopup>Failed</TooltipPopup>
-                </Tooltip>
-              ) : showSuccessIndicator ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={<span className="flex size-4 items-center justify-center" />}
-                  >
-                    <span className="inline-flex size-4 items-center justify-center">
-                      <CheckIcon
-                        className="block size-3 shrink-0 stroke-current"
-                        stroke="currentColor"
-                        aria-hidden
-                      />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipPopup>Completed</TooltipPopup>
                 </Tooltip>
               ) : showNeutralIndicator ? (
                 <Tooltip>

@@ -127,6 +127,8 @@ export type ThreadFeedEntry =
       readonly hiddenCount: number;
       readonly expanded: boolean;
       readonly onlyToolActivities: boolean;
+      readonly hiddenAdditions: number;
+      readonly hiddenDeletions: number;
     }
   | {
       readonly type: "run-fold";
@@ -611,6 +613,32 @@ export function deriveThreadFeedPresentation(
   return result;
 }
 
+export function activityFileDiffStats(
+  activity: ThreadFeedActivity,
+): { readonly additions: number; readonly deletions: number } | null {
+  const item = activity.projectedItem.item;
+  if (item.type !== "file_change") return null;
+  const additions = item.additions ?? 0;
+  const deletions = item.deletions ?? 0;
+  return additions > 0 || deletions > 0 ? { additions, deletions } : null;
+}
+
+export function sumActivityFileDiffStats(activities: ReadonlyArray<ThreadFeedActivity>): {
+  readonly additions: number;
+  readonly deletions: number;
+} {
+  let additions = 0;
+  let deletions = 0;
+  for (const activity of activities) {
+    const stats = activityFileDiffStats(activity);
+    if (stats) {
+      additions += stats.additions;
+      deletions += stats.deletions;
+    }
+  }
+  return { additions, deletions };
+}
+
 function appendPresentedFeedEntry(
   result: ThreadFeedEntry[],
   entry: Exclude<ThreadFeedEntry, { readonly type: "run-fold" | "work-toggle" | "working" }>,
@@ -639,6 +667,9 @@ function appendPresentedFeedEntry(
   const expanded = expandedWorkGroupIds.has(groupId);
   const hiddenCount = activities.length - MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleActivities = expanded ? activities : activities.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES);
+  const hiddenStats = sumActivityFileDiffStats(
+    activities.slice(0, activities.length - MAX_VISIBLE_WORK_LOG_ENTRIES),
+  );
 
   for (const activity of visibleActivities) {
     result.push({
@@ -658,6 +689,8 @@ function appendPresentedFeedEntry(
     hiddenCount,
     expanded,
     onlyToolActivities: activities.every((activity) => activity.toolLike),
+    hiddenAdditions: hiddenStats.additions,
+    hiddenDeletions: hiddenStats.deletions,
   });
 }
 export function setPendingUserInputCustomAnswer(
