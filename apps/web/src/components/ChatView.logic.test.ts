@@ -515,6 +515,25 @@ describe("resolveSendEnvMode", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
   });
+
+  it("forces local for a projectless conversation even inside a git repository", () => {
+    // T3 Work threads have no checkout to branch from, so a requested worktree
+    // would demand a base branch that cannot exist.
+    expect(
+      resolveSendEnvMode({
+        requestedEnvMode: "worktree",
+        isGitRepo: true,
+        isProjectlessConversation: true,
+      }),
+    ).toBe("local");
+    expect(
+      resolveSendEnvMode({
+        requestedEnvMode: "worktree",
+        isGitRepo: true,
+        isProjectlessConversation: false,
+      }),
+    ).toBe("worktree");
+  });
 });
 
 describe("branchMismatchKey", () => {

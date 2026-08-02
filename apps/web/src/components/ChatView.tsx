@@ -4317,6 +4317,7 @@ function ChatViewContent(props: ChatViewProps) {
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
+    isProjectlessConversation: isHermesConversation,
   });
   const localCheckoutBranchMismatch = useMemo(
     () =>
