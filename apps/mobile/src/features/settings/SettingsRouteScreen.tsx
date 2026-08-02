@@ -690,6 +690,7 @@ function ArchivedThreadsSettingsSection() {
   return (
     <SettingsSection title="Threads">
       <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
+      <SettingsRow icon="calendar.badge.clock" label="Automations" target="SettingsAutomations" />
     </SettingsSection>
   );
 }

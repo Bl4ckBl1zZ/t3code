@@ -46,6 +46,7 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { ThreadAutomationsSection } from "./ThreadAutomationsSection";
 import { ThreadRelationshipsBanner } from "./ThreadRelationshipsBanner";
 import { ThreadQueueControl } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
@@ -424,10 +425,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             contentBottomInset={estimatedOverlayHeight}
             contentMaxWidth={contentMaxWidth}
             topAccessory={
-              <ThreadRelationshipsBanner
-                environmentId={props.environmentId}
-                threadId={props.selectedThread.id}
-              />
+              <View>
+                <ThreadAutomationsSection
+                  environmentId={props.environmentId}
+                  threadId={props.selectedThread.id}
+                />
+                <ThreadRelationshipsBanner
+                  environmentId={props.environmentId}
+                  threadId={props.selectedThread.id}
+                />
+              </View>
             }
             layoutVariant={layoutVariant}
             usesAutomaticContentInsets={props.usesAutomaticContentInsets}
