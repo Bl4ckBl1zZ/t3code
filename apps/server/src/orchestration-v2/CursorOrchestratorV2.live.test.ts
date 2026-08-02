@@ -30,6 +30,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { runDaemonWithOptions as runEffectWorkerDaemonWithOptions } from "./EffectWorker.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { layer as mcpSessionRegistryTestLayer } from "../mcp/McpSessionRegistry.testkit.ts";
 import { CURSOR_MODEL_SELECTION, SUBAGENT_PROMPT } from "./testkit/fixtures/shared.ts";
 
@@ -73,6 +74,7 @@ const liveLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(checkpointStoreLayer),
   Layer.provide(serverConfigLayer),
   Layer.provide(serverSettingsLayer),
+  Layer.provide(TextGeneration.layer),
   Layer.provide(providerInstanceRegistryLayer),
   Layer.provide(backgroundPolicyLayer),
   Layer.provide(NodeServices.layer),

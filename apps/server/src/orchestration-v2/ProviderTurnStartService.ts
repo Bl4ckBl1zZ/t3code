@@ -236,6 +236,8 @@ export const layer: Layer.Layer<
           strategy: "full_thread_summary",
           items: projection.turnItems,
           createdAt,
+          cwd: projection.thread.worktreePath,
+          summaryModelSelection: run.modelSelection,
         });
         effectiveHandoffs = [...handoffs, handoff];
         yield* eventSink.write({

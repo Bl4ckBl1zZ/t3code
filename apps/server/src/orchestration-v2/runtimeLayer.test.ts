@@ -46,6 +46,7 @@ import { OrchestrationEffectWorkerV2 } from "./EffectWorker.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { ProjectionMaintenanceV2 } from "./ProjectionMaintenance.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import { unavailableLayer as textGenerationUnavailableLayer } from "../textGeneration/TextGeneration.ts";
 import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -108,6 +109,7 @@ const TestLayer = Layer.merge(OrchestrationV2LayerLive, OrchestrationV2EventSink
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettingsService.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(textGenerationUnavailableLayer),
   Layer.provide(NodeServices.layer),
 );
 
@@ -118,6 +120,7 @@ const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettingsService.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(textGenerationUnavailableLayer),
   Layer.provide(NodeServices.layer),
 );
 
@@ -150,6 +153,7 @@ const SharedApplicationDataPlaneTestLayer = Layer.merge(
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettingsService.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(textGenerationUnavailableLayer),
   Layer.provide(NodeServices.layer),
 );
 

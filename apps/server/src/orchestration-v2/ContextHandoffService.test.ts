@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  ContextTransferId,
   MessageId,
   ProviderInstanceId,
   ProviderThreadId,
@@ -8,6 +9,7 @@ import {
   TurnItemId,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,9 +19,16 @@ import {
   layer as contextHandoffServiceLayer,
   providerMessageWithContextHandoff,
 } from "./ContextHandoffService.ts";
+import {
+  TextGeneration as TextGenerationService,
+  unavailable as textGenerationUnavailable,
+  unavailableLayer as textGenerationUnavailableLayer,
+} from "../textGeneration/TextGeneration.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 
-const TestLayer = contextHandoffServiceLayer.pipe(Layer.provide(idAllocatorLayer));
+const TestLayer = contextHandoffServiceLayer.pipe(
+  Layer.provide(Layer.merge(idAllocatorLayer, textGenerationUnavailableLayer)),
+);
 
 function importedItem(
   input:
@@ -159,6 +168,81 @@ it.layer(TestLayer)("ContextHandoffService legacy import", (it) => {
       assert.include(handoff.summaryText, "User:\n... ");
       assert.include(handoff.summaryText, "LATEST_SINGLE_TOKEN");
       assert.notInclude(handoff.summaryText, "\ufffd");
+    }),
+  );
+});
+
+const providerHandoffInput = {
+  threadId: ThreadId.make("thread:switch"),
+  targetRunId: RunId.make("run:switch"),
+  transferId: ContextTransferId.make("context-transfer:switch"),
+  fromProviderThreadIds: [ProviderThreadId.make("provider-thread:codex")],
+  toProviderThreadId: ProviderThreadId.make("provider-thread:claude"),
+  fromProviderInstanceId: ProviderInstanceId.make("codex"),
+  toProviderInstanceId: ProviderInstanceId.make("claudeAgent"),
+  coveredRunOrdinals: { from: 1, to: 2 },
+  strategy: "full_thread_summary",
+  items: [
+    importedItem({ role: "user", id: "one", text: "Please refactor the parser.", ordinal: 1 }),
+    importedItem({ role: "assistant", id: "two", text: "Refactored parser.ts.", ordinal: 2 }),
+  ],
+  createdAt: DateTime.makeUnsafe("2026-01-02T00:00:00.000Z"),
+  cwd: "/tmp/switch-workspace",
+  summaryModelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude"),
+} as const;
+
+const AiSummaryTestLayer = contextHandoffServiceLayer.pipe(
+  Layer.provide(
+    Layer.merge(
+      idAllocatorLayer,
+      Layer.succeed(
+        TextGenerationService,
+        TextGenerationService.of({
+          ...textGenerationUnavailable("unused"),
+          generateHandoffSummary: (input) =>
+            Effect.succeed({
+              summary: `AI compacted summary (${input.fromProvider} -> ${input.toProvider})`,
+            }),
+        }),
+      ),
+    ),
+  ),
+);
+
+it.layer(AiSummaryTestLayer)("ContextHandoffService AI provider handoff", (it) => {
+  it.effect("uses the AI-generated summary when generation succeeds", () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffServiceV2;
+      const handoff = yield* service.prepareProviderHandoff(providerHandoffInput);
+
+      assert.equal(handoff.strategy, "full_thread_summary");
+      assert.include(handoff.summaryText, "Full conversation context for provider handoff.");
+      assert.include(handoff.summaryText, "AI compacted summary (codex -> claudeAgent)");
+      assert.notInclude(handoff.summaryText, "Canonical conversation context:");
+    }),
+  );
+});
+
+it.layer(TestLayer)("ContextHandoffService AI fallback", (it) => {
+  it.effect("falls back to the template summary when generation fails", () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffServiceV2;
+      const handoff = yield* service.prepareProviderHandoff(providerHandoffInput);
+
+      assert.include(handoff.summaryText, "Canonical conversation context:");
+      assert.include(handoff.summaryText, "Please refactor the parser.");
+    }),
+  );
+
+  it.effect("skips AI generation when no cwd is available", () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffServiceV2;
+      const handoff = yield* service.prepareProviderHandoff({
+        ...providerHandoffInput,
+        cwd: null,
+      });
+
+      assert.include(handoff.summaryText, "Canonical conversation context:");
     }),
   );
 });

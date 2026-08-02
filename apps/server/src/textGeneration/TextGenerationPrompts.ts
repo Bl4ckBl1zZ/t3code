@@ -219,6 +219,38 @@ export function buildBranchNamePrompt(input: BranchNamePromptInput) {
 }
 
 // ---------------------------------------------------------------------------
+// Provider handoff summary
+// ---------------------------------------------------------------------------
+
+export interface HandoffSummaryPromptInput {
+  transcript: string;
+  fromProvider: string;
+  toProvider: string;
+}
+
+export function buildHandoffSummaryPrompt(input: HandoffSummaryPromptInput) {
+  const prompt = [
+    "You compact coding conversations so a different AI model can continue the work seamlessly.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    "- Preserve everything needed to continue with zero memory loss: the user's goals and constraints, decisions made and why, the current state of the work, unresolved problems, and explicit next steps.",
+    "- Keep exact identifiers verbatim: file paths, branch names, function and type names, commands, URLs, and error messages.",
+    "- Write concise markdown sections; state facts from the transcript only and do not invent details.",
+    "- Do not address the reader or add commentary about the handoff itself.",
+    "",
+    `The conversation so far ran on ${input.fromProvider} and will continue on ${input.toProvider}.`,
+    "",
+    "Conversation transcript:",
+    limitSection(input.transcript, 80_000),
+  ].join("\n");
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
+
+// ---------------------------------------------------------------------------
 // Thread title
 // ---------------------------------------------------------------------------
 
