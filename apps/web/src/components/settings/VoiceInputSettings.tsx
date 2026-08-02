@@ -19,18 +19,19 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
+const CUSTOM_MODEL_OPTION = "__custom__";
+
 function modelLabel(models: readonly OpenRouterModelOption[], id: string): string {
   const model = models.find((candidate) => candidate.id === id);
-  return model ? `${model.name} · ${model.providerName}` : `${id} · Unavailable`;
+  return model ? `${model.name} · ${model.providerName}` : id;
 }
 
 export function VoiceInputSettingsSection() {
   const [status, setStatus] = useState<OpenRouterIntegrationStatus | null>(null);
   const [settings, setSettings] = useState<VoiceInputSettings | null>(null);
-  const [transcriptionModels, setTranscriptionModels] = useState<
-    ReadonlyArray<OpenRouterModelOption>
-  >([]);
-  const [textModels, setTextModels] = useState<ReadonlyArray<OpenRouterModelOption>>([]);
+  const [audioModels, setAudioModels] = useState<ReadonlyArray<OpenRouterModelOption>>([]);
+  const [customModel, setCustomModel] = useState(false);
+  const [customModelDraft, setCustomModelDraft] = useState("");
   const [dictionaryDraft, setDictionaryDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const connected = status?.state === "connected";
@@ -46,12 +47,10 @@ export function VoiceInputSettingsSection() {
       setSettings(nextSettings);
       setDictionaryDraft(nextSettings.dictionary.join("\n"));
       if (nextStatus.state === "connected") {
-        const [nextTranscriptionModels, nextTextModels] = await Promise.all([
-          listOpenRouterModels("transcription"),
-          listOpenRouterModels("text"),
-        ]);
-        setTranscriptionModels(nextTranscriptionModels);
-        setTextModels(nextTextModels);
+        const nextAudioModels = await listOpenRouterModels("audio");
+        setAudioModels(nextAudioModels);
+        setCustomModel(!nextAudioModels.some((model) => model.id === nextSettings.model));
+        setCustomModelDraft(nextSettings.model);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load Voice Input settings.");
@@ -111,55 +110,51 @@ export function VoiceInputSettingsSection() {
         }
       />
       <SettingsRow
-        title="Transcription model"
-        description="The OpenRouter speech-to-text model used for recordings."
+        title="Voice model"
+        description="A single OpenRouter model that understands audio transcribes and improves your dictation. Only audio-capable models are listed."
         control={
-          <select
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm sm:w-72"
-            aria-label="Voice transcription model"
-            disabled={!connected || settings === null}
-            value={settings?.transcriptionModel ?? DEFAULT_VOICE_INPUT_SETTINGS.transcriptionModel}
-            onChange={(event) => void update({ transcriptionModel: event.currentTarget.value })}
-          >
-            {settings ? (
-              <option value={settings.transcriptionModel}>
-                {modelLabel(transcriptionModels, settings.transcriptionModel)}
-              </option>
-            ) : null}
-            {transcriptionModels
-              .filter((model) => model.id !== settings?.transcriptionModel)
-              .map((model) => (
+          <div className="flex w-full flex-col gap-2 sm:w-72">
+            <select
+              className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm"
+              aria-label="Voice model"
+              disabled={!connected || settings === null}
+              value={customModel ? CUSTOM_MODEL_OPTION : (settings?.model ?? "")}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                if (value === CUSTOM_MODEL_OPTION) {
+                  setCustomModel(true);
+                  setCustomModelDraft(settings?.model ?? "");
+                  return;
+                }
+                setCustomModel(false);
+                void update({ model: value });
+              }}
+            >
+              {settings && !customModel && !audioModels.some((m) => m.id === settings.model) ? (
+                <option value={settings.model}>{modelLabel(audioModels, settings.model)}</option>
+              ) : null}
+              {audioModels.map((model) => (
                 <option key={model.id} value={model.id}>
-                  {modelLabel(transcriptionModels, model.id)}
+                  {modelLabel(audioModels, model.id)}
                 </option>
               ))}
-          </select>
-        }
-      />
-      <SettingsRow
-        title="Cleanup model"
-        description="The text model used only for conservative transcript correction."
-        control={
-          <select
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm sm:w-72"
-            aria-label="Transcript cleanup model"
-            disabled={!connected || settings === null || !settings.cleanup.enabled}
-            value={settings?.cleanup.model ?? DEFAULT_VOICE_INPUT_SETTINGS.cleanup.model}
-            onChange={(event) => void update({ cleanup: { model: event.currentTarget.value } })}
-          >
-            {settings ? (
-              <option value={settings.cleanup.model}>
-                {modelLabel(textModels, settings.cleanup.model)}
-              </option>
+              <option value={CUSTOM_MODEL_OPTION}>Custom model ID…</option>
+            </select>
+            {customModel ? (
+              <input
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm"
+                aria-label="Custom voice model ID"
+                disabled={!connected || settings === null}
+                placeholder="provider/model-id"
+                value={customModelDraft}
+                onChange={(event) => setCustomModelDraft(event.currentTarget.value)}
+                onBlur={() => {
+                  const value = customModelDraft.trim();
+                  if (value && value !== settings?.model) void update({ model: value });
+                }}
+              />
             ) : null}
-            {textModels
-              .filter((model) => model.id !== settings?.cleanup.model)
-              .map((model) => (
-                <option key={model.id} value={model.id}>
-                  {modelLabel(textModels, model.id)}
-                </option>
-              ))}
-          </select>
+          </div>
         }
       />
       <SettingsRow

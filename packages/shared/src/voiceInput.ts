@@ -137,11 +137,10 @@ export function applyVoiceInputSettingsPatch(
   patch: VoiceInputSettingsPatch,
 ): VoiceInputSettings {
   return {
-    transcriptionModel: patch.transcriptionModel ?? settings.transcriptionModel,
+    model: patch.model ?? settings.model,
     language: patch.language === undefined ? settings.language : patch.language,
     cleanup: {
       enabled: patch.cleanup?.enabled ?? settings.cleanup.enabled,
-      model: patch.cleanup?.model ?? settings.cleanup.model,
     },
     dictionary:
       patch.dictionary === undefined
