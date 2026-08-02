@@ -172,12 +172,11 @@ describe("buildThreadFeed", () => {
     const activities = feed.flatMap((entry) =>
       entry.type === "activity-group" ? entry.activities : [],
     );
-    expect(activities.map((activity) => activity.projectedItem)).toEqual([inherited, synthetic]);
-    expect(activities.map((activity) => activity.projectedItem.visibility)).toEqual([
-      "inherited",
-      "synthetic",
-    ]);
-    expect(activities.at(-1)?.prominent).toBe(true);
+    expect(activities.map((activity) => activity.projectedItem)).toEqual([inherited]);
+    expect(activities[0]?.projectedItem.visibility).toBe("inherited");
+    // Forks are first-class lifecycle rows, keeping the projected row identity.
+    const lifecycle = feed.find((entry) => entry.type === "lifecycle");
+    expect(lifecycle?.type === "lifecycle" ? lifecycle.row : null).toBe(synthetic);
   });
 
   it("keeps orchestration relationship cards visible when a completed run is folded", () => {
@@ -213,11 +212,7 @@ describe("buildThreadFeed", () => {
     );
 
     expect(
-      collapsed.some(
-        (entry) =>
-          entry.type === "activity-group" &&
-          entry.activities.some((activity) => activity.projectedItem.item.type === "fork"),
-      ),
+      collapsed.some((entry) => entry.type === "lifecycle" && entry.row.item.type === "fork"),
     ).toBe(true);
     expect(
       collapsed.some(
