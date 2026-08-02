@@ -52,7 +52,10 @@ import {
 } from "../../components/ComposerToolbarTrigger";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
-import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import {
+  isDraftComposerImageAttachment,
+  type DraftComposerAttachment,
+} from "../../lib/composerImages";
 import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
@@ -95,7 +98,7 @@ export const COMPOSER_EXPANDED_CHROME = 174;
 
 export interface ThreadComposerProps {
   readonly draftMessage: string;
-  readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly draftAttachments: ReadonlyArray<DraftComposerAttachment>;
   readonly placeholder: string;
   readonly contentMaxWidth?: number;
   readonly bottomInset?: number;
@@ -124,6 +127,7 @@ export interface ThreadComposerProps {
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
+  readonly onPickDraftDocuments: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
@@ -549,6 +553,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Handle command selection ──────────────────────────────
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
+  const attachmentMenuActions = useMemo(
+    () => [
+      { id: "photos", title: "Photo Library", image: Platform.select({ ios: "photo.on.rectangle" }) },
+      { id: "files", title: "Files", image: Platform.select({ ios: "folder" }) },
+    ],
+    [],
+  );
+  const onAttachmentMenuAction = useCallback(
+    ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "files") {
+        void props.onPickDraftDocuments();
+        return;
+      }
+      void props.onPickDraftImages();
+    },
+    [props.onPickDraftDocuments, props.onPickDraftImages],
+  );
+
   const handleSend = useCallback(async () => {
     if (voiceBusy) return;
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
@@ -853,11 +875,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           ) : (
             <>
               {!isExpanded ? (
-                <ControlPill
-                  icon="plus"
-                  accessibilityLabel="Add attachment"
-                  onPress={() => void props.onPickDraftImages()}
-                />
+                <ControlPillMenu
+                  actions={attachmentMenuActions}
+                  onPressAction={onAttachmentMenuAction}
+                >
+                  <ControlPill icon="plus" accessibilityLabel="Add attachment" />
+                </ControlPillMenu>
               ) : null}
               <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
                 <ComposerEditor
@@ -901,15 +924,40 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               </View>
               {!isExpanded && props.draftAttachments.length > 0 ? (
                 <View className="flex-row gap-1 pl-1">
-                  {props.draftAttachments.slice(0, 3).map((image) => (
-                    <Pressable key={image.id} onPress={() => onPressImage(image.previewUri)}>
-                      <Image
-                        source={{ uri: image.previewUri }}
-                        className="size-[30px] rounded-lg bg-subtle"
-                        resizeMode="cover"
-                      />
-                    </Pressable>
-                  ))}
+                  {props.draftAttachments.slice(0, 3).map((attachment) =>
+                    isDraftComposerImageAttachment(attachment) ? (
+                      <Pressable
+                        key={attachment.id}
+                        onPress={() => onPressImage(attachment.previewUri)}
+                      >
+                        <Image
+                          source={{ uri: attachment.previewUri }}
+                          className="size-[30px] rounded-lg bg-subtle"
+                          resizeMode="cover"
+                        />
+                      </Pressable>
+                    ) : (
+                      // No thumbnail for documents: a glyph tile keeps the
+                      // collapsed strip's 30pt rhythm.
+                      <View
+                        key={attachment.id}
+                        className="size-[30px] items-center justify-center rounded-lg bg-subtle"
+                      >
+                        <SymbolView
+                          name={
+                            attachment.type === "pdf"
+                              ? "doc.richtext"
+                              : attachment.type === "video"
+                                ? "play.rectangle"
+                                : "doc"
+                          }
+                          size={14}
+                          tintColor={foregroundColor}
+                          type="monochrome"
+                        />
+                      </View>
+                    ),
+                  )}
                   {props.draftAttachments.length > 3 ? (
                     <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
                       <Text className="text-foreground-muted text-2xs font-t3-bold">
@@ -958,12 +1006,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 fadeOpaque={toolbarFadeOpaque}
                 fadeTransparent={toolbarFadeTransparent}
               >
-                <ComposerToolbarButton
-                  accessibilityLabel="Add attachment"
-                  icon="plus"
-                  onPress={() => void props.onPickDraftImages()}
-                  showChevron={false}
-                />
+                <ControlPillMenu
+                  actions={attachmentMenuActions}
+                  onPressAction={onAttachmentMenuAction}
+                >
+                  <ComposerToolbarButton
+                    accessibilityLabel="Add attachment"
+                    icon="plus"
+                    showChevron={false}
+                  />
+                </ControlPillMenu>
                 <ControlPillMenu
                   actions={modelMenuActions}
                   onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}

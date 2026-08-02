@@ -1,10 +1,16 @@
-import type { UploadChatAttachment } from "@t3tools/contracts";
+import type { UploadChatAttachment, UploadChatImageAttachment } from "@t3tools/contracts";
 
 /**
  * Pure attachment-kind helpers, kept free of native imports so they stay
  * testable — the picker module itself reaches for expo-crypto and
  * expo-file-system, which the test runner cannot parse.
  */
+
+/** Images carry a preview URI so the composer can show a thumbnail. */
+export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
+  readonly id: string;
+  readonly previewUri: string;
+}
 
 export interface DraftComposerDocumentAttachment {
   readonly id: string;
@@ -13,6 +19,15 @@ export interface DraftComposerDocumentAttachment {
   readonly mimeType: string;
   readonly sizeBytes: number;
   readonly dataUrl: string;
+}
+
+/** Anything the composer can hold as a pending attachment. */
+export type DraftComposerAttachment = DraftComposerImageAttachment | DraftComposerDocumentAttachment;
+
+export function isDraftComposerImageAttachment(
+  attachment: DraftComposerAttachment,
+): attachment is DraftComposerImageAttachment {
+  return attachment.type === "image";
 }
 
 const VIDEO_MIME_PATTERN = /^video\//i;
@@ -29,9 +44,12 @@ export function formatAttachmentSizeLimitError(name: string): string {
   return `'${name}' exceeds the 20 MB attachment limit.`;
 }
 
-/** Wire shape for startTurn: drop the client-side draft id. */
-export function toUploadChatDocumentAttachments(
-  attachments: ReadonlyArray<DraftComposerDocumentAttachment>,
+/**
+ * Wire shape for startTurn: drop client-only fields (draft id, preview URI)
+ * from every attachment kind.
+ */
+export function toUploadChatAttachments(
+  attachments: ReadonlyArray<DraftComposerAttachment>,
 ): ReadonlyArray<UploadChatAttachment> {
   return attachments.map((attachment) => ({
     type: attachment.type,
@@ -41,3 +59,6 @@ export function toUploadChatDocumentAttachments(
     dataUrl: attachment.dataUrl,
   }));
 }
+
+/** @deprecated Use toUploadChatAttachments — kept for the document-only path. */
+export const toUploadChatDocumentAttachments = toUploadChatAttachments;

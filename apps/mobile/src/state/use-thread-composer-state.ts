@@ -24,7 +24,8 @@ import {
   pasteComposerClipboard,
   pickComposerImages,
 } from "../lib/composerImages";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import type { DraftComposerAttachment } from "../lib/composerImages";
+import { pickComposerDocuments } from "../lib/composerDocuments";
 import { resolveHermesChatCommand } from "../lib/hermesChatCommands";
 import { buildProviderDriverMap, isHermesThread } from "../lib/mobileWorkspace";
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -69,7 +70,7 @@ export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly text: string;
-  readonly attachments?: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments?: ReadonlyArray<DraftComposerAttachment>;
 }): void {
   const threadKey = scopedThreadKey(input.environmentId, input.threadId);
   const existing = appAtomRegistry.get(composerDraftsAtom)[threadKey]?.text ?? "";
@@ -344,6 +345,23 @@ export function useThreadComposerState(options?: {
     }
   }, [composerDrafts, selectedThreadShell]);
 
+  const onPickDraftDocuments = useCallback(async () => {
+    if (!selectedThreadShell) {
+      return;
+    }
+
+    const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+    const result = await pickComposerDocuments({
+      existingCount: composerDrafts[threadKey]?.attachments.length ?? 0,
+    });
+    if (result.documents.length > 0) {
+      appendComposerDraftAttachments(threadKey, result.documents);
+    }
+    if (result.error) {
+      setPendingConnectionError(result.error);
+    }
+  }, [composerDrafts, selectedThreadShell]);
+
   const onPasteIntoDraft = useCallback(async () => {
     if (!selectedThreadShell) {
       return;
@@ -453,6 +471,7 @@ export function useThreadComposerState(options?: {
     interruptibleRunId,
     onChangeDraftMessage,
     onPickDraftImages,
+    onPickDraftDocuments,
     onPasteIntoDraft,
     onNativePasteImages,
     onRemoveDraftImage,
