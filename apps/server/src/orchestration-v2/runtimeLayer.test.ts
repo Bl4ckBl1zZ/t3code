@@ -239,16 +239,6 @@ const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(NodeServices.layer),
 );
 
-const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
-  Layer.provide(mcpSessionRegistryTestLayer),
-  Layer.provideMerge(SqlitePersistenceMemory),
-  Layer.provide(CheckpointStoreTestLayer),
-  Layer.provide(ServerConfigLayer),
-  Layer.provide(ServerSettingsService.layerTest()),
-  Layer.provide(TestProviderInstanceRegistry),
-  Layer.provide(NodeServices.layer),
-);
-
 const SharedApplicationDataPlaneTestLayer = Layer.merge(
   OrchestrationLayerLive,
   OrchestrationV2LayerLive,

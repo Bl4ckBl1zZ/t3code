@@ -9,6 +9,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   HermesAcpAdapterV2Driver,
   type HermesAcpAdapterV2DriverEnv,
@@ -45,12 +47,15 @@ const makeUnsupportedTextGeneration = (): TextGenerationShape => {
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),
     generateThreadTitle: () => unsupported("generateThreadTitle"),
+    generateHandoffSummary: () => unsupported("generateHandoffSummary"),
   };
 };
 
 export type HermesAcpDriverEnv =
   | HermesAcpAdapterV2DriverEnv
-  | ChildProcessSpawner.ChildProcessSpawner;
+  | ChildProcessSpawner.ChildProcessSpawner
+  | BackgroundPolicy.BackgroundPolicy
+  | ServerSettingsService;
 
 export const HermesAcpDriver: ProviderDriver<HermesAcpSettings, HermesAcpDriverEnv> = {
   driverKind: DRIVER_KIND,

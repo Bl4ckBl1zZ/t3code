@@ -437,6 +437,7 @@ function appThread(): OrchestrationV2AppThread {
     branch: null,
     worktreePath: null,
     activeProviderThreadId: null,
+    lastVisitedAt: null,
     lineage: {
       parentThreadId: null,
       relationshipToParent: null,

@@ -438,52 +438,6 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
       },
     );
 
-    const prepareLegacyImport = Effect.fn("orchestrationV2.contextHandoff.prepareLegacyImport")(
-      function* (input: {
-        readonly threadId: ThreadId;
-        readonly targetRunId: RunId;
-        readonly toProviderThreadId: ProviderThreadId;
-        readonly toProviderInstanceId: ProviderInstanceId;
-        readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
-        readonly createdAt: DateTime.Utc;
-      }) {
-        const handoffId = yield* idAllocator.allocate
-          .contextHandoff({
-            threadId: input.threadId,
-            fromProviderInstanceId: ProviderInstanceId.make("legacy"),
-            toProviderInstanceId: input.toProviderInstanceId,
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ContextHandoffPrepareError({
-                  threadId: input.threadId,
-                  targetRunId: input.targetRunId,
-                  fromProviderThreadIds: [],
-                  toProviderThreadId: input.toProviderThreadId,
-                  cause,
-                }),
-            ),
-          );
-        return {
-          id: handoffId,
-          transferId: null,
-          threadId: input.threadId,
-          targetRunId: input.targetRunId,
-          fromProviderThreadIds: [],
-          toProviderThreadId: input.toProviderThreadId,
-          coveredRunOrdinals: { from: 1, to: 1 },
-          strategy: "manual_context",
-          status: "ready",
-          summaryMessageId: null,
-          summaryText: makeLegacyImportSummary(input.items),
-          createdByProviderInstanceId: null,
-          createdAt: input.createdAt,
-          updatedAt: input.createdAt,
-        } satisfies OrchestrationV2ContextHandoff;
-      },
-    );
-
     const prepare = Effect.fn("orchestrationV2.contextHandoff.prepare")(function* (input: {
       readonly threadId: ThreadId;
       readonly targetRunId: RunId;

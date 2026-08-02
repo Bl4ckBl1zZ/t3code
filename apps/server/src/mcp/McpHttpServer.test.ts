@@ -64,6 +64,7 @@ const stubProjectionSnapshotQueryLayer = Layer.succeed(
     getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
     getProjectShellById: () => Effect.die("unused"),
     getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+    searchThreads: () => Effect.die("unused"),
     getThreadCheckpointContext: (contextThreadId) =>
       Effect.succeed(
         contextThreadId === threadId

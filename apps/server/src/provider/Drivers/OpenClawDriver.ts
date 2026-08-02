@@ -9,6 +9,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   OpenClawAdapterV2Driver,
   type OpenClawAdapterV2DriverEnv,
@@ -45,12 +47,15 @@ const makeUnsupportedTextGeneration = (): TextGenerationShape => {
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),
     generateThreadTitle: () => unsupported("generateThreadTitle"),
+    generateHandoffSummary: () => unsupported("generateHandoffSummary"),
   };
 };
 
 export type OpenClawDriverEnv =
   | OpenClawAdapterV2DriverEnv
-  | ChildProcessSpawner.ChildProcessSpawner;
+  | ChildProcessSpawner.ChildProcessSpawner
+  | BackgroundPolicy.BackgroundPolicy
+  | ServerSettingsService;
 
 export const OpenClawDriver: ProviderDriver<OpenClawSettings, OpenClawDriverEnv> = {
   driverKind: DRIVER_KIND,
