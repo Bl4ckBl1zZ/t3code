@@ -216,7 +216,7 @@ describe("buildThreadActivityInspector", () => {
     expect(inheritedModel.rollbackTarget).toBeNull();
   });
 
-  it("prefers live subagent progress from supporting state", () => {
+  it("routes subagents to first-class lifecycle rows instead of the work log", () => {
     const item: OrchestrationV2TurnItem = {
       ...itemBase("subagent"),
       type: "subagent",
@@ -229,29 +229,19 @@ describe("buildThreadActivityInspector", () => {
       progress: "Starting",
       result: null,
     };
-    const model = buildThreadActivityInspector(
-      activityFor(item),
-      {
-        ...EMPTY_V2_ITEM_SUPPORT,
-        item,
-        subagent: {
-          origin: "provider_native",
-          status: "running",
-          progress: "Reading projection tests",
-          result: null,
-        } as never,
-      },
+    // Subagents render as first-class lifecycle rows now, not work-log
+    // activities — the feed must route them past the activity/inspector path.
+    const row: OrchestrationV2ProjectedTurnItem = {
+      position: 0,
+      visibility: "inherited",
       sourceThreadId,
-    );
-
-    expect(model.fields).toContainEqual({
-      label: "Delegated task",
-      value: "provider native · running",
-    });
-    expect(model.blocks).toContainEqual({
-      label: "Progress",
-      value: "Reading projection tests",
-      monospaced: false,
-    });
+      sourceItemId: item.id,
+      item,
+    };
+    const entry = buildThreadFeed([row])[0];
+    expect(entry?.type).toBe("lifecycle");
+    if (entry?.type === "lifecycle") {
+      expect(entry.row).toBe(row);
+    }
   });
 });

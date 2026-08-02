@@ -27,11 +27,22 @@ export interface ThreadActivityWebLink {
   readonly url: string;
 }
 
+export interface ThreadActivityCheckpointFile {
+  readonly path: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly kind: string;
+}
+
 export interface ThreadActivityInspectorModel {
   readonly fields: ReadonlyArray<ThreadActivityInspectorField>;
   readonly blocks: ReadonlyArray<ThreadActivityInspectorBlock>;
   readonly fileLinks: ReadonlyArray<ThreadActivityFileLink>;
   readonly webLinks: ReadonlyArray<ThreadActivityWebLink>;
+  /** Unified diff for file changes, rendered by the diff viewer instead of a text block. */
+  readonly diff: string | null;
+  /** Structured changed-file list for checkpoints, rendered as rows instead of text. */
+  readonly checkpointFiles: ReadonlyArray<ThreadActivityCheckpointFile> | null;
   readonly canRollback: boolean;
   readonly rollbackTarget: {
     readonly threadId: ThreadId;
@@ -158,9 +169,10 @@ export function buildThreadActivityInspector(
           value: `+${item.additions ?? 0} −${item.deletions ?? 0}`,
         });
       }
-      addBlock(blocks, "Patch", item.diffStr);
-      addBlock(blocks, "Before", item.oldStr);
-      addBlock(blocks, "After", item.newStr);
+      if (item.diffStr === undefined || item.diffStr === null || item.diffStr === "") {
+        addBlock(blocks, "Before", item.oldStr);
+        addBlock(blocks, "After", item.newStr);
+      }
       break;
     case "file_search":
       addBlock(blocks, "Query", item.pattern);
@@ -201,13 +213,6 @@ export function buildThreadActivityInspector(
       );
       break;
     case "checkpoint":
-      addBlock(
-        blocks,
-        "Files",
-        item.files
-          .map((file) => `${file.path}  +${file.additions} −${file.deletions}  ${file.kind}`)
-          .join("\n"),
-      );
       break;
     case "subagent":
       addBlock(blocks, "Prompt", item.prompt, false);
@@ -289,6 +294,11 @@ export function buildThreadActivityInspector(
     blocks,
     fileLinks,
     webLinks,
+    diff:
+      item.type === "file_change" && item.diffStr !== undefined && item.diffStr !== null
+        ? item.diffStr
+        : null,
+    checkpointFiles: item.type === "checkpoint" ? item.files : null,
     canRollback: checkpoint?.status === "ready",
     rollbackTarget:
       checkpoint?.status === "ready"
