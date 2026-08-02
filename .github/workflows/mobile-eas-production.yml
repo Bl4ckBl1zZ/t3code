@@ -56,6 +56,29 @@ jobs:
           # ignored build script (no allowBuilds config outside the repo).
           packager: npm
 
+      - name: Install ccache
+        # expo-build-properties has ccacheEnabled on for iOS; the compiler
+        # wrappers only engage when the binary is present. Caches live in
+        # $HOME, outside the git-clean EAS build sandbox, so restoring them
+        # here still benefits the sandboxed compile.
+        run: brew install ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-ios-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ccache-ios-${{ runner.os }}-
+
+      - name: Restore CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: cocoapods-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-
+
       - name: Install EAS local build worker
         # eas-cli spawns the local build worker through `npm exec`, which
         # evaluates apps/mobile/package.json and hard-fails on the
@@ -155,6 +178,10 @@ jobs:
             --local \
             --non-interactive \
             --output build-production.ipa
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats || true
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4

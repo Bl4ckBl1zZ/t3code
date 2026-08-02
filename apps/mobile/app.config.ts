@@ -407,6 +407,9 @@ const config: ExpoConfig = {
       {
         ios: {
           deploymentTarget: IOS_DEPLOYMENT_TARGET,
+          // Reuse compiled objects across archives when ccache is installed
+          // (no-op otherwise); CI persists ~/Library/Caches/ccache between runs.
+          ccacheEnabled: true,
           // AppCheckCore 11.3+ includes Swift and needs module maps for these Objective-C dependencies.
           extraPods: [
             { name: "GoogleUtilities", modular_headers: true },
