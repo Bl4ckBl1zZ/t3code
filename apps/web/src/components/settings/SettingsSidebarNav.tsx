@@ -12,9 +12,11 @@ import {
   ArrowLeftIcon,
   BotIcon,
   CalendarClockIcon,
+  Clock3Icon,
   FlaskConicalIcon,
   GitBranchIcon,
   BlocksIcon,
+  GraduationCapIcon,
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
@@ -60,15 +62,21 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
 };
 
+export type SettingsNavPath = SettingsPath | "/settings/hermes-cron" | "/settings/hermes-skills";
+
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
-  to: SettingsPath;
+  to: SettingsNavPath;
   icon: ComponentType<{ className?: string }>;
-}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
-  to,
-  label: SETTINGS_SECTION_LABELS[to],
-  icon: SETTINGS_SECTION_ICONS[to],
-}));
+}> = [
+  ...(Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[]).map((to) => ({
+    to: to as SettingsNavPath,
+    label: SETTINGS_SECTION_LABELS[to],
+    icon: SETTINGS_SECTION_ICONS[to],
+  })),
+  { label: "T3 Work", to: "/settings/hermes-cron", icon: Clock3Icon },
+  { label: "Hermes Skills", to: "/settings/hermes-skills", icon: GraduationCapIcon },
+];
 
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
@@ -128,7 +136,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   }, [isMobile, open, setOpen, setOpenMobile]);
 
   const handleSectionClick = useCallback(
-    (to: SettingsPath) => {
+    (to: SettingsNavPath) => {
       if (isMobile) {
         setOpenMobile(false);
       }

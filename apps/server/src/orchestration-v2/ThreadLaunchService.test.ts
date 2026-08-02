@@ -138,6 +138,7 @@ function launchInput(input: {
   readonly thread: string;
   readonly message?: string;
   readonly workspace?: ThreadLaunch.ThreadLaunchWorkspaceStrategy;
+  readonly prepareWorkspace?: boolean;
 }) {
   return {
     commandId: CommandId.make(input.command),
@@ -148,6 +149,7 @@ function launchInput(input: {
     runtimeMode: "full-access" as const,
     interactionMode: "default" as const,
     workspaceStrategy: input.workspace ?? { type: "root" as const },
+    ...(input.prepareWorkspace === undefined ? {} : { prepareWorkspace: input.prepareWorkspace }),
     ...(input.message === undefined
       ? {}
       : {
@@ -161,6 +163,36 @@ function launchInput(input: {
     creationSource: "web" as const,
   };
 }
+
+it.effect("starts projectless launches without workspace preparation", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:projectless",
+          thread: "thread:launch:projectless",
+          message: "Hello Hermes",
+          prepareWorkspace: false,
+        }),
+      );
+
+      assert.equal(launched.projection.runs[0]?.status, "starting");
+      assert.isUndefined(
+        launched.projection.turnItems.find(
+          (item) => item.type === "command_execution" && item.input === "Preparing workspace",
+        ),
+      );
+      assert.equal(harness.runSetup.mock.calls.length, 0);
+      assert.lengthOf(
+        yield* outbox.listByCommandId(CommandId.make("command:launch:projectless:initial-message")),
+        1,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
 
 function waitUntil<E, R>(predicate: () => Effect.Effect<boolean, E, R>): Effect.Effect<void, E, R> {
   return Effect.gen(function* () {
@@ -544,6 +576,56 @@ it.effect("falls back when the source control writer is unavailable", () =>
         harness.generateBranchName.mock.calls[0]?.[0].modelSelection,
         DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("still generates a title for launches that skip workspace preparation", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:no-workspace-title",
+          thread: "thread:launch:no-workspace-title",
+          message: "Name this thread",
+          prepareWorkspace: false,
+        }),
+      );
+      assert.equal(harness.runSetup.mock.calls.length, 0);
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(Effect.map((projection) => projection.thread.title === "Generated title")),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("rejects skipping workspace preparation for a worktree strategy", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:no-workspace-worktree",
+        thread: "thread:launch:no-workspace-worktree",
+        message: "This combination is invalid",
+        workspace: { type: "worktree", baseRef: "main" },
+        prepareWorkspace: false,
+      });
+      const failure = yield* launches.launch(input).pipe(Effect.flip);
+      assert.equal(failure.operation, "provision-worktree");
+      assert.match(
+        String(failure.cause),
+        /Skipping workspace preparation is incompatible with a worktree workspace strategy\./u,
+      );
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      const projection = yield* threads.getThreadProjection(input.threadId).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(projection));
     }).pipe(Effect.provide(harness.layer));
   }),
 );

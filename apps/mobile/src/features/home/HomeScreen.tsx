@@ -29,6 +29,7 @@ import { EmptyState } from "../../components/EmptyState";
 import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey } from "../../lib/scopedEntities";
+import type { MobileWorkspace } from "../../lib/mobileWorkspace";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
@@ -42,6 +43,7 @@ import {
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import {
+  ThreadListV2InboxHeader,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
@@ -91,6 +93,7 @@ interface HomeScreenProps {
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
+  readonly workspace: MobileWorkspace;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
@@ -201,7 +204,9 @@ export function HomeScreen(props: HomeScreenProps) {
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const threadListV2Enabled = useThreadListV2Enabled();
+  const threadListV2FlagEnabled = useThreadListV2Enabled();
+  // T3 Work always uses the v2 list layout regardless of the preference flag.
+  const threadListV2Enabled = props.workspace === "work" || threadListV2FlagEnabled;
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -954,7 +959,11 @@ export function HomeScreen(props: HomeScreenProps) {
       </View>
     ) : null;
 
-  if (!hasAnyThreads) {
+  const catalogNotReady =
+    props.catalogState.isLoadingConnections ||
+    !props.catalogState.hasConnections ||
+    !props.catalogState.hasLoadedShellSnapshot;
+  if (!hasAnyThreads && (props.workspace === "code" || catalogNotReady)) {
     return (
       <View
         className="flex-1 items-center justify-center bg-screen px-8"
@@ -1009,7 +1018,12 @@ export function HomeScreen(props: HomeScreenProps) {
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).
-  const v2ListHeader = listHeader;
+  const v2ListHeader = (
+    <>
+      {listHeader}
+      {props.workspace === "work" ? <ThreadListV2InboxHeader /> : null}
+    </>
+  );
 
   const listEmpty = !hasResults ? (
     hasSearchQuery && threadSearch.isPending ? null : hasSearchQuery ? (

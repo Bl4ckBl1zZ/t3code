@@ -108,6 +108,52 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("stamps a historical settledAt and updatedAt when the command supplies one", () =>
+    Effect.gen(function* () {
+      // Must predate the test clock (epoch): future values are clamped to now
+      // so an upstream clock skew cannot pin an imported thread above live work.
+      const historical = "1969-06-01T00:00:00.000Z";
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-historical"),
+          threadId: ThreadId.make("thread-1"),
+          settledAt: historical,
+        },
+        readModel: makeReadModel(null),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe("thread.settled");
+      if (events[0]?.type === "thread.settled") {
+        expect(events[0].payload.settledAt).toBe(historical);
+        expect(events[0].payload.updatedAt).toBe(historical);
+      }
+    }),
+  );
+
+  it.effect("clamps a future settledAt supplied by an import to now", () =>
+    Effect.gen(function* () {
+      const future = "2999-01-01T00:00:00.000Z";
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-future"),
+          threadId: ThreadId.make("thread-1"),
+          settledAt: future,
+        },
+        readModel: makeReadModel(null),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events).toHaveLength(1);
+      if (events[0]?.type === "thread.settled") {
+        expect(events[0].payload.settledAt).not.toBe(future);
+        expect(events[0].payload.settledAt).toBe(events[0].occurredAt);
+        expect(events[0].payload.updatedAt).toBe(events[0].occurredAt);
+      }
+    }),
+  );
+
   it.effect("rejects settling a thread with a live session", () =>
     Effect.gen(function* () {
       for (const status of ["starting", "running"] as const) {

@@ -270,6 +270,24 @@ export const assetRouteLayer = HttpRouter.add(
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
+    if (asset.kind === "open-file") {
+      // The artifact file handle must not outlive the request: close it when
+      // the request scope ends (response sent, request failed, or client
+      // aborted). close() swallows the double-close after the response
+      // stream's autoClose has already released the descriptor.
+      yield* Effect.addFinalizer(() => Effect.promise(asset.file.close));
+      return yield* HttpServerResponse.fileWeb(asset.file, {
+        status: 200,
+        headers: {
+          "Cache-Control": "private, max-age=3600",
+          "X-Content-Type-Options": "nosniff",
+        },
+      }).pipe(
+        Effect.orElseSucceed(() =>
+          HttpServerResponse.text("Internal Server Error", { status: 500 }),
+        ),
+      );
+    }
     return yield* HttpServerResponse.file(asset.path, {
       status: 200,
       headers: {

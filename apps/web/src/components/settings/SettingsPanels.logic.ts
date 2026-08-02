@@ -157,7 +157,7 @@ export function formatDiagnosticsDescription(input: {
 }
 
 export function buildProviderInstanceUpdatePatch(input: {
-  readonly settings: Pick<ServerSettings, "providers" | "providerInstances">;
+  readonly settings: Pick<ServerSettings, "enableHermes" | "providers" | "providerInstances">;
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
   readonly driver: ProviderDriverKind;
@@ -172,6 +172,10 @@ export function buildProviderInstanceUpdatePatch(input: {
     LegacyProviderSettings | undefined
   >;
   const legacyProviderDefault = input.isDefault ? legacyProviderDefaults[input.driver] : undefined;
+  const providerInstances = {
+    ...input.settings.providerInstances,
+    [input.instanceId]: input.instance,
+  };
   return {
     ...(legacyProviderDefault !== undefined
       ? {
@@ -181,12 +185,18 @@ export function buildProviderInstanceUpdatePatch(input: {
           } as ServerSettings["providers"],
         }
       : {}),
-    providerInstances: {
-      ...input.settings.providerInstances,
-      [input.instanceId]: input.instance,
-    },
+    providerInstances,
+    ...(input.driver === "hermes"
+      ? { enableHermes: hasEnabledHermesInstance(providerInstances) }
+      : {}),
     ...(input.textGenerationModelSelection !== undefined
       ? { textGenerationModelSelection: input.textGenerationModelSelection }
       : {}),
   };
+}
+
+export function hasEnabledHermesInstance(instances: ServerSettings["providerInstances"]): boolean {
+  return Object.values(instances).some(
+    (instance) => instance.driver === "hermes" && instance.enabled === true,
+  );
 }

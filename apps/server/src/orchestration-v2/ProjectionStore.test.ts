@@ -1264,4 +1264,117 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       );
     }),
   );
+
+  it.effect("applies newer reconciled titles and rejects stale replays", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const createdAt = yield* DateTime.now;
+      const firstReconciledAt = DateTime.add(createdAt, { seconds: 1 });
+      const secondReconciledAt = DateTime.add(createdAt, { seconds: 2 });
+      const staleReconciledAt = DateTime.add(createdAt, { seconds: 3 });
+      const threadId = ThreadId.make("thread:projection-title-reconciled");
+      const projectId = ProjectId.make("project:projection-title-reconciled");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-title-reconciled:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: createdAt,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId,
+          title: "Original title",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt,
+          updatedAt: createdAt,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-title-reconciled:first"),
+        type: "thread.title-reconciled",
+        threadId,
+        occurredAt: firstReconciledAt,
+        payload: { title: "Reconciled one", revision: 1, origin: "provider" },
+      });
+
+      const afterFirst = yield* projectionStore.getThreadProjection(threadId);
+      assert.equal(afterFirst.thread.title, "Reconciled one");
+      assert.equal(afterFirst.thread.titleRevision, 1);
+      assert.equal(afterFirst.thread.titleOrigin, "provider");
+      assert.equal(
+        DateTime.toEpochMillis(afterFirst.thread.updatedAt),
+        DateTime.toEpochMillis(firstReconciledAt),
+      );
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-title-reconciled:second"),
+        type: "thread.title-reconciled",
+        threadId,
+        occurredAt: secondReconciledAt,
+        payload: { title: "Reconciled two", revision: 2, origin: "user" },
+      });
+
+      const afterSecond = yield* projectionStore.getThreadProjection(threadId);
+      assert.equal(afterSecond.thread.title, "Reconciled two");
+      assert.equal(afterSecond.thread.titleRevision, 2);
+      assert.equal(afterSecond.thread.titleOrigin, "user");
+      assert.equal(
+        DateTime.toEpochMillis(afterSecond.thread.updatedAt),
+        DateTime.toEpochMillis(secondReconciledAt),
+      );
+
+      // A replayed or out-of-order reconciliation must not clobber the newer
+      // revision, including its origin and updatedAt.
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-title-reconciled:stale"),
+        type: "thread.title-reconciled",
+        threadId,
+        occurredAt: staleReconciledAt,
+        payload: { title: "Reconciled one", revision: 1, origin: "provider" },
+      });
+
+      const afterStale = yield* projectionStore.getThreadProjection(threadId);
+      assert.equal(afterStale.thread.title, "Reconciled two");
+      assert.equal(afterStale.thread.titleRevision, 2);
+      assert.equal(afterStale.thread.titleOrigin, "user");
+      assert.equal(
+        DateTime.toEpochMillis(afterStale.thread.updatedAt),
+        DateTime.toEpochMillis(secondReconciledAt),
+      );
+
+      // The reconciled title must survive a projection reload through both
+      // shell construction paths.
+      const shellSnapshotThread = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      assert.equal(shellSnapshotThread?.title, "Reconciled two");
+      assert.equal(shellSnapshotThread?.titleRevision, 2);
+      assert.equal(shellSnapshotThread?.titleOrigin, "user");
+
+      const threadShell = yield* projectionStore.getThreadShell(threadId);
+      assert.equal(threadShell?.title, "Reconciled two");
+      assert.equal(threadShell?.titleRevision, 2);
+      assert.equal(threadShell?.titleOrigin, "user");
+    }),
+  );
 });

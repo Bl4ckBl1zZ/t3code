@@ -35,6 +35,7 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -114,6 +115,7 @@ import {
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
+import type { Project } from "../types";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -122,10 +124,30 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
-import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
-import { resolveDefaultProviderModelSelection } from "../providerInstances";
+import {
+  environmentServerConfigsAtom,
+  primaryServerKeybindingsAtom,
+  primaryServerProvidersAtom,
+} from "../state/server";
+import {
+  deriveProviderInstanceEntries,
+  resolveDefaultProviderModelSelection,
+} from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import { CommandDialog, CommandDialogPopup } from "./ui/command";
+import {
+  isT3WorkBackingProject,
+  T3_WORK_BACKING_PROJECT_ID,
+  t3WorkDirectoryForEnvironment,
+} from "../t3WorkProject";
+import { createT3WorkBackingProject, resolveHermesDefaultModel } from "../t3WorkProjectCreate";
+import {
+  Command,
+  CommandDialog,
+  CommandDialogPopup,
+  CommandFooter,
+  CommandInput,
+  CommandPanel,
+} from "./ui/command";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -256,6 +278,16 @@ function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: stri
     case "url":
       return <LinkIcon className={className} />;
   }
+}
+
+function projectActionItemIcon(project: Project): ReactNode {
+  return (
+    <ProjectFavicon
+      environmentId={project.environmentId}
+      cwd={project.workspaceRoot}
+      className={ITEM_ICON_CLASS}
+    />
+  );
 }
 
 function remoteProjectInputPlaceholder(flow: AddProjectCloneFlow | null): string | null {
@@ -557,6 +589,18 @@ function OpenCommandPaletteDialog(props: {
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const hermesProviderEntry = useMemo(
+    () =>
+      deriveProviderInstanceEntries(providers).find(
+        (entry) =>
+          entry.driverKind === "hermes" &&
+          entry.enabled &&
+          entry.isAvailable &&
+          entry.status === "ready",
+      ) ?? null,
+    [providers],
+  );
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const environmentIds = useMemo(
@@ -606,10 +650,14 @@ function OpenCommandPaletteDialog(props: {
       ),
     [environments],
   );
+  const visibleProjects = useMemo(
+    () => projects.filter((project) => !isT3WorkBackingProject(project, serverConfigs)),
+    [projects, serverConfigs],
+  );
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
-        items: projects,
+        items: visibleProjects,
         preferredIds: projectOrder,
         getId: getProjectOrderKey,
         getPreferenceIds: (project) => [
@@ -617,12 +665,13 @@ function OpenCommandPaletteDialog(props: {
           legacyProjectCwdPreferenceKey(project.workspaceRoot),
         ],
       }),
-    [projectOrder, projects],
+    [projectOrder, visibleProjects],
   );
   const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
-        projects: clientSettings.sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
+        projects:
+          clientSettings.sidebarProjectSortOrder === "manual" ? orderedProjects : visibleProjects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
@@ -633,7 +682,7 @@ function OpenCommandPaletteDialog(props: {
       orderedProjects,
       primaryEnvironmentId,
       projectGroupingSettings,
-      projects,
+      visibleProjects,
     ],
   );
   const projectGroups = useMemo(
@@ -924,16 +973,77 @@ function OpenCommandPaletteDialog(props: {
             group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
           );
         },
-        icon: (project) => (
-          <ProjectFavicon
-            environmentId={project.environmentId}
-            cwd={project.workspaceRoot}
-            className={ITEM_ICON_CLASS}
-          />
-        ),
+        icon: projectActionItemIcon,
         runProject: openProjectFromSearch,
       }),
     [openProjectFromSearch, pickerProjects, projectGroupByTargetKey],
+  );
+
+  const startFreshHermesChat = useCallback(async () => {
+    const t3WorkDirectory = t3WorkDirectoryForEnvironment(serverConfigs, primaryEnvironmentId);
+    const existingBackingProject =
+      projects.find(
+        (project) =>
+          project.environmentId === primaryEnvironmentId &&
+          t3WorkDirectory !== null &&
+          project.workspaceRoot === t3WorkDirectory,
+      ) ?? null;
+    const hermesModel =
+      hermesProviderEntry === null ? null : resolveHermesDefaultModel(hermesProviderEntry);
+    if (
+      primaryEnvironmentId === null ||
+      t3WorkDirectory === null ||
+      !hermesProviderEntry ||
+      !hermesModel
+    ) {
+      toastManager.add({
+        type: "warning",
+        title: "Hermes is not ready",
+        description: "Enable and configure Hermes before starting a new chat.",
+      });
+      return;
+    }
+    if (existingBackingProject === null) {
+      const outcome = await createT3WorkBackingProject({
+        createProject,
+        environmentId: primaryEnvironmentId,
+        workspaceRoot: t3WorkDirectory,
+        hermesProviderEntry,
+      });
+      if (outcome !== "created") return;
+    }
+    await handleNewThread(
+      scopeProjectRef(
+        primaryEnvironmentId,
+        existingBackingProject?.id ?? T3_WORK_BACKING_PROJECT_ID,
+      ),
+      {
+        fresh: true,
+        modelSelection: {
+          instanceId: hermesProviderEntry.instanceId,
+          model: hermesModel.slug,
+        },
+      },
+    );
+  }, [
+    createProject,
+    handleNewThread,
+    hermesProviderEntry,
+    primaryEnvironmentId,
+    projects,
+    serverConfigs,
+  ]);
+
+  const newChatItem = useMemo<CommandPaletteActionItem>(
+    () => ({
+      kind: "action",
+      value: "new-thread:new-chat",
+      searchTerms: ["new chat", "hermes", "conversation", "fresh"],
+      title: "New chat",
+      icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
+      run: startFreshHermesChat,
+    }),
+    [startFreshHermesChat],
   );
 
   const projectThreadItems = useMemo(
@@ -948,13 +1058,7 @@ function OpenCommandPaletteDialog(props: {
               group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
             );
           },
-          icon: (project) => (
-            <ProjectFavicon
-              environmentId={project.environmentId}
-              cwd={project.workspaceRoot}
-              className={ITEM_ICON_CLASS}
-            />
-          ),
+          icon: projectActionItemIcon,
           runProject: async (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
             const contextualRefBelongsToGroup =
@@ -1338,7 +1442,7 @@ function OpenCommandPaletteDialog(props: {
         {
           value: "projects",
           label: "Projects",
-          items: enumerateCommandPaletteItems(prioritized),
+          items: [newChatItem, ...enumerateCommandPaletteItems(prioritized)],
         },
       ],
     });
@@ -1347,6 +1451,7 @@ function OpenCommandPaletteDialog(props: {
     browseNavigation,
     currentProjectEnvironmentId,
     currentProjectId,
+    newChatItem,
     openIntent,
     projectThreadItems,
     pushPaletteView,
@@ -1389,7 +1494,13 @@ function OpenCommandPaletteDialog(props: {
       title: "New thread in...",
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
-      groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+      groups: [
+        {
+          value: "projects",
+          label: "Projects",
+          items: [newChatItem, ...projectThreadItems],
+        },
+      ],
     });
   }
 

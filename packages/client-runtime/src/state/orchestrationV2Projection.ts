@@ -122,6 +122,20 @@ export function applyOrchestrationV2ProjectionEvent(
     case "thread.visited":
     case "thread.marked-unread":
       return { ...projection, thread: event.payload };
+    case "thread.title-reconciled": {
+      if (event.payload.revision <= (projection.thread.titleRevision ?? 0)) {
+        return projection;
+      }
+      return {
+        ...base,
+        thread: {
+          ...base.thread,
+          title: event.payload.title,
+          titleRevision: event.payload.revision,
+          titleOrigin: event.payload.origin,
+        },
+      };
+    }
     case "run.created":
     case "run.updated": {
       const next = { ...base, runs: upsertEntity(base.runs, event.payload) };

@@ -93,6 +93,9 @@ export interface EnvironmentThreadShell {
   readonly archivedAt: string | null;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
+  readonly pinnedAt: string | null;
+  readonly workInboxRole: "main" | null;
+  readonly timelineClearedAt?: string | null;
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   /**
@@ -195,6 +198,9 @@ export function presentThreadShell(
     archivedAt: nullableIso(thread.archivedAt),
     settledOverride: thread.settledOverride,
     settledAt: nullableIso(thread.settledAt),
+    pinnedAt: nullableIso(thread.pinnedAt ?? null),
+    workInboxRole: thread.workInboxRole ?? null,
+    timelineClearedAt: nullableIso(thread.timelineClearedAt ?? null),
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     ...(thread.lastVisitedAt === undefined
