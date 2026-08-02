@@ -8,14 +8,16 @@ export function TimelineSystemDivider(props: {
   readonly detail?: ReactNode | null;
   readonly tone?: "neutral" | "danger";
   readonly icon?: LucideIcon;
+  /** In-flight system work: spins the icon and pulses the label. */
+  readonly busy?: boolean;
   readonly actionLabel?: string;
   readonly onAction?: () => void;
 }) {
   const Icon = props.icon;
   const content = (
     <>
-      {Icon ? <Icon className="size-3 shrink-0" /> : null}
-      <span className="font-medium">{props.label}</span>
+      {Icon ? <Icon className={cn("size-3 shrink-0", props.busy && "animate-spin")} /> : null}
+      <span className={cn("font-medium", props.busy && "animate-pulse")}>{props.label}</span>
       {props.detail ? <span className="max-w-80 truncate opacity-70">· {props.detail}</span> : null}
     </>
   );

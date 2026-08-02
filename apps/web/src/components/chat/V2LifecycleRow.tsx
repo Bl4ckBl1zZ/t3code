@@ -13,6 +13,7 @@ import {
   ChevronDownIcon,
   ExternalLinkIcon,
   GitForkIcon,
+  LoaderCircleIcon,
   MessageSquareIcon,
   MinusIcon,
   type LucideIcon,
@@ -38,6 +39,14 @@ const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
 export function isV2LifecycleItem(item: OrchestrationV2TurnItem): boolean {
   return LIFECYCLE_TYPES.has(item.type);
 }
+
+// A handoff turn item is broadcast in a non-terminal status while the
+// orchestrator is still generating the handoff summary for the target model.
+const HANDOFF_IN_FLIGHT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
+  "pending",
+  "running",
+  "waiting",
+]);
 
 // Aborted subagents (cancelled/interrupted) keep whatever result text had
 // streamed before the abort, so only completed/failed results are final.
@@ -139,10 +148,20 @@ export function V2LifecycleRow(props: {
             instanceId,
             model: latestRunModelBefore(props.runs, instanceId, handoffRun?.ordinal),
           }));
+    // A handoff item streams in as `running` while the orchestrator prepares
+    // the summary (possibly an AI call) and flips to `completed` in place.
+    const preparing = HANDOFF_IN_FLIGHT_STATUSES.has(item.status);
     return (
       <TimelineSystemDivider
-        label="Context handoff"
-        icon={ZapIcon}
+        label={
+          preparing
+            ? "Preparing context handoff"
+            : item.status === "failed"
+              ? "Context handoff failed"
+              : "Context handoff"
+        }
+        icon={preparing ? LoaderCircleIcon : ZapIcon}
+        busy={preparing}
         tone={item.status === "failed" ? "danger" : "neutral"}
         detail={
           <span className="inline-flex min-w-0 items-center gap-1.5">

@@ -151,6 +151,8 @@ export function ThreadLifecycleRow(props: {
         detail={presentation.detail}
         tone={presentation.tone}
         symbol={presentation.symbol}
+        layout={presentation.layout}
+        busy={presentation.busy}
         actionLabel={presentation.actionLabel}
         onAction={
           openThreadId === null

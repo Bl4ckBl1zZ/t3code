@@ -3226,11 +3226,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
         );
       }
-      const providerSwitchHandoff =
+      const providerSwitchStrategy =
+        targetProviderThread === undefined || requiresFullProviderSwitchContext
+          ? ("full_thread_summary" as const)
+          : ("delta_since_target_last_seen" as const);
+      const pendingProviderSwitchHandoff =
         providerSwitchTransferId === null || latestCompletedRun === undefined
           ? null
           : yield* contextHandoffService
-              .prepareProviderHandoff({
+              .beginProviderHandoff({
                 threadId: command.threadId,
                 targetRunId: runId,
                 transferId: providerSwitchTransferId,
@@ -3248,14 +3252,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   from: providerSwitchCoveredRuns[0]!.ordinal,
                   to: providerSwitchCoveredRuns.at(-1)!.ordinal,
                 },
-                strategy:
-                  targetProviderThread === undefined || requiresFullProviderSwitchContext
-                    ? "full_thread_summary"
-                    : "delta_since_target_last_seen",
-                items: providerSwitchItems,
+                strategy: providerSwitchStrategy,
                 createdAt: now,
-                cwd: projection.thread.worktreePath,
-                summaryModelSelection: modelSelection,
               })
               .pipe(
                 Effect.mapError(
@@ -3267,6 +3265,85 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     }),
                 ),
               );
+      // Broadcast the pending handoff outside the command's buffered event
+      // batch: the summary generation below can take a long time (it may call
+      // a model), and without these events clients see nothing at all between
+      // sending the message and the handoff finishing. The ready entity and
+      // completed turn item emitted at the end of dispatch carry the same ids,
+      // so they upsert over these pending rows.
+      if (pendingProviderSwitchHandoff !== null) {
+        const pendingRootNodeId = idAllocator.derive.rootNode({ runId });
+        yield* mapDispatchError(command)(
+          writeSystemEvents([
+            {
+              type: "context-handoff.updated",
+              threadId: command.threadId,
+              runId,
+              providerInstanceId: modelSelection.instanceId,
+              occurredAt: now,
+              payload: pendingProviderSwitchHandoff,
+            },
+            {
+              type: "turn-item.updated",
+              threadId: command.threadId,
+              runId,
+              nodeId: pendingRootNodeId,
+              providerInstanceId: modelSelection.instanceId,
+              occurredAt: now,
+              payload: {
+                id: idAllocator.derive.runSignalTurnItem({
+                  runId,
+                  signal: `context-handoff:${pendingProviderSwitchHandoff.id}`,
+                }),
+                threadId: command.threadId,
+                runId,
+                nodeId: pendingRootNodeId,
+                providerThreadId: ensuredProviderThread.id,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: ordinal * 100 - 1,
+                status: "running",
+                title: "Provider handoff",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                type: "handoff",
+                contextHandoffId: pendingProviderSwitchHandoff.id,
+                fromProviderThreadIds: pendingProviderSwitchHandoff.fromProviderThreadIds,
+                toProviderThreadId: pendingProviderSwitchHandoff.toProviderThreadId,
+                fromProviderInstanceIds: Array.from(
+                  new Set(providerSwitchCoveredRuns.map((run) => run.providerInstanceId)),
+                ),
+                toProviderInstanceId: modelSelection.instanceId,
+                fromModelSelections: Array.from(
+                  new Map(
+                    providerSwitchCoveredRuns.map((run) => [
+                      `${run.modelSelection.instanceId} ${run.modelSelection.model}`,
+                      run.modelSelection,
+                    ]),
+                  ).values(),
+                ),
+                toModel: modelSelection.model,
+                strategy: pendingProviderSwitchHandoff.strategy,
+              } satisfies OrchestrationV2TurnItem,
+            },
+          ]),
+        );
+      }
+      const providerSwitchHandoff =
+        pendingProviderSwitchHandoff === null || latestCompletedRun === undefined
+          ? null
+          : yield* contextHandoffService.completeProviderHandoff({
+              handoff: pendingProviderSwitchHandoff,
+              fromProviderInstanceId: latestCompletedRun.providerInstanceId,
+              toProviderInstanceId: modelSelection.instanceId,
+              strategy: providerSwitchStrategy,
+              items: providerSwitchItems,
+              completedAt: now,
+              cwd: projection.thread.worktreePath,
+              summaryModelSelection: modelSelection,
+            });
       const legacyImportRecoveryHandoff =
         isProviderSwitch && latestCompletedRun === undefined && legacyImportItems.length > 0
           ? yield* contextHandoffService
