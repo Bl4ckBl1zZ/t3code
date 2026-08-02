@@ -477,7 +477,14 @@ function negotiatedCapabilities(
   const setup = started.sessionSetupResult;
   const hasModelConfig =
     setup.configOptions?.some((option) => option.category === "model") === true;
-  const supportsMcp = agent.mcpCapabilities?.http === true || agent.mcpCapabilities?.sse === true;
+  // Some provider flavors implement ACP session MCP registration before they
+  // advertise the optional initialize capability. A flavor may explicitly
+  // opt in through its base capabilities; all other ACP providers remain
+  // gated by the negotiated inventory.
+  const supportsMcp =
+    base.tools.supportsMcpTools ||
+    agent.mcpCapabilities?.http === true ||
+    agent.mcpCapabilities?.sse === true;
   const canLoad = agent.loadSession === true;
   const canFork = session?.fork != null;
   return {

@@ -61,6 +61,7 @@ import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 
 type WorkspaceMode = "local" | "worktree";
+type DraftScope = "project" | "work";
 
 const EMPTY_BRANCH_REFS: ReadonlyArray<VcsRef> = [];
 
@@ -131,6 +132,7 @@ type NewTaskFlowContextValue = {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly expandedProvider: string | null;
+  readonly draftScope: DraftScope;
   readonly environments: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
     readonly environmentLabel: string;
@@ -167,6 +169,7 @@ type NewTaskFlowContextValue = {
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
   ) => void;
   readonly setExpandedProvider: (value: string | null) => void;
+  readonly setDraftScope: (scope: DraftScope) => void;
 };
 
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
@@ -215,6 +218,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const [submitting, setSubmitting] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
+  const [draftScope, setDraftScope] = useState<DraftScope>("project");
   const [editingPendingTask, setEditingPendingTask] = useState<QueuedThreadMessage | null>(null);
   // Mirrors `editingPendingTask` synchronously so the unmount flush cannot act
   // on a task whose editing session already ended this render.
@@ -346,7 +350,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedProjectDraftKey = editingPendingTask
     ? pendingTaskDraftKey(editingPendingTask.messageId)
     : selectedProject
-      ? `new-task:${scopedProjectKey(selectedProject.environmentId, selectedProject.id)}`
+      ? draftScope === "work"
+        ? `new-task:work:${selectedProject.environmentId}`
+        : `new-task:${scopedProjectKey(selectedProject.environmentId, selectedProject.id)}`
       : null;
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
@@ -738,6 +744,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
             : {}),
+          ...(draftScope === "work" ? { prepareWorkspace: false } : {}),
         },
         createdAt: metadata.createdAt,
       };
@@ -751,6 +758,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProjectDraftKey,
       startFromOrigin,
       workspaceMode,
+      draftScope,
     ],
   );
 
@@ -865,6 +873,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       runtimeMode,
       interactionMode,
       expandedProvider,
+      draftScope,
       environments,
       selectedProject,
       modelOptions,
@@ -896,6 +905,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setInteractionMode,
       setSelectedModelOptions,
       setExpandedProvider,
+      setDraftScope,
     }),
     [
       attachments,
@@ -908,6 +918,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       editingPendingTask,
       environments,
       expandedProvider,
+      draftScope,
       filteredBranches,
       finishEditingPendingTask,
       interactionMode,
@@ -927,6 +938,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProjectDraftKey,
       selectedProviderSkills,
       setSelectedModelOptions,
+      setDraftScope,
       selectedProject,
       selectedProjectKey,
       selectedWorktreePath,

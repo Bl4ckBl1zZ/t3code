@@ -26,10 +26,16 @@ import { SymbolView } from "../../components/AppSymbol";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
+import {
+  buildProviderDriverMap,
+  isHermesProviderInstance,
+  isMobileWorkspaceThread,
+} from "../../lib/mobileWorkspace";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+import { useMobileWorkspace } from "../../state/preferences";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -68,6 +74,7 @@ import {
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import {
+  ThreadListV2InboxHeader,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
@@ -87,6 +94,7 @@ import {
 type SidebarListItem =
   | HomeListItem
   | ThreadListV2ListItem
+  | { readonly type: "v2-inbox"; readonly key: string }
   | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
 
 /**
@@ -206,8 +214,32 @@ function ThreadNavigationSidebarPane(
     unsnoozeThread,
     unsettleThread,
   } = useThreadListActions();
-  const threadListV2Enabled = useThreadListV2Enabled();
-  const pendingTasks = usePendingNewTasks();
+  const threadListV2FlagEnabled = useThreadListV2Enabled();
+  const [workspace, setWorkspace] = useMobileWorkspace();
+  // T3 Work always uses the v2 list layout regardless of the preference flag.
+  const threadListV2Enabled = workspace === "work" || threadListV2FlagEnabled;
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
+  const visibleThreads = useMemo(
+    () => threads.filter((thread) => isMobileWorkspaceThread(thread, workspace, providerDrivers)),
+    [providerDrivers, threads, workspace],
+  );
+  const allPendingTasks = usePendingNewTasks();
+  const pendingTasks = useMemo(
+    () =>
+      workspace === "code"
+        ? allPendingTasks
+        : allPendingTasks.filter(
+            (task) =>
+              task.message.modelSelection !== undefined &&
+              isHermesProviderInstance(
+                task.message.environmentId,
+                task.message.modelSelection.instanceId,
+                providerDrivers,
+              ),
+          ),
+    [allPendingTasks, providerDrivers, workspace],
+  );
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
     () =>
@@ -325,11 +357,11 @@ function ThreadNavigationSidebarPane(
   const scopedThreads = useMemo(
     () =>
       selectedProjectRefs === null
-        ? threads
-        : threads.filter((thread) =>
+        ? visibleThreads
+        : visibleThreads.filter((thread) =>
             selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId)),
           ),
-    [selectedProjectRefs, threads],
+    [selectedProjectRefs, visibleThreads],
   );
   const scopedPendingTasks = useMemo(
     () =>
@@ -462,7 +494,6 @@ function ThreadNavigationSidebarPane(
   }, [threadListV2Enabled]);
   // Threads on servers without the settlement capability never classify as
   // settled (the user could neither un-settle nor pin them).
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const settlementEnvironmentIds = useMemo(() => {
     const supported = new Set<EnvironmentId>();
     for (const [environmentId, config] of serverConfigs) {
@@ -493,9 +524,12 @@ function ThreadNavigationSidebarPane(
         nextSnoozeWakeAt: null,
       };
     return buildThreadListV2Items({
-      threads: threads.filter((thread) => thread.archivedAt === null),
+      threads: visibleThreads,
       environmentId: options.selectedEnvironmentId,
-      projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
+      projectRefs:
+        workspace === "work" || selectedProjectScope === null
+          ? null
+          : selectedProjectScope.projectRefs,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
@@ -522,7 +556,8 @@ function ThreadNavigationSidebarPane(
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     threadListV2Enabled,
-    threads,
+    visibleThreads,
+    workspace,
     selectedProjectScope,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the
@@ -551,24 +586,34 @@ function ThreadNavigationSidebarPane(
       (pendingTask) =>
         (options.selectedEnvironmentId === null ||
           pendingTask.message.environmentId === options.selectedEnvironmentId) &&
-        (selectedProjectRefs === null ||
+        (workspace === "work" ||
+          selectedProjectRefs === null ||
           selectedProjectRefs.has(
             scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
           )) &&
         (v2SearchQuery.length === 0 ||
           pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
     );
-    const items: SidebarListItem[] = buildThreadListV2ListItems({
-      items: threadListV2Layout.items,
-      pendingTasks: v2PendingTasks,
-      snoozedCount: threadListV2Layout.snoozedCount,
-      snoozedShelfExpanded,
-      snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
-      settledCount: threadListV2Layout.settledCount,
-      settledShelfExpanded,
-      settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
-      snoozeLabelNow: `${nowMinute}:00.000Z`,
-    });
+    const items: SidebarListItem[] = [];
+    if (workspace === "work") {
+      items.push({
+        type: "v2-inbox",
+        key: "v2-inbox",
+      });
+    }
+    items.push(
+      ...buildThreadListV2ListItems({
+        items: threadListV2Layout.items,
+        pendingTasks: v2PendingTasks,
+        snoozedCount: threadListV2Layout.snoozedCount,
+        snoozedShelfExpanded,
+        snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
+        settledCount: threadListV2Layout.settledCount,
+        settledShelfExpanded,
+        settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
+        snoozeLabelNow: `${nowMinute}:00.000Z`,
+      }),
+    );
     if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
       items.push({
         type: "v2-show-more",
@@ -588,10 +633,29 @@ function ThreadNavigationSidebarPane(
     snoozedShelfExpanded,
     threadListV2Enabled,
     threadListV2Layout,
+    workspace,
   ]);
   const showsConnectionStatus = shouldShowWorkspaceConnectionStatus(catalogState);
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
+      {
+        id: "workspace",
+        title: "Workspace",
+        subactions: [
+          {
+            id: "workspace:work",
+            title: "T3 Work",
+            subtitle: "Create, learn, and explore",
+            state: workspace === "work" ? "on" : "off",
+          },
+          {
+            id: "workspace:code",
+            title: "T3 Code",
+            subtitle: "Build, debug, and ship",
+            state: workspace === "code" ? "on" : "off",
+          },
+        ],
+      },
       {
         id: "environment",
         title: "Environment",
@@ -612,7 +676,7 @@ function ThreadNavigationSidebarPane(
           })),
         ],
       },
-      ...(projectFilterOptions.length === 0
+      ...(workspace === "work" || projectFilterOptions.length === 0
         ? []
         : ([
             {
@@ -659,11 +723,26 @@ function ThreadNavigationSidebarPane(
             },
           ] satisfies MenuAction[])),
     ],
-    [environments, options, projectFilterOptions, selectedProjectKey, threadListV2Enabled],
+    [
+      environments,
+      options,
+      projectFilterOptions,
+      selectedProjectKey,
+      threadListV2Enabled,
+      workspace,
+    ],
   );
   const handleListMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       const event = nativeEvent.event;
+      if (event === "workspace:work") {
+        setWorkspace("work");
+        return;
+      }
+      if (event === "workspace:code") {
+        setWorkspace("code");
+        return;
+      }
       if (event === "environment:all") {
         setSelectedEnvironmentId(null);
         return;
@@ -707,6 +786,7 @@ function ThreadNavigationSidebarPane(
       setProjectSortOrder,
       setSelectedEnvironmentId,
       setThreadSortOrder,
+      setWorkspace,
     ],
   );
 
@@ -798,6 +878,9 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
         return previous.hiddenCount === item.hiddenCount;
       }
+      if (previous.type === "v2-inbox" && item.type === "v2-inbox") {
+        return true;
+      }
       if (previous.type === "v2-pending" && item.type === "v2-pending") {
         return (
           previous.pendingTask === item.pendingTask &&
@@ -816,11 +899,13 @@ function ThreadNavigationSidebarPane(
         previous.type === "v2-pending" ||
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
+        previous.type === "v2-inbox" ||
         item.type === "v2-thread" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
         item.type === "v2-snoozed-shelf" ||
-        item.type === "v2-settled-shelf"
+        item.type === "v2-settled-shelf" ||
+        item.type === "v2-inbox"
       ) {
         return false;
       }
@@ -848,6 +933,8 @@ function ThreadNavigationSidebarPane(
   const renderListItem = useCallback(
     ({ item }: { readonly item: SidebarListItem }) => {
       switch (item.type) {
+        case "v2-inbox":
+          return <ThreadListV2InboxHeader pane="sidebar" />;
         case "v2-pending": {
           const pendingScopeKey = scopedProjectKey(
             item.pendingTask.message.environmentId,
@@ -1072,7 +1159,8 @@ function ThreadNavigationSidebarPane(
   // v2 ignores the sort/group options, so only the environment filter can
   // light the "customized" state while the beta is on.
   const filterCustomized = threadListV2Enabled
-    ? options.selectedEnvironmentId !== null || selectedProjectKey !== null
+    ? options.selectedEnvironmentId !== null ||
+      (workspace === "code" && selectedProjectKey !== null)
     : hasCustomHomeListOptions({ ...options, selectedProjectKey });
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
@@ -1081,9 +1169,9 @@ function ThreadNavigationSidebarPane(
     () =>
       buildHomeListFilterMenu({
         environments,
-        projects: projectFilterOptions,
+        projects: workspace === "work" ? [] : projectFilterOptions,
         selectedEnvironmentId: options.selectedEnvironmentId,
-        selectedProjectKey,
+        selectedProjectKey: workspace === "work" ? null : selectedProjectKey,
         projectSortOrder: options.projectSortOrder,
         threadSortOrder: options.threadSortOrder,
         onEnvironmentChange: setSelectedEnvironmentId,
@@ -1101,6 +1189,7 @@ function ThreadNavigationSidebarPane(
       setSelectedEnvironmentId,
       setThreadSortOrder,
       threadListV2Enabled,
+      workspace,
     ],
   );
   const nativeHeaderItems = useMemo(
@@ -1108,9 +1197,11 @@ function ThreadNavigationSidebarPane(
       createSidebarHeaderItems({
         filterIcon,
         filterMenu,
+        workspace,
+        onWorkspaceChange: setWorkspace,
         onOpenSettings: props.onOpenSettings,
       }),
-    [filterIcon, filterMenu, props.onOpenSettings],
+    [filterIcon, filterMenu, props.onOpenSettings, setWorkspace, workspace],
   );
   // Snoozed threads need no special case: the shelf header is a list row
   // even while collapsed.
@@ -1134,6 +1225,7 @@ function ThreadNavigationSidebarPane(
         <NativeStackScreenOptions
           optionsVersion={nativeHeaderItems}
           options={{
+            title: `T3 ${workspace === "work" ? "Work" : "Code"}`,
             headerSearchBarOptions: {
               ref: searchBarRef,
               autoCapitalize: "none",
@@ -1286,7 +1378,7 @@ function ThreadNavigationSidebarPane(
         </View>
         <View className="h-[50px] flex-row items-end gap-0.5 pr-2 pl-5">
           <Text className="flex-1 text-[34px] font-t3-bold text-foreground" numberOfLines={1}>
-            Threads
+            T3 {workspace === "work" ? "Work" : "Code"}
           </Text>
           <SidebarHeaderButtonGroup colorScheme={colorScheme}>
             <ControlPillMenu actions={listMenuActions} onPressAction={handleListMenuAction}>

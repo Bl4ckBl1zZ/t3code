@@ -3,11 +3,12 @@ import { ContextHandoffId } from "@t3tools/contracts";
 
 import { appendContextHandoffId, shouldPrepareLegacyImportHandoff } from "./Orchestrator.ts";
 
-it("reissues imported context until a V2 run completes", () => {
+it("reissues imported context until a V2 run completes or the provider thread is materialized", () => {
   assert.isTrue(
     shouldPrepareLegacyImportHandoff({
       historyOrigin: "v1_import",
       hasCompletedRun: false,
+      hasNativeThreadRef: false,
       legacyImportItemCount: 2,
     }),
   );
@@ -15,13 +16,7 @@ it("reissues imported context until a V2 run completes", () => {
     shouldPrepareLegacyImportHandoff({
       historyOrigin: "v1_import",
       hasCompletedRun: true,
-      legacyImportItemCount: 2,
-    }),
-  );
-  assert.isFalse(
-    shouldPrepareLegacyImportHandoff({
-      historyOrigin: undefined,
-      hasCompletedRun: false,
+      hasNativeThreadRef: false,
       legacyImportItemCount: 2,
     }),
   );
@@ -29,6 +24,23 @@ it("reissues imported context until a V2 run completes", () => {
     shouldPrepareLegacyImportHandoff({
       historyOrigin: "v1_import",
       hasCompletedRun: false,
+      hasNativeThreadRef: true,
+      legacyImportItemCount: 2,
+    }),
+  );
+  assert.isFalse(
+    shouldPrepareLegacyImportHandoff({
+      historyOrigin: undefined,
+      hasCompletedRun: false,
+      hasNativeThreadRef: false,
+      legacyImportItemCount: 2,
+    }),
+  );
+  assert.isFalse(
+    shouldPrepareLegacyImportHandoff({
+      historyOrigin: "v1_import",
+      hasCompletedRun: false,
+      hasNativeThreadRef: false,
       legacyImportItemCount: 0,
     }),
   );

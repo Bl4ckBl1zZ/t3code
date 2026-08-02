@@ -1,5 +1,5 @@
 import { SettingsIcon } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -25,8 +25,10 @@ import { SidebarUpdatePill } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
+  workspaceSelector,
 }: {
   isElectron: boolean;
+  workspaceSelector?: ReactNode;
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
@@ -34,6 +36,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     stageLabel,
     environmentIdentificationMode === "artwork",
   );
+  const onBackdrop = backdropVariant !== null;
   const pillLabel =
     environmentIdentificationMode === "pill"
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
@@ -41,6 +44,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
   return (
     <SidebarHeader
+      data-on-backdrop={onBackdrop || undefined}
       className={cn(
         "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
         isElectron && "drag-region",
@@ -54,7 +58,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
             "[:hover,[data-pressed]]:bg-white/15 focus-visible:ring-white/90 focus-visible:ring-offset-blue-700 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white!",
         )}
       />
-      <SidebarBrand onBackdrop={backdropVariant !== null} />
+      {workspaceSelector ?? <SidebarBrand onBackdrop={onBackdrop} />}
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
@@ -92,7 +96,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function T3Wordmark() {
+export function T3Wordmark() {
   return (
     <svg
       aria-label="T3"

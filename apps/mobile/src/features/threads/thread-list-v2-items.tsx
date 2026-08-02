@@ -301,6 +301,23 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   );
 });
 
+export const ThreadListV2InboxHeader = memo(function ThreadListV2InboxHeader(props: {
+  readonly pane?: "screen" | "sidebar";
+}) {
+  const borderColor = useThemeColor("--color-border");
+  return (
+    <View
+      className={cn(
+        "mb-1.5 mt-2 flex-row items-center gap-2.5",
+        props.pane === "sidebar" ? "px-3" : "px-5",
+      )}
+    >
+      <Text className="text-xs font-t3-medium text-foreground-tertiary">Inbox</Text>
+      <View className="h-px flex-1" style={{ backgroundColor: borderColor }} />
+    </View>
+  );
+});
+
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
@@ -386,6 +403,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
+  const isHermes = props.providerDriver === "hermes";
 
   const status = resolveThreadListV2Status(thread);
   // "Done" marks a completion the user has not opened yet — same emerald
@@ -550,7 +568,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const cardContent = (
     <>
       <View className="flex-row items-center gap-1.5">
-        {props.project ? (
+        {isHermes ? (
+          <ProviderIcon provider="hermes" size={15} />
+        ) : props.project ? (
           <ProjectFavicon
             environmentId={thread.environmentId}
             size={15}
@@ -565,7 +585,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
           numberOfLines={1}
         >
-          {props.projectTitle ?? props.project?.title ?? ""}
+          {isHermes ? "Hermes" : (props.projectTitle ?? props.project?.title ?? "")}
         </Text>
         <Text
           className={cn(
@@ -644,7 +664,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ) : (
           <View className="flex-1" />
         )}
-        {pr ? (
+        {!isHermes && pr ? (
           <Text
             accessibilityLabel={pr.accessibilityLabel}
             className={cn("text-xs", selected ? "text-white" : pr.textClassName)}
@@ -653,7 +673,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             #{pr.label}
           </Text>
         ) : null}
-        {props.providerDriver ? (
+        {props.providerDriver && !isHermes ? (
           <View className="opacity-60">
             <ProviderIcon provider={props.providerDriver} size={14} />
           </View>
