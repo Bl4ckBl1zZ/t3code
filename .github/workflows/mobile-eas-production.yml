@@ -64,6 +64,38 @@ jobs:
           restore-keys: |
             cocoapods-${{ runner.os }}-
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.t3code-ccache/cache
+          # Unique key per commit so every run saves its warmed cache; restore
+          # falls back to the most recent prior run.
+          key: ccache-ios-${{ github.sha }}
+          restore-keys: |
+            ccache-ios-
+
+      - name: Set up ccache
+        # plugins/withIosCcache.cjs only activates when these wrapper scripts
+        # exist, routing Pods C/C++/ObjC compilation through ccache. The
+        # wrappers bake in absolute paths and CCACHE_DIR because the EAS local
+        # sandbox does not pass shell env through to xcodebuild reliably.
+        run: |
+          set -euo pipefail
+          command -v ccache >/dev/null || brew install ccache
+          ccache_bin="$(command -v ccache)"
+          export CCACHE_DIR="$HOME/.t3code-ccache/cache"
+          wrappers="$HOME/.t3code-ccache/bin"
+          mkdir -p "$wrappers" "$CCACHE_DIR"
+          printf '#!/bin/sh\nexport CCACHE_DIR="%s"\nexec "%s" clang "$@"\n' \
+            "$CCACHE_DIR" "$ccache_bin" > "$wrappers/ccache-clang.sh"
+          printf '#!/bin/sh\nexport CCACHE_DIR="%s"\nexec "%s" clang++ "$@"\n' \
+            "$CCACHE_DIR" "$ccache_bin" > "$wrappers/ccache-clang++.sh"
+          chmod +x "$wrappers/ccache-clang.sh" "$wrappers/ccache-clang++.sh"
+          ccache --set-config max_size=3G
+          ccache --set-config inode_cache=true
+          ccache --set-config sloppiness=clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros
+          ccache --zero-stats
+
       - name: Install EAS local build worker
         # eas-cli spawns the local build worker through `npm exec`, which
         # evaluates apps/mobile/package.json and hard-fails on the
@@ -156,6 +188,10 @@ jobs:
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # Pin the sandbox working directory so source paths are identical
+          # across runs — otherwise the per-run temp dir changes every compile
+          # command line and defeats the ccache restored above.
+          EAS_LOCAL_BUILD_WORKINGDIR: ${{ runner.temp }}/eas-build-local
         run: |
           eas build \
             --platform ios \
@@ -163,6 +199,11 @@ jobs:
             --local \
             --non-interactive \
             --output build-production.ipa
+
+      - name: Report ccache stats
+        if: always()
+        run: |
+          CCACHE_DIR="$HOME/.t3code-ccache/cache" ccache --show-stats || true
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
