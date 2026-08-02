@@ -429,6 +429,13 @@ const config: ExpoConfig = {
             iosNotificationsMode === "development" ? "sandbox" : "production",
           T3CODE_IOS_ASSOCIATED_DOMAINS: isIosAssociatedDomainsEnabled ? "1" : "0",
           T3CODE_IOS_SHARING_EXTENSION: isIosSharingExtensionEnabled ? "1" : "0",
+          // The widget and sharing extensions bake CFBundleVersion from this
+          // at prebuild; without it in the sandbox snapshot they archive as
+          // '1' and Xcode rejects the mismatch with the parent app's injected
+          // build number.
+          ...(managedIosBuildNumber
+            ? { T3CODE_IOS_BUILD_NUMBER: managedIosBuildNumber }
+            : {}),
         },
       },
     ],
