@@ -23,9 +23,16 @@ describe("T3 orchestration provider instructions", () => {
 
   it("teaches the t3-html embed fence, including CSS/JS support and sizing", () => {
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "`t3-html`");
-    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "JavaScript are fully supported");
-    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "sandbox");
-    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "expand");
+    assert.include(
+      T3_HTML_EMBED_INSTRUCTIONS,
+      "Embedded CSS and JavaScript are fully supported and executed",
+    );
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "locked-down sandbox with no access to the app");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "popups and link navigation are blocked");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "blocks all network requests");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "auto-sizes to your content's height");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "Design responsively");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "expand button to open the embed in a large popup");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "stack multiple independent embeds");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, T3_HTML_EMBED_INSTRUCTIONS);
   });

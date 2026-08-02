@@ -4,7 +4,7 @@ export const T3_HTML_EMBED_INSTRUCTIONS = `
 The T3 Code chat UI renders any fenced code block with the language \`t3-html\` as a live, sandboxed HTML view instead of showing the code. Use it to visualise things directly for the user: charts, diagrams, small interactive demos, styled tables, dashboards, animations.
 
 - Put a complete, self-contained snippet inside the fence: HTML plus optional \`<style>\` and \`<script>\` tags. Embedded CSS and JavaScript are fully supported and executed.
-- The embed runs in a locked-down sandbox with no access to the app, the page around it, local files, or navigation; popups and link navigation are blocked. Keep everything inline and prefer inlining data over fetching it.
+- The embed runs in a locked-down sandbox with no access to the app, the page around it, local files, or navigation; popups and link navigation are blocked. A Content-Security-Policy also blocks all network requests (fetch/XHR/external scripts, styles, images, fonts). Everything must be inline; embed images, fonts, and media as \`data:\` URIs and inline all data.
 - The container spans the chat width on desktop and mobile and auto-sizes to your content's height (inline it is capped at roughly 480px; taller content scrolls). Design responsively: avoid fixed pixel widths, use %/flex/grid, and assume widths from ~320px (phones) to ~800px (desktop). The user can tap/click an expand button to open the embed in a large popup.
 - The document defaults to the app's light/dark color scheme with a transparent background; style your own colors when contrast matters in both schemes.
 - Emit several \`t3-html\` blocks in one message to stack multiple independent embeds below each other; each renders as its own container.

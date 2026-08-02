@@ -6,6 +6,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const HTML_EMBED_FENCE_LANGUAGE = "t3-html";
 
+export function isHtmlEmbedLanguage(language: string | null | undefined): boolean {
+  return language?.trim().toLowerCase() === HTML_EMBED_FENCE_LANGUAGE;
+}
+
 const EMBED_HEIGHT_MESSAGE_TYPE = "t3-html-embed:height";
 const INLINE_MIN_HEIGHT = 96;
 const INLINE_MAX_HEIGHT = 480;
@@ -14,6 +18,35 @@ const INLINE_DEFAULT_HEIGHT = 220;
 const SETTLE_DELAY_MS = 400;
 
 const FULL_DOCUMENT_PATTERN = /^\s*(?:<!doctype\b|<html\b)/i;
+
+// sandbox="allow-scripts" isolates the frame from the app but does not stop
+// fetch/XHR/external subresources; the CSP closes off network access so
+// embeds cannot exfiltrate anything or load remote content.
+const EMBED_CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:">`;
+
+/**
+ * Full documents authored by the agent keep their own markup, but the CSP must
+ * appear before any agent-authored script runs, so it is inserted at the start
+ * of <head> (or immediately after <html>/the doctype when no <head> exists).
+ */
+function injectCspIntoFullDocument(code: string): string {
+  const headMatch = /<head[^>]*>/i.exec(code);
+  if (headMatch) {
+    const insertAt = headMatch.index + headMatch[0].length;
+    return `${code.slice(0, insertAt)}${EMBED_CSP_META}${code.slice(insertAt)}`;
+  }
+  const htmlMatch = /<html[^>]*>/i.exec(code);
+  if (htmlMatch) {
+    const insertAt = htmlMatch.index + htmlMatch[0].length;
+    return `${code.slice(0, insertAt)}<head>${EMBED_CSP_META}</head>${code.slice(insertAt)}`;
+  }
+  const doctypeMatch = /<!doctype[^>]*>/i.exec(code);
+  if (doctypeMatch) {
+    const insertAt = doctypeMatch.index + doctypeMatch[0].length;
+    return `${code.slice(0, insertAt)}${EMBED_CSP_META}${code.slice(insertAt)}`;
+  }
+  return `${EMBED_CSP_META}${code}`;
+}
 
 // documentElement.scrollHeight is clamped to the iframe viewport, so it can
 // never report a shrink; the body is not the scrolling box and tracks true
@@ -24,9 +57,9 @@ export function buildHtmlEmbedDocument(code: string, theme: "light" | "dark"): s
   // Agent-authored full documents keep their own <head>; a trailing script is
   // reparented into <body> by the HTML parser, so height reporting still works.
   if (FULL_DOCUMENT_PATTERN.test(code)) {
-    return `${code}\n${HEIGHT_REPORTER_SCRIPT}`;
+    return `${injectCspIntoFullDocument(code)}\n${HEIGHT_REPORTER_SCRIPT}`;
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>:root{color-scheme:${theme}}html,body{margin:0;background:transparent}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.45;color:CanvasText;padding:12px;box-sizing:border-box;overflow-wrap:break-word}</style></head><body>${code}\n${HEIGHT_REPORTER_SCRIPT}</body></html>`;
+  return `<!doctype html><html><head>${EMBED_CSP_META}<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>:root{color-scheme:${theme}}html,body{margin:0;background:transparent}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.45;color:CanvasText;padding:12px;box-sizing:border-box;overflow-wrap:break-word}</style></head><body>${code}\n${HEIGHT_REPORTER_SCRIPT}</body></html>`;
 }
 
 function useSettledValue<T>(value: T, delayMs: number): T {
@@ -85,19 +118,51 @@ function EmbedFrame({
 }
 
 function ExpandedEmbedDialog({ srcDoc, onClose }: { srcDoc: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
   useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || dialogRef.current == null) return;
+      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button, iframe, a[href], [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const active = document.activeElement;
+      const inDialog = active instanceof HTMLElement && dialogRef.current.contains(active);
+      if (event.shiftKey && (active === first || !inDialog)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !inDialog)) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
   }, [onClose]);
 
   return createPortal(
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-2 py-4 sm:px-6 sm:py-8 [-webkit-app-region:no-drag]"
       role="dialog"
       aria-modal="true"
@@ -115,6 +180,7 @@ function ExpandedEmbedDialog({ srcDoc, onClose }: { srcDoc: string; onClose: () 
             Interactive embed
           </span>
           <Button
+            ref={closeButtonRef}
             type="button"
             variant="ghost"
             size="icon-xs"
