@@ -31,6 +31,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { layer as mcpSessionRegistryTestLayer } from "../mcp/McpSessionRegistry.testkit.ts";
 
 const liveAgentId = process.env.T3_ACP_REGISTRY_LIVE_AGENT_ID?.trim() || "devin";
@@ -89,6 +90,7 @@ const liveLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(checkpointStoreLayer),
   Layer.provide(serverConfigLayer),
   Layer.provide(serverSettingsLayer),
+  Layer.provide(TextGeneration.layer),
   Layer.provide(providerInstanceRegistryLayer),
   Layer.provide(backgroundPolicyLayer),
   Layer.provide(NodeServices.layer),

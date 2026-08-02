@@ -13,6 +13,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildHandoffSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -29,7 +30,8 @@ type CursorTextGenerationOperation =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateHandoffSummary";
 
 function emptyCursorSdkResultDetail(result: RunResult): string {
   switch (result.status) {
@@ -250,10 +252,32 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")((
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateHandoffSummary: TextGeneration.TextGeneration["Service"]["generateHandoffSummary"] =
+    Effect.fn("CursorTextGeneration.generateHandoffSummary")(function* (input) {
+      const { prompt, outputSchema } = buildHandoffSummaryPrompt({
+        transcript: input.transcript,
+        fromProvider: input.fromProvider,
+        toProvider: input.toProvider,
+      });
+
+      const generated = yield* runCursorJson({
+        operation: "generateHandoffSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: generated.summary.trim(),
+      } satisfies TextGeneration.HandoffSummaryGenerationResult;
+    });
+
   return Effect.succeed({
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateHandoffSummary,
   } satisfies TextGeneration.TextGeneration["Service"]);
 });

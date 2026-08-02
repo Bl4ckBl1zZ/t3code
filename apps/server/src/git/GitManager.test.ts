@@ -292,6 +292,10 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateHandoffSummary: () =>
+      Effect.succeed({
+        summary: "Handoff summary",
+      }),
     ...overrides,
   };
 
@@ -324,6 +328,17 @@ function createTextGeneration(
           (cause) =>
             new TextGenerationError({
               operation: "generateBranchName",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateHandoffSummary: (input) =>
+      implementation.generateHandoffSummary(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateHandoffSummary",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

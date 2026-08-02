@@ -73,6 +73,20 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface HandoffSummaryGenerationInput {
+  cwd: string;
+  /** Plain-text transcript of the conversation to compact. */
+  transcript: string;
+  fromProvider: string;
+  toProvider: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface HandoffSummaryGenerationResult {
+  summary: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -80,6 +94,9 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateHandoffSummary(
+    input: HandoffSummaryGenerationInput,
+  ): Promise<HandoffSummaryGenerationResult>;
 }
 
 /**
@@ -113,6 +130,11 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /** Generate a compact conversation summary for a cross-provider context handoff. */
+    readonly generateHandoffSummary: (
+      input: HandoffSummaryGenerationInput,
+    ) => Effect.Effect<HandoffSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -123,7 +145,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateHandoffSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -163,7 +186,33 @@ export const makeTextGenerationFromRegistry = (
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
       ),
+    generateHandoffSummary: (input) =>
+      resolveInstance(registry, "generateHandoffSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateHandoffSummary(input)),
+      ),
   });
+
+/**
+ * A TextGeneration whose operations always fail. For test harnesses and
+ * contexts without provider-backed generation; callers with deterministic
+ * fallbacks (e.g. context handoffs) degrade gracefully.
+ */
+export const unavailable = (detail: string): TextGeneration["Service"] => {
+  const fail = (operation: TextGenerationOp | "generateHandoffSummary") =>
+    Effect.fail(new TextGenerationError({ operation, detail }));
+  return TextGeneration.of({
+    generateCommitMessage: () => fail("generateCommitMessage"),
+    generatePrContent: () => fail("generatePrContent"),
+    generateBranchName: () => fail("generateBranchName"),
+    generateThreadTitle: () => fail("generateThreadTitle"),
+    generateHandoffSummary: () => fail("generateHandoffSummary"),
+  });
+};
+
+export const unavailableLayer = Layer.succeed(
+  TextGeneration,
+  unavailable("Text generation is unavailable in this context."),
+);
 
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;

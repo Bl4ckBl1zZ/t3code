@@ -2039,6 +2039,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             strategy: "full_thread_summary",
             items: input.projection.turnItems,
             createdAt: now,
+            cwd: input.projection.thread.worktreePath,
+            summaryModelSelection: input.modelSelection,
           })
           .pipe(mapDispatchError(input.command));
         restartProviderThread = {
@@ -3160,6 +3162,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 strategy: "full_thread_summary",
                 items: portableForkItems,
                 createdAt: now,
+                cwd: projection.thread.worktreePath,
+                summaryModelSelection: modelSelection,
               })
               .pipe(
                 Effect.mapError(
@@ -3250,6 +3254,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : "delta_since_target_last_seen",
                 items: providerSwitchItems,
                 createdAt: now,
+                cwd: projection.thread.worktreePath,
+                summaryModelSelection: modelSelection,
               })
               .pipe(
                 Effect.mapError(

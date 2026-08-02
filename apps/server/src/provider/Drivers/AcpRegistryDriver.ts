@@ -38,6 +38,7 @@ const makeUnsupportedTextGeneration = (): TextGenerationShape => {
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),
     generateThreadTitle: () => unsupported("generateThreadTitle"),
+    generateHandoffSummary: () => unsupported("generateHandoffSummary"),
   };
 };
 

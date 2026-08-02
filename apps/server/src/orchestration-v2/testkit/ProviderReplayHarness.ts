@@ -21,6 +21,7 @@ import { layer as checkpointServiceLayer } from "../CheckpointService.ts";
 import { layer as checkpointRollbackServiceLayer } from "../CheckpointRollbackService.ts";
 import { layer as commandPolicyLayer } from "../CommandPolicy.ts";
 import { layer as commandReceiptStoreLayer } from "../CommandReceiptStore.ts";
+import { unavailableLayer as textGenerationUnavailableLayer } from "../../textGeneration/TextGeneration.ts";
 import { layer as contextHandoffServiceLayer } from "../ContextHandoffService.ts";
 import { layer as effectOutboxLayer } from "../EffectOutbox.ts";
 import {
@@ -259,7 +260,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(Layer.mergeAll(checkpointStoreLayer, idAllocatorLayer)),
   );
   const contextHandoffServiceProvided = contextHandoffServiceLayer.pipe(
-    Layer.provide(idAllocatorLayer),
+    Layer.provide(Layer.merge(idAllocatorLayer, textGenerationUnavailableLayer)),
   );
   const persistenceLayer = Layer.mergeAll(
     storesLayer,
