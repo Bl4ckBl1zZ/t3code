@@ -87,6 +87,11 @@ import {
 } from "../review/nativeReviewDiffAdapter";
 import { buildReviewParsedDiff } from "../review/reviewModel";
 import { cn } from "../../lib/cn";
+import {
+  isMarkdownVideoSource,
+  markdownMediaFileName,
+  resolveMarkdownMediaSource,
+} from "../../lib/markdownMediaSource";
 import { deriveCenteredContentHorizontalPadding, type LayoutVariant } from "../../lib/layout";
 import { uuidv4 } from "../../lib/uuid";
 import {
@@ -412,6 +417,76 @@ const MarkdownExternalLink = memo(function MarkdownExternalLink(props: {
   );
 });
 
+interface MarkdownMediaContext {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
+}
+
+/**
+ * Inline assistant media. Hermes emits generated images as markdown, and the
+ * src may be a plain URL, a workspace-relative path, or a browser artifact —
+ * resolveMarkdownMediaSource decides which, and everything but a direct URL is
+ * fetched through a signed asset URL.
+ */
+function MarkdownMedia(props: {
+  readonly src: string;
+  readonly alt?: string | undefined;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
+}) {
+  const resolved = useMemo(
+    () => (props.src.length === 0 ? null : resolveMarkdownMediaSource(props.src, props.threadId)),
+    [props.src, props.threadId],
+  );
+  const assetUri = useAssetUrl(
+    props.environmentId,
+    resolved?._tag === "resource" ? resolved.resource : null,
+  );
+  const uri = resolved?._tag === "direct" ? resolved.url : assetUri;
+  const borderColor = useThemeColor("--color-border");
+  const mutedColor = useThemeColor("--color-foreground-tertiary");
+
+  if (resolved === null) return null;
+  // Video needs a player; until mobile has one inline, name it and let the
+  // caller open it rather than rendering a broken image frame.
+  if (isMarkdownVideoSource(props.src) || uri === null) {
+    return (
+      <View
+        className="my-1.5 flex-row items-center gap-2 self-start rounded-lg px-2.5 py-2"
+        style={{ borderColor, borderWidth: StyleSheet.hairlineWidth }}
+      >
+        <SymbolView
+          name={isMarkdownVideoSource(props.src) ? "play.rectangle" : "photo"}
+          size={14}
+          tintColor={mutedColor}
+          type="monochrome"
+        />
+        <NativeText className="text-xs font-t3-medium" style={{ color: mutedColor }}>
+          {props.alt && props.alt.length > 0 ? props.alt : markdownMediaFileName(props.src)}
+        </NativeText>
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      accessibilityLabel={props.alt && props.alt.length > 0 ? props.alt : "Attached media"}
+      accessibilityRole="image"
+      activeOpacity={0.7}
+      onPress={() => props.onPressImage(uri)}
+    >
+      <Image
+        className="my-1.5 h-48 w-full rounded-lg"
+        resizeMode="contain"
+        source={{ uri }}
+        style={{ borderColor, borderWidth: StyleSheet.hairlineWidth }}
+      />
+    </TouchableOpacity>
+  );
+}
+
 function MarkdownCodeBlock(props: {
   readonly backgroundColor: string;
   readonly borderColor: string;
@@ -551,7 +626,10 @@ function useReviewCommentColors(): ReviewCommentColors {
   );
 }
 
-function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSets {
+function useMarkdownStyles(
+  onLinkPress: (href: string) => void,
+  media?: MarkdownMediaContext,
+): MarkdownStyleSets {
   const colorScheme = useColorScheme();
   const { appearance } = useAppearancePreferences();
   const markdownFontSizes = useMemo(
@@ -681,6 +759,16 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
       preserveSoftBreaks: boolean,
       highlightCode: boolean,
     ): CustomRenderers => ({
+      image: ({ url = "", alt }) =>
+        media ? (
+          <MarkdownMedia
+            src={url}
+            alt={alt}
+            environmentId={media.environmentId}
+            threadId={media.threadId}
+            onPressImage={media.onPressImage}
+          />
+        ) : null,
       link: ({ children, href = "" }) => {
         const presentation = resolveMarkdownLinkPresentation(href);
         if (presentation.kind === "file") {
@@ -1569,7 +1657,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.environmentId, props.threadId, props.workspaceRoot, navigation],
   );
-  const markdownStyles = useMarkdownStyles(onMarkdownLinkPress);
+  const markdownStyles = useMarkdownStyles(onMarkdownLinkPress, {
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+    onPressImage: (uri: string, headers?: Record<string, string>) =>
+      setExpandedImage({ uri, headers }),
+  });
   const reviewCommentColors = useReviewCommentColors();
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Keep row-local interaction props in extraData so disclosures and copy feedback repaint.

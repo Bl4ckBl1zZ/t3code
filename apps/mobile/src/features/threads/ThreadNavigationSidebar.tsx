@@ -77,6 +77,7 @@ import {
   ThreadListV2InboxHeader,
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
@@ -612,6 +613,7 @@ function ThreadNavigationSidebarPane(
         settledShelfExpanded,
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
+        workSections: workspace === "work",
       }),
     );
     if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
@@ -887,6 +889,9 @@ function ThreadNavigationSidebarPane(
           previous.showPendingDivider === item.showPendingDivider
         );
       }
+      if (previous.type === "v2-work-section" && item.type === "v2-work-section") {
+        return previous.label === item.label && previous.tone === item.tone;
+      }
       if (previous.type === "v2-snoozed-shelf" && item.type === "v2-snoozed-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
@@ -900,12 +905,14 @@ function ThreadNavigationSidebarPane(
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
         previous.type === "v2-inbox" ||
+        previous.type === "v2-work-section" ||
         item.type === "v2-thread" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
         item.type === "v2-snoozed-shelf" ||
         item.type === "v2-settled-shelf" ||
-        item.type === "v2-inbox"
+        item.type === "v2-inbox" ||
+        item.type === "v2-work-section"
       ) {
         return false;
       }
@@ -935,6 +942,10 @@ function ThreadNavigationSidebarPane(
       switch (item.type) {
         case "v2-inbox":
           return <ThreadListV2InboxHeader pane="sidebar" />;
+        case "v2-work-section":
+          return (
+            <ThreadListV2SectionDivider label={item.label} pane="sidebar" tone={item.tone} />
+          );
         case "v2-pending": {
           const pendingScopeKey = scopedProjectKey(
             item.pendingTask.message.environmentId,

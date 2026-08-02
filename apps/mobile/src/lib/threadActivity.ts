@@ -20,6 +20,7 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
@@ -323,7 +324,9 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "run_interrupt_result":
       return item.message || null;
     case "error":
-      return item.failure.message;
+      // Provider failures arrive wrapped in adapter names, run ids and
+      // provider-thread ids. Present the operational next step instead.
+      return presentProviderError(item.failure.message);
     case "compaction":
     case "handoff":
       return item.summary ?? null;

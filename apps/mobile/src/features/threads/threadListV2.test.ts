@@ -777,6 +777,72 @@ describe("buildThreadListV2ListItems", () => {
     ).toHaveLength(1);
   });
 
+  it("groups the T3 Work active block into Main, Needs you, and Active", () => {
+    const workLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("ordinary"), title: "ordinary" }),
+        makeThread({
+          id: ThreadId.make("blocked"),
+          title: "blocked",
+          hasPendingApprovals: true,
+        }),
+        makeThread({ id: ThreadId.make("main"), title: "main", workInboxRole: "main" }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildThreadListV2ListItems({
+      items: workLayout.items,
+      pendingTasks: [],
+      workSections: true,
+    });
+
+    expect(
+      items.map((item) =>
+        item.type === "v2-work-section" ? `#${item.label}` : item.type === "v2-thread" ? item.item.thread.id : item.type,
+      ),
+    ).toEqual(["#Main", "main", "#Needs you", "blocked", "#Active", "ordinary"]);
+    // Blocked-on-you work is the only section drawn in the attention tone.
+    expect(
+      items.filter((item) => item.type === "v2-work-section" && item.tone === "attention"),
+    ).toHaveLength(1);
+  });
+
+  it("omits work section headers that have no rows", () => {
+    const workLayout = buildThreadListV2Items({
+      threads: [makeThread({ id: ThreadId.make("ordinary"), title: "ordinary" })],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildThreadListV2ListItems({
+      items: workLayout.items,
+      pendingTasks: [],
+      workSections: true,
+    });
+
+    expect(items.map((item) => (item.type === "v2-work-section" ? item.label : item.type))).toEqual([
+      "Active",
+      "v2-thread",
+    ]);
+  });
+
+  it("leaves the Code active block undifferentiated", () => {
+    const codeLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("a"), title: "a", workInboxRole: "main" }),
+        makeThread({ id: ThreadId.make("b"), title: "b", hasPendingApprovals: true }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildThreadListV2ListItems({ items: codeLayout.items, pendingTasks: [] });
+
+    expect(items.every((item) => item.type === "v2-thread")).toBe(true);
+  });
+
   it("ends the list with queued tasks when nothing has settled yet", () => {
     const activeOnly = buildThreadListV2Items({
       threads: [makeThread({ id: ThreadId.make("active"), title: "active" })],

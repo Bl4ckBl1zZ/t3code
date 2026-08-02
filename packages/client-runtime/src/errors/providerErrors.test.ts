@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { presentProviderError } from "./providerErrorPresentation";
+import { presentProviderError } from "./providerErrors.ts";
 
 describe("presentProviderError", () => {
   it("turns Hermes attachment configuration failures into a next step", () => {

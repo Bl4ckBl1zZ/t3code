@@ -4,12 +4,14 @@ import {
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { estimateBase64ByteSize } from "./base64";
+import type { DraftComposerImageAttachment } from "./composerAttachmentKinds";
 import { uuidv4 } from "./uuid";
 
-export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
-  readonly id: string;
-  readonly previewUri: string;
-}
+export type {
+  DraftComposerAttachment,
+  DraftComposerImageAttachment,
+} from "./composerAttachmentKinds";
+export { isDraftComposerImageAttachment, toUploadChatAttachments } from "./composerAttachmentKinds";
 
 /** Wire shape for startTurn: pure uploads without client draft id / previewUri. */
 export function toUploadChatImageAttachments(
