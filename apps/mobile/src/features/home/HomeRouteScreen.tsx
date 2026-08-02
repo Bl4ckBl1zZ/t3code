@@ -2,7 +2,6 @@ import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
-import { Alert } from "react-native";
 
 import { getCompactBrandHeaderOptions } from "../../components/CompactBrandTitle";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
@@ -11,8 +10,8 @@ import {
   buildProviderDriverMap,
   isHermesProviderInstance,
   isMobileWorkspaceThread,
-  resolveHermesConversationTarget,
 } from "../../lib/mobileWorkspace";
+import { useStartHermesConversation } from "../threads/use-start-hermes-conversation";
 import { useMobileWorkspace } from "../../state/preferences";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -124,34 +123,15 @@ export function HomeRouteScreen() {
       setSelectedProjectKey(null);
     }
   }, [projectFilterOptions, selectedProjectKey]);
+  const startHermesConversation = useStartHermesConversation({
+    requiredEnvironmentId: selectedEnvironmentId,
+  });
   const startNewTask = () => {
     if (workspace === "code") {
       navigation.navigate("NewTaskSheet", { screen: "NewTask" });
       return;
     }
-    const target = resolveHermesConversationTarget({
-      projects,
-      serverConfigs,
-      requiredEnvironmentId: selectedEnvironmentId,
-    });
-    if (!target) {
-      Alert.alert(
-        "Hermes is not ready",
-        "Enable and configure Hermes on a connected environment before starting a Work conversation.",
-      );
-      return;
-    }
-    navigation.navigate("NewTaskSheet", {
-      screen: "NewTaskDraft",
-      params: {
-        environmentId: String(target.project.environmentId),
-        projectId: String(target.project.id),
-        title: "Hermes",
-        workspace: "work",
-        providerInstanceId: String(target.modelSelection.instanceId),
-        model: target.modelSelection.model,
-      },
-    });
+    startHermesConversation();
   };
 
   // In split layouts the persistent sidebar IS the thread list — Home becomes

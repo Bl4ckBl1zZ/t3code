@@ -25,9 +25,14 @@ import {
   pickComposerImages,
 } from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { resolveHermesChatCommand } from "../lib/hermesChatCommands";
+import { buildProviderDriverMap, isHermesThread } from "../lib/mobileWorkspace";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed } from "../lib/threadActivity";
 import { appAtomRegistry } from "../state/atom-registry";
+import { useAtomCommand } from "./use-atom-command";
+import { environmentServerConfigsAtom } from "../state/server";
+import { threadEnvironment } from "../state/threads";
 import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
@@ -91,7 +96,13 @@ export function useThreadDraftForThread(input: {
   };
 }
 
-export function useThreadComposerState() {
+export function useThreadComposerState(options?: {
+  /**
+   * Invoked when the composer intercepts /new or /reset. The route screen
+   * wires this to its new-conversation flow, which owns navigation.
+   */
+  readonly onRequestFreshHermesChat?: () => void;
+}) {
   const { selectedThread: selectedThreadShell } = useThreadSelection();
   const selectedThreadProjection = useSelectedThreadProjection();
   const selectedThreadVisibleTurnItems = useSelectedThreadVisibleTurnItems();
@@ -162,6 +173,12 @@ export function useThreadComposerState() {
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
 
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
+
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
       return null;
@@ -174,6 +191,34 @@ export function useThreadComposerState() {
     const attachments = draft.attachments;
     if (text.length === 0 && attachments.length === 0) {
       return null;
+    }
+
+    // T3 Work handles a few slash commands locally rather than sending them to
+    // Hermes: /new and /reset start a fresh-context conversation, /clear wipes
+    // the visible timeline. Attachments make it a real message, not a command.
+    if (attachments.length === 0) {
+      const command = resolveHermesChatCommand({
+        text,
+        isHermesConversation: isHermesThread(thread, providerDrivers),
+      });
+      if (command === "clear-timeline") {
+        clearComposerDraftContent(threadKey);
+        const cleared = await updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, clearTimeline: true },
+        });
+        if (cleared._tag === "Failure") {
+          // Put the command back so the user can retry rather than losing it.
+          void mergeComposerDraftContent(threadKey, { text, attachments: [] });
+          setPendingConnectionError("Failed to clear the conversation.");
+        }
+        return null;
+      }
+      if (command === "fresh-chat") {
+        clearComposerDraftContent(threadKey);
+        options?.onRequestFreshHermesChat?.();
+        return null;
+      }
     }
 
     const metadata = makeQueuedMessageMetadata();
@@ -208,7 +253,7 @@ export function useThreadComposerState() {
       );
     });
     return messageId;
-  }, [selectedThreadShell]);
+  }, [options, providerDrivers, selectedThreadShell, updateThreadMetadata]);
 
   const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
     removeThreadOutboxMessage(message).catch((error: unknown) => {
