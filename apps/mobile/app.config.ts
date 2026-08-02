@@ -416,6 +416,7 @@ const config: ExpoConfig = {
       },
     ],
     "./plugins/withIosCocoaPodsUuidCache.cjs",
+    "./plugins/withIosCcache.cjs",
     [
       "./plugins/withIosExpoConfigEnvironment.cjs",
       {
