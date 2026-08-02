@@ -5,6 +5,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
   ThreadId,
 } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
@@ -590,7 +591,6 @@ describe("thread outbox", () => {
         stage: "settings-sync",
         error: deterministicFailure,
         interrupted: false,
-        sentWhileBusy: false,
       }),
     ).toBe("retry");
     expect(
@@ -598,18 +598,45 @@ describe("thread outbox", () => {
         stage: "start-turn",
         error: deterministicFailure,
         interrupted: false,
-        sentWhileBusy: false,
       }),
     ).toBe("discard");
-    // A busy-send rejection (e.g. queued turns unsupported) must not drop the
-    // message: it retries and delivers once the thread goes idle.
+  });
+
+  it("retries queued-turns-unsupported dispatch rejections instead of discarding", () => {
+    // The thread can go active between the drain's shell snapshot and the
+    // server-side dispatch, so classification must come from the dispatch
+    // error itself: a queue policy rejection retries until the thread idles.
+    const policyRejection = {
+      _tag: "OrchestrationV2DispatchCommandError",
+      message: "Failed to dispatch orchestration V2 command",
+      detail: QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
+    };
     expect(
       resolveThreadOutboxFailureAction({
         stage: "start-turn",
-        error: deterministicFailure,
+        error: policyRejection,
         interrupted: false,
-        sentWhileBusy: true,
       }),
     ).toBe("retry");
+    expect(
+      resolveThreadOutboxFailureAction({
+        stage: "start-turn",
+        error: {
+          _tag: "OrchestrationV2DispatchCommandError",
+          message: QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
+        },
+        interrupted: false,
+      }),
+    ).toBe("retry");
+    expect(
+      resolveThreadOutboxFailureAction({
+        stage: "start-turn",
+        error: {
+          _tag: "OrchestrationV2DispatchCommandError",
+          message: "Thread no longer exists",
+        },
+        interrupted: false,
+      }),
+    ).toBe("discard");
   });
 });

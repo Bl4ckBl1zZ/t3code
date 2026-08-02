@@ -2275,6 +2275,32 @@ export class OrchestrationV2DispatchCommandError extends Schema.TaggedErrorClass
   },
 ) {}
 
+/**
+ * Stable policy-rejection detail emitted when a dispatch needs app-owned
+ * queued turns but the provider does not support them. Shared with clients so
+ * an outbox can classify the rejection as retry-later instead of discarding
+ * the user's message.
+ */
+export const QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL =
+  "providerInstanceId does not support app-owned queued turns";
+
+export function isQueuedTurnsUnsupportedDispatchError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const candidate = error as { _tag?: unknown; detail?: unknown; message?: unknown };
+  if (candidate._tag !== "OrchestrationV2DispatchCommandError") {
+    return false;
+  }
+  const text =
+    typeof candidate.detail === "string"
+      ? candidate.detail
+      : typeof candidate.message === "string"
+        ? candidate.message
+        : "";
+  return text.includes(QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL);
+}
+
 export class OrchestrationV2GetThreadProjectionError extends Schema.TaggedErrorClass<OrchestrationV2GetThreadProjectionError>()(
   "OrchestrationV2GetThreadProjectionError",
   {

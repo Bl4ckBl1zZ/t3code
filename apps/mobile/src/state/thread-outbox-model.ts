@@ -4,6 +4,7 @@ import {
   CommandId,
   EnvironmentId,
   IsoDateTime,
+  isQueuedTurnsUnsupportedDispatchError,
   MessageId,
   ModelSelection,
   ProjectId,
@@ -217,15 +218,15 @@ export function resolveThreadOutboxFailureAction(input: {
   readonly stage: ThreadOutboxCommandStage;
   readonly error: unknown;
   readonly interrupted: boolean;
-  readonly sentWhileBusy: boolean;
 }): ThreadOutboxFailureAction {
   if (
     input.stage === "settings-sync" ||
     input.interrupted ||
-    // A queue-while-busy dispatch can be rejected by server policy (e.g. a
-    // provider without queued-turn support); keep the message and retry so it
-    // delivers normally once the thread goes idle instead of discarding it.
-    input.sentWhileBusy ||
+    // The server rejects a queue-while-busy dispatch when the provider lacks
+    // queued-turn support. Classify from the dispatch error itself (not any
+    // pre-send busy snapshot, which can be stale): keep the message and retry
+    // so it delivers normally once the thread goes idle.
+    isQueuedTurnsUnsupportedDispatchError(input.error) ||
     shouldRetryThreadOutboxDelivery(input.error)
   ) {
     return "retry";

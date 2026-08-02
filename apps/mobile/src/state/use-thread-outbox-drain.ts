@@ -1,8 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  threadRuntimeIsActive,
-  type EnvironmentProject,
-  type EnvironmentThreadShell,
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -119,62 +118,57 @@ export function useThreadOutboxDrain(): void {
     };
   }, []);
 
-  const makeDeliveryHelpers = useCallback(
-    (queuedMessage: QueuedThreadMessage, sentWhileBusy: boolean) => {
-      const reportFailure = (
-        commandResult: AtomCommandResult<unknown, unknown>,
-        stage: ThreadOutboxCommandStage,
-      ): boolean => {
-        if (!AsyncResult.isFailure(commandResult)) {
-          return false;
-        }
-        const action = resolveThreadOutboxFailureAction({
-          stage,
-          error: Cause.squash(commandResult.cause),
-          interrupted: Cause.hasInterruptsOnly(commandResult.cause),
-          sentWhileBusy,
-        });
-        const retry = action === "retry";
-        console.warn("[thread-outbox] queued message delivery failed", {
+  const makeDeliveryHelpers = useCallback((queuedMessage: QueuedThreadMessage) => {
+    const reportFailure = (
+      commandResult: AtomCommandResult<unknown, unknown>,
+      stage: ThreadOutboxCommandStage,
+    ): boolean => {
+      if (!AsyncResult.isFailure(commandResult)) {
+        return false;
+      }
+      const action = resolveThreadOutboxFailureAction({
+        stage,
+        error: Cause.squash(commandResult.cause),
+        interrupted: Cause.hasInterruptsOnly(commandResult.cause),
+      });
+      const retry = action === "retry";
+      console.warn("[thread-outbox] queued message delivery failed", {
+        environmentId: queuedMessage.environmentId,
+        threadId: queuedMessage.threadId,
+        messageId: queuedMessage.messageId,
+        stage,
+        cause: commandResult.cause,
+        retry,
+      });
+      return retry;
+    };
+    const completeDelivery = async (
+      deliveryResult: AtomCommandResult<unknown, unknown>,
+    ): Promise<boolean> => {
+      if (reportFailure(deliveryResult, "start-turn")) {
+        return false;
+      }
+
+      try {
+        await removeThreadOutboxMessage(queuedMessage);
+        return true;
+      } catch (error) {
+        console.warn("[thread-outbox] failed to remove delivered queued message", {
           environmentId: queuedMessage.environmentId,
           threadId: queuedMessage.threadId,
           messageId: queuedMessage.messageId,
-          stage,
-          cause: commandResult.cause,
-          retry,
+          error,
         });
-        return retry;
-      };
-      const completeDelivery = async (
-        deliveryResult: AtomCommandResult<unknown, unknown>,
-      ): Promise<boolean> => {
-        if (reportFailure(deliveryResult, "start-turn")) {
-          return false;
-        }
-
-        try {
-          await removeThreadOutboxMessage(queuedMessage);
-          return true;
-        } catch (error) {
-          console.warn("[thread-outbox] failed to remove delivered queued message", {
-            environmentId: queuedMessage.environmentId,
-            threadId: queuedMessage.threadId,
-            messageId: queuedMessage.messageId,
-            error,
-          });
-          return false;
-        }
-      };
-      return { reportFailure, completeDelivery };
-    },
-    [],
-  );
+        return false;
+      }
+    };
+    return { reportFailure, completeDelivery };
+  }, []);
 
   const sendQueuedMessage = useCallback(
     async (queuedMessage: QueuedThreadMessage, thread: EnvironmentThreadShell) => {
       const settings = resolveQueuedThreadSettings(queuedMessage, thread);
-      const sentWhileBusy = threadRuntimeIsActive(thread.runtime);
-      const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage, sentWhileBusy);
+      const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
 
       if (!modelSelectionsEqual(settings.modelSelection, thread.modelSelection)) {
         const updateResult = await updateThreadMetadata({
@@ -266,7 +260,7 @@ export function useThreadOutboxDrain(): void {
       if (modelSelection === undefined) {
         return false;
       }
-      const { completeDelivery } = makeDeliveryHelpers(queuedMessage, false);
+      const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
         input: buildProjectThreadStartTurnInput({
