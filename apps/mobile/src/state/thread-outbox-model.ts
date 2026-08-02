@@ -153,7 +153,6 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
-  readonly threadBusy: boolean;
 }): ThreadOutboxDeliveryAction {
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
@@ -169,7 +168,10 @@ export function resolveThreadOutboxDeliveryAction(input: {
   if (!input.threadExists) {
     return input.shellStatus === "live" ? "remove" : "wait";
   }
-  return input.environmentConnected && !input.threadBusy ? "send" : "wait";
+  // Busy threads are no longer held locally: the turn dispatches with
+  // dispatchMode "queue" and the server persists it as a queued run, which
+  // syncs to every client instead of living only on this device.
+  return input.environmentConnected ? "send" : "wait";
 }
 
 /**
@@ -215,10 +217,15 @@ export function resolveThreadOutboxFailureAction(input: {
   readonly stage: ThreadOutboxCommandStage;
   readonly error: unknown;
   readonly interrupted: boolean;
+  readonly sentWhileBusy: boolean;
 }): ThreadOutboxFailureAction {
   if (
     input.stage === "settings-sync" ||
     input.interrupted ||
+    // A queue-while-busy dispatch can be rejected by server policy (e.g. a
+    // provider without queued-turn support); keep the message and retry so it
+    // delivers normally once the thread goes idle instead of discarding it.
+    input.sentWhileBusy ||
     shouldRetryThreadOutboxDelivery(input.error)
   ) {
     return "retry";

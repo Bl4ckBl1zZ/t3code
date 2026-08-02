@@ -38,7 +38,7 @@ import {
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
 } from "./thread-outbox-model";
-import { environmentThreadShells, threadEnvironment } from "./threads";
+import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import {
   editingQueuedMessageIdsAtom,
@@ -119,57 +119,62 @@ export function useThreadOutboxDrain(): void {
     };
   }, []);
 
-  const makeDeliveryHelpers = useCallback((queuedMessage: QueuedThreadMessage) => {
-    const reportFailure = (
-      commandResult: AtomCommandResult<unknown, unknown>,
-      stage: ThreadOutboxCommandStage,
-    ): boolean => {
-      if (!AsyncResult.isFailure(commandResult)) {
-        return false;
-      }
-      const action = resolveThreadOutboxFailureAction({
-        stage,
-        error: Cause.squash(commandResult.cause),
-        interrupted: Cause.hasInterruptsOnly(commandResult.cause),
-      });
-      const retry = action === "retry";
-      console.warn("[thread-outbox] queued message delivery failed", {
-        environmentId: queuedMessage.environmentId,
-        threadId: queuedMessage.threadId,
-        messageId: queuedMessage.messageId,
-        stage,
-        cause: commandResult.cause,
-        retry,
-      });
-      return retry;
-    };
-    const completeDelivery = async (
-      deliveryResult: AtomCommandResult<unknown, unknown>,
-    ): Promise<boolean> => {
-      if (reportFailure(deliveryResult, "start-turn")) {
-        return false;
-      }
-
-      try {
-        await removeThreadOutboxMessage(queuedMessage);
-        return true;
-      } catch (error) {
-        console.warn("[thread-outbox] failed to remove delivered queued message", {
+  const makeDeliveryHelpers = useCallback(
+    (queuedMessage: QueuedThreadMessage, sentWhileBusy: boolean) => {
+      const reportFailure = (
+        commandResult: AtomCommandResult<unknown, unknown>,
+        stage: ThreadOutboxCommandStage,
+      ): boolean => {
+        if (!AsyncResult.isFailure(commandResult)) {
+          return false;
+        }
+        const action = resolveThreadOutboxFailureAction({
+          stage,
+          error: Cause.squash(commandResult.cause),
+          interrupted: Cause.hasInterruptsOnly(commandResult.cause),
+          sentWhileBusy,
+        });
+        const retry = action === "retry";
+        console.warn("[thread-outbox] queued message delivery failed", {
           environmentId: queuedMessage.environmentId,
           threadId: queuedMessage.threadId,
           messageId: queuedMessage.messageId,
-          error,
+          stage,
+          cause: commandResult.cause,
+          retry,
         });
-        return false;
-      }
-    };
-    return { reportFailure, completeDelivery };
-  }, []);
+        return retry;
+      };
+      const completeDelivery = async (
+        deliveryResult: AtomCommandResult<unknown, unknown>,
+      ): Promise<boolean> => {
+        if (reportFailure(deliveryResult, "start-turn")) {
+          return false;
+        }
+
+        try {
+          await removeThreadOutboxMessage(queuedMessage);
+          return true;
+        } catch (error) {
+          console.warn("[thread-outbox] failed to remove delivered queued message", {
+            environmentId: queuedMessage.environmentId,
+            threadId: queuedMessage.threadId,
+            messageId: queuedMessage.messageId,
+            error,
+          });
+          return false;
+        }
+      };
+      return { reportFailure, completeDelivery };
+    },
+    [],
+  );
 
   const sendQueuedMessage = useCallback(
     async (queuedMessage: QueuedThreadMessage, thread: EnvironmentThreadShell) => {
       const settings = resolveQueuedThreadSettings(queuedMessage, thread);
-      const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage);
+      const sentWhileBusy = threadRuntimeIsActive(thread.runtime);
+      const { reportFailure, completeDelivery } = makeDeliveryHelpers(queuedMessage, sentWhileBusy);
 
       if (!modelSelectionsEqual(settings.modelSelection, thread.modelSelection)) {
         const updateResult = await updateThreadMetadata({
@@ -234,6 +239,10 @@ export function useThreadOutboxDrain(): void {
           runtimeMode: settings.runtimeMode,
           interactionMode: settings.interactionMode,
           createdAt: queuedMessage.createdAt,
+          // Queue semantics, never steer: while the thread is busy the server
+          // persists the turn as a queued run (visible on all clients); when
+          // idle this resolves to start_immediately.
+          dispatchMode: "queue",
         },
       });
       return completeDelivery(deliveryResult);
@@ -257,7 +266,7 @@ export function useThreadOutboxDrain(): void {
       if (modelSelection === undefined) {
         return false;
       }
-      const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
+      const { completeDelivery } = makeDeliveryHelpers(queuedMessage, false);
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
         input: buildProjectThreadStartTurnInput({
@@ -316,7 +325,6 @@ export function useThreadOutboxDrain(): void {
         threadExists: thread !== undefined,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
-        threadBusy: threadRuntimeIsActive(thread?.runtime),
       });
       if (deliveryAction === "wait") {
         continue;
@@ -364,19 +372,10 @@ export function useThreadOutboxDrain(): void {
           return true;
         }
         // The guards evaluated before the confirmation await are stale by now:
-        // the thread may have gone busy, or the user may have opened this
-        // message in the editor. Re-read both and defer to the next drain pass
-        // (returning true skips the failure/backoff path) rather than sending
-        // a payload the user is editing or racing an active turn.
+        // the user may have opened this message in the editor. Re-read and
+        // defer to the next drain pass (returning true skips the
+        // failure/backoff path) rather than sending a payload being edited.
         if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
-          return true;
-        }
-        const freshThread = findThread(
-          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
-          nextQueuedMessage,
-        );
-        const freshThreadBusy = threadRuntimeIsActive(freshThread?.runtime);
-        if (deliveryAction === "send" && creation === undefined && freshThreadBusy) {
           return true;
         }
         return deliveryAction === "remove"
