@@ -81,6 +81,48 @@ export const HERMES_GATEWAY_SUPPORTED_PROTOCOL_MAJOR = 1;
 export const HERMES_GATEWAY_LEGACY_CAPABILITIES =
   [] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
 
+/**
+ * Tier 1: capabilities a non-advertising gateway may earn by demonstrating
+ * them. Each entry is a side-effect-free read, so a gateway that does not
+ * implement it answers `-32601` and simply stays without the capability —
+ * the same signal the client already uses to revoke one at call time.
+ */
+const HERMES_GATEWAY_DISCOVERY_PROBES = [
+  { capability: "commands.catalog", method: "commands.catalog", params: {} },
+  {
+    capability: "models.inventory",
+    method: "model.options",
+    params: { explicit_only: true, include_unconfigured: false },
+  },
+  { capability: "reasoning.effective_state", method: "config.get", params: { key: "reasoning" } },
+  { capability: "session.lifecycle", method: "session.list", params: {} },
+] as const satisfies ReadonlyArray<{
+  readonly capability: HermesGatewayCapabilityName;
+  readonly method: string;
+  readonly params: HermesGatewayUnknownRecord;
+}>;
+
+/**
+ * Granted only once `session.list` answers, which establishes that the
+ * gateway speaks the protocol-1 session methods. These cannot be probed
+ * without side effects — submitting a turn is not a read — so they are
+ * inferred from that evidence and still revoked on `-32601` at call time.
+ */
+const HERMES_GATEWAY_INFERRED_CAPABILITIES = [
+  "session.history",
+  "turn.prompt",
+  "turn.interrupt",
+  "events.tools",
+] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
+
+/**
+ * Tier 2 is everything absent from the two lists above: `session_mcp`,
+ * `profile.import`, `cron.manage`, `skills.manage`, attachment and approval
+ * capabilities. Those mint credentials, read or destroy history from other
+ * transports, or mutate durable state, so they require explicit advertisement
+ * and are never synthesized from a probe.
+ */
+
 export type HermesGatewayConnectionState =
   | "disconnected"
   | "connecting"
@@ -146,7 +188,11 @@ export type HermesGatewayLogEvent =
     }
   | {
       readonly type: "protocol";
-      readonly outcome: "invalid_frame" | "unknown_notification" | "capability_degraded";
+      readonly outcome:
+        | "invalid_frame"
+        | "unknown_notification"
+        | "capability_degraded"
+        | "capability_discovered";
       readonly method?: string;
       readonly capability?: string;
     }
@@ -206,6 +252,13 @@ export interface HermesGatewayClientOptions {
     readonly maxDelayMs?: number;
   };
   readonly criticalCapabilities?: ReadonlyArray<string>;
+  /**
+   * Probe a non-advertising ("legacy") gateway for the non-privileged
+   * capabilities it actually implements. Defaults to enabled. Set false to
+   * hold such gateways to a strictly empty capability set — the conformance
+   * harness does this so evidence reflects advertisement alone.
+   */
+  readonly discoverLegacyCapabilities?: boolean;
   readonly logger?: (event: HermesGatewayLogEvent) => void;
   readonly supervisor?: HermesGatewaySupervisor;
 }
@@ -421,6 +474,9 @@ export class HermesGatewayClient {
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
   private readonly criticalCapabilities: ReadonlyArray<string>;
+  private readonly discoverLegacyCapabilities: boolean;
+  /** Discovery result keyed by gateway build, so reconnects do not re-probe. */
+  private discoveredCapabilities: { readonly build: string; readonly capabilities: ReadonlyArray<string> } | undefined;
   private readonly logger: ((event: HermesGatewayLogEvent) => void) | undefined;
   private readonly supervisor: HermesGatewaySupervisor | undefined;
 
@@ -461,6 +517,7 @@ export class HermesGatewayClient {
     this.reconnectBaseDelayMs = positive(options.reconnect?.baseDelayMs, 100);
     this.reconnectMaxDelayMs = positive(options.reconnect?.maxDelayMs, 2_000);
     this.criticalCapabilities = options.criticalCapabilities ?? [];
+    this.discoverLegacyCapabilities = options.discoverLegacyCapabilities ?? true;
     this.logger = options.logger;
     this.supervisor = options.supervisor;
   }
@@ -1147,12 +1204,24 @@ export class HermesGatewayClient {
       this.ensureAttemptActive(generation);
       const ready = await this.waitForReady();
       this.ensureAttemptActive(generation);
-      const compatibility = classifyHermesGatewayReady(ready);
+      let compatibility = classifyHermesGatewayReady(ready);
       this.compatibilityValue = compatibility;
       if (compatibility.status === "unsupported") {
         throw new HermesGatewayProtocolError(compatibility.reason);
       }
       this.capabilities = new Set(compatibility.capabilities);
+      // A gateway that advertises nothing is not necessarily incapable: probe
+      // the non-privileged tier before holding it to the critical set, or every
+      // pre-negotiation build fails the handshake despite working correctly.
+      if (compatibility.status === "legacy" && this.discoverLegacyCapabilities) {
+        const discovered = await this.runLegacyCapabilityDiscovery(compatibility);
+        this.ensureAttemptActive(generation);
+        if (discovered.length > 0) {
+          this.capabilities = new Set(discovered);
+          compatibility = { ...compatibility, capabilities: discovered };
+          this.compatibilityValue = compatibility;
+        }
+      }
       for (const capability of this.criticalCapabilities) {
         this.requireCapability(capability);
       }
@@ -1341,9 +1410,14 @@ export class HermesGatewayClient {
       readonly signal: AbortSignal | undefined;
       readonly retryOnReconnect: boolean;
       readonly timeoutMs: number;
+      /** Capability discovery runs mid-handshake, before the ready state. */
+      readonly allowBeforeReady?: boolean;
     },
   ): Promise<unknown> {
-    const ready = this.stateValue === "ready" && this.socket?.readyState === SOCKET_OPEN;
+    const ready =
+      (this.stateValue === "ready" ||
+        (options.allowBeforeReady === true && this.stateValue === "connecting")) &&
+      this.socket?.readyState === SOCKET_OPEN;
     const mayWaitForReconnect =
       options.operation === "read" &&
       options.retryOnReconnect &&
@@ -1565,6 +1639,53 @@ export class HermesGatewayClient {
         this.rejectPending(pending, error, false);
       }
     }
+  }
+
+  /**
+   * Derive the capability set of a gateway that advertises none, by asking it
+   * what it implements. The client already treats a `-32601` as proof a
+   * capability is absent; this is the same evidence read in the affirmative,
+   * confined to non-privileged capabilities (see the tier lists above).
+   */
+  private async runLegacyCapabilityDiscovery(
+    compatibility: HermesGatewayCompatibility,
+  ): Promise<ReadonlyArray<string>> {
+    const build = `${compatibility.serverVersion ?? "unknown"}@${compatibility.revision ?? "unknown"}`;
+    const cached = this.discoveredCapabilities;
+    if (cached !== undefined && cached.build === build) return cached.capabilities;
+
+    const probe = (method: string, params: HermesGatewayUnknownRecord) =>
+      this.sendRequest(method, params, {
+        operation: "read",
+        operationId: undefined,
+        mutationId: undefined,
+        requiredCapability: undefined,
+        signal: undefined,
+        retryOnReconnect: false,
+        timeoutMs: this.requestTimeoutMs,
+        allowBeforeReady: true,
+      });
+
+    const results = await Promise.allSettled(
+      HERMES_GATEWAY_DISCOVERY_PROBES.map((entry) => probe(entry.method, entry.params)),
+    );
+    const discovered = new Set<string>();
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") discovered.add(HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capability);
+    });
+    if (discovered.has("session.lifecycle")) {
+      for (const capability of HERMES_GATEWAY_INFERRED_CAPABILITIES) discovered.add(capability);
+    }
+
+    const capabilities = [...discovered].toSorted();
+    this.discoveredCapabilities = { build, capabilities };
+    this.logger?.({
+      type: "protocol",
+      outcome: "capability_discovered",
+      method: "gateway.discovery",
+      capability: capabilities.join(",") || "none",
+    });
+    return capabilities;
   }
 
   private requireCapability(capability: string | undefined): void {

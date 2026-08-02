@@ -162,7 +162,9 @@ function sentFrames(socket: FakeSocket): Array<{
 
 async function openClient(
   factory: FakeSocketFactory,
-  options: Partial<ConstructorParameters<typeof HermesGatewayClient>[0]> = {},
+  options: Partial<ConstructorParameters<typeof HermesGatewayClient>[0]> & {
+    readonly discoverySupports?: ReadonlyArray<string>;
+  } = {},
   readyFrame: unknown = fullyNegotiatedReady,
 ): Promise<{ readonly client: HermesGatewayClient; readonly socket: FakeSocket }> {
   const client = new HermesGatewayClient({
@@ -178,9 +180,44 @@ async function openClient(
   socket.open();
   await Promise.resolve();
   socket.receive(readyFrame);
+  // A legacy ready frame triggers capability discovery, which blocks the
+  // handshake until every probe settles. Default to answering "unsupported"
+  // so callers keep the strictly-empty legacy capability set unless they opt
+  // into `discoverySupports`.
+  await answerDiscoveryProbes(socket, options.discoverySupports ?? []);
   await connecting;
   return { client, socket };
 }
+
+/** Replies to any outstanding discovery probes: success for `supported`, -32601 otherwise. */
+async function answerDiscoveryProbes(
+  socket: FakeSocket,
+  supported: ReadonlyArray<string>,
+): Promise<void> {
+  for (let pass = 0; pass < 4; pass += 1) {
+    await Promise.resolve();
+    const seen = answered.get(socket) ?? new Set<string>();
+    answered.set(socket, seen);
+    const pending = socket.sent
+      .map((raw) => JSON.parse(raw) as { readonly id?: string; readonly method?: string })
+      .filter((frame) => frame.id !== undefined && !seen.has(frame.id));
+    for (const frame of pending) {
+      seen.add(frame.id!);
+      if (frame.method !== undefined && supported.includes(frame.method)) {
+        socket.receive({ jsonrpc: "2.0", id: frame.id, result: {} });
+      } else {
+        socket.receive({
+          jsonrpc: "2.0",
+          id: frame.id,
+          error: { code: -32601, message: "Method not found" },
+        });
+      }
+    }
+    await Promise.resolve();
+  }
+}
+
+const answered = new WeakMap<FakeSocket, Set<string>>();
 
 describe("HermesGatewayClient transport security", () => {
   it("registers and revokes an ephemeral session MCP lease", async () => {
@@ -1492,6 +1529,66 @@ describe("HermesGatewayClient skills", () => {
     expect(client.hasCapability("skills.manage")).toBe(false);
     expect(client.hasCapability("skills.reload")).toBe(true);
     await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    client.close();
+  });
+
+  it("grants non-privileged capabilities a legacy gateway proves it implements", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(factory, {
+      discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
+    }, legacyReady);
+    const capabilities = client.health.capabilities ?? [];
+    // Directly probed.
+    expect(capabilities).toContain("commands.catalog");
+    expect(capabilities).toContain("models.inventory");
+    expect(capabilities).toContain("reasoning.effective_state");
+    expect(capabilities).toContain("session.lifecycle");
+    // Inferred from session.list answering.
+    expect(capabilities).toContain("turn.prompt");
+    expect(capabilities).toContain("turn.interrupt");
+    expect(capabilities).toContain("events.tools");
+    client.close();
+  });
+
+  it("never synthesizes privileged capabilities for a legacy gateway", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(factory, {
+      discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
+    }, legacyReady);
+    const capabilities = client.health.capabilities ?? [];
+    for (const privileged of [
+      "session_mcp",
+      "profile.import",
+      "cron.manage",
+      "skills.manage",
+      "attachments.image",
+    ]) {
+      expect(capabilities).not.toContain(privileged);
+    }
+    await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    client.close();
+  });
+
+  it("withholds capabilities a legacy gateway does not implement", async () => {
+    const factory = new FakeSocketFactory();
+    // Only session.list answers: the catalog/model/config probes return -32601.
+    const { client } = await openClient(factory, { discoverySupports: ["session.list"] }, legacyReady);
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("session.lifecycle");
+    expect(capabilities).toContain("turn.prompt");
+    expect(capabilities).not.toContain("commands.catalog");
+    expect(capabilities).not.toContain("models.inventory");
+    client.close();
+  });
+
+  it("holds a legacy gateway to advertisement alone when discovery is disabled", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(
+      factory,
+      { discoverLegacyCapabilities: false, discoverySupports: ["session.list"] },
+      legacyReady,
+    );
+    expect(client.health.capabilities ?? []).toEqual([]);
     client.close();
   });
 
