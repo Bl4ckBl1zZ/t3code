@@ -15,6 +15,9 @@ export const HermesSessionImportAgeDays = Schema.Int.check(
 );
 export type HermesSessionImportAgeDays = typeof HermesSessionImportAgeDays.Type;
 
+// Matches the server-side import ceiling (MAX_DISCOVERY_LIMIT).
+export const MAX_HERMES_SESSION_IMPORT_SELECTION = 10_000;
+
 export const HermesSessionImportSelection = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("recent"),
@@ -22,7 +25,9 @@ export const HermesSessionImportSelection = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("selected"),
-    sessionIds: Schema.Array(Schema.String),
+    sessionIds: Schema.Array(Schema.String).check(
+      Schema.isMaxLength(MAX_HERMES_SESSION_IMPORT_SELECTION),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("all"),

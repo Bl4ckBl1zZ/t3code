@@ -7,4 +7,4 @@ contents, prompts, tool arguments/output, errors, URLs, attachment bytes, filena
 
 No golden capture is checked in yet. The local Hermes 0.19.0 installation and synthetic/example
 frames are not substitutes for pinned live evidence. Use
-`docs/integrations/hermes-conformance.md` and retain blocked/indeterminate classifications.
+`docs/internals/hermes-conformance.md` and retain blocked/indeterminate classifications.

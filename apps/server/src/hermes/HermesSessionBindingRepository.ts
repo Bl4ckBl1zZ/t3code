@@ -1014,9 +1014,16 @@ export const make = Effect.gen(function* () {
         ORDER BY prepared_at ASC, operation_id ASC
         LIMIT 1
       `;
+      const conflict = unsettled[0];
+      if (conflict === undefined) {
+        return yield* repositoryError(
+          "prepareSessionCreateIntent",
+          "The conflicting session-create intent settled before it could be reported; retry the operation.",
+        );
+      }
       return {
         status: "unsettled_create",
-        operationId: unsettled[0]!.operation_id,
+        operationId: conflict.operation_id,
       } satisfies PrepareHermesSessionCreateIntentResult;
     },
     Effect.mapError(

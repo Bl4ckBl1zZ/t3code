@@ -790,6 +790,8 @@ export function createServerEnvironmentAtoms<R, E>(
     mutateHermesCron: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:hermes-cron:mutate",
       tag: WS_METHODS.hermesCronMutate,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
     }),
     searchHermesSkills: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:hermes-skills:search",

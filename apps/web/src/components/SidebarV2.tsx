@@ -113,12 +113,8 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
-import {
-  isT3WorkBackingProject,
-  T3_WORK_BACKING_PROJECT_ID,
-  T3_WORK_BACKING_PROJECT_TITLE,
-  t3WorkDirectoryForEnvironment,
-} from "../t3WorkProject";
+import { isT3WorkBackingProject, t3WorkDirectoryForEnvironment } from "../t3WorkProject";
+import { createT3WorkBackingProject } from "../t3WorkProjectCreate";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
@@ -1633,42 +1629,19 @@ export default function SidebarV2() {
     const createKey = `${workTargetEnvironmentId}:${t3WorkDirectory}`;
     if (t3WorkProjectCreateRef.current === createKey) return;
     t3WorkProjectCreateRef.current = createKey;
-    const hermesModel =
-      hermesProviderEntry.models.find((model) => model.slug === "default") ??
-      hermesProviderEntry.models[0] ??
-      null;
-    void (async () => {
-      const result = await createProject({
-        environmentId: workTargetEnvironmentId,
-        input: {
-          projectId: T3_WORK_BACKING_PROJECT_ID,
-          title: T3_WORK_BACKING_PROJECT_TITLE,
-          workspaceRoot: t3WorkDirectory,
-          createWorkspaceRootIfMissing: true,
-          defaultModelSelection:
-            hermesModel === null
-              ? null
-              : {
-                  instanceId: hermesProviderEntry.instanceId,
-                  model: hermesModel.slug,
-                },
-        },
-      });
-      t3WorkProjectCreateRef.current = null;
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not prepare T3 Work",
-            description:
-              error instanceof Error
-                ? error.message
-                : "The private T3 Work conversation directory could not be created.",
-          }),
-        );
+    void createT3WorkBackingProject({
+      createProject,
+      environmentId: workTargetEnvironmentId,
+      workspaceRoot: t3WorkDirectory,
+      hermesProviderEntry,
+    }).then((outcome) => {
+      // An interrupted command may retry later; release the guard. Keep it
+      // set on a real failure so effect re-runs for the same
+      // environment/directory pair do not retry and re-toast endlessly.
+      if (outcome === "interrupted") {
+        t3WorkProjectCreateRef.current = null;
       }
-    })();
+    });
   }, [
     createProject,
     hermesBackingProject,

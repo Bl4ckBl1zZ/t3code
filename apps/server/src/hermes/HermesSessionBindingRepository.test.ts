@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Restart coverage needs a real file-backed SQLite database.
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -56,7 +57,7 @@ function createBinding(
 memory("HermesSessionBindingRepository", (it) => {
   it.effect("keeps session imports idempotent and enforces one Main per profile", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 47 });
       const repository = yield* HermesSessionBindingRepository;
 
       const first = yield* repository.prepareSessionImport({
@@ -134,7 +135,7 @@ memory("HermesSessionBindingRepository", (it) => {
 
   it.effect("clears every local Hermes binding and import so sessions can be imported again", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 47 });
       const repository = yield* HermesSessionBindingRepository;
 
       yield* repository.prepareSessionImport({
@@ -226,7 +227,7 @@ memory("HermesSessionBindingRepository", (it) => {
 
   it.effect("rejects a scoped reset while a mutation is unsettled and preserves its records", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 47 });
       const repository = yield* HermesSessionBindingRepository;
       yield* createBinding(repository);
       const lease = yield* repository.acquireOwnerLease({
@@ -284,7 +285,7 @@ memory("HermesSessionBindingRepository", (it) => {
     "enforces both durable identity uniqueness domains and stores negotiation metadata",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 46 });
+        yield* runMigrations({ toMigrationInclusive: 47 });
         const repository = yield* HermesSessionBindingRepository;
 
         assert.isTrue(yield* createBinding(repository));
@@ -327,7 +328,7 @@ memory("HermesSessionBindingRepository", (it) => {
 
   it.effect("uses generation and expiry CAS to fence lease-owned metadata writes", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 47 });
       const repository = yield* HermesSessionBindingRepository;
       yield* createBinding(repository);
 
@@ -410,7 +411,7 @@ memory("HermesSessionBindingRepository", (it) => {
 
 it.effect("records the inherited history boundary once and preserves it afterwards", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 49 });
+    yield* runMigrations({ toMigrationInclusive: 50 });
     const repository = yield* HermesSessionBindingRepository;
 
     const prepared = yield* repository.prepareSessionImport({
@@ -457,9 +458,10 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
   );
   const databasePath = NodePath.join(directory, "state.sqlite");
   const privatePrompt = "PRIVATE PROMPT THAT MUST NEVER REACH SQLITE";
+  const privatePromptDigest = NodeCrypto.createHash("sha256").update(privatePrompt).digest("hex");
 
   const firstRuntime = Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 46 });
+    yield* runMigrations({ toMigrationInclusive: 47 });
     const repository = yield* HermesSessionBindingRepository;
     yield* createBinding(repository);
     const lease = yield* repository.acquireOwnerLease({
@@ -479,7 +481,7 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
       operationId: "operation:prompt-1",
       mutationKind: "prompt",
       method: "prompt.submit",
-      payloadDigest: DIGEST_A,
+      payloadDigest: privatePromptDigest,
     });
     assert.strictEqual(prepared.status, "prepared");
 
@@ -526,7 +528,7 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
   );
 
   const secondRuntime = Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 46 });
+    yield* runMigrations({ toMigrationInclusive: 47 });
     const repository = yield* HermesSessionBindingRepository;
     const unsettled = yield* repository.listUnsettledMutationIntents("hermes-binding:1");
     assert.deepStrictEqual(
@@ -539,7 +541,7 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
         {
           operationId: "operation:prompt-1",
           state: "indeterminate",
-          payloadDigest: DIGEST_A,
+          payloadDigest: privatePromptDigest,
         },
       ],
     );
@@ -628,7 +630,7 @@ it.effect(
     const databasePath = NodePath.join(directory, "state.sqlite");
 
     const firstRuntime = Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 47 });
       const repository = yield* HermesSessionBindingRepository;
       const prepared = yield* repository.prepareSessionCreateIntent({
         operationId: "operation:create-1",
@@ -653,7 +655,7 @@ it.effect(
     );
 
     const secondRuntime = Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 47 });
       const repository = yield* HermesSessionBindingRepository;
       const recovered = yield* repository.getMutationIntent("operation:create-1");
       assert.isTrue(Option.isSome(recovered));

@@ -74,7 +74,7 @@ function event(externalEventId = "event:1") {
 memory("HermesProactiveEventRepository", (it) => {
   it.effect("fails closed with explicit diagnostics for the pinned legacy gateway", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 45 });
+      yield* runMigrations({ toMigrationInclusive: 46 });
       const repository = yield* HermesProactiveEventRepository;
       const source = yield* repository.registerSource({
         providerInstanceId: "hermes-local",
@@ -146,7 +146,7 @@ memory("HermesProactiveEventRepository", (it) => {
     "atomically advances a durable cursor and deduplicates stable upstream identities",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 45 });
+        yield* runMigrations({ toMigrationInclusive: 46 });
         const repository = yield* HermesProactiveEventRepository;
         const source = yield* registerReady(repository, "profile:delivery");
 
@@ -248,7 +248,7 @@ memory("HermesProactiveEventRepository", (it) => {
     "leases, retries, fences, and projects outbox entries into Work and in-app records",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 45 });
+        yield* runMigrations({ toMigrationInclusive: 46 });
         const repository = yield* HermesProactiveEventRepository;
         const source = yield* registerReady(repository);
         yield* repository.ingestPage({
@@ -330,7 +330,7 @@ memory("HermesProactiveEventRepository", (it) => {
 
   it.effect("rejects outbox commits from a worker whose lease has expired", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 45 });
+      yield* runMigrations({ toMigrationInclusive: 46 });
       const repository = yield* HermesProactiveEventRepository;
       const source = yield* registerReady(repository, "profile:lease-expiry");
       yield* repository.ingestPage({

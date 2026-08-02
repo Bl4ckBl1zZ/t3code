@@ -1037,6 +1037,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     <video
                       src={attachment.previewUrl}
                       controls
+                      playsInline
                       preload="metadata"
                       className="block h-auto max-h-[220px] w-full bg-black object-contain"
                     />

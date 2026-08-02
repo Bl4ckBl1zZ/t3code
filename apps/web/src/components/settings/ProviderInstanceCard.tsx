@@ -708,7 +708,7 @@ export function ProviderInstanceCard({
   const authRowNode = (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-[13px] leading-[1.45] text-muted-foreground/80">
       {comingSoon ? (
-        <span>OpenClaw agent gateway support is coming soon.</span>
+        <span>{`${displayName} support is coming soon.`}</span>
       ) : hasAuthenticatedEmail ? (
         <>
           <span>Authenticated as</span>

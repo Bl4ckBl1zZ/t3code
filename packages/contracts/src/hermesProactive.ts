@@ -2,6 +2,15 @@ import * as Schema from "effect/Schema";
 
 import { NonNegativeInt } from "./baseSchemas.ts";
 
+// Timestamps in this contract are ISO date-time strings; validate the value
+// while preserving the plain string output shape.
+const IsoDateTime = Schema.String.check(
+  Schema.makeFilter(
+    (value: string) =>
+      !Number.isNaN(Date.parse(value)) || "Expected an ISO 8601 date-time string.",
+  ),
+);
+
 export const HermesProactiveRequiredCapabilities = [
   "cron.events.global_cursor",
   "events.stable_ids",
@@ -27,8 +36,8 @@ export const HermesProactiveSourceStatus = Schema.Struct({
   missingCapabilities: Schema.Array(Schema.String),
   checkpointCursor: Schema.NullOr(Schema.String),
   checkpointSequence: NonNegativeInt,
-  lastCheckedAt: Schema.String,
-  updatedAt: Schema.String,
+  lastCheckedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
 });
 export type HermesProactiveSourceStatus = typeof HermesProactiveSourceStatus.Type;
 
@@ -42,7 +51,7 @@ export const HermesProactiveEventProvenance = Schema.Struct({
   gatewayRevision: Schema.NullOr(Schema.String),
   protocolMajor: Schema.NullOr(NonNegativeInt),
   protocolMinor: Schema.NullOr(NonNegativeInt),
-  ingestedAt: Schema.String,
+  ingestedAt: IsoDateTime,
 });
 export type HermesProactiveEventProvenance = typeof HermesProactiveEventProvenance.Type;
 
@@ -56,8 +65,8 @@ export const HermesProactiveEvent = Schema.Struct({
   body: Schema.String,
   projectId: Schema.NullOr(Schema.String),
   threadId: Schema.NullOr(Schema.String),
-  occurredAt: Schema.String,
-  receivedAt: Schema.String,
+  occurredAt: IsoDateTime,
+  receivedAt: IsoDateTime,
   provenance: HermesProactiveEventProvenance,
 });
 export type HermesProactiveEvent = typeof HermesProactiveEvent.Type;
@@ -70,9 +79,9 @@ export const HermesProactiveWorkItem = Schema.Struct({
   title: Schema.String,
   summary: Schema.String,
   status: Schema.Literals(["unread", "read", "dismissed"]),
-  occurredAt: Schema.String,
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
+  occurredAt: IsoDateTime,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
 });
 export type HermesProactiveWorkItem = typeof HermesProactiveWorkItem.Type;
 
@@ -85,8 +94,8 @@ export const HermesInAppNotification = Schema.Struct({
   title: Schema.String,
   body: Schema.String,
   status: Schema.Literals(["unread", "read", "dismissed"]),
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
 });
 export type HermesInAppNotification = typeof HermesInAppNotification.Type;
 
@@ -104,12 +113,12 @@ export const HermesNotificationOutboxEntry = Schema.Struct({
   eventId: Schema.String,
   state: HermesNotificationOutboxState,
   attemptCount: NonNegativeInt,
-  availableAt: Schema.String,
+  availableAt: IsoDateTime,
   leaseOwner: Schema.NullOr(Schema.String),
-  leaseExpiresAt: Schema.NullOr(Schema.String),
+  leaseExpiresAt: Schema.NullOr(IsoDateTime),
   lastErrorCode: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
-  deliveredAt: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deliveredAt: Schema.NullOr(IsoDateTime),
 });
 export type HermesNotificationOutboxEntry = typeof HermesNotificationOutboxEntry.Type;

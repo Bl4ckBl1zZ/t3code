@@ -481,7 +481,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         driverKind: DRIVER_KIND,
         instanceId,
       });
-      const checkedAt = DateTime.formatIso(yield* DateTime.now);
+      let checkedAt = DateTime.formatIso(yield* DateTime.now);
       const gatewayToken = resolveHermesGatewayToken(environment);
       const connectionRuntime = yield* makeHermesServeRuntime({
         endpoint: config.endpoint,
@@ -540,6 +540,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           ...(connectionOwnership === undefined ? {} : { connectionOwnership }),
         });
       const refreshSnapshot = Effect.gen(function* () {
+        checkedAt = DateTime.formatIso(yield* DateTime.now);
         if (!enabled || !config.profileKey.trim()) {
           return currentSnapshot();
         }

@@ -253,7 +253,11 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
           const diagnostics: string[] = [];
           const dropped = entries.length - skills.length;
           if (dropped > 0) {
-            diagnostics.push(`${dropped} skill entr(ies) have no usable name and were omitted.`);
+            diagnostics.push(
+              dropped === 1
+                ? "1 skill entry has no usable name and was omitted."
+                : `${dropped} skill entries have no usable name and were omitted.`,
+            );
           }
           return {
             providerInstanceId: config.providerInstanceId,
@@ -440,7 +444,7 @@ export const makeHermesSkills = Effect.fn("HermesSkills.make")(function* (
       "reload",
       (capabilities) => capabilities.reload,
       async (client) => {
-        const result = await client.reloadSkills({ operationId: input.operationId });
+        const result = await client.reloadSkills({ operationId: input.operationId.trim() });
         const names = (values: ReadonlyArray<unknown> | undefined) => {
           const collected: string[] = [];
           for (const value of values ?? []) {

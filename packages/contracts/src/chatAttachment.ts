@@ -21,6 +21,19 @@ const ChatAttachmentMimeType = TrimmedNonEmptyString.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i),
 );
 
+// The generic "file" branch must not absorb MIME types that have their own
+// specialized attachment type (image, pdf, video); this mirrors
+// validateComposerAttachment's prefix classification.
+const GenericFileMimeType = ChatAttachmentMimeType.check(
+  Schema.makeFilter(
+    (value: string) =>
+      !/^image\//i.test(value) &&
+      !/^video\//i.test(value) &&
+      !/^application\/pdf$/i.test(value) ||
+      "Images, PDFs, and videos must use their dedicated attachment types.",
+  ),
+);
+
 export const ChatAttachmentId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(CHAT_ATTACHMENT_ID_MAX_CHARS),
   Schema.isPattern(/^[a-z0-9_-]+$/i),
@@ -55,7 +68,7 @@ const chatFileAttachment = <Type extends "file" | "pdf" | "video">(type: Type) =
         ? ChatAttachmentMimeType.check(Schema.isPattern(/^application\/pdf$/i))
         : type === "video"
           ? ChatAttachmentMimeType.check(Schema.isPattern(/^video\//i))
-          : ChatAttachmentMimeType,
+          : GenericFileMimeType,
     sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
   });
 
@@ -68,7 +81,7 @@ const uploadChatFileAttachment = <Type extends "file" | "pdf" | "video">(type: T
         ? ChatAttachmentMimeType.check(Schema.isPattern(/^application\/pdf$/i))
         : type === "video"
           ? ChatAttachmentMimeType.check(Schema.isPattern(/^video\//i))
-          : ChatAttachmentMimeType,
+          : GenericFileMimeType,
     sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
     dataUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS)),
   });

@@ -6205,7 +6205,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             latest === undefined ? entity.updatedAt : DateTime.max(latest, entity.updatedAt),
           undefined,
         );
-        const occurredAt = latestSnapshotAt ?? (yield* DateTime.now);
+        const occurredAt = latestSnapshotAt ?? snapshot.providerThread.updatedAt;
         const events: Array<OrchestrationV2DomainEvent> = [];
         if (projectedProviderThread === undefined) {
           events.push({

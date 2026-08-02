@@ -267,7 +267,7 @@ export function HermesSkillsSettings() {
   const reload = useAtomCommand(serverEnvironment.reloadHermesSkills, {
     label: "Hermes skills reload",
   });
-  const [reloading, setReloading] = useState(false);
+  const [reloadingProviderId, setReloadingProviderId] = useState<string | null>(null);
   const providers = query.data?.providers ?? [];
   const negotiationFooter = useMemo(() => skillsNegotiationFooter(providers), [providers]);
 
@@ -289,13 +289,13 @@ export function HermesSkillsSettings() {
 
   const runReload = useCallback(
     async (provider: HermesSkillsProviderProjection) => {
-      if (!environment || reloading) return;
-      setReloading(true);
+      if (!environment || reloadingProviderId !== null) return;
+      setReloadingProviderId(provider.providerInstanceId);
       const result = await reload({
         environmentId: environment.environmentId,
         input: { providerInstanceId: provider.providerInstanceId, operationId: randomUUID() },
       });
-      setReloading(false);
+      setReloadingProviderId(null);
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
           reportFailure("Hermes skills reload failed", squashAtomCommandFailure(result));
@@ -305,7 +305,7 @@ export function HermesSkillsSettings() {
       reportReload(result.value);
       query.refresh();
     },
-    [environment, query, reload, reloading, reportReload],
+    [environment, query, reload, reloadingProviderId, reportReload],
   );
 
   return (
@@ -332,7 +332,7 @@ export function HermesSkillsSettings() {
                 key={`${environment.environmentId}:${provider.providerInstanceId}`}
                 environment={environment}
                 provider={provider}
-                reloading={reloading}
+                reloading={reloadingProviderId === provider.providerInstanceId}
                 onReload={(target) => void runReload(target)}
               />
             ))}

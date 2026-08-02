@@ -84,7 +84,7 @@ export function resolveHermesProviderConnections(
         providerInstanceId,
         displayName,
         profileKey: config.profileKey,
-        diagnostic: "Hermes gateway endpoint or sensitive token is not configured.",
+        diagnostic: "The sensitive HERMES_GATEWAY_TOKEN environment variable is not configured.",
       });
     } else {
       const security = assessHermesConnectionSecurity({

@@ -98,8 +98,9 @@
         "type": "clarify.request",
         "session_id": "<session-id:01>",
         "payload": {
-          "prompt": "<redacted-content>",
-          "questions": ["<redacted-content>"]
+          "request_id": "<request-id:01>",
+          "question": "<redacted-content>",
+          "choices": ["<redacted-content>"]
         }
       }
     },

@@ -314,6 +314,10 @@ function cleanup(): Promise<void> {
 
     if (hostPlatform === "win32" || !child.pid || !childRunning(child)) {
       cleanupVerified = false;
+      if (hostPlatform === "win32" && childRunning(child)) {
+        child.kill();
+        await waitForChildExit(child, 2_000);
+      }
       cleanupEvidenceSequence = record("harness", {
         type: "cleanup-failed",
         reason:

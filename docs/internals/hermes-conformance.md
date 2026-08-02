@@ -33,7 +33,7 @@ environment. The harness defaults to `<checkout>/.venv/bin/python`; set
 git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-h0
 git -C /tmp/hermes-h0 checkout --detach 2c1a38a3cc4b5727c817f007a46c377cafddde4c
 
-pnpm hermes:conformance -- \
+vp run hermes:conformance -- \
   --mode launch \
   --source /tmp/hermes-h0 \
   --output /tmp/hermes-h0-evidence
@@ -48,7 +48,7 @@ evidence can be tied to the implementation that produced it.
 For an already-running loopback gateway:
 
 ```bash
-pnpm hermes:conformance -- \
+vp run hermes:conformance -- \
   --mode attach \
   --url 'ws://127.0.0.1:9119/api/ws?token=CALLER_CHOSEN_TOKEN' \
   --output /tmp/hermes-h0-attached
@@ -63,7 +63,7 @@ Read-only inventory probes run by default. Launch-mode mutations are confined to
 profile and working directory and still require explicit opt-in:
 
 ```bash
-HERMES_CONFORMANCE_ALLOW_MUTATIONS=1 pnpm hermes:conformance -- ...
+HERMES_CONFORMANCE_ALLOW_MUTATIONS=1 vp run hermes:conformance -- ...
 ```
 
 Mutation opt-ins never enable attach-mode writes.
@@ -82,7 +82,7 @@ HERMES_CONFORMANCE_ALLOW_LIVE=1 \
 HERMES_CONFORMANCE_TOOL_PROMPT='REVIEWED DISPOSABLE TOOL SCENARIO' \
 HERMES_CONFORMANCE_APPROVAL_PROMPT='REVIEWED DISPOSABLE APPROVAL SCENARIO' \
 HERMES_CONFORMANCE_CLARIFICATION_PROMPT='REVIEWED DISPOSABLE CLARIFICATION SCENARIO' \
-pnpm hermes:conformance -- ...
+vp run hermes:conformance -- ...
 ```
 
 Each live scenario is independent; approval and clarification observations are interrupted instead

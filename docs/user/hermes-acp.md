@@ -26,10 +26,9 @@ T3 Code reports the provider ready only when the ACP entrypoint exists and its
 adapter dependency check succeeds. Session startup then negotiates the actual
 ACP capabilities exposed by that Hermes build.
 
-The pinned Hermes revision used by the Hermes conformance work,
-`2c1a38a3cc4b5727c817f007a46c377cafddde4c`, contains the genuine
-`acp_adapter` stdio server and advertises session load, resume, list, fork,
-model switching, cancellation, image prompts, permissions, and authentication.
+Recent Hermes builds advertise session load, resume, list, fork, model
+switching, cancellation, image prompts, permissions, and authentication.
+Available features depend on the Hermes build you install.
 
 T3 Code passes its session-scoped MCP endpoint through ACP session setup and
 sets `HERMES_ACP_SKIP_CONFIGURED_MCP=1` for the child process. This avoids

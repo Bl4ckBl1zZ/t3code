@@ -2580,7 +2580,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       reservedCount += 1;
     }
-    setThreadError(threadId, error);
+    // Only failures are reported; passing `null` would clear thread errors
+    // set by unrelated work (see the compression path below).
+    if (error !== null) {
+      setThreadError(threadId, error);
+    }
     if (directAttachments.length === 1 && directAttachments[0]) {
       addComposerImage(directAttachments[0]);
     } else if (directAttachments.length > 1) {

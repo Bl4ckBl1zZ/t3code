@@ -37,7 +37,7 @@ export interface HermesConnectionSecurityInput {
   readonly remoteTlsCertificateSha256: string | undefined;
 }
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const SHA256_FINGERPRINT = /^(?:[0-9a-f]{64}|(?:[0-9a-f]{2}:){31}[0-9a-f]{2})$/iu;
 
 export function sanitizeHermesEndpoint(endpoint: string): string {

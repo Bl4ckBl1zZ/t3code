@@ -137,9 +137,9 @@ import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindin
 import {
   isT3WorkBackingProject,
   T3_WORK_BACKING_PROJECT_ID,
-  T3_WORK_BACKING_PROJECT_TITLE,
   t3WorkDirectoryForEnvironment,
 } from "../t3WorkProject";
+import { createT3WorkBackingProject, resolveHermesDefaultModel } from "../t3WorkProjectCreate";
 import {
   Command,
   CommandDialog,
@@ -989,9 +989,7 @@ function OpenCommandPaletteDialog(props: {
           project.workspaceRoot === t3WorkDirectory,
       ) ?? null;
     const hermesModel =
-      hermesProviderEntry?.models.find((model) => model.slug === "default") ??
-      hermesProviderEntry?.models[0] ??
-      null;
+      hermesProviderEntry === null ? null : resolveHermesDefaultModel(hermesProviderEntry);
     if (
       primaryEnvironmentId === null ||
       t3WorkDirectory === null ||
@@ -1006,35 +1004,13 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     if (existingBackingProject === null) {
-      const createResult = await createProject({
+      const outcome = await createT3WorkBackingProject({
+        createProject,
         environmentId: primaryEnvironmentId,
-        input: {
-          projectId: T3_WORK_BACKING_PROJECT_ID,
-          title: T3_WORK_BACKING_PROJECT_TITLE,
-          workspaceRoot: t3WorkDirectory,
-          createWorkspaceRootIfMissing: true,
-          defaultModelSelection: {
-            instanceId: hermesProviderEntry.instanceId,
-            model: hermesModel.slug,
-          },
-        },
+        workspaceRoot: t3WorkDirectory,
+        hermesProviderEntry,
       });
-      if (createResult._tag === "Failure") {
-        if (!isAtomCommandInterrupted(createResult)) {
-          const error = squashAtomCommandFailure(createResult);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not prepare T3 Work",
-              description:
-                error instanceof Error
-                  ? error.message
-                  : "The private T3 Work conversation directory could not be created.",
-            }),
-          );
-        }
-        return;
-      }
+      if (outcome !== "created") return;
     }
     await handleNewThread(
       scopeProjectRef(

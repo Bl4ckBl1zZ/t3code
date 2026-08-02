@@ -171,7 +171,7 @@ describe("HermesSkills service", () => {
         ],
       });
       expect(main?.diagnostics).toEqual([
-        "1 skill entr(ies) have no usable name and were omitted.",
+        "1 skill entry has no usable name and was omitted.",
       ]);
     }).pipe(Effect.provide(settingsLayer)),
   );

@@ -487,6 +487,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // settledAt: the engine rejects zero-event commands, and bulk-settle /
       // double-click must stay silent no-ops rather than surface errors.
       const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
+      // Historical settle times come from provider imports, which we do not
+      // control: clamp anything in the future to now so a bad upstream clock
+      // cannot pin an imported thread above live work forever. Past values
+      // pass through so imports keep their real age.
+      const requestedSettledAt =
+        command.settledAt !== undefined && command.settledAt < occurredAt
+          ? command.settledAt
+          : occurredAt;
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -497,12 +505,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.settled",
         payload: {
           threadId: command.threadId,
-          settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? occurredAt),
+          settledAt: alreadySettled ? thread.settledAt : requestedSettledAt,
           // A re-emission is a projected no-op: keep the existing updatedAt
           // so duplicate settles neither rewind nor churn ordering. A fresh
           // settle stamps its settle time, so historical settles (provider
           // imports) keep sorting by when the work actually ended.
-          updatedAt: alreadySettled ? thread.updatedAt : (command.settledAt ?? occurredAt),
+          updatedAt: alreadySettled ? thread.updatedAt : requestedSettledAt,
         },
       };
     }

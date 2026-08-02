@@ -432,7 +432,11 @@ export class HermesGatewayClient {
   private transportSequence = 0;
   private readonly sessionSequences = new Map<string, number>();
   private readonly pending = new Map<string, PendingRequest>();
+  private static readonly MAX_CONFIRMED_MUTATIONS = 1024;
+
   private readonly mutations = new Map<string, HermesGatewayMutationRecord>();
+  private readonly confirmedMutationOrder: string[] = [];
+  private indeterminateMutationIds = new Set<string>();
   private readonly eventListeners = new Set<
     (event: HermesGatewayOrderedEvent) => void | Promise<void>
   >();
@@ -937,6 +941,7 @@ export class HermesGatewayClient {
         mutationId: existing?.mutationId ?? operationId,
       });
     } else if (outcome.mutation_status === "completed") {
+      this.indeterminateMutationIds.delete(operationId);
       if (this.mutations.delete(operationId)) this.emitHealth();
     } else {
       this.setMutation({
@@ -1052,6 +1057,7 @@ export class HermesGatewayClient {
         `Hermes mutation is not indeterminate: ${operationId}`,
       );
     }
+    this.indeterminateMutationIds.delete(operationId);
     this.mutations.delete(operationId);
     this.emitHealth();
   }
@@ -1564,7 +1570,26 @@ export class HermesGatewayClient {
   }
 
   private setMutation(record: HermesGatewayMutationRecord): void {
+    const previous = this.mutations.get(record.operationId);
     this.mutations.set(record.operationId, record);
+    if (record.state === "indeterminate") {
+      this.indeterminateMutationIds.add(record.operationId);
+    } else {
+      this.indeterminateMutationIds.delete(record.operationId);
+    }
+    if (record.state === "confirmed" && previous?.state !== "confirmed") {
+      // Confirmed records are only retained for a bounded replay-protection
+      // window; older confirmations are evicted FIFO so the map cannot grow
+      // without bound over a long-lived connection.
+      this.confirmedMutationOrder.push(record.operationId);
+      while (this.confirmedMutationOrder.length > HermesGatewayClient.MAX_CONFIRMED_MUTATIONS) {
+        const evicted = this.confirmedMutationOrder.shift();
+        if (evicted === undefined) break;
+        if (this.mutations.get(evicted)?.state === "confirmed") {
+          this.mutations.delete(evicted);
+        }
+      }
+    }
     this.logger?.({
       type: "mutation",
       operationId: "<redacted-id>",
@@ -1575,10 +1600,7 @@ export class HermesGatewayClient {
   }
 
   private indeterminateOperationIds(): ReadonlyArray<string> {
-    return [...this.mutations.values()]
-      .filter((record) => record.state === "indeterminate")
-      .map((record) => record.operationId)
-      .toSorted();
+    return [...this.indeterminateMutationIds].toSorted();
   }
 
   private setState(state: HermesGatewayConnectionState, attempt: number): void {

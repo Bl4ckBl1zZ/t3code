@@ -117,13 +117,20 @@ const UnavailableHermesSessionBindingRepository = HermesSessionBindingRepository
   clearHistoryRecords: () => unavailableHermesRepositoryOperation("clearHistoryRecords"),
 });
 
+const isLoopbackHostname = (hostname: string): boolean => {
+  const host =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  if (host === "localhost" || host === "::1" || host === "::ffff:127.0.0.1") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+};
+
 const remoteHermesEnabled = (settings: ServerSettings, config: unknown): boolean => {
   if (typeof config !== "object" || config === null) return true;
   const endpoint = Reflect.get(config, "endpoint");
   if (typeof endpoint !== "string" || endpoint.trim() === "") return true;
   let remote = true;
   try {
-    remote = !["127.0.0.1", "localhost", "::1"].includes(new URL(endpoint).hostname);
+    remote = !isLoopbackHostname(new URL(endpoint).hostname);
   } catch {
     // Invalid endpoints remain visible to the provider's configuration diagnostics.
     return true;

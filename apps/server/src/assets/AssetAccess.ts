@@ -1,3 +1,4 @@
+import Mime from "@effect/platform-node/Mime";
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
@@ -155,6 +156,7 @@ function normalizeBrowserArtifactFileName(fileName: string): string | null {
     trimmed.includes("/") ||
     trimmed.includes("\\") ||
     trimmed.includes("\0") ||
+    trimmed.includes(":") ||
     trimmed.startsWith(".")
   ) {
     return null;
@@ -171,6 +173,10 @@ const openBrowserArtifact = Effect.fn("AssetAccess.openBrowserArtifact")(functio
 ) {
   const normalizedFileName = normalizeBrowserArtifactFileName(fileName);
   if (normalizedFileName === null) return null;
+
+  // Without O_NOFOLLOW the open below cannot exclude symlinks race-safely,
+  // so refuse to serve artifacts rather than follow a planted link.
+  if (typeof NodeFS.constants.O_NOFOLLOW !== "number") return null;
 
   const path = yield* Path.Path;
   const artifactPath = path.join(browserArtifactsDir, normalizedFileName);
@@ -195,7 +201,7 @@ const openBrowserArtifact = Effect.fn("AssetAccess.openBrowserArtifact")(functio
     name: normalizedFileName,
     lastModified: info.value.mtimeMs,
     size: info.value.size,
-    type: "",
+    type: Mime.getType(normalizedFileName) ?? "application/octet-stream",
     stream: () =>
       NodeStream.Readable.toWeb(
         handle.createReadStream({ autoClose: true }),

@@ -410,6 +410,10 @@ export const HermesAcpSettings = makeProviderSettingsSchema(
 );
 export type HermesAcpSettings = typeof HermesAcpSettings.Type;
 
+const SENSITIVE_QUERY_KEYS = new Set(["access_token", "apikey", "api_key", "password", "token"]);
+const hasSensitiveQueryKey = (url: URL): boolean =>
+  [...url.searchParams.keys()].some((key) => SENSITIVE_QUERY_KEYS.has(key.toLowerCase()));
+
 const OpenClawGatewayUrl = TrimmedString.check(
   Schema.makeFilter((value) => {
     if (value === "") return true;
@@ -419,10 +423,7 @@ const OpenClawGatewayUrl = TrimmedString.check(
     } catch {
       return "OpenClaw Gateway URL must be a valid ws:// or wss:// URL.";
     }
-    const sensitiveQueryKeys = new Set(["access_token", "apikey", "api_key", "password", "token"]);
-    const hasSecretQuery = [...gatewayUrl.searchParams.keys()].some((key) =>
-      sensitiveQueryKeys.has(key.toLowerCase()),
-    );
+    const hasSecretQuery = hasSensitiveQueryKey(gatewayUrl);
     return (
       (["ws:", "wss:"].includes(gatewayUrl.protocol) &&
         !gatewayUrl.username &&
@@ -575,7 +576,7 @@ const HermesGatewayEndpoint = TrimmedString.check(
       return "Hermes endpoint must be a valid WebSocket URL.";
     }
     const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpoint.hostname);
-    const hasToken = [...endpoint.searchParams.keys()].some((key) => key.toLowerCase() === "token");
+    const hasToken = hasSensitiveQueryKey(endpoint);
     return (
       (((endpoint.protocol === "ws:" && loopback) || (endpoint.protocol === "wss:" && !loopback)) &&
         !endpoint.username &&

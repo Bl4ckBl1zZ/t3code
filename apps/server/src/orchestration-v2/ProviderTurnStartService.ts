@@ -532,7 +532,7 @@ export const layer: Layer.Layer<
         });
         const errorItemOrdinal =
           Math.max(
-            run.ordinal * 1_000_000,
+            run.ordinal * 100,
             ...projection.turnItems
               .filter((item) => item.runId === run.id)
               .map((item) => item.ordinal),

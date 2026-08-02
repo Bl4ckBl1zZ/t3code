@@ -8,7 +8,7 @@ export function createHermesEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   const scheduler = createAtomCommandScheduler();
-  const concurrency = {
+  const providerConcurrency = (command: string) => ({
     mode: "singleFlight" as const,
     key: ({
       environmentId,
@@ -16,21 +16,21 @@ export function createHermesEnvironmentAtoms<R, E>(
     }: {
       readonly environmentId: string;
       readonly input: { readonly providerInstanceId: string };
-    }) => JSON.stringify([environmentId, input.providerInstanceId]),
-  };
+    }) => JSON.stringify([command, environmentId, input.providerInstanceId]),
+  });
 
   return {
     discoverSessions: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hermes:sessions:discover",
       tag: WS_METHODS.hermesSessionsDiscover,
       scheduler,
-      concurrency,
+      concurrency: providerConcurrency("discover"),
     }),
     importSessions: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hermes:sessions:import",
       tag: WS_METHODS.hermesSessionsImport,
       scheduler,
-      concurrency,
+      concurrency: providerConcurrency("import"),
     }),
     resetHistory: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hermes:history:reset",

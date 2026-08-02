@@ -570,7 +570,6 @@ export const make = Effect.gen(function* () {
         String(thread.projectId) === scope.projectId &&
         String(thread.providerInstanceId) === scope.providerInstanceId,
     );
-    const clearedImportCount = yield* repository.clearHistoryRecords(scope);
     yield* Effect.forEach(
       targets,
       (thread) =>
@@ -581,6 +580,7 @@ export const make = Effect.gen(function* () {
         }),
       { concurrency: 1, discard: true },
     );
+    const clearedImportCount = yield* repository.clearHistoryRecords(scope);
     return {
       deletedThreadCount: targets.length,
       clearedImportCount,

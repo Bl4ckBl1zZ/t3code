@@ -434,6 +434,12 @@ export const make = Effect.gen(function* () {
           "update-thread",
         )("Reusing an existing thread requires a thread id.");
       }
+      if (input.prepareWorkspace === false && input.workspaceStrategy.type === "worktree") {
+        return yield* mapError(
+          input,
+          "provision-worktree",
+        )("Skipping workspace preparation is incompatible with a worktree workspace strategy.");
+      }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
       return yield* Effect.gen(function* () {
