@@ -22,33 +22,9 @@ const SETTLE_DELAY_MS = 400;
 const FULL_DOCUMENT_PATTERN = /^\s*(?:<!doctype\b|<html\b)/i;
 
 // Navigation guards do not stop fetch/XHR/external subresources; the CSP
-// closes off network access so embeds cannot exfiltrate anything or load
-// remote content.
-const EMBED_CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:">`;
-
-/**
- * Full documents authored by the agent keep their own markup, but the CSP must
- * appear before any agent-authored script runs, so it is inserted at the start
- * of <head> (or immediately after <html>/the doctype when no <head> exists).
- */
-function injectCspIntoFullDocument(code: string): string {
-  const headMatch = /<head[^>]*>/i.exec(code);
-  if (headMatch) {
-    const insertAt = headMatch.index + headMatch[0].length;
-    return `${code.slice(0, insertAt)}${EMBED_CSP_META}${code.slice(insertAt)}`;
-  }
-  const htmlMatch = /<html[^>]*>/i.exec(code);
-  if (htmlMatch) {
-    const insertAt = htmlMatch.index + htmlMatch[0].length;
-    return `${code.slice(0, insertAt)}<head>${EMBED_CSP_META}</head>${code.slice(insertAt)}`;
-  }
-  const doctypeMatch = /<!doctype[^>]*>/i.exec(code);
-  if (doctypeMatch) {
-    const insertAt = doctypeMatch.index + doctypeMatch[0].length;
-    return `${code.slice(0, insertAt)}${EMBED_CSP_META}${code.slice(insertAt)}`;
-  }
-  return `${EMBED_CSP_META}${code}`;
-}
+// closes off network access, form submission, and <base> retargeting so
+// embeds cannot exfiltrate anything or load remote content.
+const EMBED_CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'">`;
 
 // documentElement.scrollHeight is clamped to the WebView viewport, so it can
 // never report a shrink; the body is not the scrolling box and tracks true
@@ -56,10 +32,15 @@ function injectCspIntoFullDocument(code: string): string {
 const HEIGHT_REPORTER_SCRIPT = `<script>(function(){var report=function(){var body=document.body;var height=body?Math.max(body.scrollHeight,body.offsetHeight):document.documentElement.scrollHeight;if(window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify({type:"${EMBED_HEIGHT_MESSAGE_TYPE}",height:height}));}};var schedule=function(){if(window.requestAnimationFrame){requestAnimationFrame(report);}else{report();}};window.addEventListener("load",schedule);if(window.ResizeObserver){new ResizeObserver(schedule).observe(document.documentElement);}var ticks=0;var timer=setInterval(function(){report();ticks+=1;if(ticks>=10){clearInterval(timer);}},500);schedule();})();</script>`;
 
 function buildHtmlEmbedDocument(code: string, theme: "light" | "dark"): string {
-  // Agent-authored full documents keep their own <head>; a trailing script is
-  // reparented into <body> by the HTML parser, so height reporting still works.
+  // The CSP head must precede every untrusted byte, and inserting into
+  // agent markup with string matching is spoofable (decoy <head> text in
+  // comments or scripts). So the trusted head is always emitted first and the
+  // agent's document follows verbatim: the HTML parser ignores its extra
+  // doctype, merges its <html> attributes, and reparents its head content
+  // into the body, where <style>/<script>/<meta> still function. Trailing
+  // scripts are likewise reparented, so height reporting still works.
   if (FULL_DOCUMENT_PATTERN.test(code)) {
-    return `${injectCspIntoFullDocument(code)}\n${HEIGHT_REPORTER_SCRIPT}`;
+    return `<!doctype html><html><head>${EMBED_CSP_META}<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>${code}\n${HEIGHT_REPORTER_SCRIPT}</html>`;
   }
   return `<!doctype html><html><head>${EMBED_CSP_META}<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>:root{color-scheme:${theme}}html,body{margin:0;background:transparent}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.45;color:CanvasText;padding:12px;box-sizing:border-box;overflow-wrap:break-word}</style></head><body>${code}\n${HEIGHT_REPORTER_SCRIPT}</body></html>`;
 }
