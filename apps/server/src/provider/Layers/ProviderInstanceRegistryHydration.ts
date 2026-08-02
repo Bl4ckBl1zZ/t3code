@@ -111,6 +111,7 @@ const UnavailableHermesSessionBindingRepository = HermesSessionBindingRepository
   prepareSessionImport: () => unavailableHermesRepositoryOperation("prepareSessionImport"),
   getSessionImportByStoredIdentity: () =>
     unavailableHermesRepositoryOperation("getSessionImportByStoredIdentity"),
+  listSessionImports: () => unavailableHermesRepositoryOperation("listSessionImports"),
   getMainSessionImport: () => unavailableHermesRepositoryOperation("getMainSessionImport"),
   transitionSessionImport: () => unavailableHermesRepositoryOperation("transitionSessionImport"),
   listHistoryThreadIds: () => unavailableHermesRepositoryOperation("listHistoryThreadIds"),

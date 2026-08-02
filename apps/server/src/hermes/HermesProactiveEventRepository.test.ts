@@ -46,10 +46,7 @@ const readyCompatibility = {
   reason: "Future gateway advertises the required durable feed.",
 };
 
-function registerReady(
-  repository: HermesProactiveEventRepository["Service"],
-  profileKey: string,
-) {
+function registerReady(repository: HermesProactiveEventRepository["Service"], profileKey: string) {
   return repository.registerSource({
     providerInstanceId: "hermes-local",
     profileKey,

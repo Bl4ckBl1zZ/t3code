@@ -8,9 +8,11 @@ import {
 } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   HERMES_IMPORT_TRANSPORT_SOURCES,
@@ -32,6 +34,15 @@ import { ProjectService } from "../project/ProjectService.ts";
 import { ServerConfig } from "../config.ts";
 
 const TEST_T3_WORK_DIRECTORY = "/test/t3-work";
+
+/**
+ * Fixed wall-clock instant the TestClock is advanced to so `started_at`
+ * fixtures can be positive absolute epochs (the import flow rejects
+ * non-positive upstream timestamps).
+ */
+const TEST_NOW_MILLIS = Date.UTC(2026, 6, 26, 12);
+const TEST_NOW_SECONDS = TEST_NOW_MILLIS / 1_000;
+const advanceToTestNow = TestClock.adjust(Duration.millis(TEST_NOW_MILLIS));
 
 const testProjectService = (projectId: ProjectId) =>
   ProjectService.of({
@@ -110,6 +121,27 @@ describe("Hermes transport session import policy", () => {
     ).toBeNull();
   });
 
+  it("reports the negotiated reason when the protocol is unsupported despite a full inventory", () => {
+    expect(
+      hermesImportCapabilityError({
+        status: "unsupported",
+        protocol: { major: 9, minor: 0 },
+        capabilities: ["profile.import", "session.lifecycle"],
+        inventory: ["profile.import", "session.lifecycle"],
+        reason: "gateway protocol 9.0 is newer than this build supports",
+      }),
+    ).toBe("gateway protocol 9.0 is newer than this build supports");
+    expect(
+      hermesImportCapabilityError({
+        status: "unsupported",
+        protocol: null,
+        capabilities: ["profile.import", "session.lifecycle"],
+        inventory: ["profile.import", "session.lifecycle"],
+        reason: "   ",
+      }),
+    ).toContain("unsupported");
+  });
+
   effectIt.effect("rejects discovery when profile import is disabled at the server boundary", () =>
     Effect.gen(function* () {
       const registry = ProviderInstanceRegistry.of({
@@ -149,7 +181,8 @@ describe("Hermes transport session import policy", () => {
       Effect.gen(function* () {
         const providerInstanceId = ProviderInstanceId.make("hermes-work");
         const profileKey = "private-work";
-        const recentSeconds = 0;
+        yield* advanceToTestNow;
+        const recentSeconds = TEST_NOW_SECONDS;
         const imports = new Map<string, HermesSessionImport>();
         const bindings = new Set<string>();
         const commands: OrchestrationV2Command[] = [];
@@ -253,7 +286,7 @@ describe("Hermes transport session import policy", () => {
                         id: "telegram-old",
                         title: "Old Telegram",
                         preview: "",
-                        started_at: -73 * 60 * 60,
+                        started_at: TEST_NOW_SECONDS - 73 * 60 * 60,
                         message_count: 4,
                         source: "telegram",
                       },
@@ -335,18 +368,14 @@ describe("Hermes transport session import policy", () => {
       }),
   );
 
-  effectIt.effect("resets only the canonical project, provider, and profile owned shells", () =>
+  effectIt.effect("resets every scope-owned shell in the canonical project", () =>
     Effect.gen(function* () {
       const deleted: string[] = [];
       let cleared = false;
       const repository = {
+        // Already scoped to provider instance + profile + project by SQL.
         listHistoryThreadIds: () =>
-          Effect.succeed([
-            "thread:owned",
-            "thread:other-project",
-            "thread:other-provider",
-            "thread:non-hermes",
-          ]),
+          Effect.succeed(["thread:owned", "thread:other-project", "thread:switched-provider"]),
         clearHistoryRecords: (scope: unknown) =>
           Effect.sync(() => {
             expect(scope).toEqual({
@@ -398,8 +427,10 @@ describe("Hermes transport session import policy", () => {
                 projectId: ProjectId.make("project:other"),
                 providerInstanceId: ProviderInstanceId.make("hermes-custom"),
               },
+              // Imported under this scope, then moved by provider.switch: it is
+              // still scope-owned history and must be deleted, not orphaned.
               {
-                id: ThreadId.make("thread:other-provider"),
+                id: ThreadId.make("thread:switched-provider"),
                 projectId: ProjectId.make("project:work"),
                 providerInstanceId: ProviderInstanceId.make("hermes-other"),
               },
@@ -437,15 +468,16 @@ describe("Hermes transport session import policy", () => {
         operationId: "reset:test",
       });
 
-      expect(deleted).toEqual(["thread:owned"]);
+      expect(deleted).toEqual(["thread:owned", "thread:switched-provider"]);
       expect(cleared).toBe(true);
-      expect(result).toEqual({ deletedThreadCount: 1, clearedImportCount: 3 });
+      expect(result).toEqual({ deletedThreadCount: 2, clearedImportCount: 3 });
     }),
   );
 
   effectIt.effect("creates the main T3 Work thread when no sessions match the age cutoff", () =>
     Effect.gen(function* () {
       const providerInstanceId = ProviderInstanceId.make("hermes-work-empty");
+      yield* advanceToTestNow;
       const imports = new Map<string, HermesSessionImport>();
       const commands: OrchestrationV2Command[] = [];
       const repository = {
@@ -509,7 +541,7 @@ describe("Hermes transport session import policy", () => {
                       id: "old-discord",
                       title: "Too old",
                       preview: "",
-                      started_at: -2 * 24 * 60 * 60,
+                      started_at: TEST_NOW_SECONDS - 2 * 24 * 60 * 60,
                       message_count: 1,
                       source: "discord",
                     },
@@ -559,7 +591,8 @@ describe("Hermes transport session import policy", () => {
       Effect.gen(function* () {
         const providerInstanceId = ProviderInstanceId.make("hermes-work-timestamps");
         const profileKey = "private-work";
-        const startedAtSeconds = -3600;
+        yield* advanceToTestNow;
+        const startedAtSeconds = TEST_NOW_SECONDS - 3600;
         const imports = new Map<string, HermesSessionImport>();
         const boundThreadIds = new Set<string>();
         const bindingNows: string[] = [];
@@ -744,5 +777,320 @@ describe("Hermes transport session import policy", () => {
 
         expect(hydrated).toEqual([threadId, threadId]);
       }),
+  );
+
+  effectIt.effect("omits historical timestamps when upstream started_at is not a valid epoch", () =>
+    Effect.gen(function* () {
+      const providerInstanceId = ProviderInstanceId.make("hermes-work-invalid-epoch");
+      const profileKey = "private-work";
+      yield* advanceToTestNow;
+      const imports = new Map<string, HermesSessionImport>();
+      const bindingNows: string[] = [];
+      const commands: OrchestrationV2Command[] = [];
+
+      const repository = {
+        prepareSessionImport: (input: {
+          readonly importId: string;
+          readonly providerInstanceId: string;
+          readonly profileKey: string;
+          readonly projectId: string;
+          readonly importKind: "session" | "main";
+          readonly storedSessionKey: string | null;
+          readonly threadId: string;
+          readonly now: string;
+        }) =>
+          Effect.sync(() => {
+            const row: HermesSessionImport = {
+              ...input,
+              inheritedMessageCount: null,
+              state: "prepared",
+              createdAt: input.now,
+              updatedAt: input.now,
+            };
+            imports.set(row.importId, row);
+            return row;
+          }),
+        transitionSessionImport: () => Effect.succeed(true),
+        getMainSessionImport: () => Effect.succeed(Option.none()),
+        getByStoredIdentity: () => Effect.succeed(Option.none()),
+        getByThreadId: () => Effect.succeed(Option.none()),
+        createBinding: (input: { readonly now: string }) =>
+          Effect.sync(() => {
+            bindingNows.push(input.now);
+            return true;
+          }),
+      } as unknown as HermesSessionBindingRepository["Service"];
+      const registry = ProviderInstanceRegistry.of({
+        getInstance: () =>
+          Effect.succeed({
+            driverKind: ProviderDriverKind.make("hermes"),
+            hermesSessionCatalog: {
+              profileKey,
+              importEnabled: true,
+              list: () =>
+                Effect.succeed({
+                  providerInstanceId,
+                  profileKey,
+                  compatibility: {
+                    status: "supported",
+                    protocol: { major: 1, minor: 0 },
+                    capabilities: ["profile.import", "session.lifecycle"],
+                    inventory: ["profile.import", "session.lifecycle"],
+                    reason: "test negotiation",
+                  },
+                  sessions: [
+                    {
+                      id: "discord-zero-epoch",
+                      title: "Missing timestamp",
+                      preview: "",
+                      started_at: 0,
+                      message_count: 1,
+                      source: "discord",
+                    },
+                    {
+                      id: "discord-negative-epoch",
+                      title: "Negative timestamp",
+                      preview: "",
+                      started_at: -3_600,
+                      message_count: 1,
+                      source: "discord",
+                    },
+                  ],
+                }),
+            },
+          } as never),
+        listInstances: Effect.succeed([]),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.empty,
+        subscribeChanges: Effect.never,
+      });
+      const threadManagement = {
+        dispatch: (command: OrchestrationV2Command) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return {} as never;
+          }),
+      } as unknown as ThreadManagementService["Service"];
+
+      const service = yield* make.pipe(
+        Effect.provideService(ProviderInstanceRegistry, registry),
+        Effect.provideService(HermesSessionBindingRepository, repository),
+        Effect.provideService(ThreadManagementService, threadManagement),
+        Effect.provideService(
+          ProjectService,
+          testProjectService(ProjectId.make("internal-work-backing")),
+        ),
+        Effect.provideService(ServerConfig, testServerConfig),
+      );
+      // A huge window keeps both non-positive epochs eligible for import.
+      const result = yield* service.importSessions({
+        providerInstanceId,
+        backingProjectId: ProjectId.make("internal-work-backing"),
+        selection: { type: "all" },
+        activeWithinDays: 100_000,
+        ensureMain: false,
+      });
+
+      expect(result.imported.map((item) => item.storedSessionId)).toEqual([
+        "discord-zero-epoch",
+        "discord-negative-epoch",
+      ]);
+      const creates = commands.filter(
+        (command): command is Extract<OrchestrationV2Command, { type: "thread.create" }> =>
+          command.type === "thread.create",
+      );
+      expect(creates).toHaveLength(2);
+      expect(creates.every((command) => command.createdAt === undefined)).toBe(true);
+      const settles = commands.filter(
+        (command): command is Extract<OrchestrationV2Command, { type: "thread.settle" }> =>
+          command.type === "thread.settle",
+      );
+      expect(settles).toHaveLength(2);
+      expect(settles.every((command) => command.settledAt === undefined)).toBe(true);
+      // Bindings fall back to wall-clock time rather than a 1970 epoch.
+      expect(bindingNows).toEqual([
+        DateTime.formatIso(DateTime.makeUnsafe(TEST_NOW_MILLIS)),
+        DateTime.formatIso(DateTime.makeUnsafe(TEST_NOW_MILLIS)),
+      ]);
+    }),
+  );
+
+  effectIt.effect("separates unknown selected sessions from filtered-out ones", () =>
+    Effect.gen(function* () {
+      const providerInstanceId = ProviderInstanceId.make("hermes-work-selection");
+      const profileKey = "private-work";
+      yield* advanceToTestNow;
+      const registry = ProviderInstanceRegistry.of({
+        getInstance: () =>
+          Effect.succeed({
+            driverKind: ProviderDriverKind.make("hermes"),
+            hermesSessionCatalog: {
+              profileKey,
+              importEnabled: true,
+              list: () =>
+                Effect.succeed({
+                  providerInstanceId,
+                  profileKey,
+                  compatibility: {
+                    status: "supported",
+                    protocol: { major: 1, minor: 0 },
+                    capabilities: ["profile.import", "session.lifecycle"],
+                    inventory: ["profile.import", "session.lifecycle"],
+                    reason: "test negotiation",
+                  },
+                  sessions: [
+                    {
+                      id: "discord-too-old",
+                      title: "Too old",
+                      preview: "",
+                      started_at: TEST_NOW_SECONDS - 30 * 24 * 60 * 60,
+                      message_count: 1,
+                      source: "discord",
+                    },
+                  ],
+                }),
+            },
+          } as never),
+        listInstances: Effect.succeed([]),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.empty,
+        subscribeChanges: Effect.never,
+      });
+      const service = yield* make.pipe(
+        Effect.provideService(ProviderInstanceRegistry, registry),
+        Effect.provideService(HermesSessionBindingRepository, {} as never),
+        Effect.provideService(ThreadManagementService, {} as never),
+        Effect.provideService(
+          ProjectService,
+          testProjectService(ProjectId.make("internal-work-backing")),
+        ),
+        Effect.provideService(ServerConfig, testServerConfig),
+      );
+      const base = {
+        providerInstanceId,
+        backingProjectId: ProjectId.make("internal-work-backing"),
+        activeWithinDays: 1,
+      } as const;
+
+      const filteredOut = yield* Effect.flip(
+        service.importSessions({
+          ...base,
+          selection: { type: "selected", sessionIds: ["discord-too-old"] },
+        }),
+      );
+      const neverReturned = yield* Effect.flip(
+        service.importSessions({
+          ...base,
+          selection: { type: "selected", sessionIds: ["discord-unknown"] },
+        }),
+      );
+
+      expect(filteredOut.message).toContain("activity window");
+      expect(neverReturned.message).toContain("not returned by the configured profile");
+    }),
+  );
+
+  effectIt.effect("resolves imported thread ids with a single scoped import query", () =>
+    Effect.gen(function* () {
+      const providerInstanceId = ProviderInstanceId.make("hermes-work-discover");
+      const profileKey = "private-work";
+      yield* advanceToTestNow;
+      let listCalls = 0;
+      const repository = {
+        listSessionImports: () =>
+          Effect.sync(() => {
+            listCalls += 1;
+            return [
+              {
+                importId: "hermes-import:session:a",
+                providerInstanceId: String(providerInstanceId),
+                profileKey,
+                projectId: "internal-work-backing",
+                importKind: "session",
+                storedSessionKey: "discord-a",
+                threadId: "thread:hermes:session:a",
+                inheritedMessageCount: null,
+                state: "completed",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+              } satisfies HermesSessionImport,
+            ];
+          }),
+        getSessionImportByStoredIdentity: () => Effect.die("discovery must not query per session"),
+        getMainSessionImport: () => Effect.succeed(Option.none()),
+      } as unknown as HermesSessionBindingRepository["Service"];
+      const registry = ProviderInstanceRegistry.of({
+        getInstance: () =>
+          Effect.succeed({
+            driverKind: ProviderDriverKind.make("hermes"),
+            hermesSessionCatalog: {
+              profileKey,
+              importEnabled: true,
+              list: () =>
+                Effect.succeed({
+                  providerInstanceId,
+                  profileKey,
+                  compatibility: {
+                    status: "supported",
+                    protocol: { major: 1, minor: 0 },
+                    capabilities: ["profile.import", "session.lifecycle"],
+                    inventory: ["profile.import", "session.lifecycle"],
+                    reason: "test negotiation",
+                  },
+                  sessions: [
+                    {
+                      id: "discord-a",
+                      title: "Imported",
+                      preview: "",
+                      started_at: TEST_NOW_SECONDS - 60,
+                      message_count: 2,
+                      source: "discord",
+                    },
+                    {
+                      id: "discord-b",
+                      title: "Not imported",
+                      preview: "",
+                      started_at: TEST_NOW_SECONDS - 60,
+                      message_count: 2,
+                      source: "discord",
+                    },
+                    {
+                      id: "tui-c",
+                      title: "Local",
+                      preview: "",
+                      started_at: TEST_NOW_SECONDS - 60,
+                      message_count: 2,
+                      source: "tui",
+                    },
+                  ],
+                }),
+            },
+          } as never),
+        listInstances: Effect.succeed([]),
+        listUnavailable: Effect.succeed([]),
+        streamChanges: Stream.empty,
+        subscribeChanges: Effect.never,
+      });
+      const service = yield* make.pipe(
+        Effect.provideService(ProviderInstanceRegistry, registry),
+        Effect.provideService(HermesSessionBindingRepository, repository),
+        Effect.provideService(ThreadManagementService, {} as never),
+        Effect.provideService(
+          ProjectService,
+          testProjectService(ProjectId.make("internal-work-backing")),
+        ),
+        Effect.provideService(ServerConfig, testServerConfig),
+      );
+
+      const result = yield* service.discover({ providerInstanceId });
+
+      expect(listCalls).toBe(1);
+      expect(
+        result.sessions.map((session) => [session.storedSessionId, session.importedThreadId]),
+      ).toEqual([
+        ["discord-a", ThreadId.make("thread:hermes:session:a")],
+        ["discord-b", null],
+      ]);
+    }),
   );
 });

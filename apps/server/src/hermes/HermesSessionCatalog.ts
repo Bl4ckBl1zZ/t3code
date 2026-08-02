@@ -29,6 +29,15 @@ export function hermesImportCapabilityError(
   ) {
     return null;
   }
+  // An explicitly unsupported protocol is fatal on its own: the advertised
+  // capability list cannot be trusted, so report the negotiated reason instead
+  // of a misleading "missing capabilities" message.
+  if (compatibility.status === "unsupported") {
+    return (
+      compatibility.reason.trim() ||
+      "Hermes import is unavailable because the gateway protocol is unsupported."
+    );
+  }
   return compatibility.status === "legacy" || compatibility.inventory === null
     ? "Hermes import requires an evidence-backed negotiated capability inventory."
     : `Hermes import is unavailable because the gateway did not advertise: ${missing.join(", ")}.`;

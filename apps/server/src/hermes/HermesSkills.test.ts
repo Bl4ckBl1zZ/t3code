@@ -170,9 +170,7 @@ describe("HermesSkills service", () => {
           { name: "git", description: "Git helper" },
         ],
       });
-      expect(main?.diagnostics).toEqual([
-        "1 skill entry has no usable name and was omitted.",
-      ]);
+      expect(main?.diagnostics).toEqual(["1 skill entry has no usable name and was omitted."]);
     }).pipe(Effect.provide(settingsLayer)),
   );
 

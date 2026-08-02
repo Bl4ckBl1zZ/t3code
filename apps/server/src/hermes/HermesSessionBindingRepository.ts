@@ -308,6 +308,15 @@ export interface HermesSessionBindingRepositoryShape {
   readonly getSessionImportByStoredIdentity: (
     identity: HermesBindingStoredIdentity & { readonly projectId: string },
   ) => Effect.Effect<Option.Option<HermesSessionImport>, HermesSessionBindingRepositoryError>;
+  /**
+   * Scoped bulk read of stored-session imports; discovery uses it instead of
+   * one {@link getSessionImportByStoredIdentity} call per listed session.
+   */
+  readonly listSessionImports: (input: {
+    readonly providerInstanceId: string;
+    readonly profileKey: string;
+    readonly projectId: string;
+  }) => Effect.Effect<ReadonlyArray<HermesSessionImport>, HermesSessionBindingRepositoryError>;
   readonly getMainSessionImport: (input: {
     readonly providerInstanceId: string;
     readonly profileKey: string;
@@ -909,6 +918,21 @@ export const make = Effect.gen(function* () {
         } satisfies PrepareHermesMutationIntentResult;
       }
 
+      // The INSERT is also a lease guard: it selects from hermes_session_bindings under the
+      // fence. A missing row therefore means either the lease is gone or the unsettled-prompt
+      // unique index rejected the insert, so confirm the fence before blaming a live prompt.
+      const held = yield* sql<{ readonly binding_id: string }>`
+      SELECT binding_id
+      FROM hermes_session_bindings
+      WHERE binding_id = ${input.bindingId}
+        AND lease_owner_key = ${input.ownerKey}
+        AND lease_generation = ${input.generation}
+        AND lease_expires_at > ${input.now}
+    `;
+      if (held[0] === undefined) {
+        return { status: "lease_not_held" } satisfies PrepareHermesMutationIntentResult;
+      }
+
       if (input.mutationKind === "prompt") {
         const unsettled = yield* sql<{ readonly operation_id: string }>`
         SELECT operation_id
@@ -1224,6 +1248,26 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  const listSessionImports = Effect.fn("HermesSessionBindingRepository.listSessionImports")(
+    function* (input: {
+      readonly providerInstanceId: string;
+      readonly profileKey: string;
+      readonly projectId: string;
+    }) {
+      const rows = yield* sql<ImportRow>`
+        SELECT * FROM hermes_session_imports
+        WHERE provider_instance_id = ${input.providerInstanceId}
+          AND profile_key = ${input.profileKey}
+          AND project_id = ${input.projectId}
+          AND import_kind = 'session'
+      `;
+      return yield* Effect.forEach(rows, importFromRow);
+    },
+    Effect.mapError(
+      mapRepositoryError("listSessionImports", "Could not list the stored-session imports."),
+    ),
+  );
+
   const getMainSessionImport = Effect.fn("HermesSessionBindingRepository.getMainSessionImport")(
     function* (input: {
       readonly providerInstanceId: string;
@@ -1412,6 +1456,7 @@ export const make = Effect.gen(function* () {
     listUnsettledMutationIntents,
     prepareSessionImport,
     getSessionImportByStoredIdentity,
+    listSessionImports,
     getMainSessionImport,
     transitionSessionImport,
     setSessionImportInheritedCount,

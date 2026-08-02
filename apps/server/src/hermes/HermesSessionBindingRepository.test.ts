@@ -4,7 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -26,11 +26,31 @@ const T4 = "2026-07-24T12:00:40.000Z";
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
 
+/**
+ * Migration 045 creates the Hermes binding/import/mutation-intent schema and 047 completes it
+ * with title-branch lineage. Most cases here deliberately stop at 047 so the repository stays
+ * proven against the oldest schema it must still read: `session_imports.inherited_message_count`
+ * (added by 050) is absent there, which is what keeps the `?? null` fallback in `importFromRow`
+ * honest.
+ */
+const MIGRATIONS_BEFORE_INHERITED_BOUNDARY = 47;
+
+/** Migration 050 adds `session_imports.inherited_message_count`; boundary cases need it. */
+const MIGRATIONS_WITH_INHERITED_BOUNDARY = 50;
+
 function testLayer(databaseLayer: Layer.Layer<SqlClient.SqlClient, SqlError>) {
   return HermesSessionBindingRepositoryLayer.pipe(Layer.provideMerge(databaseLayer));
 }
 
-const memory = it.layer(testLayer(NodeSqliteClient.layerMemory()));
+/**
+ * Every case gets its own in-memory database: these tests reuse the same binding, thread and
+ * import identifiers, so a layer shared across the block would leak state between them.
+ */
+function withMemoryDatabase<A, E>(
+  effect: Effect.Effect<A, E, HermesSessionBindingRepository | SqlClient.SqlClient>,
+) {
+  return effect.pipe(Effect.provide(testLayer(NodeSqliteClient.layerMemory())), Effect.scoped);
+}
 
 function createBinding(
   repository: HermesSessionBindingRepository["Service"],
@@ -54,10 +74,10 @@ function createBinding(
   });
 }
 
-memory("HermesSessionBindingRepository", (it) => {
+describe("HermesSessionBindingRepository", () => {
   it.effect("keeps session imports idempotent and enforces one Main per profile", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
       const repository = yield* HermesSessionBindingRepository;
 
       const first = yield* repository.prepareSessionImport({
@@ -130,12 +150,34 @@ memory("HermesSessionBindingRepository", (it) => {
       });
       assert.strictEqual(competingMain.importId, main.importId);
       assert.strictEqual(competingMain.threadId, "thread:main:1");
-    }),
+
+      // Bulk scoped read backing discovery: session-kind rows only, and never
+      // rows belonging to another provider instance, profile, or project.
+      yield* repository.prepareSessionImport({
+        importId: "import:session:other-profile",
+        providerInstanceId: "hermes-local",
+        profileKey: "profile:other",
+        projectId: "project:1",
+        importKind: "session",
+        storedSessionKey: "stored:other",
+        threadId: "thread:import:other-profile",
+        now: T0,
+      });
+      const scoped = yield* repository.listSessionImports({
+        providerInstanceId: "hermes-local",
+        profileKey: "profile:default",
+        projectId: "project:1",
+      });
+      assert.deepEqual(
+        scoped.map((row) => row.storedSessionKey),
+        ["stored:1"],
+      );
+    }).pipe(withMemoryDatabase),
   );
 
   it.effect("clears every local Hermes binding and import so sessions can be imported again", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
       const repository = yield* HermesSessionBindingRepository;
 
       yield* repository.prepareSessionImport({
@@ -168,19 +210,23 @@ memory("HermesSessionBindingRepository", (it) => {
         threadId: "thread:other-provider",
         now: T0,
       });
-      yield* createBinding(repository, {
-        bindingId: "binding:reset",
-        profileKey: "profile:reset",
-        storedSessionKey: "stored:reset",
-        threadId: "thread:reset",
-      });
-      yield* createBinding(repository, {
-        bindingId: "binding:other-project",
-        profileKey: "profile:reset",
-        projectId: "project:other",
-        storedSessionKey: "stored:other",
-        threadId: "thread:other",
-      });
+      assert.isTrue(
+        yield* createBinding(repository, {
+          bindingId: "binding:reset",
+          profileKey: "profile:reset",
+          storedSessionKey: "stored:reset",
+          threadId: "thread:reset",
+        }),
+      );
+      assert.isTrue(
+        yield* createBinding(repository, {
+          bindingId: "binding:other-project",
+          profileKey: "profile:reset",
+          projectId: "project:other",
+          storedSessionKey: "stored:other",
+          threadId: "thread:other",
+        }),
+      );
 
       const scope = {
         providerInstanceId: "hermes-local",
@@ -222,14 +268,14 @@ memory("HermesSessionBindingRepository", (it) => {
         ),
       );
       assert.deepEqual(yield* repository.listHistoryThreadIds(scope), []);
-    }),
+    }).pipe(withMemoryDatabase),
   );
 
   it.effect("rejects a scoped reset while a mutation is unsettled and preserves its records", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
       const repository = yield* HermesSessionBindingRepository;
-      yield* createBinding(repository);
+      assert.isTrue(yield* createBinding(repository));
       const lease = yield* repository.acquireOwnerLease({
         bindingId: "hermes-binding:1",
         ownerKey: "reset-test-owner",
@@ -278,14 +324,14 @@ memory("HermesSessionBindingRepository", (it) => {
         profileKey: "profile:default",
         projectId: "project:1",
       });
-    }),
+    }).pipe(withMemoryDatabase),
   );
 
   it.effect(
     "enforces both durable identity uniqueness domains and stores negotiation metadata",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 47 });
+        yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
         const repository = yield* HermesSessionBindingRepository;
 
         assert.isTrue(yield* createBinding(repository));
@@ -323,14 +369,14 @@ memory("HermesSessionBindingRepository", (it) => {
         if (Option.isSome(byIdentity)) {
           assert.strictEqual(byIdentity.value.bindingId, "hermes-binding:1");
         }
-      }),
+      }).pipe(withMemoryDatabase),
   );
 
   it.effect("uses generation and expiry CAS to fence lease-owned metadata writes", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
       const repository = yield* HermesSessionBindingRepository;
-      yield* createBinding(repository);
+      assert.isTrue(yield* createBinding(repository));
 
       const first = yield* repository.acquireOwnerLease({
         bindingId: "hermes-binding:1",
@@ -405,13 +451,13 @@ memory("HermesSessionBindingRepository", (it) => {
           fingerprint: "stale-fingerprint",
         }),
       );
-    }),
+    }).pipe(withMemoryDatabase),
   );
 });
 
 it.effect("records the inherited history boundary once and preserves it afterwards", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 50 });
+    yield* runMigrations({ toMigrationInclusive: MIGRATIONS_WITH_INHERITED_BOUNDARY });
     const repository = yield* HermesSessionBindingRepository;
 
     const prepared = yield* repository.prepareSessionImport({
@@ -461,9 +507,9 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
   const privatePromptDigest = NodeCrypto.createHash("sha256").update(privatePrompt).digest("hex");
 
   const firstRuntime = Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 47 });
+    yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
     const repository = yield* HermesSessionBindingRepository;
-    yield* createBinding(repository);
+    assert.isTrue(yield* createBinding(repository));
     const lease = yield* repository.acquireOwnerLease({
       bindingId: "hermes-binding:1",
       ownerKey: "owner:first-runtime",
@@ -528,7 +574,7 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
   );
 
   const secondRuntime = Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 47 });
+    yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
     const repository = yield* HermesSessionBindingRepository;
     const unsettled = yield* repository.listUnsettledMutationIntents("hermes-binding:1");
     assert.deepStrictEqual(
@@ -610,8 +656,12 @@ it.effect("persists ambiguous mutation recovery across a file-backed SQLite rest
   return Effect.gen(function* () {
     yield* firstRuntime;
     yield* secondRuntime;
-    const databaseBytes = NodeFS.readFileSync(databasePath);
-    assert.notInclude(databaseBytes.toString("utf8"), privatePrompt);
+    // WAL and shared-memory sidecars can retain pages the main file no longer shows, so the
+    // prompt must be absent from every artefact SQLite produced in the directory.
+    for (const entry of NodeFS.readdirSync(directory)) {
+      const bytes = NodeFS.readFileSync(NodePath.join(directory, entry));
+      assert.notInclude(bytes.toString("utf8"), privatePrompt, `${entry} leaked the prompt`);
+    }
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {
@@ -630,7 +680,7 @@ it.effect(
     const databasePath = NodePath.join(directory, "state.sqlite");
 
     const firstRuntime = Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
       const repository = yield* HermesSessionBindingRepository;
       const prepared = yield* repository.prepareSessionCreateIntent({
         operationId: "operation:create-1",
@@ -655,7 +705,7 @@ it.effect(
     );
 
     const secondRuntime = Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
       const repository = yield* HermesSessionBindingRepository;
       const recovered = yield* repository.getMutationIntent("operation:create-1");
       assert.isTrue(Option.isSome(recovered));

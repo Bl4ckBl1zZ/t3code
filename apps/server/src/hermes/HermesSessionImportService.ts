@@ -279,15 +279,21 @@ export const make = Effect.gen(function* () {
     );
     yield* assertImportCompatibility(snapshot);
     const nowMillis = DateTime.toEpochMillis(yield* DateTime.now);
-    const sessions = yield* Effect.forEach(
-      snapshot.sessions.filter((session) => isHermesImportTransportSource(session.source)),
-      Effect.fnUntraced(function* (session) {
-        const imported = yield* repository.getSessionImportByStoredIdentity({
-          providerInstanceId: String(input.providerInstanceId),
-          profileKey: snapshot.profileKey,
-          projectId: String(backingProject.id),
-          storedSessionKey: session.id,
-        });
+    // One scoped read instead of a per-session lookup: discovery lists up to
+    // MAX_DISCOVERY_LIMIT sessions, so the per-session query was an N+1.
+    const importsByStoredKey = new Map(
+      (yield* repository.listSessionImports({
+        providerInstanceId: String(input.providerInstanceId),
+        profileKey: snapshot.profileKey,
+        projectId: String(backingProject.id),
+      })).flatMap((row) =>
+        row.storedSessionKey === null ? [] : [[row.storedSessionKey, row] as const],
+      ),
+    );
+    const sessions = snapshot.sessions
+      .filter((session) => isHermesImportTransportSource(session.source))
+      .map((session) => {
+        const imported = importsByStoredKey.get(session.id);
         return {
           storedSessionId: session.id,
           title: session.title,
@@ -296,11 +302,9 @@ export const make = Effect.gen(function* () {
           settlement: classifyHermesImportedSession(session.started_at, nowMillis),
           messageCount: session.message_count,
           source: session.source,
-          importedThreadId: Option.isSome(imported) ? ThreadId.make(imported.value.threadId) : null,
+          importedThreadId: imported === undefined ? null : ThreadId.make(imported.threadId),
         } satisfies HermesDiscoveredSession;
-      }),
-      { concurrency: 16 },
-    );
+      });
     const main = yield* repository.getMainSessionImport({
       providerInstanceId: String(input.providerInstanceId),
       profileKey: snapshot.profileKey,
@@ -426,10 +430,17 @@ export const make = Effect.gen(function* () {
         ? transportSessions.filter((session) => selectedSessionIds.includes(session.id))
         : transportSessions;
     if (selectedSessionIds !== null && selected.length !== new Set(selectedSessionIds).size) {
+      // Distinguish "the profile never returned this id" from "the profile
+      // returned it but our transport/age filters excluded it" so operators are
+      // not told a session is missing when it is merely ineligible.
+      const returnedIds = new Set(snapshot.sessions.map((session) => session.id));
+      const missing = [...new Set(selectedSessionIds)].filter((id) => !returnedIds.has(id));
       return yield* new HermesSessionsError({
         code: "import_failed",
         message:
-          "One or more selected Hermes sessions were not returned by the configured profile.",
+          missing.length > 0
+            ? "One or more selected Hermes sessions were not returned by the configured profile."
+            : "One or more selected Hermes sessions are not importable transport sessions within the requested activity window.",
       });
     }
 
@@ -453,8 +464,10 @@ export const make = Effect.gen(function* () {
         const wasCompleted = row.state === "completed";
         // session.list has no last_active; started_at is the only upstream
         // timestamp and becomes the imported thread's historical time.
+        // Non-positive epochs are missing/garbage upstream values; leaving them
+        // undefined keeps createdAt/settledAt on wall-clock time instead of 1970.
         const startedAt =
-          session.started_at !== 0 ? DateTime.makeUnsafe(session.started_at * 1_000) : undefined;
+          session.started_at > 0 ? DateTime.makeUnsafe(session.started_at * 1_000) : undefined;
         yield* createThreadForImport({
           row,
           projectId: backingProject.id,
@@ -565,10 +578,13 @@ export const make = Effect.gen(function* () {
     const snapshot = yield* threads.getShellSnapshot();
     const historyThreadIds = new Set(yield* repository.listHistoryThreadIds(scope));
     const targets = [...snapshot.threads, ...snapshot.archivedThreads].filter(
+      // listHistoryThreadIds is already scoped to this provider instance,
+      // profile, and project, so the thread's *current* providerInstanceId must
+      // not be required to match: a thread whose provider changed via
+      // provider.switch still belongs to this scope's history and would
+      // otherwise survive as an orphan once clearHistoryRecords wipes its ledger.
       (thread) =>
-        historyThreadIds.has(String(thread.id)) &&
-        String(thread.projectId) === scope.projectId &&
-        String(thread.providerInstanceId) === scope.providerInstanceId,
+        historyThreadIds.has(String(thread.id)) && String(thread.projectId) === scope.projectId,
     );
     yield* Effect.forEach(
       targets,
