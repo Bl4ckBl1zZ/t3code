@@ -25,7 +25,7 @@ const decodeNotification = Schema.decodeUnknownEffect(HermesInAppNotification);
 const encodeProvenance = Schema.encodeEffect(HermesProactiveEventProvenance);
 const MissingCapabilitiesJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const ProvenanceJson = Schema.fromJsonString(HermesProactiveEventProvenance);
-const decodeMissingCapabilitiesJson = Schema.decodeUnknownSync(MissingCapabilitiesJson);
+const decodeMissingCapabilitiesJson = Schema.decodeUnknownEffect(MissingCapabilitiesJson);
 const encodeMissingCapabilitiesJson = Schema.encodeSync(MissingCapabilitiesJson);
 const encodeProvenanceJson = Schema.encodeSync(ProvenanceJson);
 
@@ -251,22 +251,33 @@ export function classifyHermesProactiveCapability(compatibility: HermesGatewayCo
       missingCapabilities,
     };
   }
+  if (missingCapabilities.length > 0) {
+    return {
+      state: "degraded",
+      diagnosticCode: "missing_capability_inventory",
+      missingCapabilities,
+    };
+  }
   return { state: "ready", diagnosticCode: "ready", missingCapabilities: [] };
 }
 
 function sourceFromRow(row: SourceRow) {
-  return decodeSource({
-    sourceId: row.source_id,
-    providerInstanceId: row.provider_instance_id,
-    profileKey: row.profile_key,
-    state: row.capability_state,
-    diagnosticCode: row.diagnostic_code,
-    missingCapabilities: decodeMissingCapabilitiesJson(row.missing_capabilities_json),
-    checkpointCursor: row.checkpoint_cursor,
-    checkpointSequence: row.checkpoint_sequence,
-    lastCheckedAt: row.last_checked_at,
-    updatedAt: row.updated_at,
-  });
+  return Effect.flatMap(
+    decodeMissingCapabilitiesJson(row.missing_capabilities_json),
+    (missingCapabilities) =>
+      decodeSource({
+        sourceId: row.source_id,
+        providerInstanceId: row.provider_instance_id,
+        profileKey: row.profile_key,
+        state: row.capability_state,
+        diagnosticCode: row.diagnostic_code,
+        missingCapabilities,
+        checkpointCursor: row.checkpoint_cursor,
+        checkpointSequence: row.checkpoint_sequence,
+        lastCheckedAt: row.last_checked_at,
+        updatedAt: row.updated_at,
+      }),
+  );
 }
 
 function outboxFromRow(row: OutboxRow) {
@@ -587,23 +598,39 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
         sql
           .withTransaction(
             Effect.gen(function* () {
+              const fenced = yield* sql<{ event_id: string }>`
+              UPDATE hermes_notification_outbox
+              SET state = 'delivered',
+                  lease_owner = NULL,
+                  lease_expires_at = NULL,
+                  updated_at = ${input.now},
+                  delivered_at = ${input.now}
+              WHERE outbox_id = ${input.outboxId}
+                AND state = 'processing'
+                AND lease_owner = ${input.workerId}
+                AND lease_expires_at > ${input.now}
+              RETURNING event_id
+            `;
+              if (fenced[0] === undefined) return false;
               const events = yield* sql<EventRow>`
               SELECT
-                event.event_id,
-                event.title,
-                event.body,
-                event.project_id,
-                event.thread_id,
-                event.occurred_at
-              FROM hermes_notification_outbox AS outbox
-              JOIN hermes_proactive_events AS event ON event.event_id = outbox.event_id
-              WHERE outbox.outbox_id = ${input.outboxId}
-                AND outbox.state = 'processing'
-                AND outbox.lease_owner = ${input.workerId}
+                event_id,
+                title,
+                body,
+                project_id,
+                thread_id,
+                occurred_at
+              FROM hermes_proactive_events
+              WHERE event_id = ${fenced[0].event_id}
               LIMIT 1
             `;
               const event = events[0];
-              if (event === undefined) return false;
+              if (event === undefined) {
+                return yield* repositoryError(
+                  "deliverInApp",
+                  "Outbox entry references a missing proactive event.",
+                );
+              }
               const workItemId = stableId("hermes-work", event.event_id);
               yield* sql`
               INSERT INTO hermes_proactive_work_items (
@@ -659,20 +686,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
               )
               ON CONFLICT(event_id) DO NOTHING
             `;
-              const delivered = yield* sql<{ outbox_id: string }>`
-              UPDATE hermes_notification_outbox
-              SET state = 'delivered',
-                  lease_owner = NULL,
-                  lease_expires_at = NULL,
-                  updated_at = ${input.now},
-                  delivered_at = ${input.now}
-              WHERE outbox_id = ${input.outboxId}
-                AND state = 'processing'
-                AND lease_owner = ${input.workerId}
-                AND lease_expires_at > ${input.now}
-              RETURNING outbox_id
-            `;
-              return delivered.length === 1;
+              return true;
             }),
           )
           .pipe(

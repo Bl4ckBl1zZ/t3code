@@ -433,6 +433,7 @@ export class HermesGatewayClient {
   private readonly sessionSequences = new Map<string, number>();
   private readonly pending = new Map<string, PendingRequest>();
   private static readonly MAX_CONFIRMED_MUTATIONS = 1024;
+  private static readonly MAX_SESSION_SEQUENCES = 1024;
 
   private readonly mutations = new Map<string, HermesGatewayMutationRecord>();
   private readonly confirmedMutationOrder: string[] = [];
@@ -911,7 +912,9 @@ export class HermesGatewayClient {
         key: "fast",
         ...(sessionId === undefined ? {} : { session_id: sessionId }),
       },
-      { ...options, requiredCapability: "models.inventory" },
+      // config.get carries its own capability; gating on models.inventory would
+      // make an unsupported fast read degrade unrelated model-option access.
+      { ...options, requiredCapability: "reasoning.effective_state" },
     );
     return decodeResult(HermesGatewayFastConfigResult, result, "config.get");
   }
@@ -1291,7 +1294,15 @@ export class HermesGatewayClient {
     const sessionId = frame.params.session_id || undefined;
     const sessionKey = sessionId ?? "";
     const sessionSequence = (this.sessionSequences.get(sessionKey) ?? 0) + 1;
+    // Re-inserting keeps the map in least-recently-used order so the bounded
+    // window below only evicts sessions that stopped emitting events.
+    this.sessionSequences.delete(sessionKey);
     this.sessionSequences.set(sessionKey, sessionSequence);
+    while (this.sessionSequences.size > HermesGatewayClient.MAX_SESSION_SEQUENCES) {
+      const oldest = this.sessionSequences.keys().next();
+      if (oldest.done === true) break;
+      this.sessionSequences.delete(oldest.value);
+    }
     const ordered: HermesGatewayOrderedEvent = {
       transportSequence,
       sessionSequence,
@@ -1470,12 +1481,15 @@ export class HermesGatewayClient {
         pending.sent = false;
         continue;
       }
+      // Only mutations that actually reached the gateway are indeterminate;
+      // unsent ones are a plain connection failure.
+      const markIndeterminate = pending.operation === "mutation" && pending.sent;
       this.rejectPending(
         pending,
-        pending.operationId
+        markIndeterminate && pending.operationId
           ? new HermesGatewayMutationIndeterminateError(pending.operationId, pending.method)
           : new HermesGatewayConnectionError("Hermes gateway disconnected."),
-        pending.operation === "mutation" && pending.sent,
+        markIndeterminate,
       );
     }
 

@@ -6,6 +6,9 @@ import * as NodePath from "node:path";
 import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+import { ChatAttachment } from "@t3tools/contracts";
 
 import {
   hermesHistoryMediaRoots,
@@ -107,10 +110,29 @@ describe("Hermes imported history normalization", () => {
     ).toEqual({
       text: "",
       media: [
-        { kind: "image", path: "/tmp/real.png" },
         { kind: "file", path: "/tmp/no-extension" },
+        { kind: "image", path: "/tmp/real.png" },
       ],
     });
+  });
+
+  it("returns media from both MEDIA passes in source order", () => {
+    expect(
+      parseHermesHistoryText({
+        role: "assistant",
+        text: [
+          "MEDIA:/tmp/alpha-no-extension",
+          "MEDIA:/tmp/beta.png",
+          "MEDIA:/tmp/gamma-no-extension",
+          "MEDIA:/tmp/delta.mp4",
+        ].join("\n"),
+      }).media,
+    ).toEqual([
+      { kind: "file", path: "/tmp/alpha-no-extension" },
+      { kind: "image", path: "/tmp/beta.png" },
+      { kind: "file", path: "/tmp/gamma-no-extension" },
+      { kind: "video", path: "/tmp/delta.mp4" },
+    ]);
   });
 
   it("honors quoted MEDIA paths and preserves examples in protected prose", () => {
@@ -300,6 +322,23 @@ describe("Hermes imported history normalization", () => {
           mimeType: "text/markdown",
           name: "notes.md",
         });
+        // ChatAttachment's generic "file" branch rejects image/pdf/video MIME
+        // types, so extension-derived media must pick the dedicated type.
+        const svg = NodePath.join(output, "diagram.svg");
+        NodeFS.writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+        const svgAttachment = yield* persist(svg, "svg");
+        expect(svgAttachment).toMatchObject({
+          type: "image",
+          mimeType: "image/svg+xml",
+          name: "diagram.svg",
+        });
+        for (const attachment of [
+          yield* persist(pdf, "pdf"),
+          yield* persist(markdown, "markdown"),
+          svgAttachment,
+        ]) {
+          expect(yield* Schema.decodeUnknownEffect(ChatAttachment)(attachment)).toEqual(attachment);
+        }
       }).pipe(
         Effect.ensuring(Effect.sync(() => NodeFS.rmSync(temp, { recursive: true, force: true }))),
       );

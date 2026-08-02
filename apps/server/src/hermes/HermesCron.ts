@@ -231,7 +231,11 @@ function projectProvider(input: {
       `${missingIdentity} cron job(s) have no upstream id or name and cannot be safely mutated.`,
     );
   }
-  if (!jobs.some((job) => job.executions.some((run) => run.provenance.upstreamCursor !== null))) {
+  const observedExecutions = jobs.some((job) => job.executions.length > 0);
+  if (
+    observedExecutions &&
+    !jobs.some((job) => job.executions.some((run) => run.provenance.upstreamCursor !== null))
+  ) {
     diagnostics.push("Hermes does not expose a durable global cron execution cursor.");
   }
   if (input.compatibility.status === "legacy") {
@@ -347,6 +351,21 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
     clients.set(config.providerInstanceId, { connectionKey, client });
     return client;
   };
+  // Providers that leave the ready directory (disabled, unconfigured, or
+  // removed) must not keep a live gateway connection around.
+  const pruneClients = (readyIds: ReadonlySet<string>): void => {
+    for (const [providerInstanceId, entry] of clients) {
+      if (readyIds.has(providerInstanceId)) continue;
+      entry.client.close();
+      clients.delete(providerInstanceId);
+    }
+  };
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      for (const entry of clients.values()) entry.client.close();
+      clients.clear();
+    }),
+  );
 
   const configuredProviders = Effect.fn("HermesCron.configuredProviders")(function* () {
     const settings = yield* settingsService.getSettings.pipe(
@@ -359,6 +378,7 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
       ),
     );
     const directory = resolveHermesProviderConnections(settings);
+    pruneClients(new Set(directory.ready.map((provider) => provider.providerInstanceId)));
     return {
       ready: directory.ready,
       unavailable: directory.unavailable.map((provider) =>
@@ -464,6 +484,14 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
         const result = await client.manageCron(mutationParams(input), {
           operationId: input.operationId,
         });
+        if (!result.success) {
+          throw new HermesCronError({
+            code: "gateway_error",
+            providerInstanceId: input.providerInstanceId,
+            operation: input.operation,
+            message: `Hermes gateway rejected cron ${input.operation}.`,
+          });
+        }
         const inventory = await client.listCronJobs().catch(() => null);
         return {
           provider: inventory

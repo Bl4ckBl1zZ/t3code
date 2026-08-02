@@ -103,6 +103,9 @@ async function defaultEndpointReachable(endpoint: string): Promise<boolean> {
     const socket = NodeNet.createConnection(target);
     const finish = (reachable: boolean) => {
       socket.removeAllListeners();
+      // A late error after destroy() would otherwise surface as an uncaught
+      // exception because every listener was just removed.
+      socket.on("error", () => undefined);
       socket.destroy();
       resolve(reachable);
     };

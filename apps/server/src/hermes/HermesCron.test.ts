@@ -218,6 +218,32 @@ describe("HermesCron mutate", () => {
     }),
   );
 
+  it.effect("fails the mutation when the gateway reports an unsuccessful result", () =>
+    Effect.gen(function* () {
+      const cron = yield* makeHermesCron({
+        clientFactory: () => ({
+          compatibility,
+          connect: () => Promise.resolve(compatibility),
+          hasCapability: () => true,
+          listCronJobs: () => Promise.resolve({ success: true, jobs: [] }),
+          manageCron: () =>
+            Promise.resolve({ success: false } satisfies HermesGatewayCronMutationResult),
+          close: () => {},
+        }),
+      });
+      const failure = yield* cron
+        .mutate({
+          providerInstanceId: "hermes_main",
+          operation: "pause",
+          operationId: "op-unsuccessful",
+          jobIdentity: "job-1",
+        })
+        .pipe(Effect.flip);
+      expect(failure.code).toBe("gateway_error");
+      expect(failure.message).toBe("Hermes gateway rejected cron pause.");
+    }).pipe(Effect.provide(settingsLayer)),
+  );
+
   it.effect("projects a throwing client factory as a per-provider error in list", () =>
     Effect.gen(function* () {
       const cron = yield* makeHermesCron({

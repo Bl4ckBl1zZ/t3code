@@ -9,6 +9,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
 import {
@@ -113,11 +114,10 @@ const RESERVED_TRANSPORT_LABELS = new Set([
 ]);
 
 function expandHomePrefix(path: string): string {
-  return path === "~"
-    ? NodeOS.homedir()
-    : path.startsWith(`~${NodePath.sep}`)
-      ? NodePath.join(NodeOS.homedir(), path.slice(2))
-      : path;
+  if (path === "~") return NodeOS.homedir();
+  return path.startsWith("~/") || path.startsWith(`~${NodePath.sep}`)
+    ? NodePath.join(NodeOS.homedir(), path.slice(2))
+    : path;
 }
 
 function mediaKind(label: string): HermesHistoryMediaKind {
@@ -192,7 +192,7 @@ function extractAssistantMedia(text: string): ParsedHermesHistoryText {
       media: [],
     };
   }
-  const media: HermesHistoryMediaReference[] = [];
+  const found: Array<{ readonly start: number; readonly media: HermesHistoryMediaReference }> = [];
   const removalSpans: Array<readonly [number, number]> = [];
   const protectedSpans = protectedMediaSpans(text);
   for (const match of text.matchAll(HERMES_MEDIA_TAG)) {
@@ -200,7 +200,7 @@ function extractAssistantMedia(text: string): ParsedHermesHistoryText {
     const start = match.index;
     const end = start + match[0].length;
     if (!path || isProtectedSpan(start, end, protectedSpans)) continue;
-    media.push({ kind: mediaKindForPath(path), path });
+    found.push({ start, media: { kind: mediaKindForPath(path), path } });
     removalSpans.push([start, end]);
   }
   // Upstream also accepts extension-less and unknown-extension files after
@@ -218,9 +218,14 @@ function extractAssistantMedia(text: string): ParsedHermesHistoryText {
     ) {
       continue;
     }
-    media.push({ kind: mediaKindForPath(path), path });
+    found.push({ start, media: { kind: mediaKindForPath(path), path } });
     removalSpans.push([start, end]);
   }
+  // The two passes scan the text independently, so the combined list must be
+  // re-sorted by source offset to keep attachment order matching the prose.
+  const media = found
+    .toSorted((left, right) => left.start - right.start)
+    .map((entry) => entry.media);
 
   let visible = text;
   for (const [start, end] of removalSpans.toSorted((left, right) => right[0] - left[0])) {
@@ -394,12 +399,23 @@ const GENERIC_FILE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".zip": "application/zip",
 };
 
+function chatAttachmentTypeForMime(mimeType: string): ChatAttachment["type"] {
+  if (/^image\//iu.test(mimeType)) return "image";
+  if (/^video\//iu.test(mimeType)) return "video";
+  if (/^application\/pdf$/iu.test(mimeType)) return "pdf";
+  return "file";
+}
+
 function supportedGenericFile(path: string): {
   readonly type: ChatAttachment["type"];
   readonly mimeType: string;
 } | null {
   const mimeType = GENERIC_FILE_MIME_BY_EXTENSION[NodePath.extname(path).toLowerCase()];
-  return mimeType === undefined ? null : { type: "file", mimeType };
+  if (mimeType === undefined) return null;
+  // ChatAttachment's generic "file" branch rejects image/video/pdf MIME types;
+  // they must be persisted under their dedicated attachment types (e.g. `.svg`
+  // maps to `image/svg+xml`), otherwise the row fails contract validation.
+  return { type: chatAttachmentTypeForMime(mimeType), mimeType };
 }
 
 function safeAttachmentName(path: string, mimeType: string): string {
@@ -460,6 +476,10 @@ export function hermesHistoryMediaRoots(input: {
   }
   return [...new Set(roots)];
 }
+
+class PersistHermesHistoryMediaFailed extends Data.TaggedError(
+  "PersistHermesHistoryMediaFailed",
+)<{ readonly sourcePath: string; readonly cause: unknown }> {}
 
 export const persistHermesHistoryMedia = Effect.fn("persistHermesHistoryMedia")(function* (input: {
   readonly sourcePath: string;
@@ -567,8 +587,13 @@ export const persistHermesHistoryMedia = Effect.fn("persistHermesHistoryMedia")(
       );
       return attachment;
     },
-    catch: () => null,
-  }).pipe(Effect.orElseSucceed(() => null));
+    catch: (cause) => new PersistHermesHistoryMediaFailed({ sourcePath: input.sourcePath, cause }),
+  }).pipe(
+    // Import must never fail on a single unreadable/pruned cache entry, but the
+    // reason is still worth recording instead of silently dropping it.
+    Effect.tapError((error) => Effect.logDebug("persistHermesHistoryMedia failed", error)),
+    Effect.orElseSucceed(() => null),
+  );
 });
 
 export const normalizeHermesHistoryMessage = Effect.fn("normalizeHermesHistoryMessage")(

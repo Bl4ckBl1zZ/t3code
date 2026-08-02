@@ -48,7 +48,7 @@ const readyCompatibility = {
 
 function registerReady(
   repository: HermesProactiveEventRepository["Service"],
-  profileKey = "profile:default",
+  profileKey: string,
 ) {
   return repository.registerSource({
     providerInstanceId: "hermes-local",
@@ -250,7 +250,7 @@ memory("HermesProactiveEventRepository", (it) => {
       Effect.gen(function* () {
         yield* runMigrations({ toMigrationInclusive: 46 });
         const repository = yield* HermesProactiveEventRepository;
-        const source = yield* registerReady(repository);
+        const source = yield* registerReady(repository, "profile:lifecycle");
         yield* repository.ingestPage({
           sourceId: source.sourceId,
           expectedCursor: null,
@@ -359,6 +359,19 @@ memory("HermesProactiveEventRepository", (it) => {
           now: T2,
         }),
       );
+      const projectedAfterFencedDelivery = yield* repository.listWorkItems();
+      assert.isUndefined(
+        projectedAfterFencedDelivery.find((item) => item.eventId === claimed.value.eventId),
+        "a fenced-out worker must not project work items",
+      );
+      const notifiedAfterFencedDelivery = yield* repository.listInAppNotifications();
+      assert.isUndefined(
+        notifiedAfterFencedDelivery.find(
+          (notification) => notification.eventId === claimed.value.eventId,
+        ),
+        "a fenced-out worker must not project in-app notifications",
+      );
+
       assert.isFalse(
         yield* repository.retryNotification({
           outboxId: claimed.value.outboxId,
