@@ -2686,6 +2686,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const showStoppedIndicator = lifecycleStatus === "stopped" || lifecycleStatus === "declined";
   const showNeutralIndicator =
     lifecycleStatus === undefined && !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
+  // Completed tool calls render no glyph — this row is diffstat-first, so a
+  // checkmark on every finished call is noise. Screen readers still need the
+  // outcome, so the empty indicator slot carries the label instead.
+  const completedIndicatorLabel = lifecycleStatus === "completed" ? "Tool call completed" : undefined;
   const projected = workEntry.projectedItem?.item;
   const fileDiffStat =
     projected?.type === "file_change"
@@ -2768,7 +2772,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 />
               ) : null}
             </span>
-            <span className="flex size-4 shrink-0 items-center justify-center">
+            <span
+              className="flex size-4 shrink-0 items-center justify-center"
+              {...(completedIndicatorLabel === undefined
+                ? {}
+                : { "aria-label": completedIndicatorLabel })}
+            >
               {showFailedIndicator ? (
                 <Tooltip>
                   <TooltipTrigger

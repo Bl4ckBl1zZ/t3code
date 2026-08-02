@@ -1616,6 +1616,9 @@ export default function SidebarV2() {
         project.workspaceRoot === t3WorkDirectory,
     ) ?? null;
   const t3WorkProjectCreateRef = useRef<string | null>(null);
+  // Bumped by the failure toast's "Try again" action: clearing the ref alone
+  // would not re-run the effect, since none of its other inputs changed.
+  const [t3WorkCreateRetry, setT3WorkCreateRetry] = useState(0);
   useEffect(() => {
     if (
       workspace !== "work" ||
@@ -1634,6 +1637,10 @@ export default function SidebarV2() {
       environmentId: workTargetEnvironmentId,
       workspaceRoot: t3WorkDirectory,
       hermesProviderEntry,
+      onRetry: () => {
+        t3WorkProjectCreateRef.current = null;
+        setT3WorkCreateRetry((value) => value + 1);
+      },
     }).then((outcome) => {
       // An interrupted command may retry later; release the guard. Keep it
       // set on a real failure so effect re-runs for the same
@@ -1647,6 +1654,7 @@ export default function SidebarV2() {
     hermesBackingProject,
     hermesProviderEntry,
     t3WorkDirectory,
+    t3WorkCreateRetry,
     workTargetEnvironmentId,
     workspace,
   ]);

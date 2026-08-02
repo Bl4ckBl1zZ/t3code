@@ -29,7 +29,7 @@ describe("ProviderInstanceCard coming-soon presentation", () => {
 
     expect(markup).toContain("OpenClaw");
     expect(markup).toContain("Soon");
-    expect(markup).toContain("OpenClaw agent gateway support is coming soon.");
+    expect(markup).toContain("OpenClaw support is coming soon.");
     expect(markup).toContain('aria-disabled="true"');
     // Base UI mirrors each disabled control onto its hidden form input.
     expect(markup.match(/disabled=""/g)).toHaveLength(4);

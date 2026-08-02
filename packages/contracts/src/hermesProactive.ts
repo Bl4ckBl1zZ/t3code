@@ -3,12 +3,47 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt } from "./baseSchemas.ts";
 
 // Timestamps in this contract are ISO date-time strings; validate the value
-// while preserving the plain string output shape.
+// while preserving the plain string output shape. Date.parse alone is too
+// permissive — it accepts date-only values ("2025-01-01") and non-ISO forms
+// ("Jan 1 2025") — so require the full grammar and then confirm the calendar
+// date is real (rejecting e.g. 2025-02-30, which the pattern cannot catch).
+const ISO_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+
 const IsoDateTime = Schema.String.check(
-  Schema.makeFilter(
-    (value: string) =>
-      !Number.isNaN(Date.parse(value)) || "Expected an ISO 8601 date-time string.",
-  ),
+  Schema.makeFilter((value: string) => {
+    const match = ISO_DATE_TIME_PATTERN.exec(value);
+    if (match === null) return "Expected an ISO 8601 date-time string.";
+    const [, year, month, day, hour, minute, second] = match;
+    const monthValue = Number(month);
+    const dayValue = Number(day);
+    if (monthValue < 1 || monthValue > 12 || dayValue < 1 || dayValue > 31) {
+      return "Expected an ISO 8601 date-time string.";
+    }
+    if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 60) {
+      return "Expected an ISO 8601 date-time string.";
+    }
+    // Reject impossible calendar dates (e.g. 2025-02-30, 2025-04-31), which
+    // the pattern above cannot catch, using the month's real length.
+    const isLeapYear =
+      Number(year) % 4 === 0 && (Number(year) % 100 !== 0 || Number(year) % 400 === 0);
+    const daysInMonth = [
+      31,
+      isLeapYear ? 29 : 28,
+      31,
+      30,
+      31,
+      30,
+      31,
+      31,
+      30,
+      31,
+      30,
+      31,
+    ][monthValue - 1]!;
+    if (dayValue > daysInMonth) return "Expected an ISO 8601 date-time string.";
+    return true;
+  }),
 );
 
 export const HermesProactiveRequiredCapabilities = [

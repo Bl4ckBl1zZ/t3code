@@ -37,6 +37,12 @@ export function createT3WorkBackingProject(options: {
   readonly environmentId: EnvironmentId;
   readonly workspaceRoot: string;
   readonly hermesProviderEntry: ProviderInstanceEntry;
+  /**
+   * Invoked from the failure toast's "Try again" action. Callers pass a
+   * callback that clears their guard and re-runs preparation so a failed
+   * attempt stays recoverable without reloading the app.
+   */
+  readonly onRetry?: () => void;
 }): Promise<T3WorkBackingProjectOutcome> {
   const key = `${options.environmentId}:${options.workspaceRoot}`;
   const existing = inFlightCreates.get(key);
@@ -71,6 +77,9 @@ export function createT3WorkBackingProject(options: {
           error instanceof Error
             ? error.message
             : "The private T3 Work conversation directory could not be created.",
+        ...(options.onRetry === undefined
+          ? {}
+          : { actionProps: { children: "Try again", onClick: options.onRetry }, actionVariant: "outline" as const }),
       }),
     );
     return "failed";
