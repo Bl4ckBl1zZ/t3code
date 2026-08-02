@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   DEFAULT_VOICE_INPUT_SETTINGS,
   type OpenRouterIntegrationStatus,
+  type OpenRouterModelOption,
   type VoiceInputSettings,
   type VoiceInputSettingsPatch,
 } from "@t3tools/contracts/voice";
@@ -12,6 +13,7 @@ import { AppText as Text } from "../../components/AppText";
 import {
   getOpenRouterIntegration,
   getVoiceInputSettings,
+  listOpenRouterModels,
   patchVoiceInputSettings,
 } from "../voice/mobileVoiceApi";
 import { invalidateVoicePreflight } from "../voice/useMobileVoiceInput";
@@ -23,6 +25,7 @@ export function SettingsVoiceInputRouteScreen() {
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<OpenRouterIntegrationStatus | null>(null);
   const [settings, setSettings] = useState<VoiceInputSettings | null>(null);
+  const [audioModels, setAudioModels] = useState<ReadonlyArray<OpenRouterModelOption>>([]);
   const [dictionary, setDictionary] = useState("");
   const connected = status?.state === "connected";
 
@@ -32,6 +35,11 @@ export function SettingsVoiceInputRouteScreen() {
         setStatus(nextStatus);
         setSettings(nextSettings);
         setDictionary(nextSettings.dictionary.join("\n"));
+        if (nextStatus.state === "connected") {
+          void listOpenRouterModels("audio")
+            .then(setAudioModels)
+            .catch(() => setAudioModels([]));
+        }
       })
       .catch((cause) =>
         Alert.alert(
@@ -79,31 +87,48 @@ export function SettingsVoiceInputRouteScreen() {
             onValueChange={(enabled) => void update({ cleanup: { enabled } })}
           />
         </SettingsSection>
-        <SettingsSection title="Models and language" card>
+        <SettingsSection title="Model and language" card>
           <View className={!connected ? "gap-4 p-4 opacity-45" : "gap-4 p-4"}>
-            <Text className="text-sm text-foreground-muted">Transcription model</Text>
+            <Text className="text-sm text-foreground-muted">Voice model</Text>
+            {audioModels.length > 0 ? (
+              <View className="gap-1">
+                {audioModels.map((model) => {
+                  const selected = settings?.model === model.id;
+                  return (
+                    <Pressable
+                      key={model.id}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      disabled={!connected}
+                      className={
+                        selected
+                          ? "flex-row items-center justify-between rounded-xl bg-background px-3 py-2.5"
+                          : "flex-row items-center justify-between rounded-xl px-3 py-2.5"
+                      }
+                      onPress={() => void update({ model: model.id })}
+                    >
+                      <Text className="flex-1 pr-2 text-foreground" numberOfLines={1}>
+                        {model.name}
+                      </Text>
+                      {selected ? <Text className="text-foreground">✓</Text> : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+            <Text className="text-sm text-foreground-muted">Custom model ID</Text>
             <TextInput
-              accessibilityLabel="Voice transcription model"
+              accessibilityLabel="Voice model"
               editable={connected}
               className="h-11 rounded-xl bg-background px-3 text-foreground"
               autoCapitalize="none"
-              value={
-                settings?.transcriptionModel ?? DEFAULT_VOICE_INPUT_SETTINGS.transcriptionModel
-              }
-              onEndEditing={(event) =>
-                void update({ transcriptionModel: event.nativeEvent.text.trim() })
-              }
-            />
-            <Text className="text-sm text-foreground-muted">Cleanup model</Text>
-            <TextInput
-              accessibilityLabel="Transcript cleanup model"
-              editable={connected && settings?.cleanup.enabled !== false}
-              className="h-11 rounded-xl bg-background px-3 text-foreground"
-              autoCapitalize="none"
-              value={settings?.cleanup.model ?? DEFAULT_VOICE_INPUT_SETTINGS.cleanup.model}
-              onEndEditing={(event) =>
-                void update({ cleanup: { model: event.nativeEvent.text.trim() } })
-              }
+              placeholder="provider/model-id"
+              key={settings?.model ?? "default"}
+              defaultValue={settings?.model ?? DEFAULT_VOICE_INPUT_SETTINGS.model}
+              onEndEditing={(event) => {
+                const model = event.nativeEvent.text.trim();
+                if (model) void update({ model });
+              }}
             />
             <Text className="text-sm text-foreground-muted">Spoken language</Text>
             <TextInput
@@ -139,12 +164,9 @@ export function SettingsVoiceInputRouteScreen() {
           </View>
         </SettingsSection>
         {!connected ? (
-          <Pressable accessibilityRole="button">
-            <Text className="px-2 text-sm text-foreground-muted">
-              Connect OpenRouter to enable model-dependent controls. Saved preferences are
-              preserved.
-            </Text>
-          </Pressable>
+          <Text className="px-2 text-sm text-foreground-muted">
+            Connect OpenRouter to enable model-dependent controls. Saved preferences are preserved.
+          </Text>
         ) : null}
       </ScrollView>
     </View>

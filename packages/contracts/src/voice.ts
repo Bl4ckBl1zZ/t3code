@@ -49,11 +49,10 @@ export const VoiceInputDictionaryEntry = TrimmedNonEmptyString.check(
 );
 
 export const VoiceInputSettings = Schema.Struct({
-  transcriptionModel: TrimmedNonEmptyString,
+  model: TrimmedNonEmptyString,
   language: Schema.NullOr(TrimmedNonEmptyString),
   cleanup: Schema.Struct({
     enabled: Schema.Boolean,
-    model: TrimmedNonEmptyString,
   }),
   dictionary: Schema.Array(VoiceInputDictionaryEntry).check(
     Schema.isMaxLength(VOICE_INPUT_MAX_DICTIONARY_ENTRIES),
@@ -62,22 +61,20 @@ export const VoiceInputSettings = Schema.Struct({
 export type VoiceInputSettings = typeof VoiceInputSettings.Type;
 
 export const DEFAULT_VOICE_INPUT_SETTINGS: VoiceInputSettings = {
-  transcriptionModel: "openai/gpt-4o-mini-transcribe",
+  model: "google/gemini-2.5-flash",
   language: null,
   cleanup: {
     enabled: true,
-    model: "openai/gpt-4.1-mini",
   },
   dictionary: [],
 };
 
 export const VoiceInputSettingsPatch = Schema.Struct({
-  transcriptionModel: Schema.optionalKey(TrimmedNonEmptyString),
+  model: Schema.optionalKey(TrimmedNonEmptyString),
   language: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   cleanup: Schema.optionalKey(
     Schema.Struct({
       enabled: Schema.optionalKey(Schema.Boolean),
-      model: Schema.optionalKey(TrimmedNonEmptyString),
     }),
   ),
   dictionary: Schema.optionalKey(
@@ -88,7 +85,7 @@ export const VoiceInputSettingsPatch = Schema.Struct({
 });
 export type VoiceInputSettingsPatch = typeof VoiceInputSettingsPatch.Type;
 
-export const OpenRouterModelCapability = Schema.Literals(["transcription", "text"]);
+export const OpenRouterModelCapability = Schema.Literals(["audio"]);
 export type OpenRouterModelCapability = typeof OpenRouterModelCapability.Type;
 
 export const OpenRouterModelOption = Schema.Struct({
@@ -139,8 +136,7 @@ export const VoiceTranscriptionResponse = Schema.Struct({
   usage: Schema.optionalKey(
     Schema.Struct({
       audioSeconds: Schema.optionalKey(Schema.Number),
-      transcriptionCostUsd: Schema.optionalKey(Schema.Number),
-      cleanupCostUsd: Schema.optionalKey(Schema.Number),
+      costUsd: Schema.optionalKey(Schema.Number),
     }),
   ),
 });

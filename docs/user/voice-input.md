@@ -34,9 +34,9 @@ Editing the prompt dismisses these options.
 
 Under **Settings → Voice Input** you can:
 
-- Choose the transcription model.
+- Choose the voice model — a single audio-capable OpenRouter model handles both transcription and transcript cleanup. Only models that understand audio and text are listed, and you can enter a custom model ID.
 - Set a spoken language, or leave it on automatic detection.
-- Turn transcript cleanup on or off and choose the cleanup model.
+- Turn transcript cleanup on or off.
 - Maintain a dictionary of names and terms (one per line) that transcription and cleanup should spell correctly.
 
 ## Troubleshooting
