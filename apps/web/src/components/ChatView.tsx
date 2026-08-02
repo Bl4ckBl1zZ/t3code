@@ -289,6 +289,7 @@ import {
   dismissBranchMismatchForSession,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  deriveIsHermesConversation,
   isHermesClearChatCommand,
   isHermesFreshChatCommand,
   isWorkspacePreparationTurnItem,
@@ -2248,7 +2249,11 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind =
     modelPickerLockedProvider ?? unlockedSelectedProvider;
-  const isHermesConversation = selectedProvider === ProviderDriverKind.make("hermes");
+  const isHermesConversation = deriveIsHermesConversation({
+    runtimeProviderInstanceId: isServerThread ? (activeRuntime?.providerInstanceId ?? null) : null,
+    providers: providerStatuses,
+    selectedProvider,
+  });
   const phase = derivePhase(activeRuntime);
   const pendingRequests = useMemo(
     () =>
@@ -2386,6 +2391,18 @@ function ChatViewContent(props: ChatViewProps) {
     attachmentPreviewHandoffByMessageIdRef.current = {};
     setAttachmentPreviewHandoffByMessageId({});
   }, []);
+  // Drop every optimistic user bubble and release the blob preview URLs it
+  // owns. Used whenever the visible timeline is wiped (e.g. Hermes `/clear`),
+  // so cleared threads neither leak object URLs nor re-show stale messages.
+  const discardOptimisticUserMessages = useCallback(() => {
+    clearAttachmentPreviewHandoffs();
+    setOptimisticUserMessages((existing) => {
+      for (const message of existing) {
+        revokeUserMessagePreviewUrls(message);
+      }
+      return existing.length === 0 ? existing : [];
+    });
+  }, [clearAttachmentPreviewHandoffs]);
   useEffect(() => {
     return () => {
       clearAttachmentPreviewHandoffs();
@@ -5043,6 +5060,7 @@ function ChatViewContent(props: ChatViewProps) {
       return false;
     }
     if (!isServerThread) {
+      discardOptimisticUserMessages();
       scheduleComposerFocus();
       return true;
     }
@@ -5065,11 +5083,13 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return false;
     }
+    discardOptimisticUserMessages();
     scrollToEnd();
     scheduleComposerFocus();
     return true;
   }, [
     activeThread,
+    discardOptimisticUserMessages,
     environmentId,
     isHermesConversation,
     isServerThread,

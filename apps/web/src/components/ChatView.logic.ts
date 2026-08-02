@@ -4,7 +4,7 @@ import {
   ProjectId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
-  type ProviderDriverKind,
+  ProviderDriverKind,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -254,12 +254,33 @@ export function shouldExposeWorkspaceArtifacts(input: {
   return !input.isProjectlessConversation;
 }
 
+/**
+ * A started conversation is Hermes when the runtime actually driving it is a
+ * Hermes provider instance. Only drafts (no runtime yet) follow the composer's
+ * selected provider, so opening the handoff/model picker on a live Hermes
+ * thread cannot flip Hermes-only behaviour before the handoff runs.
+ */
+export function deriveIsHermesConversation(input: {
+  readonly runtimeProviderInstanceId: string | null | undefined;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly selectedProvider: ProviderDriverKind;
+}): boolean {
+  const runtimeEntry =
+    input.runtimeProviderInstanceId == null
+      ? undefined
+      : input.providers.find(
+          (candidate) => candidate.instanceId === input.runtimeProviderInstanceId,
+        );
+  const provider = runtimeEntry?.driver ?? input.selectedProvider;
+  return provider === ProviderDriverKind.make("hermes");
+}
+
 export function isHermesFreshChatCommand(input: {
   readonly text: string;
   readonly isHermesConversation: boolean;
 }): boolean {
   if (!input.isHermesConversation) return false;
-  return /^\/(?:new|reset)(?:\s+.*)?$/iu.test(input.text.trim());
+  return /^\/(?:new|reset)$/iu.test(input.text.trim());
 }
 
 export function isHermesClearChatCommand(input: {

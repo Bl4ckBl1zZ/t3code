@@ -8,6 +8,7 @@ import {
   RunId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
@@ -22,6 +23,7 @@ import {
   createLocalDispatchSnapshot,
   deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
+  deriveIsHermesConversation,
   deriveLockedProvider,
   dismissBranchMismatchForSession,
   getStartedThreadModelChangeBlockReason,
@@ -48,14 +50,17 @@ const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
 
 describe("Hermes native fresh-chat commands", () => {
-  it.each(["/new", "/reset Work"])("recognizes %s only for Hermes", (text) => {
+  it.each(["/new", "  /reset  ", "/RESET"])("recognizes %s only for Hermes", (text) => {
     expect(isHermesFreshChatCommand({ text, isHermesConversation: true })).toBe(true);
     expect(isHermesFreshChatCommand({ text, isHermesConversation: false })).toBe(false);
   });
 
-  it.each(["/newer", "/clear", "/retry"])("does not intercept %s", (text) => {
-    expect(isHermesFreshChatCommand({ text, isHermesConversation: true })).toBe(false);
-  });
+  it.each(["/newer", "/clear", "/retry", "/reset Work", "/new thread", "please /new"])(
+    "does not intercept %s",
+    (text) => {
+      expect(isHermesFreshChatCommand({ text, isHermesConversation: true })).toBe(false);
+    },
+  );
 
   it("recognizes exact /clear only for Hermes", () => {
     expect(isHermesClearChatCommand({ text: "  /clear  ", isHermesConversation: true })).toBe(true);
@@ -88,6 +93,50 @@ describe("working timeline visibility", () => {
         isSendBusy: false,
         isConnecting: false,
         isRevertingCheckpoint: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("deriveIsHermesConversation", () => {
+  const providers = [
+    {
+      instanceId: ProviderInstanceId.make("hermes_local"),
+      driver: ProviderDriverKind.make("hermes"),
+    },
+    { instanceId: ProviderInstanceId.make("codex"), driver: ProviderDriverKind.make("codex") },
+  ] as unknown as ReadonlyArray<ServerProvider>;
+
+  it("uses the running thread's provider instead of the composer selection", () => {
+    expect(
+      deriveIsHermesConversation({
+        runtimeProviderInstanceId: ProviderInstanceId.make("hermes_local"),
+        providers,
+        selectedProvider: ProviderDriverKind.make("codex"),
+      }),
+    ).toBe(true);
+    expect(
+      deriveIsHermesConversation({
+        runtimeProviderInstanceId: ProviderInstanceId.make("codex"),
+        providers,
+        selectedProvider: ProviderDriverKind.make("hermes"),
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to the selected provider for drafts and unknown runtimes", () => {
+    expect(
+      deriveIsHermesConversation({
+        runtimeProviderInstanceId: null,
+        providers,
+        selectedProvider: ProviderDriverKind.make("hermes"),
+      }),
+    ).toBe(true);
+    expect(
+      deriveIsHermesConversation({
+        runtimeProviderInstanceId: ProviderInstanceId.make("gone"),
+        providers,
+        selectedProvider: ProviderDriverKind.make("codex"),
       }),
     ).toBe(false);
   });

@@ -1,4 +1,5 @@
 import {
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProviderDriverKind,
@@ -7,8 +8,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   composerAttachmentAccept,
+  partitionComposerAttachments,
   validateComposerAttachment,
 } from "./composerAttachmentValidation";
+
+const HERMES = ProviderDriverKind.make("hermes");
 
 describe("validateComposerAttachment", () => {
   it("limits the native picker to images for providers with an image-only transport", () => {
@@ -82,5 +86,69 @@ describe("validateComposerAttachment", () => {
       accepted: false,
       message: expect.stringContaining(message),
     });
+  });
+
+  it.each([".", ".."] as const)("rejects the traversal segment '%s'", (name) => {
+    expect(
+      validateComposerAttachment({ name, size: 12, type: "text/plain" }, HERMES),
+    ).toMatchObject({
+      accepted: false,
+      message: expect.stringContaining("safe, plain file names"),
+    });
+  });
+
+  it("keeps ordinary dotted names", () => {
+    expect(
+      validateComposerAttachment({ name: ".env.local", size: 12, type: "text/plain" }, HERMES),
+    ).toMatchObject({ accepted: true, type: "file" });
+  });
+});
+
+describe("partitionComposerAttachments", () => {
+  it("collects every rejection reason instead of stopping at the first", () => {
+    const result = partitionComposerAttachments(
+      [
+        { name: "voice.mp3", size: 12, type: "audio/mpeg" },
+        { name: "../secret.txt", size: 12, type: "text/plain" },
+        { name: "shot.png", size: 12, type: "image/png" },
+      ],
+      HERMES,
+      0,
+    );
+    expect(result.accepted).toHaveLength(1);
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors[0]).toContain("sound input path");
+    expect(result.errors[1]).toContain("safe, plain file names");
+  });
+
+  it("reports every file skipped for capacity in one message", () => {
+    const result = partitionComposerAttachments(
+      [
+        { name: "a.png", size: 12, type: "image/png" },
+        { name: "b.png", size: 12, type: "image/png" },
+        { name: "voice.mp3", size: 12, type: "audio/mpeg" },
+      ],
+      HERMES,
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+    );
+    expect(result.accepted).toHaveLength(0);
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors[0]).toContain("sound input path");
+    expect(result.errors[1]).toContain("'a.png', 'b.png'");
+  });
+
+  it("fills only the remaining slots", () => {
+    const files = Array.from({ length: 3 }, (_unused, position) => ({
+      name: `shot-${position}.png`,
+      size: 12,
+      type: "image/png",
+    }));
+    const result = partitionComposerAttachments(
+      files,
+      HERMES,
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 2,
+    );
+    expect(result.accepted.map((entry) => entry.file.name)).toEqual(["shot-0.png", "shot-1.png"]);
+    expect(result.errors).toEqual([expect.stringContaining("'shot-2.png'")]);
   });
 });

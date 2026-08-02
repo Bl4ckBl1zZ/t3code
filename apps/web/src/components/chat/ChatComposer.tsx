@@ -231,6 +231,7 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 import {
   composerAttachmentAccept,
+  partitionComposerAttachments,
   validateComposerAttachment,
 } from "./composerAttachmentValidation";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -2551,39 +2552,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // through the compression pipeline; other accepted attachment kinds
     // (video, PDF, file) attach directly.
     const pendingCount = pendingImageCompressionsRef.current.get(threadId) ?? 0;
-    let reservedCount = composerImagesRef.current.length + pendingCount;
+    const reservedCount = composerImagesRef.current.length + pendingCount;
     const acceptedFiles: File[] = [];
     const directAttachments: ComposerAttachment[] = [];
-    let error: string | null = null;
-    for (const file of files) {
-      const validation = validateComposerAttachment(file, selectedProvider);
-      if (!validation.accepted) {
-        error = validation.message;
-        continue;
-      }
-      if (reservedCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
-        break;
-      }
-      if (validation.type === "image") {
-        acceptedFiles.push(file);
+    const partitioned = partitionComposerAttachments(files, selectedProvider, reservedCount);
+    for (const entry of partitioned.accepted) {
+      if (entry.type === "image") {
+        acceptedFiles.push(entry.file);
       } else {
         directAttachments.push({
-          type: validation.type,
+          type: entry.type,
           id: randomUUID(),
-          name: file.name || "attachment",
-          mimeType: validation.mimeType,
-          sizeBytes: file.size,
-          previewUrl: URL.createObjectURL(file),
-          file,
+          name: entry.file.name || "attachment",
+          mimeType: entry.mimeType,
+          sizeBytes: entry.file.size,
+          previewUrl: URL.createObjectURL(entry.file),
+          file: entry.file,
         });
       }
-      reservedCount += 1;
     }
     // Only failures are reported; passing `null` would clear thread errors
     // set by unrelated work (see the compression path below).
-    if (error !== null) {
-      setThreadError(threadId, error);
+    if (partitioned.errors.length > 0) {
+      setThreadError(threadId, partitioned.errors.join(" "));
     }
     if (directAttachments.length === 1 && directAttachments[0]) {
       addComposerImage(directAttachments[0]);
@@ -2652,6 +2643,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length === 0) return;
+    // Claim the paste only when something is actually attachable: otherwise
+    // the clipboard's text fallback (a file path, HTML, plain text) should
+    // still land in the composer.
+    if (!files.some((file) => validateComposerAttachment(file, selectedProvider).accepted)) return;
     event.preventDefault();
     void addComposerImages(files);
   };

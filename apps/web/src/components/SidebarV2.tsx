@@ -3181,18 +3181,20 @@ export default function SidebarV2() {
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <SidebarMenuButton
-                          size="icon"
-                          type="button"
-                          className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                          onClick={() => setHermesImportOpen(true)}
-                          disabled={hermesProviderEntry === null || hermesBackingProject === null}
-                          aria-label="Import Hermes conversations"
-                        />
+                        <span className="inline-flex">
+                          <SidebarMenuButton
+                            size="icon"
+                            type="button"
+                            className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                            onClick={() => setHermesImportOpen(true)}
+                            disabled={hermesProviderEntry === null || hermesBackingProject === null}
+                            aria-label="Import Hermes conversations"
+                          >
+                            <DownloadIcon />
+                          </SidebarMenuButton>
+                        </span>
                       }
-                    >
-                      <DownloadIcon />
-                    </TooltipTrigger>
+                    />
                     <TooltipPopup side="right">Import Hermes conversations</TooltipPopup>
                   </Tooltip>
                 </div>
@@ -3201,26 +3203,28 @@ export default function SidebarV2() {
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <SidebarMenuButton
-                        size="icon"
-                        type="button"
-                        className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={handleNewThreadClick}
-                        disabled={
-                          workspace === "work"
-                            ? hermesProviderEntry === null || hermesBackingProject === null
-                            : projects.length === 0
-                        }
-                        aria-label="New thread"
-                      />
+                      <span className="inline-flex">
+                        <SidebarMenuButton
+                          size="icon"
+                          type="button"
+                          className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          onClick={handleNewThreadClick}
+                          disabled={
+                            workspace === "work"
+                              ? hermesProviderEntry === null || hermesBackingProject === null
+                              : projects.length === 0
+                          }
+                          aria-label="New thread"
+                        >
+                          <SquarePenIcon />
+                          <span
+                            className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                            aria-hidden="true"
+                          />
+                        </SidebarMenuButton>
+                      </span>
                     }
-                  >
-                    <SquarePenIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
+                  />
                   <TooltipPopup side="right">
                     {newThreadShortcutLabel
                       ? `New thread (${newThreadShortcutLabel})`

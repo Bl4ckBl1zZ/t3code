@@ -21,4 +21,16 @@ describe("ExpandedImageDialog", () => {
     expect(markup).toContain('aria-label="Download comparison-sheet.jpg"');
     expect(markup).toContain('aria-label="Close image preview"');
   });
+
+  it("gives the backdrop an accessible name distinct from the close button", () => {
+    const markup = renderToStaticMarkup(
+      <ExpandedImageDialog
+        preview={{ images: [{ src: "/assets/hermes-render", name: "sheet.jpg" }], index: 0 }}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Dismiss image preview"');
+    expect(markup.match(/aria-label="Close image preview"/g)).toHaveLength(1);
+  });
 });
