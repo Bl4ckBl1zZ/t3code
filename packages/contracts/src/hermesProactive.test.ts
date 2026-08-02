@@ -72,4 +72,45 @@ describe("Hermes proactive contracts", () => {
     assert.strictEqual(entry.state, "retry");
     assert.strictEqual(entry.attemptCount, 2);
   });
+  it("validates ISO date-time timestamps beyond what Date.parse accepts", () => {
+    const decodeAt = (lastCheckedAt: string) =>
+      decodeHermesProactiveSourceStatus({
+        sourceId: "hermes-source:1",
+        providerInstanceId: "hermes-local",
+        profileKey: "default",
+        state: "ready",
+        diagnosticCode: "ready",
+        missingCapabilities: [],
+        checkpointCursor: null,
+        checkpointSequence: 0,
+        lastCheckedAt,
+        updatedAt: "2026-07-25T12:00:00.000Z",
+      });
+
+    // Valid forms round-trip unchanged as plain strings.
+    for (const valid of [
+      "2026-07-25T12:00:00.000Z",
+      "2026-07-25T12:00:00Z",
+      "2026-07-25T12:00:00+02:00",
+      "2024-02-29T00:00:00Z",
+    ]) {
+      assert.strictEqual(decodeAt(valid).lastCheckedAt, valid);
+    }
+
+    // Date.parse accepts all of these; the contract must not.
+    for (const invalid of [
+      "2026-07-25",
+      "Jul 25 2026",
+      "2026-02-30T00:00:00Z",
+      "2025-02-29T00:00:00Z",
+      "2026-13-01T00:00:00Z",
+      "2026-07-25T24:00:00Z",
+      "2026-07-25T12:60:00Z",
+      "2026-07-25T12:00:60Z",
+      "2026-07-25T12:00:00+99:99",
+      "2026-07-25T12:00:00",
+    ]) {
+      assert.throws(() => decodeAt(invalid));
+    }
+  });
 });

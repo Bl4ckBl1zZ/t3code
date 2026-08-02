@@ -2776,7 +2776,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               className="flex size-4 shrink-0 items-center justify-center"
               {...(completedIndicatorLabel === undefined
                 ? {}
-                : { "aria-label": completedIndicatorLabel })}
+                : // role is required for the label to be exposed: ARIA ignores
+                  // aria-label on a generic, role-less element.
+                  { role: "img", "aria-label": completedIndicatorLabel })}
             >
               {showFailedIndicator ? (
                 <Tooltip>

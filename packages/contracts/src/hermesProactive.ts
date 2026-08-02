@@ -7,8 +7,12 @@ import { NonNegativeInt } from "./baseSchemas.ts";
 // permissive — it accepts date-only values ("2025-01-01") and non-ISO forms
 // ("Jan 1 2025") — so require the full grammar and then confirm the calendar
 // date is real (rejecting e.g. 2025-02-30, which the pattern cannot catch).
+// Offset hours/minutes are bounded in the pattern itself so "+99:99" cannot
+// slip through. Seconds are bounded at 59: these are gateway event timestamps,
+// not an RFC 3339 leap-second ledger, so 60 is rejected outright rather than
+// pretending to know the leap-second table for the supplied date and offset.
 const ISO_DATE_TIME_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
 const IsoDateTime = Schema.String.check(
   Schema.makeFilter((value: string) => {
@@ -20,7 +24,7 @@ const IsoDateTime = Schema.String.check(
     if (monthValue < 1 || monthValue > 12 || dayValue < 1 || dayValue > 31) {
       return "Expected an ISO 8601 date-time string.";
     }
-    if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 60) {
+    if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) {
       return "Expected an ISO 8601 date-time string.";
     }
     // Reject impossible calendar dates (e.g. 2025-02-30, 2025-04-31), which
