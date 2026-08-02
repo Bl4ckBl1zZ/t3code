@@ -74,6 +74,7 @@ import {
 
 import { AppText as Text } from "../../components/AppText";
 import { CopyTextButton } from "../../components/CopyTextButton";
+import { HtmlEmbedView, isHtmlEmbedLanguage } from "../../components/HtmlEmbedView";
 import {
   parseReviewCommentMessageSegments,
   type ReviewInlineComment,
@@ -359,6 +360,10 @@ interface ReviewCommentColors {
   readonly text: ColorValue;
   readonly mutedText: ColorValue;
   readonly codeBackground: ColorValue;
+}
+
+function renderMarkdownHtmlEmbed({ html }: { readonly html: string }) {
+  return <HtmlEmbedView html={html} />;
 }
 
 const failedMarkdownFaviconHosts = new Set<string>();
@@ -778,21 +783,24 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
             soft_break: () => <NativeText>{"\n"}</NativeText>,
           }
         : {}),
-      code_block: ({ content = "", language }) => (
-        <MarkdownCodeBlock
-          backgroundColor={blockBackgroundColor}
-          borderColor={markdownHrColor}
-          content={content}
-          copyTintColor={copyTintColor}
-          fontSize={markdownFontSizes.codeBlockFontSize}
-          headerTextColor={blockTextColor}
-          highlightCode={highlightCode}
-          language={language}
-          lineHeight={markdownFontSizes.codeBlockLineHeight}
-          textColor={blockTextColor}
-          theme={themeMode}
-        />
-      ),
+      code_block: ({ content = "", language }) =>
+        isHtmlEmbedLanguage(language) ? (
+          <HtmlEmbedView html={content} />
+        ) : (
+          <MarkdownCodeBlock
+            backgroundColor={blockBackgroundColor}
+            borderColor={markdownHrColor}
+            content={content}
+            copyTintColor={copyTintColor}
+            fontSize={markdownFontSizes.codeBlockFontSize}
+            headerTextColor={blockTextColor}
+            highlightCode={highlightCode}
+            language={language}
+            lineHeight={markdownFontSizes.codeBlockLineHeight}
+            textColor={blockTextColor}
+            theme={themeMode}
+          />
+        ),
     });
 
     const userTheme: PartialMarkdownTheme = {
@@ -1124,6 +1132,7 @@ function renderFeedEntry(
               markdown={message.text}
               skills={props.skills}
               textStyle={styles.nativeTextStyle}
+              renderHtmlEmbed={renderMarkdownHtmlEmbed}
               onLinkPress={props.onMarkdownLinkPress}
             />
           ) : (

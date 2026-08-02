@@ -20,6 +20,7 @@ const EMPTY_SKILLS: ReadonlyArray<SelectableMarkdownSkill> = [];
 export type {
   MarkdownCodeHighlighter,
   MarkdownHighlightedToken,
+  MarkdownHtmlEmbedRenderer,
   NativeMarkdownTextStyle,
   SelectableMarkdownSkill,
   SelectableMarkdownTextProps,
@@ -34,6 +35,7 @@ export function SelectableMarkdownText({
   skills = EMPTY_SKILLS,
   textStyle,
   highlightCode,
+  renderHtmlEmbed,
   preserveSoftBreaks = false,
   onLinkPress,
   marginTop = 0,
@@ -71,6 +73,7 @@ export function SelectableMarkdownText({
               node={chunk.node}
               textStyle={textStyle}
               highlightCode={highlightCode}
+              renderHtmlEmbed={renderHtmlEmbed}
               onLinkPress={onLinkPress}
             />
           ) : (

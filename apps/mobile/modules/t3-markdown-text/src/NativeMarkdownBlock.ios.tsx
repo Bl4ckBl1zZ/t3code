@@ -13,8 +13,15 @@ import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText.ios
 import type {
   MarkdownCodeHighlighter,
   MarkdownHighlightedToken,
+  MarkdownHtmlEmbedRenderer,
   NativeMarkdownTextStyle,
 } from "./SelectableMarkdownText.types";
+
+const HTML_EMBED_FENCE_LANGUAGE = "t3-html";
+
+function isHtmlEmbedLanguage(language: string | undefined): boolean {
+  return language?.trim().toLowerCase() === HTML_EMBED_FENCE_LANGUAGE;
+}
 
 type HighlightedCode = ReadonlyArray<ReadonlyArray<MarkdownHighlightedToken>>;
 
@@ -475,6 +482,7 @@ function NativeList(props: {
   readonly node: MarkdownNode;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly highlightCode: MarkdownCodeHighlighter;
+  readonly renderHtmlEmbed?: MarkdownHtmlEmbedRenderer;
   readonly onLinkPress?: (href: string) => void;
   readonly depth: number;
 }) {
@@ -536,6 +544,7 @@ function NativeList(props: {
                   node={child}
                   textStyle={props.textStyle}
                   highlightCode={props.highlightCode}
+                  renderHtmlEmbed={props.renderHtmlEmbed}
                   onLinkPress={props.onLinkPress}
                   depth={props.depth + 1}
                   compact
@@ -553,6 +562,7 @@ export function NativeMarkdownBlock(props: {
   readonly node: MarkdownNode;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly highlightCode: MarkdownCodeHighlighter;
+  readonly renderHtmlEmbed?: MarkdownHtmlEmbedRenderer;
   readonly onLinkPress?: (href: string) => void;
   readonly depth?: number;
   readonly compact?: boolean;
@@ -568,6 +578,7 @@ export function NativeMarkdownBlock(props: {
               node={child}
               textStyle={props.textStyle}
               highlightCode={props.highlightCode}
+              renderHtmlEmbed={props.renderHtmlEmbed}
               onLinkPress={props.onLinkPress}
               depth={depth}
             />
@@ -575,6 +586,9 @@ export function NativeMarkdownBlock(props: {
         </View>
       );
     case "code_block":
+      if (props.renderHtmlEmbed && isHtmlEmbedLanguage(props.node.language)) {
+        return props.renderHtmlEmbed({ html: nodeText(props.node).replace(/\n$/, "") });
+      }
       return (
         <NativeCodeBlock
           node={props.node}
@@ -626,6 +640,7 @@ export function NativeMarkdownBlock(props: {
               node={child}
               textStyle={props.textStyle}
               highlightCode={props.highlightCode}
+              renderHtmlEmbed={props.renderHtmlEmbed}
               onLinkPress={props.onLinkPress}
               depth={depth}
               compact
@@ -639,6 +654,7 @@ export function NativeMarkdownBlock(props: {
           node={props.node}
           textStyle={props.textStyle}
           highlightCode={props.highlightCode}
+          renderHtmlEmbed={props.renderHtmlEmbed}
           onLinkPress={props.onLinkPress}
           depth={depth}
         />
@@ -692,6 +708,7 @@ export function NativeMarkdownBlock(props: {
               node={child}
               textStyle={props.textStyle}
               highlightCode={props.highlightCode}
+              renderHtmlEmbed={props.renderHtmlEmbed}
               onLinkPress={props.onLinkPress}
               depth={depth}
               compact

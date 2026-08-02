@@ -1,3 +1,5 @@
+import type { ReactElement } from "react";
+
 export interface NativeMarkdownTextStyle {
   readonly color: string;
   readonly strongColor: string;
@@ -36,10 +38,14 @@ export interface SelectableMarkdownSkill {
   readonly displayName?: string | null;
 }
 
+export type MarkdownHtmlEmbedRenderer = (input: { readonly html: string }) => ReactElement | null;
+
 export interface SelectableMarkdownTextProps {
   readonly markdown: string;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly highlightCode: MarkdownCodeHighlighter;
+  /** Renders `t3-html` fences as live embeds instead of code blocks. */
+  readonly renderHtmlEmbed?: MarkdownHtmlEmbedRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly preserveSoftBreaks?: boolean;
   readonly onLinkPress?: (href: string) => void;

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  T3_HTML_EMBED_INSTRUCTIONS,
   t3OrchestrationPromptForFirstRun,
   t3OrchestrationSystemPrompt,
 } from "./T3OrchestrationInstructions.ts";
@@ -18,6 +19,15 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "structured object, never as JSON text");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, '"everyMs":3600000');
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
+  });
+
+  it("teaches the t3-html embed fence, including CSS/JS support and sizing", () => {
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "`t3-html`");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "JavaScript are fully supported");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "sandbox");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "expand");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "stack multiple independent embeds");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, T3_HTML_EMBED_INSTRUCTIONS);
   });
 
   it("injects prompt fallback only for an MCP-enabled first run", () => {
