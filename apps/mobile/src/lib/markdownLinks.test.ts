@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
+import {
+  resolveInlineCodeFileLink,
+  resolveMarkdownLinkPresentation,
+} from "@t3tools/mobile-markdown-text/links";
 
 describe("resolveMarkdownLinkPresentation", () => {
   it("extracts external link hosts", () => {
@@ -83,6 +86,64 @@ describe("resolveMarkdownLinkPresentation", () => {
     expect(resolveMarkdownLinkPresentation("/chat/settings")).toEqual({
       kind: "link",
       href: null,
+    });
+  });
+});
+
+describe("resolveInlineCodeFileLink", () => {
+  it("chips workspace-relative paths with optional positions", () => {
+    expect(resolveInlineCodeFileLink("apps/web/src/markdown-links.ts")).toEqual({
+      href: "apps/web/src/markdown-links.ts",
+      icon: "typescript",
+      label: "markdown-links.ts",
+      path: "apps/web/src/markdown-links.ts",
+    });
+    expect(resolveInlineCodeFileLink("src/ipc.ts:42:7")).toEqual({
+      href: "src/ipc.ts:42:7",
+      icon: "typescript",
+      label: "ipc.ts:42:7",
+      path: "src/ipc.ts",
+      line: 42,
+      column: 7,
+    });
+  });
+
+  it("chips bare filenames with recognized extensions or names", () => {
+    expect(resolveInlineCodeFileLink("HostedBrowserWebview.tsx")).toMatchObject({
+      icon: "react",
+      label: "HostedBrowserWebview.tsx",
+      path: "HostedBrowserWebview.tsx",
+    });
+    expect(resolveInlineCodeFileLink("index.html")).toMatchObject({ icon: "html" });
+    expect(resolveInlineCodeFileLink("Manager.ts:12")).toMatchObject({
+      icon: "typescript",
+      label: "Manager.ts:12",
+      line: 12,
+    });
+    expect(resolveInlineCodeFileLink("pnpm-workspace.yaml")).toMatchObject({ icon: "pnpm" });
+    expect(resolveInlineCodeFileLink(".gitignore")).toMatchObject({ icon: "git" });
+  });
+
+  it("leaves prose-like code spans alone", () => {
+    expect(resolveInlineCodeFileLink("Object.keys")).toBeNull();
+    expect(resolveInlineCodeFileLink("example.com")).toBeNull();
+    expect(resolveInlineCodeFileLink("1.2.3")).toBeNull();
+    expect(resolveInlineCodeFileLink("input/output")).toBeNull();
+    expect(resolveInlineCodeFileLink("preview_resize")).toBeNull();
+    expect(resolveInlineCodeFileLink("const x = 1")).toBeNull();
+    expect(resolveInlineCodeFileLink("setColorScheme")).toBeNull();
+    expect(resolveInlineCodeFileLink("https://example.com/a.ts")).toBeNull();
+  });
+
+  it("keeps absolute and home-prefixed paths", () => {
+    expect(resolveInlineCodeFileLink("/Users/julius/project/src/main.ts")).toMatchObject({
+      icon: "typescript",
+      label: "main.ts",
+      path: "/Users/julius/project/src/main.ts",
+    });
+    expect(resolveInlineCodeFileLink("./scripts/build")).toMatchObject({
+      label: "build",
+      path: "./scripts/build",
     });
   });
 });
