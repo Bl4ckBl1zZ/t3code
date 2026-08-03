@@ -12,23 +12,20 @@ describe("user message intent badge", () => {
     expect(resolveUserMessageIntentBadge("queued_turn")).toEqual({
       label: "queued",
       accessibilityLabel: "Queued behind the active turn",
-      tone: "queued",
     });
   });
 
   it("labels messages that steer the active turn", () => {
     expect(resolveUserMessageIntentBadge("steer")).toEqual({
-      label: "steer",
+      label: "steered the run",
       accessibilityLabel: "Steered the active turn",
-      tone: "steer",
     });
   });
 
   it("preserves the queued origin after promotion to steer", () => {
     expect(resolveUserMessageIntentBadge("promoted_queued_to_steer")).toEqual({
-      label: "queued → steer",
+      label: "queued → steered the run",
       accessibilityLabel: "Originally queued, then promoted to steer the active turn",
-      tone: "steer",
     });
   });
 });

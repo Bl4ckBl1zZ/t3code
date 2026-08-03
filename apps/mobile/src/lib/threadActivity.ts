@@ -121,6 +121,12 @@ export type ThreadFeedEntry =
       readonly activities: ReadonlyArray<ThreadFeedActivity>;
     }
   | {
+      readonly type: "agent-updates";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly messages: ReadonlyArray<ThreadFeedMessage>;
+    }
+  | {
       readonly type: "work-toggle";
       readonly id: string;
       readonly createdAt: string;
@@ -441,6 +447,51 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
     });
   }
   return grouped;
+}
+
+type AgentUpdateMessageEntry = Extract<ThreadFeedEntry, { readonly type: "message" }>;
+
+function isAgentUpdateMessageEntry(entry: ThreadFeedEntry): entry is AgentUpdateMessageEntry {
+  return (
+    entry.type === "message" && entry.message.role === "user" && entry.message.createdBy === "agent"
+  );
+}
+
+// Consecutive agent-authored prompts (delegated-task wakes and other injected
+// instructions) collapse into one "agent-updates" group — a run of near-
+// identical machine callbacks shouldn't occupy a bubble each. Singles keep
+// their ordinary message presentation.
+export function mergeAgentUpdateRuns(entries: ThreadFeedEntry[]): ThreadFeedEntry[] {
+  const result: ThreadFeedEntry[] = [];
+  let index = 0;
+  while (index < entries.length) {
+    const entry = entries[index]!;
+    if (!isAgentUpdateMessageEntry(entry)) {
+      result.push(entry);
+      index += 1;
+      continue;
+    }
+    const run: AgentUpdateMessageEntry[] = [entry];
+    while (index + run.length < entries.length) {
+      const candidate = entries[index + run.length]!;
+      if (!isAgentUpdateMessageEntry(candidate)) break;
+      run.push(candidate);
+    }
+    if (run.length < 2) {
+      result.push(entry);
+    } else {
+      result.push({
+        type: "agent-updates",
+        // Anchored to the first message so the group id stays stable as later
+        // updates append to it.
+        id: `agent-updates:${entry.id}`,
+        createdAt: entry.createdAt,
+        messages: run.map((messageEntry) => messageEntry.message),
+      });
+    }
+    index += run.length;
+  }
+  return result;
 }
 
 function computeElapsedMs(startIso: string, endIso: string): number | null {
@@ -782,5 +833,5 @@ export function buildThreadFeed(
       activity,
     });
   }
-  return groupAdjacentActivities(entries);
+  return mergeAgentUpdateRuns(groupAdjacentActivities(entries));
 }

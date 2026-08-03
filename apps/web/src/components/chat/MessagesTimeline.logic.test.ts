@@ -337,6 +337,87 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows[1]?.id).toBe("new-user-entry");
   });
 
+  it("collapses consecutive agent-sent messages into one agent-updates group", () => {
+    const agentMessageEntry = (index: number) => ({
+      id: `agent-entry-${index}`,
+      kind: "message" as const,
+      createdAt: `2026-01-01T00:00:0${index}Z`,
+      message: {
+        id: `agent-message-${index}` as never,
+        role: "user" as const,
+        text: `Delegated task "Drain batch ${index}" completed. Use task_status with taskId node:task-${index} to read the result.`,
+        runId: null,
+        createdBy: "agent" as const,
+        createdAt: `2026-01-01T00:00:0${index}Z`,
+        updatedAt: `2026-01-01T00:00:0${index}Z`,
+        streaming: false,
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        agentMessageEntry(1),
+        agentMessageEntry(2),
+        agentMessageEntry(3),
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:09Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Looks good, continue.",
+            runId: null,
+            createdAt: "2026-01-01T00:00:09Z",
+            updatedAt: "2026-01-01T00:00:09Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["agent-updates", "message"]);
+    const group = rows[0];
+    if (group?.kind !== "agent-updates") throw new Error("expected agent-updates row");
+    expect(group.id).toBe("agent-updates:agent-entry-1");
+    expect(group.updates.map((update) => update.id)).toEqual([
+      "agent-entry-1",
+      "agent-entry-2",
+      "agent-entry-3",
+    ]);
+  });
+
+  it("keeps a lone agent-sent message as an ordinary message row", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "agent-entry-solo",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "agent-message-solo" as never,
+            role: "user",
+            text: "Check the deploy before continuing.",
+            runId: null,
+            createdBy: "agent",
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:01Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message"]);
+  });
+
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

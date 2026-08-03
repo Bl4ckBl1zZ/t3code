@@ -12,9 +12,9 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { parseDelegatedTaskWakeMessage } from "@t3tools/shared/delegatedTaskWake";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 
-import { AgentOrb, agentOrbHue } from "./AgentOrb";
 import {
   createContext,
   Fragment,
@@ -178,10 +178,6 @@ interface TimelineRowActivityState {
   activeTurnInProgress: boolean;
   latestRunId: RunId | null;
 }
-
-// Agent-authored user messages don't carry the sending agent's id, so every
-// agent-sent message shares one stable identity color distinct from the user.
-const AGENT_MESSAGE_ORB_SEED = "agent";
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
@@ -951,6 +947,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
       {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
+      {row.kind === "agent-updates" ? <AgentUpdatesTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
@@ -968,6 +965,99 @@ function ChatClearedTimelineRow() {
       <span>Chat cleared</span>
       <div className="h-px flex-1 bg-border/60" />
     </div>
+  );
+}
+
+// A run of consecutive agent-authored prompts (delegated-task wakes) collapses
+// into one quiet group: header + latest line, expandable to every update. All
+// text, no badges — the task_status boilerplate never renders.
+function AgentUpdatesTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "agent-updates" }>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const updates = row.updates.map((update) => ({
+    update,
+    wake: parseDelegatedTaskWakeMessage(update.message.text),
+  }));
+  const latest = updates[updates.length - 1];
+  return (
+    <div
+      className="overflow-hidden rounded-xl border border-border/60 bg-card/30"
+      data-agent-updates-group
+      data-agent-updates-count={row.updates.length}
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/40"
+      >
+        <span aria-hidden="true" className="text-xs text-muted-foreground">
+          ↳
+        </span>
+        <span className="text-xs font-medium text-foreground/80">Agent updates</span>
+        <span className="text-xs tabular-nums text-muted-foreground">· {row.updates.length}</span>
+        <ChevronDownIcon
+          className={cn(
+            "ms-auto size-3 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-180",
+          )}
+        />
+      </button>
+      {expanded ? (
+        <ul className="m-0 list-none border-t border-border/50 p-0">
+          {updates.map(({ update, wake }) => (
+            <li key={update.id} className="border-t border-border/40 px-3 py-2 first:border-t-0">
+              <AgentUpdateLine wake={wake} text={update.message.text} clamp={false} />
+            </li>
+          ))}
+        </ul>
+      ) : latest !== undefined ? (
+        <div className="border-t border-border/50 px-3 py-2">
+          <AgentUpdateLine wake={latest.wake} text={latest.update.message.text} clamp />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AgentUpdateLine(props: {
+  readonly wake: ReturnType<typeof parseDelegatedTaskWakeMessage>;
+  readonly text: string;
+  readonly clamp: boolean;
+}) {
+  if (props.wake !== null) {
+    const completed = props.wake.status === "completed";
+    return (
+      <p className="flex min-w-0 items-baseline gap-2 text-xs">
+        <span aria-hidden="true" className={completed ? "text-success" : "text-muted-foreground"}>
+          {completed ? "✓" : "○"}
+        </span>
+        <span className={cn("min-w-0 flex-1 text-foreground/80", props.clamp && "truncate")}>
+          {props.wake.title}
+        </span>
+        <span
+          className={cn(
+            "shrink-0 text-[11px]",
+            props.wake.status === "failed" ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {props.wake.status}
+        </span>
+      </p>
+    );
+  }
+  return (
+    <p
+      className={cn(
+        "whitespace-pre-wrap break-words text-xs text-foreground/80",
+        props.clamp && "line-clamp-2",
+      )}
+    >
+      {props.text}
+    </p>
   );
 }
 
@@ -1001,34 +1091,26 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
   const isAgentMessage = row.message.createdBy === "agent";
-  const agentHueValue = agentOrbHue(AGENT_MESSAGE_ORB_SEED);
 
   return (
     <div className={cn("group flex flex-col gap-1", isAgentMessage ? "items-start" : "items-end")}>
       {isAgentMessage ? (
         <p
-          className="flex items-center gap-1.5 ps-0.5 text-[11px] font-medium"
-          style={{ color: `hsl(${agentHueValue} 60% 55%)` }}
+          className="ms-1 text-[11px] text-muted-foreground/70"
           data-user-message-attribution="agent"
         >
-          <AgentOrb seed={AGENT_MESSAGE_ORB_SEED} size={14} state="idle" />
           Sent by another agent
         </p>
       ) : null}
       <div
         className={cn(
           "relative max-w-[80%] p-3",
-          isAgentMessage ? "rounded-xl rounded-ss-md border border-l-2" : "rounded-2xl bg-accent",
-        )}
-        style={
+          // Agent-authored prompts sit left, on the panel/card material rather
+          // than the user-accent bubble — quiet, no color accents.
           isAgentMessage
-            ? {
-                borderColor: `hsl(${agentHueValue} 50% 50% / 0.35)`,
-                borderLeftColor: `hsl(${agentHueValue} 80% 60%)`,
-                backgroundColor: `hsl(${agentHueValue} 50% 50% / 0.08)`,
-              }
-            : undefined
-        }
+            ? "rounded-2xl rounded-ss-md border border-border/60 bg-card/40"
+            : "rounded-2xl bg-accent",
+        )}
       >
         {regularAttachments.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
@@ -1117,7 +1199,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         row.projectedItem.item.status !== "waiting") ? (
         <div className="me-1 flex items-center gap-1.5">
           {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
-            <UserMessageIntentBadge intent={row.message.inputIntent} />
+            <UserMessageIntentNote intent={row.message.inputIntent} />
           ) : null}
           {row.projectedItem &&
           row.projectedItem.item.status !== "completed" &&
@@ -1171,26 +1253,22 @@ function UserMessageReplyPreview({ text }: { readonly text: string }) {
   );
 }
 
-function UserMessageIntentBadge({
+// Input intent is metadata, so it reads as quiet text alongside the timestamp
+// rather than a colored badge.
+function UserMessageIntentNote({
   intent,
 }: {
   readonly intent: NonNullable<TimelineMessage["inputIntent"]>;
 }) {
-  const presentation =
+  const label =
     intent === "queued_turn"
-      ? { label: "queued", className: "border-amber-500/25 bg-amber-500/8 text-amber-700" }
+      ? "queued"
       : intent === "promoted_queued_to_steer"
-        ? {
-            label: "queued → steer",
-            className: "border-sky-500/25 bg-sky-500/8 text-sky-700",
-          }
-        : { label: "steer", className: "border-sky-500/25 bg-sky-500/8 text-sky-700" };
+        ? "queued → steered the run"
+        : "steered the run";
   return (
     <span
-      className={cn(
-        "me-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium tracking-wide",
-        presentation.className,
-      )}
+      className="me-1 text-[11px] text-muted-foreground/60"
       title={
         intent === "queued_turn"
           ? "Queued behind the active turn"
@@ -1199,7 +1277,7 @@ function UserMessageIntentBadge({
             : "Steered the active turn"
       }
     >
-      {presentation.label}
+      {label}
     </span>
   );
 }
