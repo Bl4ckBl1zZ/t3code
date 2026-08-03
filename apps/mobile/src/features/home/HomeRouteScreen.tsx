@@ -160,7 +160,13 @@ export function HomeRouteScreen() {
     <AndroidHomeFabLayout onStartNewTask={startNewTask}>
       <>
         {/* Restore the compact title after the split branch blanks the detail header. */}
-        <NativeStackScreenOptions options={getCompactBrandHeaderOptions()} />
+        <NativeStackScreenOptions
+          optionsVersion={workspace}
+          options={getCompactBrandHeaderOptions(undefined, {
+            workspace,
+            onWorkspaceChange: setWorkspace,
+          })}
+        />
         <HomeHeader
           environments={environments}
           workspace={workspace}

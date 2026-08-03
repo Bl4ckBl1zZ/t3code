@@ -7,8 +7,10 @@ import { Platform, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
 import { T3Wordmark } from "./T3Wordmark";
+import { withNativeGlassHeaderItem } from "../features/layout/native-glass-header-items";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../lib/mobileBranding";
+import type { MobileWorkspace } from "../lib/mobileWorkspace";
 import { useThemeColor } from "../lib/useThemeColor";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 
@@ -16,12 +18,18 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 const IOS_NATIVE_LEADING_TITLE_OFFSET = -6;
 const IPAD_NATIVE_LEADING_TITLE_OFFSET = 7;
 
+export type CompactBrandWorkspaceMenu = {
+  readonly workspace: MobileWorkspace;
+  readonly onWorkspaceChange: (workspace: MobileWorkspace) => void;
+};
+
 /**
  * Compact brand lockup sized for native navigation bars.
  */
 export function CompactBrandTitle(
   props: {
     readonly nativeLeadingItem?: boolean;
+    readonly workspace?: MobileWorkspace;
   } = {},
 ) {
   const iconColor = useThemeColor("--color-icon");
@@ -39,10 +47,12 @@ export function CompactBrandTitle(
           ? IPAD_HOME_TITLE_OFFSET
           : 0;
 
+  const workspaceLabel = props.workspace === "work" ? "Work" : "Code";
+
   return (
     <View
       aria-level={1}
-      accessibilityLabel="T3 Code, Threads"
+      accessibilityLabel={`T3 ${workspaceLabel}, Threads`}
       accessible
       role="heading"
       style={{
@@ -61,7 +71,7 @@ export function CompactBrandTitle(
           letterSpacing: -0.5,
         }}
       >
-        Code
+        {workspaceLabel}
       </Text>
       <View
         style={{
@@ -91,30 +101,71 @@ export function renderCompactBrandTitle() {
   return <CompactBrandTitle />;
 }
 
-export function renderCompactBrandHeaderItems(): NativeStackHeaderItem[] {
+// The iOS 26 Mail-style bottom toolbar drops every toolbar item that is sent
+// alongside the native `mailSearchToolbar` item, so the Home workspace
+// switcher cannot live there on Liquid Glass. It rides next to the brand
+// lockup in the navigation bar's leading items instead.
+function workspaceSwitcherHeaderItem(menu: CompactBrandWorkspaceMenu): NativeStackHeaderItem {
+  return withNativeGlassHeaderItem(
+    {
+      type: "menu",
+      label: "",
+      accessibilityLabel: `Switch workspace. Current workspace: T3 ${menu.workspace === "work" ? "Work" : "Code"}`,
+      icon: { type: "sfSymbol" as const, name: "chevron.up.chevron.down" as never },
+      sharesBackground: false,
+      variant: "plain",
+      menu: {
+        title: "Workspace",
+        items: [
+          {
+            type: "action" as const,
+            label: "T3 Work",
+            description: "Create, learn, and explore",
+            state: menu.workspace === "work" ? ("on" as const) : undefined,
+            onPress: () => menu.onWorkspaceChange("work"),
+          },
+          {
+            type: "action" as const,
+            label: "T3 Code",
+            description: "Build, debug, and ship",
+            state: menu.workspace === "code" ? ("on" as const) : undefined,
+            onPress: () => menu.onWorkspaceChange("code"),
+          },
+        ],
+      },
+    },
+    { hidesSharedBackground: true },
+  );
+}
+
+export function renderCompactBrandHeaderItems(
+  workspaceMenu?: CompactBrandWorkspaceMenu,
+): NativeStackHeaderItem[] {
   return [
     {
-      element: <CompactBrandTitle nativeLeadingItem />,
+      element: <CompactBrandTitle nativeLeadingItem workspace={workspaceMenu?.workspace} />,
       hidesSharedBackground: true,
       type: "custom",
     },
+    ...(workspaceMenu ? [workspaceSwitcherHeaderItem(workspaceMenu)] : []),
   ];
 }
 
 export function getCompactBrandHeaderOptions(
   fallbackTitleStyle?: NativeStackNavigationOptions["headerTitleStyle"],
+  workspaceMenu?: CompactBrandWorkspaceMenu,
 ): NativeStackNavigationOptions {
   if (Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED) {
     return {
       headerTitle: "Threads",
       headerTitleStyle: { color: "transparent", fontSize: 18, fontWeight: "800" },
       title: "Threads",
-      unstable_headerLeftItems: renderCompactBrandHeaderItems,
+      unstable_headerLeftItems: () => renderCompactBrandHeaderItems(workspaceMenu),
     };
   }
 
   return {
-    headerTitle: renderCompactBrandTitle,
+    headerTitle: () => <CompactBrandTitle workspace={workspaceMenu?.workspace} />,
     headerTitleStyle: fallbackTitleStyle,
     title: "Threads",
   };

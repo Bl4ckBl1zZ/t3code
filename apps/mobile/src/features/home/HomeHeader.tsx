@@ -350,7 +350,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, props.workspace]}
+        optionsVersion={filterMenu.items}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
@@ -372,34 +372,10 @@ function IosHomeHeader(props: HomeHeaderProps) {
           // reapply cannot clobber options owned by NativeHeaderToolbar.
           ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
             ? {
+                // The native mailSearchToolbar item drops every sibling
+                // toolbar item, so the workspace switcher lives in the
+                // navigation bar's leading brand items (CompactBrandTitle).
                 unstable_headerToolbarItems: () => [
-                  {
-                    type: "menu" as const,
-                    label: `T3 ${props.workspace === "work" ? "Work" : "Code"}`,
-                    accessibilityLabel: `Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`,
-                    icon: { type: "sfSymbol", name: "chevron.up.chevron.down" } as const,
-                    identifier: "home-workspace",
-                    sharesBackground: false,
-                    variant: "plain" as const,
-                    menu: {
-                      items: [
-                        {
-                          type: "action" as const,
-                          label: "T3 Work",
-                          description: "Create, learn, and explore",
-                          onPress: () => props.onWorkspaceChange("work"),
-                          state: props.workspace === "work" ? ("on" as const) : undefined,
-                        },
-                        {
-                          type: "action" as const,
-                          label: "T3 Code",
-                          description: "Build, debug, and ship",
-                          onPress: () => props.onWorkspaceChange("code"),
-                          state: props.workspace === "code" ? ("on" as const) : undefined,
-                        },
-                      ],
-                    },
-                  },
                   createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
                     composeSystemImageName: "square.and.pencil",
