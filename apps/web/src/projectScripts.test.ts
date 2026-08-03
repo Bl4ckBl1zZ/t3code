@@ -21,6 +21,7 @@ describe("projectScripts helpers", () => {
         command: "pnpm dev",
         icon: "debug",
         runOnWorktreeCreate: false,
+        runOnWorktreeDelete: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
         singleRun: false,
@@ -43,6 +44,7 @@ describe("projectScripts helpers", () => {
         command: "pnpm test",
         icon: "test",
         runOnWorktreeCreate: false,
+        runOnWorktreeDelete: false,
         previewUrl: null,
         autoOpenPreview: false,
         singleRun: false,
@@ -62,6 +64,7 @@ describe("projectScripts helpers", () => {
       command: "pnpm dev",
       icon: "play" as const,
       runOnWorktreeCreate: false,
+      runOnWorktreeDelete: false,
       previewUrl: null,
       autoOpenPreview: false,
     };

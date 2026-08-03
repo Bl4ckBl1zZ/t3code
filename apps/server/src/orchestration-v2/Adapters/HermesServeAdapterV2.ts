@@ -102,7 +102,7 @@ import {
   ProviderAdapterResumeThreadError,
   ProviderAdapterRollbackThreadError,
   ProviderAdapterRuntimeRequestResponseError,
-  ProviderAdapterSteerRunUnsupportedError,
+  ProviderAdapterSteerRunError,
   ProviderAdapterTurnStartError,
   type ProviderAdapterV2EnsureThreadInput,
   type ProviderAdapterV2Event,
@@ -181,9 +181,9 @@ export const HermesProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
-    supportsActiveSteering: false,
-    supportsSteeringByInterruptRestart: false,
-    supportsQueuedMessages: false,
+    supportsActiveSteering: true,
+    supportsSteeringByInterruptRestart: true,
+    supportsQueuedMessages: true,
     terminalStatusQuality: "strong",
   },
   streaming: {
@@ -417,6 +417,12 @@ interface ActiveHermesTurn {
   readonly generatingToolsByName: Map<string, Array<ActiveHermesTool>>;
   readonly seenEventIds: Set<string>;
   gatewayRunId: string | null;
+  /**
+   * Completions to absorb before terminalizing: a steering prompt Hermes
+   * admitted as "queued" runs as a follow-up gateway run on the same
+   * session, so the current run's completion must not end this turn.
+   */
+  pendingSteerCompletions: number;
   interrupted: boolean;
   finalized: boolean;
   intentState: HermesMutationIntentState;
@@ -1982,6 +1988,29 @@ export function makeHermesServeAdapterV2(
         );
       });
 
+      // Consume one absorbed completion for a Hermes-side queued steering
+      // prompt instead of terminalizing the turn: close out the finished
+      // run's streamed artifacts and reset the accumulators so the follow-up
+      // run (which arrives under a fresh gateway run id) streams new items.
+      const absorbSteerCompletion = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        active: ActiveHermesTurn,
+      ) {
+        if (active.interrupted || active.pendingSteerCompletions <= 0) return false;
+        active.pendingSteerCompletions -= 1;
+        yield* reasoningArtifacts(state, active, true);
+        yield* messageArtifacts(state, active, true);
+        active.gatewayRunId = null;
+        active.assistantNativeId = null;
+        active.assistantText = "";
+        active.assistantSnapshotPending = false;
+        active.assistantStartedAt = null;
+        active.reasoningText = "";
+        active.reasoningStartedAt = null;
+        active.reasoningHasStreamedDelta = false;
+        return true;
+      });
+
       const handleGatewayEvent = Effect.fnUntraced(function* (event: HermesGatewayOrderedEvent) {
         const state =
           (event.sessionId === undefined ? undefined : statesByLiveSession.get(event.sessionId)) ??
@@ -2142,7 +2171,7 @@ export function makeHermesServeAdapterV2(
               yield* finalizeTurn(state, "failed", "Hermes reported a turn error.");
             } else if (status === "interrupted") {
               yield* finalizeTurn(state, "interrupted");
-            } else {
+            } else if (!(yield* absorbSteerCompletion(state, active))) {
               yield* finalizeTurn(state, active.interrupted ? "interrupted" : "completed");
             }
             return;
@@ -2155,7 +2184,9 @@ export function makeHermesServeAdapterV2(
             } else if (status === "interrupted") {
               yield* finalizeTurn(state, "interrupted");
             } else if (status === "idle" || status === "complete" || status === "completed") {
-              yield* finalizeTurn(state, active.interrupted ? "interrupted" : "completed");
+              if (!(yield* absorbSteerCompletion(state, active))) {
+                yield* finalizeTurn(state, active.interrupted ? "interrupted" : "completed");
+              }
             }
             return;
           }
@@ -3097,6 +3128,7 @@ export function makeHermesServeAdapterV2(
               generatingToolsByName: new Map(),
               seenEventIds: new Set(),
               gatewayRunId: null,
+              pendingSteerCompletions: 0,
               interrupted: false,
               finalized: false,
               intentState: prepared.intentState,
@@ -3200,19 +3232,98 @@ export function makeHermesServeAdapterV2(
             ),
           ),
         steerTurn: (steerInput) =>
-          new ProviderAdapterSteerRunUnsupportedError({
-            driver: HERMES_PROVIDER,
-            providerThreadId: steerInput.providerThread.id,
-          }),
-        interruptTurn: (interruptInput) =>
           Effect.gen(function* () {
-            const state = stateForProviderThread(interruptInput.providerThread);
+            const state = stateForProviderThread(steerInput.providerThread);
             const active = state?.activeTurn;
             if (state === undefined || active == null || active.providerTurn === null) {
               return yield* new ProviderAdapterProtocolError({
                 driver: HERMES_PROVIDER,
                 detail: "Hermes provider turn is not active",
               });
+            }
+            if (String(active.providerTurn.id) !== String(steerInput.providerTurnId)) {
+              return yield* new ProviderAdapterProtocolError({
+                driver: HERMES_PROVIDER,
+                detail: "Hermes steering targets a provider turn that is no longer active",
+              });
+            }
+            const operationId = `hermes:steer:${steerInput.message.messageId}`;
+            // mutationKind "steer", not "prompt": the turn's own prompt
+            // intent is still unsettled while the run streams, and prompt
+            // intents are exclusive per binding.
+            const prepared = yield* prepareBoundMutation(state, {
+              operationId,
+              mutationKind: "steer",
+              method: "prompt.submit",
+              payloadDigest: stableDigest(
+                state.binding.storedSessionKey,
+                steerInput.message.text,
+                operationId,
+              ),
+            });
+            const submit = () =>
+              client.submitPrompt(
+                {
+                  session_id: state.liveSessionId,
+                  text: steerInput.message.text,
+                },
+                mutationOptions(operationId),
+              );
+            const submitted = prepared.replay
+              ? yield* gatewayEffect(submit).pipe(
+                  Effect.tap(() =>
+                    transitionIntent(
+                      state,
+                      operationId,
+                      prepared.intentState,
+                      prepared.intentState === "admitted" ? "confirmed" : "reconciled",
+                    ),
+                  ),
+                )
+              : yield* settleMutation(state, operationId, submit);
+            if (submitted.mutation_status === "completed") {
+              // Historical replay: the steering prompt already ran to
+              // completion in a previous owner generation.
+              return;
+            }
+            if (submitted.status === "queued") {
+              // Hermes runs the steered prompt as a follow-up run on the
+              // same session; keep this provider turn open across the
+              // current run's completion so both runs project into it.
+              active.pendingSteerCompletions += 1;
+            } else if (
+              submitted.run_id !== undefined &&
+              active.gatewayRunId !== null &&
+              submitted.run_id !== active.gatewayRunId
+            ) {
+              // The prompt was merged into (or redirected to) a different
+              // gateway run; follow it so its events are not filtered out.
+              active.gatewayRunId = submitted.run_id;
+            }
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterSteerRunError({
+                  driver: HERMES_PROVIDER,
+                  providerThreadId: steerInput.providerThread.id,
+                  providerTurnId: steerInput.providerTurnId,
+                  cause,
+                }),
+            ),
+          ),
+        interruptTurn: (interruptInput) =>
+          Effect.gen(function* () {
+            const state = stateForProviderThread(interruptInput.providerThread);
+            const active = state?.activeTurn;
+            if (state === undefined || active == null || active.providerTurn === null) {
+              // The turn already terminalized (or never started); treat the
+              // interrupt as satisfied so stop is idempotent instead of
+              // failing a race against normal completion.
+              yield* Effect.logDebug("Hermes interrupt found no active turn; treating as done.", {
+                providerThreadId: String(interruptInput.providerThread.id),
+                providerTurnId: String(interruptInput.providerTurnId),
+              });
+              return;
             }
             const operationId = `hermes:interrupt:${interruptInput.providerTurnId}`;
             const prepared = yield* prepareBoundMutation(state, {
@@ -3253,10 +3364,19 @@ export function makeHermesServeAdapterV2(
               Effect.timeoutOption(INTERRUPT_TERMINAL_TIMEOUT),
             );
             if (Option.isNone(terminal)) {
-              return yield* new ProviderAdapterProtocolError({
-                driver: HERMES_PROVIDER,
-                detail: "Hermes interrupt did not produce a terminal event",
-              });
+              // The gateway accepted the interrupt but never pushed a
+              // terminal event (e.g. the run is blocked on a pending
+              // clarification). Finalize locally so the run cannot stay
+              // running forever; finalizeTurn also cancels the turn's
+              // pending runtime requests.
+              yield* Effect.logWarning(
+                "Hermes interrupt did not produce a terminal event; finalizing locally.",
+                {
+                  providerThreadId: String(state.providerThread.id),
+                  providerTurnId: String(interruptInput.providerTurnId),
+                },
+              );
+              yield* finalizeTurn(state, "interrupted");
             }
           }).pipe(
             Effect.mapError(

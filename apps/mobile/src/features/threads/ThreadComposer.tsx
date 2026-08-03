@@ -938,7 +938,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               <View className="flex-row items-center gap-1">
                 {/* Mic drives the full gesture: tap toggles hands-free, hold is
                   push-to-talk, slide up cancels. The recording HUD renders above the pill.
-                  The round primary button sends; a running thread keeps its stop pill. */}
+                  A running thread swaps the send pill for a stop pill. */}
                 <GestureDetector
                   gesture={voice.comboGesture({ canSend: false, onSend: () => undefined })}
                 >
@@ -967,15 +967,21 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   </Animated.View>
                 </GestureDetector>
                 {showStopAction ? (
-                  <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
-                ) : null}
-                <ControlPill
-                  icon="arrow.up"
-                  variant="primary"
-                  disabled={!canSend || voiceBusy}
-                  accessibilityLabel="Send"
-                  onPress={() => void handleSend()}
-                />
+                  <ControlPill
+                    icon="stop.fill"
+                    variant="danger"
+                    accessibilityLabel="Stop"
+                    onPress={props.onStopThread}
+                  />
+                ) : (
+                  <ControlPill
+                    icon="arrow.up"
+                    variant="primary"
+                    disabled={!canSend || voiceBusy}
+                    accessibilityLabel="Send"
+                    onPress={() => void handleSend()}
+                  />
+                )}
               </View>
             </Animated.View>
           ) : null}

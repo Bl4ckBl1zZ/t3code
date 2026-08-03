@@ -31,6 +31,7 @@ import {
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as ProjectTeardownScriptRunner from "../project/ProjectTeardownScriptRunner.ts";
 
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
@@ -138,6 +139,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const teardownScriptRunner = yield* ProjectTeardownScriptRunner.ProjectTeardownScriptRunner;
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
@@ -317,6 +319,14 @@ export const make = Effect.gen(function* () {
       ),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
+        // Best-effort teardown script (runOnWorktreeDelete) runs while the
+        // worktree still exists; the runner never fails, so removal proceeds.
+        Effect.andThen(
+          teardownScriptRunner.runForWorktree({
+            projectCwd: input.cwd,
+            worktreePath: input.path,
+          }),
+        ),
         Effect.andThen(git.removeWorktree(input)),
       ),
     deleteLocalBranch: (input) =>

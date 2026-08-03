@@ -8,6 +8,13 @@ import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as ProjectTeardownScriptRunner from "../project/ProjectTeardownScriptRunner.ts";
+
+const teardownRunnerMockLayer = Layer.mock(ProjectTeardownScriptRunner.ProjectTeardownScriptRunner)(
+  {
+    runForWorktree: () => Effect.void,
+  },
+);
 
 function makeLayer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
@@ -20,6 +27,7 @@ function makeLayer(input: {
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(teardownRunnerMockLayer),
   );
 }
 
@@ -100,6 +108,7 @@ describe("GitWorkflowService", () => {
           status,
         }),
       ),
+      Layer.provide(teardownRunnerMockLayer),
     );
 
     return Effect.gen(function* () {

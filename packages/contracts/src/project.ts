@@ -32,6 +32,11 @@ export const ProjectScript = Schema.Struct({
   command: TrimmedNonEmptyString,
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
+  /**
+   * When true, the script runs in the worktree right before it is removed.
+   * Optional so peers that predate teardown scripts can still decode.
+   */
+  runOnWorktreeDelete: Schema.optional(Schema.Boolean),
   previewUrl: Schema.optional(TrimmedNonEmptyString),
   autoOpenPreview: Schema.optional(Schema.Boolean),
   /**

@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -28,11 +29,14 @@ import {
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -354,12 +358,16 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     return { attached: true };
   }
 
+  interruptEmitsTerminal = true;
+
   async interruptSession(
     _params: { readonly session_id: string },
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
   ): Promise<HermesGatewayInterruptResult> {
     this.interrupts.push(options);
-    queueMicrotask(() => void this.emit("message.complete", { text: "partial" }));
+    if (this.interruptEmitsTerminal) {
+      queueMicrotask(() => void this.emit("message.complete", { text: "partial" }));
+    }
     return { status: "interrupted" };
   }
 
@@ -2219,6 +2227,193 @@ describe("HermesServeAdapterV2", () => {
           providerTurnId: providerTurn.value.providerTurn.id,
         });
         assert.equal(fake.interrupts.length, 1);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("treats an interrupt with no active turn as already satisfied", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: ProviderTurnId.make("provider-turn:hermes-stale"),
+        });
+        assert.equal(fake.interrupts.length, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("finalizes locally when an interrupt never observes a terminal event", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.interruptEmitsTerminal = false;
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        const providerTurn = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "provider_turn.updated"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(providerTurn));
+        if (Option.isNone(providerTurn) || providerTurn.value.type !== "provider_turn.updated")
+          return;
+
+        const fiber = yield* runtime
+          .interruptTurn({
+            providerThread,
+            providerTurnId: providerTurn.value.providerTurn.id,
+          })
+          .pipe(Effect.forkScoped);
+        yield* TestClock.adjust(Duration.seconds(16));
+        yield* Fiber.join(fiber);
+
+        assert.equal(fake.interrupts.length, 1);
+        const terminal = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(terminal));
+        if (Option.isSome(terminal) && terminal.value.type === "turn.terminal") {
+          assert.equal(terminal.value.status, "interrupted");
+        }
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestLayer, TestClock.layer()))),
+  );
+
+  it.effect("steers the active turn through prompt.submit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const input = turnInput(providerThread);
+        yield* runtime.startTurn(input);
+        const providerTurn = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "provider_turn.updated"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(providerTurn));
+        if (Option.isNone(providerTurn) || providerTurn.value.type !== "provider_turn.updated")
+          return;
+
+        fake.promptResult = { status: "steered", run_id: "hermes-run-1" };
+        yield* runtime.steerTurn({
+          threadId,
+          runId: input.runId,
+          providerThread,
+          providerTurnId: providerTurn.value.providerTurn.id,
+          message: {
+            messageId: MessageId.make("message:hermes-steer"),
+            text: "actually, focus on the tests",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        });
+
+        assert.equal(fake.prompts.length, 2);
+        assert.equal(fake.prompts[1]!.params.text, "actually, focus on the tests");
+        assert.equal(fake.prompts[1]!.options.operationId, "hermes:steer:message:hermes-steer");
+
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "steered answer" }));
+        const terminal = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(terminal));
+        if (Option.isSome(terminal) && terminal.value.type === "turn.terminal") {
+          assert.equal(terminal.value.status, "completed");
+        }
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("keeps the provider turn open across a Hermes-side queued steering prompt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const input = turnInput(providerThread);
+        yield* runtime.startTurn(input);
+        const providerTurn = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "provider_turn.updated"),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(providerTurn));
+        if (Option.isNone(providerTurn) || providerTurn.value.type !== "provider_turn.updated")
+          return;
+
+        fake.promptResult = { status: "queued", run_id: "hermes-run-2" };
+        yield* runtime.steerTurn({
+          threadId,
+          runId: input.runId,
+          providerThread,
+          providerTurnId: providerTurn.value.providerTurn.id,
+          message: {
+            messageId: MessageId.make("message:hermes-steer-queued"),
+            text: "and after that, run the linter",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        });
+
+        // First run completes: absorbed, the turn stays open for the queued
+        // steering prompt's follow-up run.
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "first answer" }));
+        yield* Effect.promise(() =>
+          fake.emit(
+            "message.delta",
+            { text: "second answer" },
+            { runId: "hermes-run-2", messageId: "hermes-assistant-2" },
+          ),
+        );
+        yield* Effect.promise(() =>
+          fake.emit(
+            "message.complete",
+            { text: "second answer" },
+            { runId: "hermes-run-2", messageId: "hermes-assistant-2" },
+          ),
+        );
+
+        const collected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const events = [...collected];
+        const last = events[events.length - 1];
+        assert.equal(last?.type, "turn.terminal");
+        if (last?.type === "turn.terminal") {
+          assert.equal(last.status, "completed");
+        }
+        assert.isTrue(
+          events.some(
+            (event) => event.type === "message.updated" && event.message.text === "second answer",
+          ),
+          "the queued steering run's output must project into the same provider turn",
+        );
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
