@@ -61,6 +61,8 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as T3ProjectFileSync from "./project/T3ProjectFileSync.ts";
+import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -96,6 +98,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import {
   OrchestrationV2ProductionLayerLive,
+  ProjectServiceLayerLive,
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
@@ -252,7 +255,13 @@ const GitLayerLive = Layer.empty.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
 );
 
+const ProjectTeardownScriptRunnerLayerLive = ProjectTeardownScriptRunner.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+  Layer.provide(ProcessRunner.layer),
+);
+
 const GitWorkflowLayerLive = GitWorkflowService.layer.pipe(
+  Layer.provide(ProjectTeardownScriptRunnerLayerLive),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
 );
@@ -335,7 +344,16 @@ const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
   Layer.provideMerge(OrchestrationV2RuntimeLayerLive),
 );
 
-const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
+// Background reconciler that keeps each project's actions and its checked-in
+// t3.json in sync (writes on in-app edits, imports on file edits).
+const T3ProjectFileSyncLayerLive = T3ProjectFileSync.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+);
+
+const RuntimeCoreDependenciesBaseLive = Layer.merge(
+  AgentAwarenessRelay.layer,
+  T3ProjectFileSyncLayerLive,
+).pipe(
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),

@@ -1,10 +1,13 @@
+import { LiquidGlassView } from "@callstack/liquid-glass";
 import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
 import { BackHandler, Platform, Pressable, useColorScheme, View } from "react-native";
-import Animated, { FadeOut, ZoomIn } from "react-native-reanimated";
+import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 
 import { appBlurTargetRef } from "../lib/appBlurTarget";
 import { cn } from "../lib/cn";
@@ -38,8 +41,8 @@ type OverlayFrame = {
 };
 
 /**
- * Attachment source menu for the composer "+" buttons: a frosted card that
- * springs up from the anchor with one large row per source (leading circled
+ * Attachment source menu for the composer "+" buttons: a glass card that
+ * fades in above the anchor with one large row per source (leading circled
  * glyph + label), replacing the platform menus whose icon treatment can't
  * match this layout. Renders through OverlayPortal so the keyboard stays up
  * while it is open; the anchor is snapshotted in window coordinates at open
@@ -144,29 +147,43 @@ export function ComposerAttachmentMenu(props: {
             <Pressable accessible={false} className="absolute inset-0" onPress={close} />
             {!placeable || local === null ? null : (
               <Animated.View
-                entering={ZoomIn.springify().damping(19).stiffness(320)}
+                entering={FadeIn.duration(140)}
                 exiting={FadeOut.duration(100)}
-                className="absolute overflow-hidden rounded-[26px] border border-border shadow-2xl"
+                className={cn(
+                  "absolute overflow-hidden rounded-[26px] shadow-2xl",
+                  !NATIVE_LIQUID_GLASS_SUPPORTED && "border border-border",
+                )}
                 style={{
                   left,
                   width: MENU_WIDTH,
                   maxHeight,
                   bottom: (rootHeight ?? 0) - local.y + ANCHOR_GAP,
-                  // Spring from the anchor corner, like a context menu.
-                  transformOrigin: "left bottom",
                 }}
               >
-                {/* Frosted backdrop: blur of the app content behind the menu,
-                    washed with the translucent card tone so rows keep contrast. */}
-                <BlurView
-                  intensity={40}
-                  tint={isDarkMode ? "dark" : "light"}
-                  className="absolute inset-0"
-                  {...(Platform.OS === "android"
-                    ? { blurMethod: "dimezisBlurView" as const, blurTarget: appBlurTargetRef }
-                    : {})}
-                />
-                <View className="absolute inset-0 bg-card-translucent" />
+                {/* Backdrop: native liquid glass where available (iOS 26+);
+                    otherwise blur of the app content washed with the
+                    translucent card tone so rows keep contrast. */}
+                {NATIVE_LIQUID_GLASS_SUPPORTED ? (
+                  <LiquidGlassView
+                    effect="clear"
+                    interactive={false}
+                    tintColor={isDarkMode ? "rgba(30,30,32,0.9)" : "rgba(255,255,255,0.88)"}
+                    colorScheme={isDarkMode ? "dark" : "light"}
+                    style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+                  />
+                ) : (
+                  <>
+                    <BlurView
+                      intensity={40}
+                      tint={isDarkMode ? "dark" : "light"}
+                      className="absolute inset-0"
+                      {...(Platform.OS === "android"
+                        ? { blurMethod: "dimezisBlurView" as const, blurTarget: appBlurTargetRef }
+                        : {})}
+                    />
+                    <View className="absolute inset-0 bg-card-translucent" />
+                  </>
+                )}
                 <View className="py-2">
                   {props.items.map((item) => (
                     <Pressable

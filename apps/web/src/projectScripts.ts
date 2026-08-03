@@ -12,6 +12,7 @@ export interface ProjectScriptInput {
   readonly command: ProjectScript["command"];
   readonly icon: ProjectScript["icon"];
   readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
+  readonly runOnWorktreeDelete: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
   readonly autoOpenPreview: boolean;
   readonly singleRun: boolean;
@@ -24,6 +25,7 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
     command: input.command,
     icon: input.icon,
     runOnWorktreeCreate: input.runOnWorktreeCreate,
+    ...(input.runOnWorktreeDelete ? { runOnWorktreeDelete: true } : {}),
     ...(input.previewUrl === null
       ? {}
       : {
@@ -84,6 +86,8 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
 }
 
 export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
-  const regular = scripts.find((script) => !script.runOnWorktreeCreate);
+  const regular = scripts.find(
+    (script) => !script.runOnWorktreeCreate && script.runOnWorktreeDelete !== true,
+  );
   return regular ?? scripts[0] ?? null;
 }

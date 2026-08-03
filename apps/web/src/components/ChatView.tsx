@@ -3240,14 +3240,20 @@ function ChatViewContent(props: ChatViewProps) {
         activeProject.scripts.map((script) => script.id),
       );
       const nextScript = buildProjectScript(nextId, input);
-      const nextScripts = input.runOnWorktreeCreate
-        ? [
-            ...activeProject.scripts.map((script) =>
-              script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-            ),
-            nextScript,
-          ]
-        : [...activeProject.scripts, nextScript];
+      // Only one setup and one teardown script are honored per project, so
+      // claiming either flag clears it on every other script.
+      const nextScripts = [
+        ...activeProject.scripts.map((script) => ({
+          ...script,
+          ...(input.runOnWorktreeCreate && script.runOnWorktreeCreate
+            ? { runOnWorktreeCreate: false }
+            : {}),
+          ...(input.runOnWorktreeDelete && script.runOnWorktreeDelete
+            ? { runOnWorktreeDelete: false }
+            : {}),
+        })),
+        nextScript,
+      ];
 
       return persistProjectScripts({
         projectId: activeProject.id,
@@ -3277,9 +3283,15 @@ function ChatViewContent(props: ChatViewProps) {
       const nextScripts = activeProject.scripts.map((script) =>
         script.id === scriptId
           ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
+          : {
+              ...script,
+              ...(input.runOnWorktreeCreate && script.runOnWorktreeCreate
+                ? { runOnWorktreeCreate: false }
+                : {}),
+              ...(input.runOnWorktreeDelete && script.runOnWorktreeDelete
+                ? { runOnWorktreeDelete: false }
+                : {}),
+            },
       );
 
       return persistProjectScripts({

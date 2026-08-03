@@ -113,6 +113,7 @@ export interface NewProjectScriptInput {
   command: string;
   icon: ProjectScriptIcon;
   runOnWorktreeCreate: boolean;
+  runOnWorktreeDelete: boolean;
   keybinding: string | null;
   /** Optional URL to open in the in-app preview when this script runs. */
   previewUrl: string | null;
@@ -171,6 +172,7 @@ export default function ProjectScriptsControl({
   const [icon, setIcon] = useState<ProjectScriptIcon>("play");
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(false);
+  const [runOnWorktreeDelete, setRunOnWorktreeDelete] = useState(false);
   const [singleRun, setSingleRun] = useState(false);
   const [keybinding, setKeybinding] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
@@ -249,6 +251,7 @@ export default function ProjectScriptsControl({
         command: trimmedCommand,
         icon,
         runOnWorktreeCreate,
+        runOnWorktreeDelete,
         keybinding: keybindingRule?.key ?? null,
         previewUrl: trimmedPreviewUrl.length > 0 ? trimmedPreviewUrl : null,
         autoOpenPreview: trimmedPreviewUrl.length > 0 ? autoOpenPreview : false,
@@ -280,6 +283,7 @@ export default function ProjectScriptsControl({
     setIcon("play");
     setIconPickerOpen(false);
     setRunOnWorktreeCreate(false);
+    setRunOnWorktreeDelete(false);
     setSingleRun(false);
     setKeybinding("");
     setPreviewUrl("");
@@ -296,6 +300,7 @@ export default function ProjectScriptsControl({
     setIcon(script.icon);
     setIconPickerOpen(false);
     setRunOnWorktreeCreate(script.runOnWorktreeCreate);
+    setRunOnWorktreeDelete(script.runOnWorktreeDelete ?? false);
     setSingleRun(script.singleRun ?? false);
     setKeybinding(keybindingValueForCommand(keybindings, commandForProjectScript(script.id)) ?? "");
     setPreviewUrl(script.previewUrl ?? "");
@@ -317,6 +322,7 @@ export default function ProjectScriptsControl({
       command: fileScript.command,
       icon: fileScript.icon ?? "play",
       runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
+      runOnWorktreeDelete: fileScript.runOnWorktreeDelete ?? false,
       keybinding: null,
       previewUrl: fileScript.previewUrl ?? null,
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
@@ -333,6 +339,7 @@ export default function ProjectScriptsControl({
       setIcon(payload.icon);
       setIconPickerOpen(false);
       setRunOnWorktreeCreate(payload.runOnWorktreeCreate);
+      setRunOnWorktreeDelete(payload.runOnWorktreeDelete);
       setSingleRun(payload.singleRun);
       setKeybinding("");
       setPreviewUrl(payload.previewUrl ?? "");
@@ -469,7 +476,11 @@ export default function ProjectScriptsControl({
                       <ScriptIcon icon={script.icon} className="size-4" />
                     )}
                     <span className="truncate">
-                      {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
+                      {script.runOnWorktreeCreate
+                        ? `${script.name} (setup)`
+                        : script.runOnWorktreeDelete
+                          ? `${script.name} (teardown)`
+                          : script.name}
                     </span>
                     <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
                       {shortcutLabel && (
@@ -573,6 +584,7 @@ export default function ProjectScriptsControl({
           setCommand("");
           setIcon("play");
           setRunOnWorktreeCreate(false);
+          setRunOnWorktreeDelete(false);
           setSingleRun(false);
           setKeybinding("");
           setPreviewUrl("");
@@ -680,6 +692,13 @@ export default function ProjectScriptsControl({
                 <Switch
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                <span>Run automatically on worktree deletion</span>
+                <Switch
+                  checked={runOnWorktreeDelete}
+                  onCheckedChange={(checked) => setRunOnWorktreeDelete(Boolean(checked))}
                 />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
