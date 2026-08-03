@@ -8,6 +8,7 @@
 import type {
   DesktopPreviewAnnotationTheme,
   DesktopPreviewColorScheme,
+  DesktopPreviewDeviceEmulation,
   DesktopPreviewPointerEvent,
   PreviewAnnotationPayload,
   PreviewAnnotationRect,
@@ -469,6 +470,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     new Set(),
   );
   const pickSessionsRef = yield* Ref.make<ReadonlyMap<string, PickSession>>(new Map());
+  // Desired device identity per tab (absence = desktop). Kept outside the
+  // broadcast tab state: the renderer owns the viewport preset and only needs
+  // the override re-applied across webview swaps.
+  const deviceEmulationRef = yield* Ref.make<ReadonlyMap<string, DesktopPreviewDeviceEmulation>>(
+    new Map(),
+  );
   const controlSessionsRef = yield* SynchronizedRef.make<
     ReadonlyMap<number, BrowserControlSession>
   >(new Map());
@@ -1486,6 +1493,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       ] as const;
     });
     if (Option.isNone(tab)) return;
+    yield* Ref.update(deviceEmulationRef, (emulations) =>
+      replaceMap(emulations, (copy) => {
+        copy.delete(tabId);
+      }),
+    );
     const closedTab = tab.value;
     if (closedTab.webContentsId != null) {
       yield* Effect.all(
@@ -1938,6 +1950,109 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  // Device emulation makes the guest present as the emulated hardware: the
+  // metrics/touch/client-hint overrides live on the CDP debugger session (and
+  // so must be re-applied after every (re)attach, like applyColorScheme),
+  // while the user-agent string is set at the WebContents level so network
+  // requests and navigator.userAgent survive a debugger detach.
+  const applyDeviceEmulation = Effect.fn("PreviewManager.applyDeviceEmulation")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+    emulation: DesktopPreviewDeviceEmulation | null,
+  ) {
+    const targetUserAgent =
+      emulation?.userAgent != null
+        ? emulation.userAgent.replace("%s", process.versions.chrome)
+        : wc.session.getUserAgent();
+    const userAgentChanged = wc.getUserAgent() !== targetUserAgent;
+    if (userAgentChanged) {
+      yield* attempt(
+        { operation: "applyDeviceEmulation.setUserAgent", tabId, webContentsId: wc.id },
+        () => wc.setUserAgent(targetUserAgent),
+      );
+    }
+    yield* ensureControlSession(wc);
+    yield* attemptPromise(
+      { operation: "applyDeviceEmulation", tabId, webContentsId: wc.id },
+      async () => {
+        if (emulation) {
+          await wc.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+            // Zero width/height leaves sizing to the <webview> element (which
+            // the renderer already sets to the preset's CSS viewport); only
+            // the scale factor and mobile layout mode are overridden.
+            width: 0,
+            height: 0,
+            deviceScaleFactor: emulation.deviceScaleFactor,
+            mobile: emulation.mobile,
+          });
+          await wc.debugger.sendCommand("Emulation.setTouchEmulationEnabled", {
+            enabled: emulation.touch,
+            maxTouchPoints: 5,
+          });
+          await wc.debugger.sendCommand("Emulation.setUserAgentOverride", {
+            userAgent: targetUserAgent,
+            // Sec-CH-UA-* client hints; Safari user agents ship none.
+            ...(emulation.userAgent?.includes("Android")
+              ? {
+                  userAgentMetadata: {
+                    platform: "Android",
+                    platformVersion: "10",
+                    architecture: "",
+                    model: "K",
+                    mobile: true,
+                  },
+                }
+              : {}),
+          });
+        } else {
+          await wc.debugger.sendCommand("Emulation.clearDeviceMetricsOverride");
+          await wc.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: false });
+          await wc.debugger.sendCommand("Emulation.setUserAgentOverride", {
+            userAgent: targetUserAgent,
+          });
+        }
+      },
+    );
+    // Sites sniff the user agent server-side (m.* redirects, adaptive SSR),
+    // so a changed identity needs a reload to take effect.
+    if (userAgentChanged && /^https?:/.test(wc.getURL())) {
+      yield* attempt(
+        { operation: "applyDeviceEmulation.reload", tabId, webContentsId: wc.id },
+        () => wc.reload(),
+      );
+    }
+  });
+
+  const setDeviceEmulation = Effect.fn("PreviewManager.setDeviceEmulation")(function* (
+    tabId: string,
+    emulation: DesktopPreviewDeviceEmulation | null,
+  ) {
+    const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+    if (!tab) {
+      return yield* new PreviewTabNotFoundError({ tabId });
+    }
+    const previous = yield* Ref.modify(deviceEmulationRef, (emulations) => {
+      const prior = emulations.get(tabId) ?? null;
+      return [
+        prior,
+        replaceMap(emulations, (copy) => {
+          if (emulation) copy.set(tabId, emulation);
+          else copy.delete(tabId);
+        }),
+      ] as const;
+    });
+    // Nothing was ever applied and nothing is requested — don't disturb the
+    // guest (or force a control session) for a no-op.
+    if (previous === null && emulation === null) return;
+    // Re-read after the update: registerWebview may have swapped the guest
+    // in the meantime and the override must land on the current one.
+    const webContentsId = (yield* SynchronizedRef.get(tabsRef)).get(tabId)?.webContentsId;
+    if (webContentsId == null) return;
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) return;
+    yield* applyDeviceEmulation(tabId, wc, emulation);
+  });
+
   // Re-establish the control session after a detach, restoring any
   // color-scheme override the tab carries. The scheme is read after the
   // session attaches so a concurrent setColorScheme is not overwritten with
@@ -1963,6 +2078,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             ],
           }),
         );
+      }
+      const emulation = (yield* Ref.get(deviceEmulationRef)).get(tabId);
+      if (emulation) {
+        yield* applyDeviceEmulation(tabId, wc, emulation);
       }
     }).pipe(Effect.ignore);
 
@@ -3281,6 +3400,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     saveRecording,
     setAnnotationTheme,
     setColorScheme,
+    setDeviceEmulation,
     setMainWindow,
     startRecording,
     closePictureInPicture,
@@ -3577,6 +3697,10 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       colorScheme: DesktopPreviewColorScheme,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setDeviceEmulation: (
+      tabId: string,
+      emulation: DesktopPreviewDeviceEmulation | null,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: () => Effect.Effect<void, PreviewManagerError>;
     readonly clearCache: () => Effect.Effect<void, PreviewManagerError>;
@@ -3674,6 +3798,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     resetZoom: operations.resetZoom,
     hardReload: operations.hardReload,
     setColorScheme: operations.setColorScheme,
+    setDeviceEmulation: operations.setDeviceEmulation,
     openDevTools: operations.openDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* () {
       yield* browserSession
