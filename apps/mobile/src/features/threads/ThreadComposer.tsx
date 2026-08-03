@@ -25,6 +25,7 @@ import {
   View,
   type ViewStyle,
 } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import Animated, {
   FadeIn,
@@ -74,13 +75,12 @@ import type { QueuedThreadMessage } from "../../state/thread-outbox";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { QueuedMessageStrip } from "./QueuedMessageStrip";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
-import { SymbolView } from "../../components/AppSymbol";
+import { AnimatedSymbolSwap, SymbolView } from "../../components/AppSymbol";
 import {
   voiceComboButtonProps,
+  VoiceCancelTarget,
   VoiceComboBadge,
-  VoiceInlineComposer,
   VoiceRecordingBar,
-  VoiceRecoveryRow,
 } from "../voice/VoiceComposerControls";
 import { useVoiceComposer } from "../voice/useVoiceComposer";
 
@@ -291,6 +291,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const isDarkMode = useColorScheme() === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
   const iconColor = useThemeColor("--color-icon");
+  const dangerColor = useThemeColor("--color-danger");
   const bodyText = useScaledTextRole("body");
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
@@ -383,15 +384,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     },
   });
   const voiceBusy = voice.busy;
-  // Voice Input takes over the collapsed pill's contents (waveform / transcribing row) instead
-  // of rendering a bar above it; the expanded card keeps the bar above the toolbar.
-  const voiceInlineActive =
-    voice.state.type === "recording" ||
-    voice.state.type === "stopping" ||
-    voice.state.type === "transcribing";
-  // Set when the user taps send while recording/transcribing: the message goes out
-  // automatically as soon as the transcript is inserted into the draft.
-  const [pendingVoiceSend, setPendingVoiceSend] = useState(false);
 
   const composerTrigger = useMemo<ComposerTrigger | null>(() => {
     if (composerSelection.start !== composerSelection.end) {
@@ -555,7 +547,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const attachmentMenuActions = useMemo(
     () => [
-      { id: "photos", title: "Photo Library", image: Platform.select({ ios: "photo.on.rectangle" }) },
+      {
+        id: "photos",
+        title: "Photo Library",
+        image: Platform.select({ ios: "photo.on.rectangle" }),
+      },
       { id: "files", title: "Files", image: Platform.select({ ios: "folder" }) },
     ],
     [],
@@ -597,22 +593,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.title,
     voiceBusy,
   ]);
-
-  // Dispatch a queued voice send once the transcript has landed in the draft. "completed" and
-  // the draft update can commit on different renders, so wait for canSend before firing;
-  // cancel/failure clears the queue.
-  const voiceStateForSend = voice.state.type;
-  useEffect(() => {
-    if (!pendingVoiceSend) return;
-    if (voiceStateForSend === "completed" && canSend) {
-      setPendingVoiceSend(false);
-      void handleSend();
-      return;
-    }
-    if (voiceStateForSend === "idle" || voiceStateForSend === "failed") {
-      setPendingVoiceSend(false);
-    }
-  }, [pendingVoiceSend, voiceStateForSend, canSend, handleSend]);
 
   const handleCommandSelect = useCallback(
     (item: ComposerCommandItem) => {
@@ -802,15 +782,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           />
         ) : null}
 
-        {/* Collapsed voice UI lives inside the pill itself; the bar only serves the expanded card. */}
-        {isExpanded ? (
-          <VoiceRecordingBar
-            state={voice.state}
-            subscribeLevel={voice.subscribeLevel}
-            onCancel={() => void voice.cancel()}
-            onCleanupChange={voice.setCleanup}
-          />
-        ) : null}
+        {/* The one recording HUD for both modes: it sits above the pill/card so the draft and
+            attachments stay visible and mounted while Voice Input is active. */}
+        <VoiceRecordingBar
+          state={voice.state}
+          subscribeLevel={voice.subscribeLevel}
+          onCancel={() => void voice.cancel()}
+          onCleanupChange={voice.setCleanup}
+          holdActive={voice.holdActive}
+          cancelArmed={voice.cancelArmed}
+        />
 
         <QueuedMessageStrip
           messages={props.queuedMessages}
@@ -857,145 +838,139 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </Animated.View>
           ) : null}
 
-          {!isExpanded && voiceInlineActive ? (
-            <VoiceInlineComposer
-              state={voice.state}
-              subscribeLevel={voice.subscribeLevel}
-              onCancel={() => {
-                setPendingVoiceSend(false);
-                void voice.cancel();
+          {!isExpanded ? (
+            <ControlPillMenu actions={attachmentMenuActions} onPressAction={onAttachmentMenuAction}>
+              <ControlPill icon="plus" accessibilityLabel="Add attachment" />
+            </ControlPillMenu>
+          ) : null}
+          <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
+            <ComposerEditor
+              ref={inputRef}
+              multiline
+              value={props.draftMessage}
+              skills={selectedProviderStatus?.skills ?? []}
+              selection={composerSelection}
+              onChangeText={props.onChangeDraftMessage}
+              onSelectionChange={handleSelectionChange}
+              onPasteImages={(uris) => void props.onNativePasteImages(uris)}
+              placeholder={props.placeholder}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+              onSubmit={handleSend}
+              scrollEnabled={isExpanded}
+              // Android: collapsed single line centers natively (gravity) in
+              // a pill-height box matching the send button; iOS keeps insets.
+              singleLineCentered={!isExpanded}
+              contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
+              style={
+                isExpanded
+                  ? {
+                      minHeight: 80,
+                      maxHeight: 160,
+                      paddingHorizontal: 4,
+                      paddingVertical: 4,
+                    }
+                  : {
+                      height: 36,
+                    }
+              }
+              textStyle={{
+                ...bodyText,
+                color: foregroundColor,
               }}
-              onStop={voice.toggle}
-              onSend={() => {
-                setPendingVoiceSend(true);
-                if (voice.state.type === "recording") voice.toggle();
-              }}
-              sendQueued={pendingVoiceSend}
             />
-          ) : (
-            <>
-              {!isExpanded ? (
-                <ControlPillMenu
-                  actions={attachmentMenuActions}
-                  onPressAction={onAttachmentMenuAction}
-                >
-                  <ControlPill icon="plus" accessibilityLabel="Add attachment" />
-                </ControlPillMenu>
-              ) : null}
-              <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
-                <ComposerEditor
-                  ref={inputRef}
-                  multiline
-                  value={props.draftMessage}
-                  skills={selectedProviderStatus?.skills ?? []}
-                  selection={composerSelection}
-                  onChangeText={(text) => {
-                    if (voice.recovery) voice.clearRecovery();
-                    props.onChangeDraftMessage(text);
-                  }}
-                  onSelectionChange={handleSelectionChange}
-                  onPasteImages={(uris) => void props.onNativePasteImages(uris)}
-                  placeholder={props.placeholder}
-                  onFocus={handleFocus}
-                  onBlur={handleBlur}
-                  onSubmit={handleSend}
-                  scrollEnabled={isExpanded}
-                  // Android: collapsed single line centers natively (gravity) in
-                  // a pill-height box matching the send button; iOS keeps insets.
-                  singleLineCentered={!isExpanded}
-                  contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
-                  style={
-                    isExpanded
-                      ? {
-                          minHeight: 80,
-                          maxHeight: 160,
-                          paddingHorizontal: 4,
-                          paddingVertical: 4,
-                        }
-                      : {
-                          height: 36,
-                        }
-                  }
-                  textStyle={{
-                    ...bodyText,
-                    color: foregroundColor,
-                  }}
-                />
-              </View>
-              {!isExpanded && props.draftAttachments.length > 0 ? (
-                <View className="flex-row gap-1 pl-1">
-                  {props.draftAttachments.slice(0, 3).map((attachment) =>
-                    isDraftComposerImageAttachment(attachment) ? (
-                      <Pressable
-                        key={attachment.id}
-                        onPress={() => onPressImage(attachment.previewUri)}
-                      >
-                        <Image
-                          source={{ uri: attachment.previewUri }}
-                          className="size-[30px] rounded-lg bg-subtle"
-                          resizeMode="cover"
-                        />
-                      </Pressable>
-                    ) : (
-                      // No thumbnail for documents: a glyph tile keeps the
-                      // collapsed strip's 30pt rhythm.
-                      <View
-                        key={attachment.id}
-                        className="size-[30px] items-center justify-center rounded-lg bg-subtle"
-                      >
-                        <SymbolView
-                          name={
-                            attachment.type === "pdf"
-                              ? "doc.richtext"
-                              : attachment.type === "video"
-                                ? "play.rectangle"
-                                : "doc"
-                          }
-                          size={14}
-                          tintColor={foregroundColor}
-                          type="monochrome"
-                        />
-                      </View>
-                    ),
-                  )}
-                  {props.draftAttachments.length > 3 ? (
-                    <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
-                      <Text className="text-foreground-muted text-2xs font-t3-bold">
-                        +{props.draftAttachments.length - 3}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
-              {!isExpanded ? (
-                <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
-                  <View className="flex-row items-center gap-1">
-                    {/* Plain mic starts dictation (the in-pill voice UI takes over from there);
-                    the round primary button sends. A running thread keeps its stop pill. */}
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Dictate message"
-                      disabled={voiceBusy}
-                      onPress={voice.toggle}
-                      className="h-11 w-9 items-center justify-center"
-                    >
-                      <SymbolView name="mic" size={18} tintColor={iconColor} type="monochrome" />
-                    </Pressable>
-                    {showStopAction ? (
-                      <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
-                    ) : null}
-                    <ControlPill
-                      icon="arrow.up"
-                      variant="primary"
-                      disabled={!canSend || voiceBusy}
-                      accessibilityLabel="Send"
-                      onPress={() => void handleSend()}
+          </View>
+          {!isExpanded && props.draftAttachments.length > 0 ? (
+            <View className="flex-row gap-1 pl-1">
+              {props.draftAttachments.slice(0, 3).map((attachment) =>
+                isDraftComposerImageAttachment(attachment) ? (
+                  <Pressable
+                    key={attachment.id}
+                    onPress={() => onPressImage(attachment.previewUri)}
+                  >
+                    <Image
+                      source={{ uri: attachment.previewUri }}
+                      className="size-[30px] rounded-lg bg-subtle"
+                      resizeMode="cover"
+                    />
+                  </Pressable>
+                ) : (
+                  // No thumbnail for documents: a glyph tile keeps the
+                  // collapsed strip's 30pt rhythm.
+                  <View
+                    key={attachment.id}
+                    className="size-[30px] items-center justify-center rounded-lg bg-subtle"
+                  >
+                    <SymbolView
+                      name={
+                        attachment.type === "pdf"
+                          ? "doc.richtext"
+                          : attachment.type === "video"
+                            ? "play.rectangle"
+                            : "doc"
+                      }
+                      size={14}
+                      tintColor={foregroundColor}
+                      type="monochrome"
                     />
                   </View>
-                </Animated.View>
+                ),
+              )}
+              {props.draftAttachments.length > 3 ? (
+                <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
+                  <Text className="text-foreground-muted text-2xs font-t3-bold">
+                    +{props.draftAttachments.length - 3}
+                  </Text>
+                </View>
               ) : null}
-            </>
-          )}
+            </View>
+          ) : null}
+          {!isExpanded ? (
+            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
+              <View className="flex-row items-center gap-1">
+                {/* Mic drives the full gesture: tap toggles hands-free, hold is
+                  push-to-talk, slide up cancels. The recording HUD renders above the pill.
+                  The round primary button sends; a running thread keeps its stop pill. */}
+                <GestureDetector
+                  gesture={voice.comboGesture({ canSend: false, onSend: () => undefined })}
+                >
+                  <Animated.View style={voice.comboPressStyle}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        voice.state.type === "recording"
+                          ? "Stop recording and transcribe"
+                          : "Dictate message"
+                      }
+                      accessibilityHint="Hold to record, slide up to cancel"
+                      disabled={voiceBusy && voice.state.type !== "recording"}
+                      onPress={() =>
+                        voice.comboActivate({ canSend: false, onSend: () => undefined })
+                      }
+                      className="h-11 w-9 items-center justify-center"
+                    >
+                      <AnimatedSymbolSwap
+                        name={voice.state.type === "recording" ? "stop.fill" : "mic"}
+                        size={18}
+                        tintColor={voice.state.type === "recording" ? dangerColor : iconColor}
+                        type="monochrome"
+                      />
+                    </Pressable>
+                  </Animated.View>
+                </GestureDetector>
+                {showStopAction ? (
+                  <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
+                ) : null}
+                <ControlPill
+                  icon="arrow.up"
+                  variant="primary"
+                  disabled={!canSend || voiceBusy}
+                  accessibilityLabel="Send"
+                  onPress={() => void handleSend()}
+                />
+              </View>
+            </Animated.View>
+          ) : null}
         </ComposerSurface>
 
         {isExpanded ? (
@@ -1051,24 +1026,37 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               {/* Combined send/record button pinned outside the scroller so it's always
                   reachable while the keyboard is up. It stays mounted through the whole voice
                   lifecycle (mic → send arrow → stop) so a hold-to-record release always lands
-                  on the same pressable. */}
-              <VoiceComboBadge visible={canSend && !voiceBusy}>
-                <ComposerToolbarButton
-                  {...voiceComboButtonProps(voice.state, canSend && !voiceBusy)}
-                  {...voice.comboPressProps({
-                    canSend: canSend && !voiceBusy,
-                    onSend: () => void handleSend(),
-                  })}
-                  showChevron={false}
+                  on the same pressable. onPress is the screen-reader activation path; real
+                  touches are handled by the gesture. */}
+              <View>
+                <VoiceComboBadge visible={canSend && !voiceBusy}>
+                  <GestureDetector
+                    gesture={voice.comboGesture({
+                      canSend: canSend && !voiceBusy,
+                      onSend: () => void handleSend(),
+                    })}
+                  >
+                    <Animated.View style={voice.comboPressStyle}>
+                      <ComposerToolbarButton
+                        {...voiceComboButtonProps(voice.state, canSend && !voiceBusy)}
+                        onPress={() =>
+                          voice.comboActivate({
+                            canSend: canSend && !voiceBusy,
+                            onSend: () => void handleSend(),
+                          })
+                        }
+                        showChevron={false}
+                      />
+                    </Animated.View>
+                  </GestureDetector>
+                </VoiceComboBadge>
+                <VoiceCancelTarget
+                  holdActive={voice.holdActive}
+                  cancelArmed={voice.cancelArmed}
+                  cancelProgress={voice.cancelProgress}
                 />
-              </VoiceComboBadge>
+              </View>
             </ComposerToolbarRow>
-            <VoiceRecoveryRow
-              recovery={voice.recovery}
-              onUseRaw={voice.useRaw}
-              onUndo={voice.undo}
-              onDismiss={voice.clearRecovery}
-            />
           </Animated.View>
         ) : null}
 

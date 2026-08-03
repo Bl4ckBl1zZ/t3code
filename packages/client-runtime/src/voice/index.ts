@@ -12,6 +12,23 @@ export {
   type VoicePreflightSnapshot,
 } from "./preflight.ts";
 
+export {
+  createVoiceTranscriptStash,
+  type VoiceTranscriptStash,
+  type VoiceTranscriptStashEntry,
+} from "./stash.ts";
+
+export {
+  VOICE_GESTURE_DEFAULTS,
+  VOICE_GESTURE_IDLE,
+  voiceGestureCancelProgress,
+  voiceGestureTransition,
+  type VoiceGestureConfig,
+  type VoiceGestureEffect,
+  type VoiceGestureEvent,
+  type VoiceGestureState,
+} from "./gesture.ts";
+
 export type VoiceInputError = {
   readonly code: VoiceTranscriptionErrorCode | "permission_denied" | "recording_failed";
   readonly message?: string;
@@ -299,9 +316,11 @@ export class VoiceInputController {
   }
 
   async retry(): Promise<boolean> {
-    if (this.#state.type !== "failed" || !this.#state.canRetry || this.#recording === null) {
-      return false;
-    }
+    if (this.#state.type !== "failed" || !this.#state.canRetry) return false;
+    // A permission failure leaves no recording behind, so the only meaningful retry is a fresh
+    // start that re-requests microphone access.
+    if (this.#state.stage === "permission") return this.start(this.#cleanup);
+    if (this.#recording === null) return false;
     return this.#transcribe();
   }
 

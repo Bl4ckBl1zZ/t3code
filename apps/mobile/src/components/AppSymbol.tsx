@@ -74,6 +74,7 @@ import {
 } from "@tabler/icons-react-native";
 import { Platform } from "react-native";
 import { SymbolView as ExpoSymbolView, type SFSymbol, type SymbolViewProps } from "expo-symbols";
+import Animated, { ReduceMotion, ZoomIn, ZoomOut } from "react-native-reanimated";
 
 const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.branch": IconGitBranch,
@@ -200,5 +201,26 @@ export function SymbolView(props: SymbolViewProps) {
       style={props.style}
       testID={props.testID}
     />
+  );
+}
+
+const symbolSwapEnter = ZoomIn.springify()
+  .damping(18)
+  .stiffness(260)
+  .reduceMotion(ReduceMotion.System);
+const symbolSwapExit = ZoomOut.duration(100).reduceMotion(ReduceMotion.System);
+
+/**
+ * SymbolView that morphs when its symbol changes: the old glyph zooms out fast while the new
+ * one springs in, instead of snapping between frames. Use for stateful buttons whose icon
+ * tracks a mode (mic → stop → send). Finite entering/exiting animations only, no loops.
+ */
+export function AnimatedSymbolSwap(props: SymbolViewProps) {
+  const swapKey =
+    typeof props.name === "string" ? props.name : (props.name.ios ?? props.name.android);
+  return (
+    <Animated.View key={swapKey} entering={symbolSwapEnter} exiting={symbolSwapExit}>
+      <SymbolView {...props} />
+    </Animated.View>
   );
 }

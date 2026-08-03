@@ -15,7 +15,7 @@ import {
 import { useThemeColor } from "../lib/useThemeColor";
 import { cn } from "../lib/cn";
 import { AppText as Text } from "./AppText";
-import { SymbolView } from "./AppSymbol";
+import { AnimatedSymbolSwap, SymbolView } from "./AppSymbol";
 
 export const COMPOSER_TOOLBAR_CONTROL_HEIGHT = 44;
 export const COMPOSER_TOOLBAR_GAP = 8;
@@ -138,6 +138,8 @@ export function ComposerToolbarScroller(props: {
 export function ComposerToolbarButton(props: {
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly iconNode?: ReactNode;
+  /** Morph (zoom-crossfade) between icons when `icon` changes instead of snapping. */
+  readonly animateIconChanges?: boolean;
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly active?: boolean;
@@ -146,8 +148,6 @@ export function ComposerToolbarButton(props: {
   readonly minWidth?: number;
   readonly onPress?: () => void;
   readonly onLongPress?: () => void;
-  readonly onPressOut?: () => void;
-  readonly delayLongPress?: number;
   readonly showChevron?: boolean;
   readonly textTransform?: "none" | "uppercase";
   readonly variant?: "default" | "primary" | "danger";
@@ -185,8 +185,6 @@ export function ComposerToolbarButton(props: {
       disabled={props.disabled}
       onPress={props.onPress}
       onLongPress={props.onLongPress}
-      onPressOut={props.onPressOut}
-      delayLongPress={props.delayLongPress}
       className={cn(
         // Default width cap lives in the class chain (not the inline style)
         // so callers can lift it with max-w-full — flex-filling pills in the
@@ -228,7 +226,16 @@ export function ComposerToolbarButton(props: {
       {props.iconNode ? (
         <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
       ) : props.icon ? (
-        <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        props.animateIconChanges ? (
+          <AnimatedSymbolSwap
+            name={props.icon}
+            size={16}
+            tintColor={iconTintColor}
+            type="monochrome"
+          />
+        ) : (
+          <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        )
       ) : null}
       {props.label ? (
         <Text

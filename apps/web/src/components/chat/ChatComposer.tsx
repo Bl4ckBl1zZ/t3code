@@ -22,6 +22,7 @@ import {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import { useNavigate } from "@tanstack/react-router";
 import {
   memo,
   type ReactNode,
@@ -109,14 +110,10 @@ import { buildExpandedImagePreview, type ExpandedImagePreview } from "./Expanded
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
-import {
-  insertVoiceTranscript,
-  replaceVoiceInsertionWithRaw,
-  undoVoiceInsertion,
-  type VoiceInsertionRecovery,
-} from "@t3tools/shared/voiceInput";
+import { insertVoiceTranscript } from "@t3tools/shared/voiceInput";
 import { voiceInputErrorMessage } from "@t3tools/client-runtime/voice";
 import { useWebVoiceInput } from "../../voice/useWebVoiceInput";
+import { takeStashedVoiceTranscript } from "../../voice/webVoiceSession";
 import { ComposerVoiceAction } from "./ComposerVoiceAction";
 
 function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children: ReactNode }) {
@@ -1269,7 +1266,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         scheduleComposerFocus();
         return;
       }
-      if (voiceRecovery) setVoiceRecovery(null);
       promptRef.current = nextPrompt;
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
       const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
@@ -1343,46 +1339,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     readonly cursor: number;
     readonly identity: string;
   } | null>(null);
-  const [voiceRecovery, setVoiceRecovery] = useState<VoiceInsertionRecovery | null>(null);
-  // The recovery chip auto-dismisses so it never lingers in the action row; hovering it
-  // pauses the countdown so nobody loses "Undo" mid-reach.
-  const voiceRecoveryHoveredRef = useRef(false);
-  useEffect(() => {
-    if (!voiceRecovery) return;
-    const id = window.setInterval(() => {
-      if (!voiceRecoveryHoveredRef.current) {
-        setVoiceRecovery(null);
-      }
-    }, 6_000);
-    return () => window.clearInterval(id);
-  }, [voiceRecovery]);
   const composerVoiceIdentity = `${environmentId}:${draftId ?? activeThreadId ?? "new"}`;
-  const voice = useWebVoiceInput({
-    onCompleted: (result) => {
-      const anchor = voiceAnchorRef.current;
-      if (!anchor || anchor.identity !== composerVoiceIdentity) {
-        toastManager.add({
-          type: "info",
-          title: "Voice transcript discarded",
-          description: "The composer changed while the recording was transcribing.",
-        });
-        return;
-      }
-      const currentPrompt = promptRef.current;
-      const usedFallback = currentPrompt !== anchor.prompt;
-      const cursor = usedFallback ? composerCursor : anchor.cursor;
+  const navigate = useNavigate();
+  const insertVoiceTranscriptAt = useCallback(
+    (text: string, cursor: number) => {
       const insertion = insertVoiceTranscript({
-        draft: currentPrompt,
+        draft: promptRef.current,
         range: { start: cursor, end: cursor },
-        rawText: result.rawText,
-        cleanedText: result.text,
+        cleanedText: text,
       });
       promptRef.current = insertion.text;
       setPrompt(insertion.text);
       setComposerCursor(insertion.caret);
-      setVoiceRecovery(insertion.recovery);
       window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(insertion.caret));
-      if (usedFallback) {
+    },
+    [promptRef, setPrompt],
+  );
+  const voice = useWebVoiceInput({
+    identity: composerVoiceIdentity,
+    onCompleted: (result) => {
+      // The session router only delivers here when this composer's identity matches the
+      // session's origin, so the transcript always belongs in this draft. The anchor may still
+      // be missing (this composer remounted mid-transcription) or stale (the draft changed);
+      // fall back to the current cursor rather than ever dropping the text.
+      const anchor = voiceAnchorRef.current;
+      voiceAnchorRef.current = null;
+      const anchored =
+        anchor !== null &&
+        anchor.identity === composerVoiceIdentity &&
+        anchor.prompt === promptRef.current;
+      const cursor = anchored
+        ? anchor.cursor
+        : (composerEditorRef.current?.readSnapshot()?.cursor ?? composerCursor);
+      insertVoiceTranscriptAt(result.text, cursor);
+      if (!anchored) {
         toastManager.add({
           type: "info",
           title: "Transcript inserted at current cursor",
@@ -1391,7 +1381,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     onUnavailable: (reason) => {
       if (reason === "connect_openrouter") {
-        void window.location.assign("/settings/integrations/openrouter");
+        void navigate({ to: "/settings/integrations/openrouter" });
         return;
       }
       toastManager.add({
@@ -1413,6 +1403,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
   }, [voice.state]);
 
+  // A transcript that finished while this conversation's composer was not active is stashed by
+  // the app-scoped voice session; claim it as soon as this identity is the active composer.
+  // take() consumes the entry, so StrictMode's double effect run inserts at most once.
+  useEffect(() => {
+    const stashed = takeStashedVoiceTranscript(composerVoiceIdentity);
+    if (!stashed) return;
+    const cursor = composerEditorRef.current?.readSnapshot()?.cursor ?? promptRef.current.length;
+    insertVoiceTranscriptAt(stashed.text, cursor);
+    toastManager.add({ type: "info", title: "Voice transcript inserted" });
+  }, [composerVoiceIdentity, insertVoiceTranscriptAt, promptRef]);
+
   const toggleVoiceInput = useCallback(() => {
     // Capture the anchor on start as well as on manual stop: a recording that stops on its own
     // (duration cap, interruption) still needs an insertion point for the transcript.
@@ -1422,44 +1423,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       cursor: snapshot?.cursor ?? composerCursor,
       identity: composerVoiceIdentity,
     };
-    if (voice.state.type !== "recording") setVoiceRecovery(null);
     void voice.toggle();
   }, [composerCursor, composerVoiceIdentity, promptRef, voice]);
 
-  const useRawVoiceTranscript = useCallback(() => {
-    if (!voiceRecovery) return;
-    const replacement = replaceVoiceInsertionWithRaw(promptRef.current, voiceRecovery);
-    if (!replacement) {
-      setVoiceRecovery(null);
-      return;
-    }
-    promptRef.current = replacement.text;
-    setPrompt(replacement.text);
-    setComposerCursor(replacement.caret);
-    setVoiceRecovery(replacement.recovery);
-    window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(replacement.caret));
-  }, [promptRef, setPrompt, voiceRecovery]);
-
-  const undoVoiceTranscript = useCallback(() => {
-    if (!voiceRecovery) return;
-    const undone = undoVoiceInsertion(promptRef.current, voiceRecovery);
-    setVoiceRecovery(null);
-    if (!undone) return;
-    promptRef.current = undone.text;
-    setPrompt(undone.text);
-    setComposerCursor(undone.caret);
-    window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(undone.caret));
-  }, [promptRef, setPrompt, voiceRecovery]);
   const voiceBusy =
     voice.state.type === "requesting_permission" ||
     voice.state.type === "recording" ||
     voice.state.type === "stopping" ||
     voice.state.type === "transcribing";
+  // Enter while voice is busy gets one toast per busy episode, not one per keypress.
+  const voiceBusySubmitToastRef = useRef(false);
+  useEffect(() => {
+    if (!voiceBusy) voiceBusySubmitToastRef.current = false;
+  }, [voiceBusy]);
 
   useEffect(() => {
     const onVoiceShortcut = (event: KeyboardEvent) => {
       if (event.isComposing || event.defaultPrevented) return;
       if (event.key === "Escape" && voice.state.type === "recording") {
+        // Esc over an open dialog closes the dialog, not the recording.
+        if (document.querySelector('[role="dialog"][data-open="true"]')) return;
         event.preventDefault();
         void voice.cancel();
         scheduleComposerFocus();
@@ -1814,7 +1797,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerDraftTarget,
       composerTerminalContexts,
       setComposerDraftTerminalContexts,
-      voiceRecovery,
     ],
   );
 
@@ -2925,6 +2907,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onSubmit={(event) => {
         if (voiceBusy) {
           event.preventDefault();
+          if (!voiceBusySubmitToastRef.current) {
+            voiceBusySubmitToastRef.current = true;
+            toastManager.add({ type: "info", title: "Waiting for voice transcript…" });
+          }
           return;
         }
         submitComposer(event);
@@ -3543,43 +3529,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
-                {voiceRecovery ? (
-                  <div
-                    className="flex items-center gap-1 text-xs text-muted-foreground animate-voice-chip-in motion-reduce:animate-none"
-                    onMouseEnter={() => {
-                      voiceRecoveryHoveredRef.current = true;
-                    }}
-                    onMouseLeave={() => {
-                      voiceRecoveryHoveredRef.current = false;
-                    }}
-                  >
-                    <span>
-                      {voiceRecovery.rawText === voiceRecovery.cleanedText ? "Added" : "Cleaned up"}
-                    </span>
-                    {voiceRecovery.rawText !== voiceRecovery.cleanedText ? (
-                      <button
-                        type="button"
-                        className="rounded px-1.5 py-1 hover:bg-muted hover:text-foreground"
-                        onClick={useRawVoiceTranscript}
-                      >
-                        Use raw
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="rounded px-1.5 py-1 hover:bg-muted hover:text-foreground"
-                      onClick={undoVoiceTranscript}
-                    >
-                      Undo
-                    </button>
-                  </div>
-                ) : null}
                 <ComposerVoiceAction
                   state={voice.state}
+                  // Dictation stays available while the agent runs: the transcript only lands
+                  // in the draft, which is legal to edit mid-turn.
                   disabled={
                     isConnecting ||
                     isSendBusy ||
-                    phase === "running" ||
                     environmentUnavailable !== null ||
                     noProviderAvailable ||
                     projectSelectionRequired
