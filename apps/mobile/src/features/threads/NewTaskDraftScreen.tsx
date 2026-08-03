@@ -2,6 +2,8 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Animated from "react-native-reanimated";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -57,9 +59,9 @@ import { useCreateProjectThread } from "./use-project-actions";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import {
   voiceComboButtonProps,
+  VoiceCancelTarget,
   VoiceComboBadge,
   VoiceRecordingBar,
-  VoiceRecoveryRow,
 } from "../voice/VoiceComposerControls";
 import { useVoiceComposer } from "../voice/useVoiceComposer";
 
@@ -1025,10 +1027,7 @@ export function NewTaskDraftScreen(props: {
       value={flow.prompt}
       selection={composerSelection}
       skills={flow.selectedProviderSkills}
-      onChangeText={(text) => {
-        if (voice.recovery) voice.clearRecovery();
-        flow.setPrompt(text);
-      }}
+      onChangeText={flow.setPrompt}
       onSelectionChange={setComposerSelection}
       onFocus={() => setIsComposerFocused(true)}
       onBlur={() => setIsComposerFocused(false)}
@@ -1128,31 +1127,40 @@ export function NewTaskDraftScreen(props: {
             : "Queue task. Hold to dictate",
         }
       : rawComboVisual;
-  const comboPress = voice.comboPressProps({
+  const comboButton = {
     canSend: canStart,
     onSend: () => void handleStart(),
-  });
+  };
   const startComboButton = (
-    <VoiceComboBadge visible={canStart}>
-      <ComposerToolbarButton {...comboVisual} {...comboPress} showChevron={false} />
-    </VoiceComboBadge>
+    <View>
+      <VoiceComboBadge visible={canStart}>
+        <GestureDetector gesture={voice.comboGesture(comboButton)}>
+          <Animated.View style={voice.comboPressStyle}>
+            <ComposerToolbarButton
+              {...comboVisual}
+              onPress={() => voice.comboActivate(comboButton)}
+              showChevron={false}
+            />
+          </Animated.View>
+        </GestureDetector>
+      </VoiceComboBadge>
+      <VoiceCancelTarget
+        holdActive={voice.holdActive}
+        cancelArmed={voice.cancelArmed}
+        cancelProgress={voice.cancelProgress}
+      />
+    </View>
   );
 
-  const voiceRecoveryControls = (
-    <>
-      <VoiceRecordingBar
-        state={voice.state}
-        subscribeLevel={voice.subscribeLevel}
-        onCancel={() => void voice.cancel()}
-        onCleanupChange={voice.setCleanup}
-      />
-      <VoiceRecoveryRow
-        recovery={voice.recovery}
-        onUseRaw={voice.useRaw}
-        onUndo={voice.undo}
-        onDismiss={voice.clearRecovery}
-      />
-    </>
+  const voiceRecordingBar = (
+    <VoiceRecordingBar
+      state={voice.state}
+      subscribeLevel={voice.subscribeLevel}
+      onCancel={() => void voice.cancel()}
+      onCleanupChange={voice.setCleanup}
+      holdActive={voice.holdActive}
+      cancelArmed={voice.cancelArmed}
+    />
   );
 
   if (isAndroid) {
@@ -1179,6 +1187,9 @@ export function NewTaskDraftScreen(props: {
                 : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.85) 40%, rgba(255,255,255,0.95) 100%)",
             }}
           >
+            {/* The recording HUD sits above the pill/card in both modes so a collapsed
+                push-to-talk hold still gets meter, clock, and the slide-to-cancel hint. */}
+            {voiceRecordingBar}
             <ComposerSurface
               isDarkMode={isDarkMode}
               style={
@@ -1213,14 +1224,20 @@ export function NewTaskDraftScreen(props: {
               <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
               {!isExpanded ? (
                 <VoiceComboBadge visible={canStart}>
-                  <ControlPill {...comboVisual} {...comboPress} />
+                  <GestureDetector gesture={voice.comboGesture(comboButton)}>
+                    <Animated.View style={voice.comboPressStyle}>
+                      <ControlPill
+                        {...comboVisual}
+                        onPress={() => voice.comboActivate(comboButton)}
+                      />
+                    </Animated.View>
+                  </GestureDetector>
                 </VoiceComboBadge>
               ) : null}
             </ComposerSurface>
 
             {isExpanded ? (
               <>
-                {voiceRecoveryControls}
                 <ComposerToolbarRow paddingBottom={8} paddingHorizontal={0} paddingTop={8}>
                   <ComposerToolbarScroller
                     fadeOpaque={isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)"}
@@ -1248,7 +1265,7 @@ export function NewTaskDraftScreen(props: {
         <View className="min-h-0 flex-1 px-5 pt-2">{promptEditor}</View>
 
         <View className="border-t border-border" style={{ paddingBottom: controlsBottomPadding }}>
-          {voiceRecoveryControls}
+          {voiceRecordingBar}
           {flow.attachments.length > 0 ? (
             <View className="px-4 pt-3">
               <ComposerAttachmentStrip

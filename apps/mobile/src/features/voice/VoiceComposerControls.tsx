@@ -7,8 +7,9 @@ import Animated, {
   cancelAnimation,
   Easing,
   FadeIn,
-  FadeInDown,
+  FadeInUp,
   FadeOut,
+  FadeOutDown,
   LinearTransition,
   ReduceMotion,
   useAnimatedStyle,
@@ -19,6 +20,8 @@ import Animated, {
   withSequence,
   withSpring,
   withTiming,
+  ZoomIn,
+  ZoomOut,
   type SharedValue,
 } from "react-native-reanimated";
 
@@ -34,7 +37,6 @@ const LEVEL_BAR_COUNT = 14;
 const LEVEL_BAR_WIDTH = 3;
 const LEVEL_BAR_MAX_HEIGHT = 16;
 const LEVEL_BAR_MIN_HEIGHT = 3;
-const RECOVERY_AUTO_DISMISS_MS = 6_000;
 
 // Bars form a dome mirrored around the center like the system dictation meter. Alternating
 // response exponents keep neighbors from moving in lockstep so the meter reads as a live
@@ -50,8 +52,8 @@ const LEVEL_BAR_PROFILES = Array.from({ length: LEVEL_BAR_COUNT }, (_, index) =>
 
 /**
  * Visuals for the combined send/record button: mic when idle and empty, send arrow when the
- * draft has content, stop while recording. Hold always records regardless of mode (the press
- * handlers come from useVoiceComposer's comboPressProps).
+ * draft has content, stop while recording. Hold always records regardless of mode (the touch
+ * handling comes from useVoiceComposer's comboGesture).
  */
 export function voiceComboButtonProps(
   state: VoiceInputState,
@@ -61,6 +63,7 @@ export function voiceComboButtonProps(
   readonly variant?: "danger" | "primary";
   readonly disabled: boolean;
   readonly accessibilityLabel: string;
+  readonly animateIconChanges: true;
 } {
   const recording = state.type === "recording";
   const busy =
@@ -73,6 +76,7 @@ export function voiceComboButtonProps(
       variant: "danger",
       disabled: false,
       accessibilityLabel: "Stop recording and transcribe",
+      animateIconChanges: true,
     };
   }
   if (canSend && !busy) {
@@ -81,6 +85,7 @@ export function voiceComboButtonProps(
       variant: "primary",
       disabled: false,
       accessibilityLabel: "Send. Hold to dictate",
+      animateIconChanges: true,
     };
   }
   return {
@@ -90,6 +95,7 @@ export function voiceComboButtonProps(
       state.type === "transcribing"
         ? "Transcribing voice input"
         : "Dictate message. Hold to record",
+    animateIconChanges: true,
   };
 }
 
@@ -186,11 +192,14 @@ function VoiceLevelMeter(props: {
   );
 }
 
-function RecordingDot() {
+function RecordingDot(props: { readonly paused?: boolean }) {
   const reducedMotion = useReducedMotion();
+  // Slide-to-cancel armed reuses the reduced-motion static path: the pulse stops while the
+  // release would discard the recording.
+  const still = reducedMotion || props.paused === true;
   const progress = useSharedValue(1);
   useEffect(() => {
-    if (reducedMotion) return;
+    if (still) return;
     progress.value = withRepeat(
       withSequence(
         withTiming(0.35, { duration: 850, easing: Easing.inOut(Easing.quad) }),
@@ -202,7 +211,7 @@ function RecordingDot() {
       cancelAnimation(progress);
       progress.value = 1;
     };
-  }, [reducedMotion, progress]);
+  }, [still, progress]);
   const style = useAnimatedStyle(() => ({ opacity: progress.value }));
   return <Animated.View className="size-1.5 rounded-full bg-danger" style={style} aria-hidden />;
 }
@@ -287,133 +296,101 @@ function TranscribingDots() {
   );
 }
 
-const WAVE_BAR_COUNT = 32;
-const WAVE_BAR_WIDTH = 3;
-const WAVE_SAMPLE_INTERVAL_MS = 100;
-
-function WaveBar(props: { readonly history: SharedValue<number[]>; readonly index: number }) {
-  const { history, index } = props;
-  const style = useAnimatedStyle(() => {
-    const value = history.value[index] ?? 0;
-    return {
-      height: withTiming(
-        LEVEL_BAR_MIN_HEIGHT + value * (LEVEL_BAR_MAX_HEIGHT - LEVEL_BAR_MIN_HEIGHT),
-        { duration: WAVE_SAMPLE_INTERVAL_MS },
-      ),
-    };
-  });
-  return (
-    <Animated.View
-      className="rounded-full bg-foreground-muted"
-      style={[style, { width: WAVE_BAR_WIDTH }]}
-    />
-  );
-}
+const cancelTargetEnter = ZoomIn.springify()
+  .damping(16)
+  .stiffness(240)
+  .reduceMotion(ReduceMotion.System);
+const cancelTargetExit = ZoomOut.duration(120).reduceMotion(ReduceMotion.System);
 
 /**
- * Scrolling level history that fills the pill while recording: quiet samples read as a dotted
- * line, speech as bars, with the newest sample entering on the right — the system voice-memo
- * look. One shared array drives every bar; sampling is peak-hold per interval so short
- * transients still register.
+ * Floating slide-to-cancel target above the combo button, visible only while a push-to-talk
+ * hold is in progress. useVoiceComposer quantizes cancel progress to 5% steps to bound JS-side
+ * re-renders; a spring chases each step so the target reads as continuous growth. Arming keeps
+ * the instant danger color swap but pops the scale (overshoot, then settle) so the flip lands
+ * with weight. Render it as a sibling of the button inside a relatively positioned wrapper
+ * that isn't clipped by an overflow-hidden ancestor.
  */
-function VoiceWaveform(props: {
-  readonly subscribeLevel: (listener: (level: number) => void) => () => void;
+export function VoiceCancelTarget(props: {
+  readonly holdActive: boolean;
+  readonly cancelArmed: boolean;
+  readonly cancelProgress: number;
 }) {
-  const history = useSharedValue<number[]>(Array.from({ length: WAVE_BAR_COUNT }, () => 0));
-  const peak = useRef(0);
-  useEffect(
-    () =>
-      props.subscribeLevel((next) => {
-        peak.current = Math.max(peak.current, Math.min(1, Math.max(0, next)));
-      }),
-    [props.subscribeLevel],
-  );
+  const iconColor = useThemeColor("--color-icon");
+  const dangerFg = useThemeColor("--color-danger-foreground");
+  const progressScale = useSharedValue(0.75 + 0.45 * props.cancelProgress);
+  const armedPop = useSharedValue(1);
   useEffect(() => {
-    const id = setInterval(() => {
-      history.value = [...history.value.slice(1), peak.current];
-      peak.current = 0;
-    }, WAVE_SAMPLE_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [history]);
+    progressScale.value = withSpring(0.75 + 0.45 * props.cancelProgress, {
+      damping: 18,
+      stiffness: 240,
+      reduceMotion: ReduceMotion.System,
+    });
+  }, [props.cancelProgress, progressScale]);
+  useEffect(() => {
+    armedPop.value = props.cancelArmed
+      ? withSequence(
+          withSpring(1.15, { damping: 14, stiffness: 420, reduceMotion: ReduceMotion.System }),
+          withSpring(1, { damping: 18, stiffness: 320, reduceMotion: ReduceMotion.System }),
+        )
+      : withSpring(1, { damping: 18, stiffness: 320, reduceMotion: ReduceMotion.System });
+  }, [props.cancelArmed, armedPop]);
+  const scaleStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: progressScale.value * armedPop.value }],
+  }));
+  if (!props.holdActive) return null;
   return (
-    <View
-      className="min-w-0 flex-1 flex-row items-center justify-between px-2"
-      style={{ height: LEVEL_BAR_MAX_HEIGHT }}
+    <Animated.View
+      pointerEvents="none"
+      className="absolute inset-x-0 bottom-full items-center pb-3"
+      entering={cancelTargetEnter}
+      exiting={cancelTargetExit}
       aria-hidden
     >
-      {Array.from({ length: WAVE_BAR_COUNT }, (_, index) => (
-        // Bars are fixed positional slots in the scrolling history.
-        <WaveBar key={index} history={history} index={index} />
-      ))}
-    </View>
-  );
-}
-
-/**
- * In-pill replacement for the composer row while Voice Input is active: cancel on the left, a
- * scrolling waveform (recording) or "Transcribing" + spinner (stopping/transcribing) in the
- * middle, and stop / send on the right. Send while recording stops the capture and queues the
- * message to go out as soon as the transcript lands.
- */
-export function VoiceInlineComposer(props: {
-  readonly state: VoiceInputState;
-  readonly subscribeLevel: (listener: (level: number) => void) => () => void;
-  readonly onCancel: () => void;
-  readonly onStop: () => void;
-  readonly onSend: () => void;
-  readonly sendQueued: boolean;
-}) {
-  const iconSubtle = useThemeColor("--color-icon-subtle");
-  const recording = props.state.type === "recording";
-  return (
-    <Animated.View
-      entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
-      exiting={FadeOut.duration(120).reduceMotion(ReduceMotion.System)}
-      className="min-w-0 flex-1 flex-row items-center gap-1"
-      accessibilityRole="toolbar"
-      accessibilityLabel={
-        recording ? "Voice recording controls" : "Voice transcription in progress"
-      }
-    >
-      <ControlPill
-        icon="xmark"
-        accessibilityLabel={recording ? "Cancel recording" : "Cancel transcription"}
-        onPress={props.onCancel}
-      />
-      {recording ? (
-        <VoiceWaveform subscribeLevel={props.subscribeLevel} />
-      ) : (
-        <View className="min-w-0 flex-1 flex-row items-center justify-center">
-          <Text className="text-base text-foreground-muted" numberOfLines={1}>
-            {props.sendQueued ? "Transcribing, will send" : "Transcribing"}
-          </Text>
-        </View>
-      )}
-      {recording ? (
-        <ControlPill
-          icon="stop.fill"
-          accessibilityLabel="Stop recording and transcribe"
-          onPress={props.onStop}
+      <Animated.View
+        className={cn(
+          "size-8 items-center justify-center rounded-full border",
+          props.cancelArmed ? "border-danger bg-danger" : "border-border bg-subtle-strong",
+        )}
+        style={scaleStyle}
+      >
+        <SymbolView
+          name="xmark"
+          size={13}
+          tintColor={props.cancelArmed ? dangerFg : iconColor}
+          type="monochrome"
         />
-      ) : (
-        <View className="h-11 w-11 items-center justify-center">
-          <ActivityIndicator size="small" color={iconSubtle} />
-        </View>
-      )}
-      <ControlPill
-        icon="arrow.up"
-        variant="primary"
-        disabled={props.sendQueued}
-        accessibilityLabel={recording ? "Stop and send" : "Send when transcription finishes"}
-        onPress={props.onSend}
-      />
+      </Animated.View>
     </Animated.View>
   );
 }
 
-const barLayout = LinearTransition.duration(220)
-  .easing(Easing.inOut(Easing.cubic))
+const barLayout = LinearTransition.springify()
+  .damping(18)
+  .stiffness(220)
   .reduceMotion(ReduceMotion.System);
+const barEnter = FadeInUp.springify().damping(18).stiffness(220).reduceMotion(ReduceMotion.System);
+const barExit = FadeOutDown.duration(140).reduceMotion(ReduceMotion.System);
+
+/**
+ * Eases the recording bar's dim treatment while slide-to-cancel is armed: an opacity timing
+ * instead of an instant style flip, so the bar settles into (and out of) its muted state.
+ */
+function ArmedDim(props: { readonly dimmed: boolean; readonly children: ReactNode }) {
+  const opacity = useSharedValue(props.dimmed ? 0.35 : 1);
+  useEffect(() => {
+    opacity.value = withTiming(props.dimmed ? 0.35 : 1, {
+      duration: 180,
+      easing: Easing.out(Easing.quad),
+      reduceMotion: ReduceMotion.System,
+    });
+  }, [props.dimmed, opacity]);
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View className="flex-row items-center gap-2" style={style}>
+      {props.children}
+    </Animated.View>
+  );
+}
 
 /**
  * Live recording/transcribing status row for the composers. One persistent container morphs
@@ -425,18 +402,21 @@ export function VoiceRecordingBar(props: {
   readonly subscribeLevel: (listener: (level: number) => void) => () => void;
   readonly onCancel: () => void;
   readonly onCleanupChange: (cleanup: boolean) => void;
+  /** A push-to-talk finger is down: swap the cancel pill for the slide-up hint. */
+  readonly holdActive?: boolean;
+  /** Slide-up cancel is armed: dim the bar so release clearly discards. */
+  readonly cancelArmed?: boolean;
 }) {
+  const iconSubtle = useThemeColor("--color-icon-subtle");
   const recording = props.state.type === "recording" ? props.state : null;
   const busy = props.state.type === "stopping" || props.state.type === "transcribing";
-  if (!recording && !busy) return null;
+  const requesting = props.state.type === "requesting_permission";
+  const holdActive = props.holdActive === true;
+  const cancelArmed = holdActive && props.cancelArmed === true;
+  if (!recording && !busy && !requesting) return null;
 
   return (
-    <Animated.View
-      entering={FadeInDown.springify().damping(22).stiffness(280).reduceMotion(ReduceMotion.System)}
-      exiting={FadeOut.duration(140).reduceMotion(ReduceMotion.System)}
-      layout={barLayout}
-      className="px-2 pb-2"
-    >
+    <Animated.View entering={barEnter} exiting={barExit} layout={barLayout} className="px-2 pb-2">
       {recording ? (
         <Animated.View
           key="recording"
@@ -446,9 +426,11 @@ export function VoiceRecordingBar(props: {
           accessibilityRole="toolbar"
           accessibilityLabel="Voice recording controls"
         >
-          <RecordingDot />
-          <VoiceLevelMeter subscribeLevel={props.subscribeLevel} />
-          <RecordingClock startedAt={recording.startedAt} />
+          <RecordingDot paused={cancelArmed} />
+          <ArmedDim dimmed={cancelArmed}>
+            <VoiceLevelMeter subscribeLevel={props.subscribeLevel} />
+            <RecordingClock startedAt={recording.startedAt} />
+          </ArmedDim>
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ selected: recording.cleanup }}
@@ -465,13 +447,37 @@ export function VoiceRecordingBar(props: {
             </Text>
           </Pressable>
           <View className="flex-1" />
-          {/* The composer mic morphs into the stop control while recording, so the bar only
-              carries cancel — a second stop pill here reads as a duplicate. */}
-          <ControlPill
-            icon="xmark"
-            accessibilityLabel="Cancel recording"
-            onPress={props.onCancel}
-          />
+          {/* While a push-to-talk finger is down the cancel pill is unreachable, so the slot
+              shows the gesture hint instead; otherwise the bar only carries cancel — the
+              composer mic morphs into the stop control while recording, so a second stop pill
+              here reads as a duplicate. */}
+          {holdActive ? (
+            <Text className="text-xs text-foreground-muted" accessibilityLiveRegion="polite">
+              {cancelArmed ? "Release to cancel" : "Slide up to cancel"}
+            </Text>
+          ) : (
+            <ControlPill
+              icon="xmark"
+              accessibilityLabel="Cancel recording"
+              onPress={props.onCancel}
+            />
+          )}
+        </Animated.View>
+      ) : requesting ? (
+        // No cancel affordance here: the OS permission sheet owns the screen, and the bar exists
+        // only so first-time users see the flow started while the sheet is up.
+        <Animated.View
+          key="requesting"
+          entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
+          exiting={FadeOut.duration(120).reduceMotion(ReduceMotion.System)}
+          className="flex-row items-center gap-2"
+          accessibilityLiveRegion="polite"
+          accessibilityLabel="Waiting for microphone access"
+        >
+          <View style={{ height: LEVEL_BAR_MAX_HEIGHT }} className="justify-center" aria-hidden>
+            <ActivityIndicator size="small" color={iconSubtle} />
+          </View>
+          <Text className="text-xs text-foreground-muted">Waiting for microphone access…</Text>
         </Animated.View>
       ) : (
         <Animated.View
@@ -492,50 +498,6 @@ export function VoiceRecordingBar(props: {
           />
         </Animated.View>
       )}
-    </Animated.View>
-  );
-}
-
-export function VoiceRecoveryRow(props: {
-  readonly recovery: {
-    readonly rawText: string;
-    readonly cleanedText: string;
-  } | null;
-  readonly onUseRaw: () => void;
-  readonly onUndo: () => void;
-  readonly onDismiss?: () => void;
-}) {
-  const recovery = props.recovery;
-  const onDismiss = props.onDismiss;
-
-  // The chip auto-dismisses so it never lingers in the toolbar; any recovery change (e.g.
-  // switching to the raw transcript) restarts the window.
-  useEffect(() => {
-    if (!recovery || !onDismiss) return;
-    const id = setTimeout(onDismiss, RECOVERY_AUTO_DISMISS_MS);
-    return () => clearTimeout(id);
-  }, [recovery, onDismiss]);
-
-  if (!recovery) return null;
-  return (
-    <Animated.View
-      entering={FadeInDown.duration(200)
-        .easing(Easing.out(Easing.cubic))
-        .reduceMotion(ReduceMotion.System)}
-      exiting={FadeOut.duration(240).reduceMotion(ReduceMotion.System)}
-      className="flex-row items-center justify-end gap-3 px-2 pb-2"
-    >
-      <Text className="text-xs text-foreground-muted">
-        {recovery.rawText === recovery.cleanedText ? "Transcript added" : "Cleaned up"}
-      </Text>
-      {recovery.rawText !== recovery.cleanedText ? (
-        <Pressable accessibilityRole="button" onPress={props.onUseRaw}>
-          <Text className="text-xs text-accent">Use raw</Text>
-        </Pressable>
-      ) : null}
-      <Pressable accessibilityRole="button" onPress={props.onUndo}>
-        <Text className="text-xs text-accent">Undo</Text>
-      </Pressable>
     </Animated.View>
   );
 }

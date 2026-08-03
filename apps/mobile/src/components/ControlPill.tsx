@@ -12,18 +12,18 @@ import { useThemeColor } from "../lib/useThemeColor";
 
 import { cn } from "../lib/cn";
 import { AndroidAnchoredMenu } from "./AndroidAnchoredMenu";
-import { SymbolView } from "./AppSymbol";
+import { AnimatedSymbolSwap, SymbolView } from "./AppSymbol";
 import { AppText as Text } from "./AppText";
 
 export function ControlPill(props: {
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly iconNode?: ReactNode;
+  /** Morph (zoom-crossfade) between icons when `icon` changes instead of snapping. */
+  readonly animateIconChanges?: boolean;
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly onPress?: () => void;
   readonly onLongPress?: () => void;
-  readonly onPressOut?: () => void;
-  readonly delayLongPress?: number;
   readonly variant?: "circle" | "pill" | "primary" | "danger";
   readonly disabled?: boolean;
 }) {
@@ -73,15 +73,22 @@ export function ControlPill(props: {
       accessibilityRole="button"
       onPress={props.onPress}
       onLongPress={props.onLongPress}
-      onPressOut={props.onPressOut}
-      delayLongPress={props.delayLongPress}
       disabled={props.disabled}
       className={containerClassName}
     >
       {props.iconNode ? (
         <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
       ) : props.icon ? (
-        <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        props.animateIconChanges ? (
+          <AnimatedSymbolSwap
+            name={props.icon}
+            size={16}
+            tintColor={iconTintColor}
+            type="monochrome"
+          />
+        ) : (
+          <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        )
       ) : null}
       {props.label ? <Text className={labelClassName}>{props.label}</Text> : null}
     </Pressable>
