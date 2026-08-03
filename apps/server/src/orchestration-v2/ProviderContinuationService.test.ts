@@ -29,6 +29,7 @@ const driver = ProviderDriverKind.make("continuation-test");
 const projection = {
   thread: { archivedAt: null },
   messages: [],
+  runs: [],
 } as unknown as OrchestrationV2ThreadProjection;
 
 const request = (
@@ -71,9 +72,20 @@ function testLayer(input: {
   readonly dispatched: Queue.Queue<unknown>;
   readonly getThreadProjection: () => Effect.Effect<OrchestrationV2ThreadProjection>;
 }) {
+  return testLayerWithDispatch({
+    ...input,
+    dispatch: (command) => Queue.offer(input.dispatched, command).pipe(Effect.as({} as never)),
+  });
+}
+
+function testLayerWithDispatch(input: {
+  readonly dispatched: Queue.Queue<unknown>;
+  readonly getThreadProjection: () => Effect.Effect<OrchestrationV2ThreadProjection>;
+  readonly dispatch: ThreadManagementService["Service"]["dispatch"];
+}) {
   const threads = Layer.mock(ThreadManagementService)({
     getThreadProjection: input.getThreadProjection,
-    dispatch: (command) => Queue.offer(input.dispatched, command).pipe(Effect.as({} as never)),
+    dispatch: input.dispatch,
   });
   const worker = workerLive.pipe(
     Layer.provide(Layer.mergeAll(idAllocatorLayer, continuationRequestsLayer, threads)),
@@ -125,6 +137,105 @@ describe("ProviderContinuationService", () => {
       }).pipe(
         Effect.provide(
           testLayer({ dispatched, getThreadProjection: () => Effect.succeed(projection) }),
+        ),
+        Effect.scoped,
+      );
+    });
+  });
+
+  it.effect("steers a live parent run for a message_text wake", () => {
+    return Effect.gen(function* () {
+      const dispatched = yield* Queue.unbounded<unknown>();
+      yield* Effect.gen(function* () {
+        const requests = yield* ProviderContinuationRequests;
+        yield* requests.offer({
+          threadId,
+          providerThreadId,
+          driver,
+          detail: "Delegated task completed.",
+          delivery: "message_text",
+        });
+        const command = (yield* Queue.take(dispatched)) as {
+          readonly dispatchMode: { readonly type: string; readonly targetRunId?: string };
+        };
+        assert.deepEqual(command.dispatchMode, { type: "steer_active", targetRunId: "run-live" });
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            dispatched,
+            getThreadProjection: () =>
+              Effect.succeed({
+                ...projection,
+                runs: [{ id: "run-live", status: "running" }],
+              } as unknown as OrchestrationV2ThreadProjection),
+          }),
+        ),
+        Effect.scoped,
+      );
+    });
+  });
+
+  it.effect("falls back to queue_after_active when steering is rejected", () => {
+    return Effect.gen(function* () {
+      const dispatched = yield* Queue.unbounded<unknown>();
+      yield* Effect.gen(function* () {
+        const requests = yield* ProviderContinuationRequests;
+        yield* requests.offer({
+          threadId,
+          providerThreadId,
+          driver,
+          detail: "Delegated task completed.",
+          delivery: "message_text",
+        });
+        const command = (yield* Queue.take(dispatched)) as {
+          readonly dispatchMode: { readonly type: string };
+        };
+        assert.deepEqual(command.dispatchMode, { type: "queue_after_active" });
+      }).pipe(
+        Effect.provide(
+          testLayerWithDispatch({
+            dispatched,
+            getThreadProjection: () =>
+              Effect.succeed({
+                ...projection,
+                runs: [{ id: "run-live", status: "running" }],
+              } as unknown as OrchestrationV2ThreadProjection),
+            dispatch: (command) => {
+              const mode = (command as { readonly dispatchMode: { readonly type: string } })
+                .dispatchMode;
+              return mode.type === "steer_active"
+                ? Effect.fail("steer rejected" as never)
+                : Queue.offer(dispatched, command).pipe(Effect.as({} as never));
+            },
+          }),
+        ),
+        Effect.scoped,
+      );
+    });
+  });
+
+  it.effect("keeps queue_after_active for an adapter-buffered wake with a live run", () => {
+    return Effect.gen(function* () {
+      const dispatched = yield* Queue.unbounded<unknown>();
+      yield* Effect.gen(function* () {
+        const requests = yield* ProviderContinuationRequests;
+        yield* requests.offer(request());
+        const command = (yield* Queue.take(dispatched)) as {
+          readonly dispatchMode: { readonly type: string };
+        };
+        // Buffered wakes must open their own continuation turn to drain the
+        // adapter buffer; steering an existing turn would never do that.
+        assert.deepEqual(command.dispatchMode, { type: "queue_after_active" });
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            dispatched,
+            getThreadProjection: () =>
+              Effect.succeed({
+                ...projection,
+                runs: [{ id: "run-live", status: "running" }],
+              } as unknown as OrchestrationV2ThreadProjection),
+          }),
         ),
         Effect.scoped,
       );
