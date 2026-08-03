@@ -1,3 +1,4 @@
+import { LiquidGlassView } from "@callstack/liquid-glass";
 import { MenuView } from "@react-native-menu/menu";
 import * as Haptics from "expo-haptics";
 import {
@@ -9,6 +10,7 @@ import {
 } from "react";
 import { Platform, Pressable, useColorScheme, View } from "react-native";
 import { useThemeColor } from "../lib/useThemeColor";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 
 import { cn } from "../lib/cn";
 import { AndroidAnchoredMenu } from "./AndroidAnchoredMenu";
@@ -26,13 +28,22 @@ export function ControlPill(props: {
   readonly onLongPress?: () => void;
   readonly variant?: "circle" | "pill" | "primary" | "danger";
   readonly disabled?: boolean;
+  /**
+   * Render the circle as an interactive LiquidGlassView on iOS 26+ so a menu
+   * anchored to it presents as glass morphing out of glass. Icon-only circles
+   * only; falls back to the standard styling when unsupported.
+   */
+  readonly glass?: boolean;
 }) {
   const variant = props.variant ?? "circle";
+  const isDarkMode = useColorScheme() === "dark";
 
   const iconColor = useThemeColor("--color-icon");
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const primaryFg = useThemeColor("--color-primary-foreground");
   const dangerFg = useThemeColor("--color-danger-foreground");
+  const primaryBg = useThemeColor("--color-primary");
+  const dangerBg = useThemeColor("--color-danger");
   const iconTintColor =
     variant === "primary"
       ? props.disabled
@@ -66,6 +77,55 @@ export function ControlPill(props: {
         : "text-primary-foreground"
       : "",
   );
+
+  if (props.glass && NATIVE_LIQUID_GLASS_SUPPORTED && isCircle) {
+    return (
+      <LiquidGlassView
+        effect="regular"
+        interactive
+        colorScheme={isDarkMode ? "dark" : "light"}
+        tintColor={
+          variant === "primary" && !props.disabled
+            ? primaryBg
+            : variant === "danger"
+              ? dangerBg
+              : undefined
+        }
+        style={{
+          alignItems: "center",
+          borderRadius: 22,
+          height: 44,
+          justifyContent: "center",
+          opacity: props.disabled ? 0.55 : 1,
+          width: 44,
+        }}
+      >
+        <Pressable
+          accessibilityLabel={props.accessibilityLabel ?? props.label}
+          accessibilityRole="button"
+          onPress={props.onPress}
+          onLongPress={props.onLongPress}
+          disabled={props.disabled}
+          className="h-11 w-11 items-center justify-center"
+        >
+          {props.iconNode ? (
+            <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
+          ) : props.icon ? (
+            props.animateIconChanges ? (
+              <AnimatedSymbolSwap
+                name={props.icon}
+                size={16}
+                tintColor={iconTintColor}
+                type="monochrome"
+              />
+            ) : (
+              <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+            )
+          ) : null}
+        </Pressable>
+      </LiquidGlassView>
+    );
+  }
 
   return (
     <Pressable

@@ -1,3 +1,4 @@
+import { LiquidGlassView } from "@callstack/liquid-glass";
 import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -12,6 +13,7 @@ import {
   type ViewStyle,
 } from "react-native";
 
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 import { useThemeColor } from "../lib/useThemeColor";
 import { cn } from "../lib/cn";
 import { AppText as Text } from "./AppText";
@@ -151,6 +153,12 @@ export function ComposerToolbarButton(props: {
   readonly showChevron?: boolean;
   readonly textTransform?: "none" | "uppercase";
   readonly variant?: "default" | "primary" | "danger";
+  /**
+   * Render the circle as an interactive LiquidGlassView on iOS 26+ so a menu
+   * anchored to it presents as glass morphing out of glass. Icon-only circles
+   * only; falls back to the standard styling when unsupported.
+   */
+  readonly glass?: boolean;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
 }) {
@@ -159,6 +167,8 @@ export function ComposerToolbarButton(props: {
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const primaryFg = useThemeColor("--color-primary-foreground");
   const dangerFg = useThemeColor("--color-danger-foreground");
+  const primaryBg = useThemeColor("--color-primary");
+  const dangerBg = useThemeColor("--color-danger");
   const variant = props.variant ?? "default";
   const isCircle = !props.label && props.showChevron === false;
   const defaultBorderColor = isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
@@ -177,6 +187,58 @@ export function ComposerToolbarButton(props: {
       : variant === "danger"
         ? dangerFg
         : iconColor;
+
+  if (props.glass && NATIVE_LIQUID_GLASS_SUPPORTED && isCircle) {
+    return (
+      <LiquidGlassView
+        effect="regular"
+        interactive
+        colorScheme={isDarkMode ? "dark" : "light"}
+        tintColor={
+          variant === "primary" && !props.disabled
+            ? primaryBg
+            : variant === "danger"
+              ? dangerBg
+              : undefined
+        }
+        style={[
+          {
+            alignItems: "center",
+            borderRadius: COMPOSER_TOOLBAR_CONTROL_HEIGHT / 2,
+            height: COMPOSER_TOOLBAR_CONTROL_HEIGHT,
+            justifyContent: "center",
+            opacity: props.disabled ? 0.55 : 1,
+            width: COMPOSER_TOOLBAR_CONTROL_HEIGHT,
+          },
+          props.style,
+        ]}
+      >
+        <Pressable
+          accessibilityLabel={props.accessibilityLabel ?? props.label}
+          accessibilityRole="button"
+          disabled={props.disabled}
+          onPress={props.onPress}
+          onLongPress={props.onLongPress}
+          className="h-11 w-11 items-center justify-center"
+        >
+          {props.iconNode ? (
+            <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
+          ) : props.icon ? (
+            props.animateIconChanges ? (
+              <AnimatedSymbolSwap
+                name={props.icon}
+                size={16}
+                tintColor={iconTintColor}
+                type="monochrome"
+              />
+            ) : (
+              <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+            )
+          ) : null}
+        </Pressable>
+      </LiquidGlassView>
+    );
+  }
 
   return (
     <Pressable

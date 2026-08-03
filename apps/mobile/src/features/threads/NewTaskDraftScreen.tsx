@@ -68,9 +68,6 @@ import {
 } from "../voice/VoiceComposerControls";
 import { useVoiceComposer } from "../voice/useVoiceComposer";
 
-// This screen presents as a native formSheet on iOS, which sits above the
-// OverlayPortal host — so unlike ThreadComposer it keeps the platform menu
-// (native UIMenu / AndroidAnchoredMenu) for the attachment sources.
 const attachmentMenuActions: MenuAction[] = [
   { id: "camera", title: "Camera", image: "camera" },
   { id: "photos", title: "Photos", image: "photo.on.rectangle" },
@@ -1100,6 +1097,7 @@ export function NewTaskDraftScreen(props: {
         <ComposerToolbarButton
           icon="plus"
           accessibilityLabel="Add attachment"
+          glass
           showChevron={false}
           disabled={isIncomingShareTransferPending}
         />
@@ -1178,6 +1176,7 @@ export function NewTaskDraftScreen(props: {
           <Animated.View style={voice.comboPressStyle}>
             <ComposerToolbarButton
               {...comboVisual}
+              glass
               onPress={() => voice.comboActivate(comboButton)}
               showChevron={false}
             />

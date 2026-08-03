@@ -1,4 +1,5 @@
 import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
+import type { MenuAction } from "@react-native-menu/menu";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type {
   EnvironmentId,
@@ -51,10 +52,6 @@ import {
   ComposerToolbarScroller,
   ComposerToolbarTrigger,
 } from "../../components/ComposerToolbarTrigger";
-import {
-  ComposerAttachmentMenu,
-  type ComposerAttachmentMenuItem,
-} from "../../components/ComposerAttachmentMenu";
 import { ComposerCameraSheet } from "../../components/ComposerCameraSheet";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
@@ -551,11 +548,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Handle command selection ──────────────────────────────
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
-  const attachmentMenuItems = useMemo<ReadonlyArray<ComposerAttachmentMenuItem>>(
+  const attachmentMenuActions = useMemo<MenuAction[]>(
     () => [
-      { id: "camera", title: "Camera", icon: "camera" },
-      { id: "photos", title: "Photos", icon: "photo.on.rectangle" },
-      { id: "files", title: "Files", icon: "paperclip" },
+      { id: "camera", title: "Camera", image: "camera" },
+      { id: "photos", title: "Photos", image: "photo.on.rectangle" },
+      { id: "files", title: "Files", image: "paperclip" },
     ],
     [],
   );
@@ -847,9 +844,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           ) : null}
 
           {!isExpanded ? (
-            <ComposerAttachmentMenu items={attachmentMenuItems} onSelect={onAttachmentMenuSelect}>
-              <ControlPill icon="plus" accessibilityLabel="Add attachment" />
-            </ComposerAttachmentMenu>
+            <ControlPillMenu
+              actions={attachmentMenuActions}
+              onPressAction={({ nativeEvent }) => onAttachmentMenuSelect(nativeEvent.event)}
+            >
+              <ControlPill glass icon="plus" accessibilityLabel="Add attachment" />
+            </ControlPillMenu>
           ) : null}
           <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
             <ComposerEditor
@@ -968,6 +968,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 </GestureDetector>
                 {showStopAction ? (
                   <ControlPill
+                    glass
                     icon="stop.fill"
                     variant="danger"
                     accessibilityLabel="Stop"
@@ -975,6 +976,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   />
                 ) : (
                   <ControlPill
+                    glass
                     icon="arrow.up"
                     variant="primary"
                     disabled={!canSend || voiceBusy}
@@ -995,16 +997,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 fadeOpaque={toolbarFadeOpaque}
                 fadeTransparent={toolbarFadeTransparent}
               >
-                <ComposerAttachmentMenu
-                  items={attachmentMenuItems}
-                  onSelect={onAttachmentMenuSelect}
+                <ControlPillMenu
+                  actions={attachmentMenuActions}
+                  onPressAction={({ nativeEvent }) => onAttachmentMenuSelect(nativeEvent.event)}
                 >
                   <ComposerToolbarButton
                     accessibilityLabel="Add attachment"
+                    glass
                     icon="plus"
                     showChevron={false}
                   />
-                </ComposerAttachmentMenu>
+                </ControlPillMenu>
                 <ControlPillMenu
                   actions={modelMenuActions}
                   onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
@@ -1053,6 +1056,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     <Animated.View style={voice.comboPressStyle}>
                       <ComposerToolbarButton
                         {...voiceComboButtonProps(voice.state, canSend && !voiceBusy)}
+                        glass
                         onPress={() =>
                           voice.comboActivate({
                             canSend: canSend && !voiceBusy,
