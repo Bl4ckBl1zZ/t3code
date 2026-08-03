@@ -18,13 +18,7 @@ import { invalidateVoicePreflight } from "../../voice/useWebVoiceInput";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-
-const CUSTOM_MODEL_OPTION = "__custom__";
-
-function modelLabel(models: readonly OpenRouterModelOption[], id: string): string {
-  const model = models.find((candidate) => candidate.id === id);
-  return model ? `${model.name} · ${model.providerName}` : id;
-}
+import { VoiceModelPicker } from "./VoiceModelPicker";
 
 export function VoiceInputSettingsSection() {
   const [status, setStatus] = useState<OpenRouterIntegrationStatus | null>(null);
@@ -114,32 +108,20 @@ export function VoiceInputSettingsSection() {
         description="A single OpenRouter model that understands audio transcribes and improves your dictation. Only audio-capable models are listed."
         control={
           <div className="flex w-full flex-col gap-2 sm:w-72">
-            <select
-              className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm"
-              aria-label="Voice model"
+            <VoiceModelPicker
+              models={audioModels}
+              value={settings?.model ?? ""}
+              isCustom={customModel}
               disabled={!connected || settings === null}
-              value={customModel ? CUSTOM_MODEL_OPTION : (settings?.model ?? "")}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                if (value === CUSTOM_MODEL_OPTION) {
-                  setCustomModel(true);
-                  setCustomModelDraft(settings?.model ?? "");
-                  return;
-                }
+              onSelect={(modelId) => {
                 setCustomModel(false);
-                void update({ model: value });
+                void update({ model: modelId });
               }}
-            >
-              {settings && !customModel && !audioModels.some((m) => m.id === settings.model) ? (
-                <option value={settings.model}>{modelLabel(audioModels, settings.model)}</option>
-              ) : null}
-              {audioModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {modelLabel(audioModels, model.id)}
-                </option>
-              ))}
-              <option value={CUSTOM_MODEL_OPTION}>Custom model ID…</option>
-            </select>
+              onSelectCustom={() => {
+                setCustomModel(true);
+                setCustomModelDraft(settings?.model ?? "");
+              }}
+            />
             {customModel ? (
               <input
                 className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm"
