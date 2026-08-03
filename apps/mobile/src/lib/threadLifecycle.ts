@@ -19,13 +19,6 @@ export function isV2LifecycleTimelineItem(item: OrchestrationV2TurnItem): boolea
   return LIFECYCLE_TYPES.has(item.type);
 }
 
-// Aborted subagents (cancelled/interrupted) keep whatever result text had
-// streamed before the abort, so only completed/failed results are final.
-const FINAL_RESULT_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
-  "completed",
-  "failed",
-]);
-
 // A handoff turn item is broadcast in a non-terminal status while the
 // orchestrator is still generating the handoff summary for the target model.
 const HANDOFF_IN_FLIGHT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
@@ -77,7 +70,9 @@ export type LifecyclePresentation =
       readonly badge: string;
       readonly badgeTone: "neutral" | "success" | "danger";
       readonly threadId: ThreadId | null;
-      readonly expandedDetail: string | null;
+      /** Stable per-agent seed; when present the card renders an AgentOrb. */
+      readonly orbSeed: string | null;
+      readonly orbState: "active" | "done" | "failed" | null;
     };
 
 function subagentDisplayTitle(title: string): string {
@@ -101,6 +96,11 @@ function latestRunModelBefore(
 
 function endpointLabel(instanceId: string, model: string | undefined): string {
   return model !== undefined && model.length > 0 ? model : instanceId;
+}
+
+function subagentOrbState(status: OrchestrationV2TurnItem["status"]): "active" | "done" | "failed" {
+  if (status === "failed") return "failed";
+  return TERMINAL_SUBAGENT_STATUSES.has(status) ? "done" : "active";
 }
 
 function subagentBadgeTone(
@@ -218,11 +218,11 @@ export function resolveLifecyclePresentation(
         badge: "created",
         badgeTone: "neutral",
         threadId: item.targetThreadId,
-        expandedDetail: null,
+        orbSeed: null,
+        orbState: null,
       };
     case "subagent": {
       const streamedResult = item.result?.trim() ? item.result : null;
-      const finalResult = FINAL_RESULT_SUBAGENT_STATUSES.has(item.status) ? streamedResult : null;
       const detail = TERMINAL_SUBAGENT_STATUSES.has(item.status)
         ? (streamedResult ?? item.progress ?? item.prompt)
         : (item.progress ?? streamedResult ?? item.prompt);
@@ -234,7 +234,10 @@ export function resolveLifecyclePresentation(
         badge: item.status,
         badgeTone: subagentBadgeTone(item.status),
         threadId: item.childThreadId ?? null,
-        expandedDetail: finalResult,
+        // Child thread id first: the relationships surfaces only know thread
+        // ids, so this keeps one agent the same color everywhere.
+        orbSeed: item.childThreadId ?? item.subagentId,
+        orbState: subagentOrbState(item.status),
       };
     }
     default:

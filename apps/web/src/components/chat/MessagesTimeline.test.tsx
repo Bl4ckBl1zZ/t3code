@@ -435,7 +435,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).not.toContain("Show full message");
     expect(markup).toContain('data-user-message-collapsible="false"');
-    expect(markup).toContain("rounded-2xl bg-accent p-3");
+    expect(markup).toContain("rounded-2xl bg-accent");
   });
 
   it("renders imported Hermes replies as a compact reference and separate message", () => {
@@ -1121,7 +1121,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work Log");
   });
 
-  it("discloses the full Codex subagent result without projecting child events", async () => {
+  it("shows the final Codex subagent result on a card that opens the child thread", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1167,12 +1167,10 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain('data-v2-item-type="subagent"');
-    expect(markup).toContain('data-v2-subagent-result-disclosure="true"');
-    expect(markup).toContain('data-v2-subagent-result="true"');
-    expect(markup).toContain('aria-label="Show full result for Isolation report"');
+    expect(markup).not.toContain('data-v2-subagent-result-disclosure="true"');
+    expect(markup).not.toContain('data-v2-subagent-result="true"');
     expect(markup).toContain('aria-label="Open Isolation report"');
     expect(markup).toContain("Tests should be isolated.");
-    expect(markup).toContain("Result: no shared state.");
     expect(markup).not.toContain("Explain test isolation");
   });
 

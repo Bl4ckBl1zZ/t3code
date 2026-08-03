@@ -72,6 +72,8 @@ import {
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
 
+import { agentHue } from "@t3tools/shared/agentIdentity";
+import { AgentOrb } from "../../components/AgentOrb";
 import { AppText as Text } from "../../components/AppText";
 import { CopyTextButton } from "../../components/CopyTextButton";
 import { HtmlEmbedView, isHtmlEmbedLanguage } from "../../components/HtmlEmbedView";
@@ -1126,6 +1128,72 @@ function renderFeedEntry(
       !assistantTurnStillInProgress &&
       !message.streaming;
 
+    if (isUser && message.createdBy === "agent") {
+      // Agent-sent instructions read as a left-aligned "agent report" rather
+      // than a user bubble: orb + tinted attribution, colored left border.
+      const enterAnimated = isFreshTimestamp(message.createdAt);
+      const orbSeed = message.sourceThreadId ?? "agent";
+      const hue = agentHue(orbSeed);
+      return (
+        <Animated.View
+          className="mb-5 items-start"
+          {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
+        >
+          <View className="mb-1 flex-row items-center gap-1.5 pl-0.5">
+            <AgentOrb seed={orbSeed} size={22} />
+            <Text className="font-t3-semibold text-xs" style={{ color: `hsl(${hue} 60% 50%)` }}>
+              Agent
+            </Text>
+          </View>
+          <View
+            className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
+            style={{
+              borderLeftWidth: 3,
+              borderLeftColor: `hsl(${hue} 70% 55%)`,
+              backgroundColor: `hsla(${hue}, 70%, 55%, 0.09)`,
+              maxWidth: props.userBubbleMaxWidth,
+              ...(hasReviewCommentContext ? { width: props.reviewCommentBubbleWidth } : null),
+            }}
+          >
+            {message.text.trim().length > 0 ? (
+              <UserMessageContent
+                text={message.text}
+                markdownStyles={markdownStyles.assistant}
+                reviewCommentColors={props.reviewCommentColors}
+                skills={props.skills}
+                onLinkPress={props.onMarkdownLinkPress}
+              />
+            ) : null}
+            {attachments.map((attachment) => {
+              return (
+                <MessageAttachmentImage
+                  key={attachment.id}
+                  environmentId={props.environmentId}
+                  attachmentId={attachment.id}
+                  className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
+                  onPressImage={props.onPressImage}
+                />
+              );
+            })}
+          </View>
+          <View className="mt-1 flex-row items-center gap-1 pl-0.5">
+            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+              {timestampLabel}
+            </Text>
+            {message.text.trim().length > 0 ? (
+              <CopyTextButton
+                accessibilityLabel="Copy message"
+                text={message.text}
+                tintColor={iconSubtleColor}
+                buttonSize={28}
+                iconSize={13}
+              />
+            ) : null}
+          </View>
+        </Animated.View>
+      );
+    }
+
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
       const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
@@ -1135,11 +1203,6 @@ function renderFeedEntry(
           className="mb-5 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
-          {message.createdBy === "agent" ? (
-            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
-              Sent by another agent
-            </Text>
-          ) : null}
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
             style={{

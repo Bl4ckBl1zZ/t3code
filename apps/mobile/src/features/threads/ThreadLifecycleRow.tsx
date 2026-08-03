@@ -1,11 +1,13 @@
 import * as Haptics from "expo-haptics";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Pressable, View } from "react-native";
 
+import { AgentOrb } from "../../components/AgentOrb";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
+import { ShimmerText } from "../../components/ShimmerText";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
 import {
@@ -34,10 +36,8 @@ function RelatedThreadCard(props: {
 }) {
   const navigation = useNavigation();
   const iconSubtle = useThemeColor("--color-icon-subtle");
-  const [expanded, setExpanded] = useState(false);
   const presentation = props.presentation;
   const canOpen = props.threadId !== null;
-  const canExpand = presentation.expandedDetail !== null;
 
   return (
     <View className="mb-4 overflow-hidden rounded-[16px] border-continuous bg-card">
@@ -47,12 +47,8 @@ function RelatedThreadCard(props: {
         }
         accessibilityRole="button"
         className="flex-row items-center gap-3 px-3.5 py-3"
-        disabled={!canOpen && !canExpand}
+        disabled={!canOpen}
         onPress={() => {
-          if (canExpand && !canOpen) {
-            setExpanded((current) => !current);
-            return;
-          }
           if (props.threadId === null) return;
           void Haptics.selectionAsync();
           navigation.navigate("Thread", {
@@ -60,20 +56,31 @@ function RelatedThreadCard(props: {
             threadId: props.threadId,
           });
         }}
-        onLongPress={canExpand ? () => setExpanded((current) => !current) : undefined}
       >
-        <SymbolView name={presentation.symbol} size={16} tintColor={iconSubtle} type="monochrome" />
+        {presentation.orbSeed !== null ? (
+          <AgentOrb seed={presentation.orbSeed} size={26} state={presentation.orbState ?? "done"} />
+        ) : (
+          <SymbolView
+            name={presentation.symbol}
+            size={16}
+            tintColor={iconSubtle}
+            type="monochrome"
+          />
+        )}
         <View className="min-w-0 flex-1">
           <Text className="font-t3-medium text-base text-foreground" numberOfLines={1}>
             {presentation.title}
           </Text>
           {presentation.detail ? (
-            <Text
-              className="mt-0.5 text-sm text-foreground-muted"
-              numberOfLines={expanded ? undefined : 2}
-            >
-              {presentation.detail}
-            </Text>
+            presentation.orbState === "active" ? (
+              <ShimmerText className="mt-0.5 text-sm text-foreground-muted" numberOfLines={2}>
+                {presentation.detail}
+              </ShimmerText>
+            ) : (
+              <Text className="mt-0.5 text-sm text-foreground-muted" numberOfLines={2}>
+                {presentation.detail}
+              </Text>
+            )
           ) : null}
         </View>
         <View
@@ -88,11 +95,6 @@ function RelatedThreadCard(props: {
           <SymbolView name="chevron.right" size={12} tintColor={iconSubtle} type="monochrome" />
         ) : null}
       </Pressable>
-      {expanded && presentation.expandedDetail ? (
-        <View className="border-t border-neutral-300/40 px-3.5 py-3 dark:border-white/[0.06]">
-          <Text className="text-sm text-foreground-muted">{presentation.expandedDetail}</Text>
-        </View>
-      ) : null}
     </View>
   );
 }

@@ -21,6 +21,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { presentProviderError } from "@t3tools/client-runtime/errors";
+import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
@@ -221,7 +222,8 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "assistant_message":
       return "message";
     case "dynamic_tool":
-      return "wrench";
+      // Read-style tool calls (a file/notebook path argument) present as reads.
+      return dynamicToolInputPreview(item.input)?.kind === "path" ? "eye" : "wrench";
     case "subagent":
       return "hammer";
     case "run_interrupt_request":
@@ -336,7 +338,9 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "subagent":
       return item.result ?? item.progress ?? item.prompt;
     case "dynamic_tool":
-      return null;
+      // Surface read-style tool arguments (file path / search pattern) inline —
+      // otherwise a Read row is just "Read" with the path hidden in the inspector.
+      return dynamicToolInputPreview(item.input)?.value ?? null;
     case "proposed_plan":
       return item.markdown || null;
     case "todo_list":

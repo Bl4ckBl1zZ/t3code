@@ -79,6 +79,14 @@
       "types": "./src/t3McpToolPresentation.ts",
       "import": "./src/t3McpToolPresentation.ts"
     },
+    "./dynamicToolPreview": {
+      "types": "./src/dynamicToolPreview.ts",
+      "import": "./src/dynamicToolPreview.ts"
+    },
+    "./agentIdentity": {
+      "types": "./src/agentIdentity.ts",
+      "import": "./src/agentIdentity.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"
