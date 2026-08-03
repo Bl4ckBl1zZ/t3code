@@ -22,6 +22,8 @@ export function createInitialDesktopUpdateState(
 ): DesktopUpdateState {
   return {
     enabled: false,
+    autoUpdateEnabled: false,
+    autoInstallPending: false,
     status: "disabled",
     channel,
     currentVersion,
@@ -46,6 +48,7 @@ export function reduceDesktopUpdateStateOnCheckStart(
   return {
     ...state,
     status: "checking",
+    autoInstallPending: false,
     checkedAt,
     releaseNotes: [],
     message: null,
@@ -80,6 +83,7 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   return {
     ...state,
     status: "available",
+    autoInstallPending: false,
     availableVersion: version,
     downloadedVersion: null,
     releaseNotes,
@@ -98,6 +102,7 @@ export function reduceDesktopUpdateStateOnNoUpdate(
   return {
     ...state,
     status: "up-to-date",
+    autoInstallPending: false,
     availableVersion: null,
     downloadedVersion: null,
     releaseNotes: [],
@@ -115,6 +120,7 @@ export function reduceDesktopUpdateStateOnDownloadStart(
   return {
     ...state,
     status: "downloading",
+    autoInstallPending: false,
     downloadPercent: 0,
     message: null,
     errorContext: null,
@@ -173,8 +179,29 @@ export function reduceDesktopUpdateStateOnInstallFailure(
   return {
     ...state,
     status: "downloaded",
+    // A failed install stops the automatic idle-wait; retrying is left to the
+    // user so a persistent installer failure can't loop forever.
+    autoInstallPending: false,
     message,
     errorContext: "install",
     canRetry: true,
   };
+}
+
+export function reduceDesktopUpdateStateOnAutoUpdatePreferenceChange(
+  state: DesktopUpdateState,
+  autoUpdateEnabled: boolean,
+): DesktopUpdateState {
+  return {
+    ...state,
+    autoUpdateEnabled,
+    autoInstallPending: autoUpdateEnabled ? state.autoInstallPending : false,
+  };
+}
+
+export function reduceDesktopUpdateStateOnAutoInstallWait(
+  state: DesktopUpdateState,
+  autoInstallPending: boolean,
+): DesktopUpdateState {
+  return state.status === "downloaded" ? { ...state, autoInstallPending } : state;
 }

@@ -374,11 +374,27 @@ export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
 });
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 
-export class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
-  HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
-    success: ExecutionEnvironmentDescriptor,
-  }),
-) {}
+// Lightweight agent-activity probe for the desktop auto-update idle gate.
+// Intentionally coarse (a count, no thread ids or titles) so it can sit on the
+// same unauthenticated well-known surface as the environment descriptor.
+export const EnvironmentActivitySnapshot = Schema.Struct({
+  // Threads whose latest run is in a non-terminal status (preparing, queued,
+  // starting, running, waiting) — i.e. agent work would be lost on restart.
+  activeRunCount: Schema.Number,
+});
+export type EnvironmentActivitySnapshot = typeof EnvironmentActivitySnapshot.Type;
+
+export class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
+  .add(
+    HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
+      success: ExecutionEnvironmentDescriptor,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("activity", "/.well-known/t3/activity", {
+      success: EnvironmentActivitySnapshot,
+    }),
+  ) {}
 
 export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
   .add(

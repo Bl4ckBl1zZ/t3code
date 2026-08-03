@@ -354,6 +354,7 @@ function AboutVersionTitle() {
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
+  const [isChangingAutoUpdate, setIsChangingAutoUpdate] = useState(false);
 
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const selectedUpdateChannel = updateState?.channel ?? "latest";
@@ -388,6 +389,29 @@ function AboutVersionSection() {
     },
     [selectedUpdateChannel],
   );
+
+  const handleAutoUpdateToggle = useCallback((enabled: boolean) => {
+    const bridge = window.desktopBridge;
+    if (!bridge || typeof bridge.setAutoUpdateEnabled !== "function") {
+      return;
+    }
+
+    setIsChangingAutoUpdate(true);
+    void bridge
+      .setAutoUpdateEnabled(enabled)
+      .catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not change automatic updates",
+            description: error instanceof Error ? error.message : "Automatic update change failed.",
+          }),
+        );
+      })
+      .finally(() => {
+        setIsChangingAutoUpdate(false);
+      });
+  }, []);
 
   const handleButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -497,6 +521,26 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
+      {hasDesktopBridge ? (
+        <SettingsRow
+          title="Automatic updates"
+          description={
+            updateState?.autoInstallPending
+              ? "Update downloaded — the app will restart automatically once no agents are running."
+              : "Download updates automatically and restart to install once no agent activity is running."
+          }
+          control={
+            <Switch
+              checked={updateState?.autoUpdateEnabled ?? false}
+              disabled={!updateState || isChangingAutoUpdate}
+              onCheckedChange={(checked) => {
+                handleAutoUpdateToggle(Boolean(checked));
+              }}
+              aria-label="Automatic updates"
+            />
+          }
+        />
+      ) : null}
       {hasDesktopBridge ? (
         <SettingsRow
           title="Update track"
