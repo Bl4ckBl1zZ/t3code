@@ -185,6 +185,10 @@ export const DesktopRuntimeInfoSchema = Schema.Struct({
 
 export interface DesktopUpdateState {
   enabled: boolean;
+  /** User preference: download updates automatically and install once no agent activity is running. */
+  autoUpdateEnabled: boolean;
+  /** A downloaded update is waiting for all agent activity to finish before the app restarts to install it. */
+  autoInstallPending: boolean;
   status: DesktopUpdateStatus;
   channel: DesktopUpdateChannel;
   currentVersion: string;
@@ -213,6 +217,8 @@ export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
 
 export const DesktopUpdateStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
+  autoUpdateEnabled: Schema.Boolean,
+  autoInstallPending: Schema.Boolean,
   status: DesktopUpdateStatusSchema,
   channel: DesktopUpdateChannelSchema,
   currentVersion: Schema.String,
@@ -1009,6 +1015,7 @@ export interface DesktopBridge {
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
+  setAutoUpdateEnabled: (enabled: boolean) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;

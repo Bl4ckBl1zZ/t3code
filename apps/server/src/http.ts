@@ -39,6 +39,7 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
@@ -172,18 +173,50 @@ const authenticateRawRouteWithScope = (
     }
   });
 
+const ACTIVE_THREAD_STATUSES: ReadonlySet<string> = new Set([
+  "preparing",
+  "queued",
+  "starting",
+  "running",
+  "waiting",
+]);
+
 export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "metadata",
   Effect.fnUntraced(function* (handlers) {
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-    return handlers.handle(
-      "descriptor",
-      Effect.fn("environment.metadata.descriptor")(function* (args) {
-        yield* annotateEnvironmentRequest(args.endpoint.name);
-        return yield* serverEnvironment.getDescriptor;
-      }, traceRelayRequest),
-    );
+    const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    return handlers
+      .handle(
+        "descriptor",
+        Effect.fn("environment.metadata.descriptor")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          return yield* serverEnvironment.getDescriptor;
+        }, traceRelayRequest),
+      )
+      .handle(
+        "activity",
+        Effect.fn("environment.metadata.activity")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          // Scheduled-task runs execute through threads, so counting
+          // non-terminal thread runs covers them too. On failure report one
+          // active run rather than zero: the consumer (the desktop auto-update
+          // idle gate) must never restart the app on an inconclusive answer.
+          return yield* threadManagement.getShellSnapshot().pipe(
+            Effect.map((snapshot) => ({
+              activeRunCount: snapshot.threads.filter((thread) =>
+                ACTIVE_THREAD_STATUSES.has(thread.status),
+              ).length,
+            })),
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to compute environment activity snapshot", { cause }).pipe(
+                Effect.as({ activeRunCount: 1 }),
+              ),
+            ),
+          );
+        }),
+      );
   }),
 );
 

@@ -12,7 +12,10 @@ import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import type { HttpClientRequest } from "effect/unstable/http";
 
+import type * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -31,6 +34,11 @@ interface UpdatesHarnessOptions {
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly env?: Record<string, string | undefined>;
+  readonly initialSettings?: DesktopAppSettings.DesktopSettings;
+  readonly backendInstance?: DesktopBackendPool.DesktopBackendInstance;
+  readonly activityHandler?: (
+    request: HttpClientRequest.HttpClientRequest,
+  ) => Effect.Effect<HttpClientResponse.HttpClientResponse>;
 }
 
 const flushCallbacks = Effect.yieldNow;
@@ -112,22 +120,30 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     syncAllAppearance: () => Effect.void,
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
-  const stubBackendInstance: DesktopBackendPool.DesktopBackendInstance = {
-    id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
-    label: Effect.succeed("Windows"),
-    start: Effect.void,
-    stop: () => options.stopBackend ?? Effect.void,
-    currentConfig: Effect.succeed(Option.none()),
-    snapshot: Effect.succeed({
-      desiredRunning: false,
-      ready: false,
-      activePid: Option.none(),
-      restartAttempt: 0,
-      restartScheduled: false,
-    }),
-    waitForReady: () => Effect.succeed(true),
-  };
+  const stubBackendInstance: DesktopBackendPool.DesktopBackendInstance =
+    options.backendInstance ?? {
+      id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
+      label: Effect.succeed("Windows"),
+      start: Effect.void,
+      stop: () => options.stopBackend ?? Effect.void,
+      currentConfig: Effect.succeed(Option.none()),
+      snapshot: Effect.succeed({
+        desiredRunning: false,
+        ready: false,
+        activePid: Option.none(),
+        restartAttempt: 0,
+        restartScheduled: false,
+      }),
+      waitForReady: () => Effect.succeed(true),
+    };
   const backendLayer = DesktopBackendPool.layerTest([stubBackendInstance]);
+
+  const httpClientLayer = Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make(
+      (request) => options.activityHandler?.(request) ?? Effect.die("unexpected HTTP request"),
+    ),
+  );
 
   const environmentLayer = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
@@ -162,13 +178,16 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
         setServerExposureMode: () => Effect.die("unexpected server exposure update"),
         setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
         setUpdateChannel: () => Effect.fail(setUpdateChannelError),
+        setAutoUpdateEnabled: () => Effect.die("unexpected auto-update toggle"),
         setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
         setWslDistro: () => Effect.die("unexpected WSL distro change"),
         setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
         applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
         applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
       } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
-    : DesktopAppSettings.layer;
+    : options.initialSettings
+      ? DesktopAppSettings.layerTest(options.initialSettings)
+      : DesktopAppSettings.layer;
 
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),
@@ -185,6 +204,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       }),
     ),
     Layer.provideMerge(environmentLayer),
+    Layer.provideMerge(httpClientLayer),
     Layer.provideMerge(NodeServices.layer),
   );
 
@@ -604,6 +624,222 @@ describe("DesktopUpdates", () => {
         assert.strictEqual(error.cause.cause, diskFailure);
         assert.equal(error.message, "Failed to persist the nightly desktop update channel.");
         assert.notInclude(error.message, diskFailure.message);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  const autoUpdateSettings: DesktopAppSettings.DesktopSettings = {
+    ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+    autoUpdateEnabled: true,
+  };
+
+  const runningBackendConfig: DesktopBackendManager.DesktopBackendStartConfig = {
+    executablePath: "node",
+    args: ["/app/bin.mjs"],
+    entryPath: "/app/bin.mjs",
+    cwd: "/app",
+    env: {},
+    extendEnv: true,
+    bootstrap: {
+      mode: "desktop",
+      noBrowser: true,
+      port: 5151,
+      host: "127.0.0.1",
+      desktopBootstrapToken: "bootstrap-token",
+      tailscaleServeEnabled: false,
+      tailscaleServePort: 443,
+    },
+    bootstrapDelivery: "stdin",
+    httpBaseUrl: new URL("http://127.0.0.1:5151"),
+    captureOutput: true,
+    preflightFailure: Option.none(),
+  };
+
+  const runningBackendInstance: DesktopBackendPool.DesktopBackendInstance = {
+    id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
+    label: Effect.succeed("Windows"),
+    start: Effect.void,
+    stop: () => Effect.void,
+    currentConfig: Effect.succeed(Option.some(runningBackendConfig)),
+    snapshot: Effect.succeed({
+      desiredRunning: true,
+      ready: true,
+      activePid: Option.some(4242),
+      restartAttempt: 0,
+      restartScheduled: false,
+    }),
+    waitForReady: () => Effect.succeed(true),
+  };
+
+  const activityResponse = (request: HttpClientRequest.HttpClientRequest, activeRunCount: number) =>
+    Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(JSON.stringify({ activeRunCount }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+  it.effect("persists the auto-update preference and reflects it in update state", () => {
+    const harness = makeHarness({
+      initialSettings: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        assert.isFalse((yield* updates.getState).autoUpdateEnabled);
+
+        const enabledState = yield* updates.setAutoUpdateEnabled(true);
+        assert.isTrue(enabledState.autoUpdateEnabled);
+        assert.isTrue((yield* settings.get).autoUpdateEnabled);
+        assert.equal(harness.sentStates.at(-1)?.autoUpdateEnabled, true);
+
+        const disabledState = yield* updates.setAutoUpdateEnabled(false);
+        assert.isFalse(disabledState.autoUpdateEnabled);
+        assert.isFalse((yield* settings.get).autoUpdateEnabled);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("automatically downloads and installs an update when no backend is running", () => {
+    const harness = makeHarness({ initialSettings: autoUpdateSettings });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+
+        // The available update starts downloading without a manual trigger.
+        assert.equal((yield* updates.getState).status, "downloading");
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+
+        // The stopped backend cannot host agent activity, so the idle watcher
+        // proceeds straight to the install-and-restart step.
+        assert.isTrue(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("defers the automatic install until backends report no agent activity", () => {
+    let activeRunCount = 1;
+    const harness = makeHarness({
+      initialSettings: autoUpdateSettings,
+      backendInstance: runningBackendInstance,
+      activityHandler: (request) => activityResponse(request, activeRunCount),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+
+        const waitingState = yield* updates.getState;
+        assert.equal(waitingState.status, "downloaded");
+        assert.isTrue(waitingState.autoInstallPending);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+
+        activeRunCount = 0;
+        yield* TestClock.adjust(Duration.seconds(30));
+
+        assert.isTrue(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("treats an unreachable activity endpoint as agent activity", () => {
+    const harness = makeHarness({
+      initialSettings: autoUpdateSettings,
+      backendInstance: runningBackendInstance,
+      activityHandler: (request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 500 }))),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+
+        const waitingState = yield* updates.getState;
+        assert.isTrue(waitingState.autoInstallPending);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("stops waiting for idle when the auto-update preference is turned off", () => {
+    const harness = makeHarness({
+      initialSettings: autoUpdateSettings,
+      backendInstance: runningBackendInstance,
+      activityHandler: (request) => activityResponse(request, 1),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+        assert.isTrue((yield* updates.getState).autoInstallPending);
+
+        const disabledState = yield* updates.setAutoUpdateEnabled(false);
+        assert.isFalse(disabledState.autoInstallPending);
+
+        yield* TestClock.adjust(Duration.seconds(60));
+        assert.equal((yield* updates.getState).status, "downloaded");
+        assert.isFalse((yield* updates.getState).autoInstallPending);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("does not auto-download or auto-install while the preference is off", () => {
+    const harness = makeHarness({
+      initialSettings: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).status, "available");
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.seconds(60));
+
+        assert.equal((yield* updates.getState).status, "downloaded");
+        assert.isFalse((yield* updates.getState).autoInstallPending);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
