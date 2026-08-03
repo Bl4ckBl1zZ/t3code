@@ -2,10 +2,12 @@ import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { useNavigation } from "@react-navigation/native";
 import { LayoutAnimation, Pressable, useColorScheme, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
+import { ShimmerText } from "../../components/ShimmerText";
 import { T3_CODE_BRAND_MARK_SOURCE } from "../../components/brandAssets";
 import { scaledTypographyLineHeight } from "../../lib/appearancePreferences";
 import { cn } from "../../lib/cn";
@@ -17,7 +19,6 @@ import {
 } from "../../lib/threadActivity";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import Animated, { FadeIn } from "react-native-reanimated";
-import { useV2ItemSupport } from "../../state/v2-item-support";
 import { ThreadActivityInspector } from "./ThreadActivityInspector";
 import { threadWorkLogOverflowNoun } from "./thread-work-log-labels";
 
@@ -39,6 +40,9 @@ function triggerDisclosureFeedback() {
   LayoutAnimation.configureNext(WORK_LOG_LAYOUT_ANIMATION);
   void Haptics.selectionAsync();
 }
+
+// Rows whose underlying turn item is still in flight shimmer their text.
+const IN_PROGRESS_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
 
 function stripShellWrapper(value: string): string {
   const trimmed = value.trim();
@@ -242,11 +246,6 @@ function ThreadActivityThreadLink(props: {
   readonly iconColor: import("react-native").ColorValue;
 }) {
   const row = props.activity.projectedItem;
-  const support = useV2ItemSupport({
-    environmentId: props.environmentId,
-    sourceThreadId: row.sourceThreadId,
-    sourceItemId: row.sourceItemId,
-  });
   const navigation = useNavigation();
   const item = row.item;
   let targetThreadId: ThreadId | null = null;
@@ -255,9 +254,6 @@ function ThreadActivityThreadLink(props: {
   if (item.type === "thread_created") {
     targetThreadId = item.targetThreadId;
     label = "Open created thread";
-  } else if (item.type === "subagent") {
-    targetThreadId = support.subagent?.childThreadId ?? item.childThreadId;
-    label = "Open subagent thread";
   } else if (item.type === "fork") {
     targetThreadId =
       item.targetThreadId === row.sourceThreadId && item.source.type === "run"
@@ -383,15 +379,21 @@ export function ThreadWorkLog(props: {
           const displayText = detail ? `${row.summary} ${detail}` : row.summary;
           const textIsDestructive = row.icon === "alert" || row.icon === "warning";
           const item = row.projectedItem.item;
+          const dynamicToolPath =
+            item.type === "dynamic_tool" ? dynamicToolInputPreview(item.input) : null;
           const filePath =
             item.type === "file_change"
               ? splitDisplayPath(item.fileName, props.workspaceRoot)
-              : null;
+              : dynamicToolPath?.kind === "path"
+                ? splitDisplayPath(dynamicToolPath.value, props.workspaceRoot)
+                : null;
           const diffStats = activityFileDiffStats(row);
           // The icon already communicates the tool kind on these rows, so the
           // detail (command text, search pattern, path) is the whole row.
           const hideSummaryLabel =
             detail !== null && (item.type === "command_execution" || item.type === "file_search");
+          const inProgress = IN_PROGRESS_ITEM_STATUSES.has(item.status);
+          const RowText = inProgress ? ShimmerText : Text;
 
           if (item.type === "checkpoint" && item.files.length > 0) {
             return (
@@ -448,19 +450,19 @@ export function ThreadWorkLog(props: {
                   </View>
 
                   {filePath ? (
-                    <Text className="min-w-0 flex-1 font-mono text-xs" numberOfLines={1}>
+                    <RowText className="min-w-0 flex-1 font-mono text-xs" numberOfLines={1}>
                       <Text className="text-foreground-muted opacity-60">{filePath.prefix}</Text>
                       <Text className="text-foreground">{filePath.name}</Text>
-                    </Text>
+                    </RowText>
                   ) : hideSummaryLabel ? (
-                    <Text
+                    <RowText
                       className="min-w-0 flex-1 font-mono text-xs text-foreground-muted"
                       numberOfLines={1}
                     >
                       {detail}
-                    </Text>
+                    </RowText>
                   ) : (
-                    <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
+                    <RowText className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
                       <Text
                         className={cn(
                           "font-t3-medium text-foreground",
@@ -472,7 +474,7 @@ export function ThreadWorkLog(props: {
                       {detail ? (
                         <Text className="text-foreground-muted opacity-60"> {detail}</Text>
                       ) : null}
-                    </Text>
+                    </RowText>
                   )}
 
                   <View className="shrink-0 flex-row items-center gap-px">

@@ -346,6 +346,22 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("previews native Read tool calls with their file path and a read icon", () => {
+    const toolItem: OrchestrationV2TurnItem = {
+      ...base("item-read-tool", "2026-06-20T00:00:04.000Z", 3),
+      type: "dynamic_tool",
+      toolName: "Read",
+      input: { file_path: "/repo/apps/web/src/App.tsx" },
+    };
+
+    const feed = buildThreadFeed([projected(toolItem, 0)]);
+    const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
+
+    expect(activity?.summary).toBe("Read");
+    expect(activity?.detail).toBe("/repo/apps/web/src/App.tsx");
+    expect(activity?.icon).toBe("eye");
+  });
+
   it("pretty prints T3 MCP dynamic tool activities and attaches the product logo", () => {
     const toolItem: OrchestrationV2TurnItem = {
       ...base("item-t3-tool", "2026-06-20T00:00:04.000Z", 3),

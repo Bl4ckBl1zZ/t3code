@@ -13,10 +13,11 @@ import {
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import { copySorted } from "@t3tools/shared/Array";
 import { useNavigation } from "@react-navigation/native";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AgentOrb, type AgentOrbState } from "../../components/AgentOrb";
 import { AppText as Text } from "../../components/AppText";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadShells } from "../../state/entities";
@@ -36,10 +37,20 @@ function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: Thread
 }
 
 function relationshipSymbol(edge: ThreadRelationshipEdge): SFSymbol {
-  if (edge.kind === "subagent") return "person.2";
   if (edge.kind === "transfer") return "arrow.left.arrow.right";
   return "arrow.triangle.branch";
 }
+
+function subagentEdgeOrbState(status: string | null): AgentOrbState {
+  if (status === "failed") return "failed";
+  if (status === "running") return "active";
+  return "done";
+}
+
+// A finished subagent edge stays visible for a minute, then collapses into
+// the trailing "Done · N" group. Failed edges never auto-collapse.
+const SUBAGENT_DECAY_MS = 60_000;
+const DECAY_TERMINAL_STATUSES = new Set(["completed", "cancelled", "interrupted"]);
 
 function threadAvailability(
   thread: OrchestrationV2ThreadShell | null,
@@ -95,6 +106,47 @@ export function ThreadRelationshipsBanner(props: {
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
   const [visible, setVisible] = useState(false);
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [decayTick, setDecayTick] = useState(0);
+  // edgeKey -> timestamp after which the edge collapses into the Done group.
+  const decayExpiryRef = useRef<Map<string, number>>(new Map());
+  const observedOnceRef = useRef(false);
+
+  useEffect(() => {
+    const expiries = decayExpiryRef.current;
+    const liveKeys = new Set<string>();
+    let changed = false;
+    for (const { threadId, edge } of rows) {
+      if (edge.kind !== "subagent") continue;
+      const key = `${edge.kind}:${threadId}`;
+      liveKeys.add(key);
+      if (edge.status !== null && DECAY_TERMINAL_STATUSES.has(edge.status)) {
+        if (!expiries.has(key)) {
+          // Edges already terminal on first observation go straight to the
+          // archived group; later completions linger for the decay window.
+          expiries.set(key, observedOnceRef.current ? Date.now() + SUBAGENT_DECAY_MS : 0);
+          changed = true;
+        }
+      } else if (expiries.delete(key)) {
+        changed = true;
+      }
+    }
+    for (const key of expiries.keys()) {
+      if (!liveKeys.has(key)) {
+        expiries.delete(key);
+        changed = true;
+      }
+    }
+    observedOnceRef.current = true;
+    if (changed) setDecayTick((tick) => tick + 1);
+    const pending = [...expiries.values()].filter((expiry) => expiry > Date.now());
+    if (pending.length === 0) return;
+    const timeout = setTimeout(
+      () => setDecayTick((tick) => tick + 1),
+      Math.min(...pending) - Date.now() + 50,
+    );
+    return () => clearTimeout(timeout);
+  }, [rows, decayTick]);
   const navigation = useNavigation();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack, "merge thread back");
   const stopSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
@@ -104,6 +156,15 @@ export function ThreadRelationshipsBanner(props: {
   const iconColor = useThemeColor("--color-icon-subtle");
 
   if (rows.length === 0 && !canDetach) return null;
+
+  const decayNow = Date.now();
+  const visibleRows: typeof rows = [];
+  const archivedRows: typeof rows = [];
+  for (const row of rows) {
+    const expiry = decayExpiryRef.current.get(`${row.edge.kind}:${row.threadId}`);
+    if (expiry !== undefined && expiry <= decayNow) archivedRows.push(row);
+    else visibleRows.push(row);
+  }
 
   const primaryParent = rows.find(({ edge }) => edge.targetThreadId === props.threadId) ?? rows[0];
   const primaryNode = primaryParent ? graph.nodes.get(primaryParent.threadId) : null;
@@ -140,6 +201,49 @@ export function ThreadRelationshipsBanner(props: {
     if (result._tag === "Success") openThread(mergeTargetThreadId, false);
   };
 
+  const renderRelationshipRow = ({ threadId, edge }: (typeof rows)[number]) => {
+    const node = graph.nodes.get(threadId);
+    const availability = threadAvailability(node?.thread ?? null, node?.missing ?? true);
+    const archivedThread = availability === "Archived";
+    const disabled = availability === "Unavailable" || availability === "Deleted";
+    return (
+      <Pressable
+        key={`${edge.kind}:${threadId}`}
+        accessibilityRole={disabled ? undefined : "link"}
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        onPress={() => openThread(threadId, archivedThread)}
+        className="min-h-14 flex-row items-center gap-3 rounded-2xl border border-neutral-300/50 bg-card px-3 py-2.5 dark:border-white/[0.08]"
+      >
+        {edge.kind === "subagent" ? (
+          <AgentOrb seed={threadId} size={32} state={subagentEdgeOrbState(edge.status)} />
+        ) : (
+          <View className="h-8 w-8 items-center justify-center rounded-full bg-neutral-200/60 dark:bg-white/[0.06]">
+            <SymbolView
+              name={relationshipSymbol(edge)}
+              size={14}
+              tintColor={iconColor}
+              type="monochrome"
+            />
+          </View>
+        )}
+        <View className="min-w-0 flex-1">
+          <Text className="text-3xs uppercase tracking-wide text-foreground-muted">
+            {relationshipLabel(edge, props.threadId)}
+          </Text>
+          <Text className="font-t3-medium text-sm text-foreground" numberOfLines={1}>
+            {node?.thread?.title ?? threadId}
+          </Text>
+        </View>
+        {availability ? (
+          <Text className="text-2xs text-foreground-muted">{availability}</Text>
+        ) : (
+          <SymbolView name="chevron.right" size={12} tintColor={iconColor} type="monochrome" />
+        )}
+      </Pressable>
+    );
+  };
+
   const detach = async () => {
     if (!canDetach) return;
     setBusyAction("detach");
@@ -161,12 +265,20 @@ export function ThreadRelationshipsBanner(props: {
         }}
         className="mb-4 min-h-11 flex-row items-center gap-2 rounded-xl border border-neutral-300/60 bg-card px-3 py-2.5 dark:border-white/[0.1]"
       >
-        <SymbolView
-          name={primaryParent ? relationshipSymbol(primaryParent.edge) : "link"}
-          size={14}
-          tintColor={iconColor}
-          type="monochrome"
-        />
+        {primaryParent && primaryParent.edge.kind === "subagent" ? (
+          <AgentOrb
+            seed={primaryParent.threadId}
+            size={16}
+            state={subagentEdgeOrbState(primaryParent.edge.status)}
+          />
+        ) : (
+          <SymbolView
+            name={primaryParent ? relationshipSymbol(primaryParent.edge) : "link"}
+            size={14}
+            tintColor={iconColor}
+            type="monochrome"
+          />
+        )}
         <Text className="min-w-0 flex-1 font-t3-medium text-xs text-foreground" numberOfLines={1}>
           {summary}
         </Text>
@@ -213,52 +325,31 @@ export function ThreadRelationshipsBanner(props: {
             </View>
 
             <ScrollView contentContainerStyle={{ gap: 8 }} showsVerticalScrollIndicator={false}>
-              {rows.map(({ threadId, edge }) => {
-                const node = graph.nodes.get(threadId);
-                const availability = threadAvailability(
-                  node?.thread ?? null,
-                  node?.missing ?? true,
-                );
-                const archivedThread = availability === "Archived";
-                const disabled = availability === "Unavailable" || availability === "Deleted";
-                return (
-                  <Pressable
-                    key={`${edge.kind}:${threadId}`}
-                    accessibilityRole={disabled ? undefined : "link"}
-                    accessibilityState={{ disabled }}
-                    disabled={disabled}
-                    onPress={() => openThread(threadId, archivedThread)}
-                    className="min-h-14 flex-row items-center gap-3 rounded-2xl border border-neutral-300/50 bg-card px-3 py-2.5 dark:border-white/[0.08]"
-                  >
-                    <View className="h-8 w-8 items-center justify-center rounded-full bg-neutral-200/60 dark:bg-white/[0.06]">
-                      <SymbolView
-                        name={relationshipSymbol(edge)}
-                        size={14}
-                        tintColor={iconColor}
-                        type="monochrome"
-                      />
-                    </View>
-                    <View className="min-w-0 flex-1">
-                      <Text className="text-3xs uppercase tracking-wide text-foreground-muted">
-                        {relationshipLabel(edge, props.threadId)}
-                      </Text>
-                      <Text className="font-t3-medium text-sm text-foreground" numberOfLines={1}>
-                        {node?.thread?.title ?? threadId}
-                      </Text>
-                    </View>
-                    {availability ? (
-                      <Text className="text-2xs text-foreground-muted">{availability}</Text>
-                    ) : (
-                      <SymbolView
-                        name="chevron.right"
-                        size={12}
-                        tintColor={iconColor}
-                        type="monochrome"
-                      />
-                    )}
-                  </Pressable>
-                );
-              })}
+              {visibleRows.map(renderRelationshipRow)}
+              {archivedRows.length > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: showArchived }}
+                  accessibilityLabel={`${archivedRows.length} finished ${archivedRows.length === 1 ? "subagent" : "subagents"}`}
+                  onPress={() => {
+                    void Haptics.selectionAsync();
+                    setShowArchived((value) => !value);
+                  }}
+                  className="min-h-11 flex-row items-center gap-2 rounded-2xl border border-neutral-300/50 px-3 py-2 dark:border-white/[0.08]"
+                >
+                  <Text className="font-t3-medium text-xs text-foreground-muted">
+                    Done · {archivedRows.length}
+                  </Text>
+                  <View className="flex-1" />
+                  <SymbolView
+                    name={showArchived ? "chevron.up" : "chevron.down"}
+                    size={11}
+                    tintColor={iconColor}
+                    type="monochrome"
+                  />
+                </Pressable>
+              ) : null}
+              {showArchived ? archivedRows.map(renderRelationshipRow) : null}
             </ScrollView>
 
             {canMerge || canDetach ? (

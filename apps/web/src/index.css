@@ -1846,3 +1846,98 @@ label:has(> select#reasoning-effort) select {
   opacity: 0.3;
   pointer-events: none;
 }
+
+/* Agent orb: a per-agent colored sphere with softly drifting "smoke". The hue
+   is set via --agent-orb-h (a deterministic hash of the agent id), so one
+   agent keeps one color across the timeline, messages, and panels. */
+.agent-orb {
+  background: hsl(var(--agent-orb-h, 255) 85% 60%);
+}
+.agent-orb::before,
+.agent-orb::after {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  border-radius: 9999px;
+  filter: blur(4px);
+}
+.agent-orb::before {
+  background: radial-gradient(
+    circle at 30% 35%,
+    hsl(calc(var(--agent-orb-h, 255) + 45) 95% 78%),
+    transparent 62%
+  );
+  animation: agent-orb-drift-a 4.2s ease-in-out infinite;
+}
+.agent-orb::after {
+  background: radial-gradient(circle at 68% 72%, #fff, transparent 52%);
+  opacity: 0.9;
+  animation: agent-orb-drift-b 5.4s ease-in-out infinite;
+}
+/* Work stopped: freeze the smoke and mute the color. */
+.agent-orb[data-agent-orb-state="idle"]::before,
+.agent-orb[data-agent-orb-state="idle"]::after,
+.agent-orb[data-agent-orb-state="done"]::before,
+.agent-orb[data-agent-orb-state="done"]::after,
+.agent-orb[data-agent-orb-state="failed"]::before,
+.agent-orb[data-agent-orb-state="failed"]::after {
+  animation: none;
+}
+.agent-orb[data-agent-orb-state="done"] {
+  filter: saturate(0.45) brightness(0.9);
+}
+.agent-orb[data-agent-orb-state="failed"] {
+  filter: saturate(0.85);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-orb::before,
+  .agent-orb::after {
+    animation: none;
+  }
+}
+@keyframes agent-orb-drift-a {
+  0%,
+  100% {
+    transform: translate(-8%, -6%) rotate(0deg);
+  }
+  50% {
+    transform: translate(10%, 14%) rotate(55deg);
+  }
+}
+@keyframes agent-orb-drift-b {
+  0%,
+  100% {
+    transform: translate(8%, 10%);
+  }
+  50% {
+    transform: translate(-14%, -12%);
+  }
+}
+
+/* Text shimmer for in-flight AI work (running tool calls, live agent status).
+   Settled text must never shimmer — remove the class the moment work stops. */
+.text-shimmer {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 20%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 80%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: text-shimmer-sweep 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .text-shimmer {
+    animation: none;
+    color: var(--muted-foreground);
+    background-image: none;
+  }
+}
+@keyframes text-shimmer-sweep {
+  to {
+    background-position: -200% 0;
+  }
+}

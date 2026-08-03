@@ -12,6 +12,9 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
+
+import { AgentOrb, agentOrbHue } from "./AgentOrb";
 import {
   createContext,
   Fragment,
@@ -175,6 +178,10 @@ interface TimelineRowActivityState {
   activeTurnInProgress: boolean;
   latestRunId: RunId | null;
 }
+
+// Agent-authored user messages don't carry the sending agent's id, so every
+// agent-sent message shares one stable identity color distinct from the user.
+const AGENT_MESSAGE_ORB_SEED = "agent";
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
@@ -993,18 +1000,36 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       attachment.type !== "image" || !attachment.name.startsWith("preview-annotation-"),
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  const isAgentMessage = row.message.createdBy === "agent";
+  const agentHueValue = agentOrbHue(AGENT_MESSAGE_ORB_SEED);
 
   return (
-    <div className="group flex flex-col items-end gap-1">
-      {row.message.createdBy === "agent" ? (
+    <div className={cn("group flex flex-col gap-1", isAgentMessage ? "items-start" : "items-end")}>
+      {isAgentMessage ? (
         <p
-          className="me-1 text-[11px] text-muted-foreground/70"
+          className="flex items-center gap-1.5 ps-0.5 text-[11px] font-medium"
+          style={{ color: `hsl(${agentHueValue} 60% 55%)` }}
           data-user-message-attribution="agent"
         >
+          <AgentOrb seed={AGENT_MESSAGE_ORB_SEED} size={14} state="idle" />
           Sent by another agent
         </p>
       ) : null}
-      <div className="relative max-w-[80%] rounded-2xl bg-accent p-3">
+      <div
+        className={cn(
+          "relative max-w-[80%] p-3",
+          isAgentMessage ? "rounded-xl rounded-ss-md border border-l-2" : "rounded-2xl bg-accent",
+        )}
+        style={
+          isAgentMessage
+            ? {
+                borderColor: `hsl(${agentHueValue} 50% 50% / 0.35)`,
+                borderLeftColor: `hsl(${agentHueValue} 80% 60%)`,
+                backgroundColor: `hsl(${agentHueValue} 50% 50% / 0.08)`,
+              }
+            : undefined
+        }
+      >
         {regularAttachments.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularAttachments.map(
@@ -2513,7 +2538,10 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
 }
 
 function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles" | "itemType">,
+  workEntry: Pick<
+    TimelineWorkEntry,
+    "detail" | "command" | "changedFiles" | "itemType" | "toolData"
+  >,
   workspaceRoot: string | undefined,
 ) {
   // File changes read as their path (with a diffstat rendered separately) —
@@ -2521,6 +2549,17 @@ function workEntryPreview(
   if (workEntry.itemType === "file_change" && (workEntry.changedFiles?.length ?? 0) > 0) {
     const [filePath] = workEntry.changedFiles!;
     return filePath ? formatWorkspaceRelativePath(filePath, workspaceRoot) : null;
+  }
+  // Native read-style tools (Read, Glob, Grep, …) arrive as dynamic_tool items
+  // whose arguments otherwise stay buried in the expanded inspector JSON.
+  if (workEntry.itemType === "dynamic_tool") {
+    const input = (workEntry.toolData as { readonly input?: unknown } | null | undefined)?.input;
+    const inputPreview = dynamicToolInputPreview(input);
+    if (inputPreview) {
+      return inputPreview.kind === "path"
+        ? formatWorkspaceRelativePath(inputPreview.value, workspaceRoot)
+        : inputPreview.value;
+    }
   }
   // Prefer stdout/detail so completed shell/monitor results are visible collapsed
   // (command alone hid ls listings behind expand-only inspector JSON).
@@ -2614,8 +2653,11 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (workEntry.itemType === "file_search") return "eye";
 
   switch (workEntry.itemType) {
-    case "dynamic_tool":
-      return "wrench";
+    case "dynamic_tool": {
+      // Read-style tool calls (a file/notebook path argument) present as reads.
+      const input = (workEntry.toolData as { readonly input?: unknown } | null | undefined)?.input;
+      return dynamicToolInputPreview(input)?.kind === "path" ? "eye" : "wrench";
+    }
     case "subagent":
       return "bot";
   }
@@ -2689,7 +2731,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Completed tool calls render no glyph — this row is diffstat-first, so a
   // checkmark on every finished call is noise. Screen readers still need the
   // outcome, so the empty indicator slot carries the label instead.
-  const completedIndicatorLabel = lifecycleStatus === "completed" ? "Tool call completed" : undefined;
+  const completedIndicatorLabel =
+    lifecycleStatus === "completed" ? "Tool call completed" : undefined;
   const projected = workEntry.projectedItem?.item;
   const fileDiffStat =
     projected?.type === "file_change"
@@ -2737,7 +2780,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <div className="min-w-0 flex-1 overflow-hidden">
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
-              <span className={cn("min-w-0 shrink truncate", headingClass)}>{heading}</span>
+              <span
+                className={cn(
+                  "min-w-0 shrink truncate",
+                  headingClass,
+                  showRunningIndicator && "text-shimmer",
+                )}
+              >
+                {heading}
+              </span>
               {workEntry.projectedItem?.visibility !== undefined &&
               workEntry.projectedItem.visibility !== "local" ? (
                 <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] leading-none text-muted-foreground">
@@ -2745,7 +2796,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 </span>
               ) : null}
               {preview && (
-                <span className="min-w-0 flex-1 truncate text-muted-foreground/55">{preview}</span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-muted-foreground/55",
+                    showRunningIndicator && "text-shimmer",
+                  )}
+                >
+                  {preview}
+                </span>
               )}
             </p>
           </div>

@@ -186,6 +186,8 @@ describe("resolveLifecyclePresentation", () => {
       detail: "claude · claude-opus-5",
       badge: "created",
       threadId: "thread-child",
+      orbSeed: null,
+      orbState: null,
     });
   });
 
@@ -203,18 +205,26 @@ describe("resolveLifecyclePresentation", () => {
     };
     expect(resolveLifecyclePresentation(item({ ...base, status: "completed" }), [])).toMatchObject({
       detail: "all done",
-      expandedDetail: "all done",
       badgeTone: "success",
+      orbSeed: "thread-child",
+      orbState: "done",
     });
     expect(resolveLifecyclePresentation(item({ ...base, status: "running" }), [])).toMatchObject({
       detail: "working on step 2",
-      expandedDetail: null,
       badgeTone: "neutral",
+      orbState: "active",
     });
     expect(resolveLifecyclePresentation(item({ ...base, status: "cancelled" }), [])).toMatchObject({
       detail: "all done",
-      expandedDetail: null,
+      orbState: "done",
     });
+    expect(resolveLifecyclePresentation(item({ ...base, status: "failed" }), [])).toMatchObject({
+      orbSeed: "thread-child",
+      orbState: "failed",
+    });
+    expect(
+      resolveLifecyclePresentation(item({ ...base, childThreadId: null, status: "running" }), []),
+    ).toMatchObject({ orbSeed: "node-1" });
   });
 
   it("returns null for non-lifecycle items", () => {
