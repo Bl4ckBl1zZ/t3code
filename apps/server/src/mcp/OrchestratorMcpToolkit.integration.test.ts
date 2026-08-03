@@ -1013,7 +1013,8 @@ describe("orchestrator MCP toolkit", () => {
 
             // The cancelled async child carries completionWake "always", so
             // its terminal offers a wake even though the parent run is live;
-            // queue_after_active sequences the continuation behind it.
+            // the continuation worker steers the live run (or queues if it
+            // cannot).
             const offersAfterCancel = yield* waitForContinuationOffers(1);
             expect(offersAfterCancel).toHaveLength(1);
             expect(offersAfterCancel[0]).toMatchObject({

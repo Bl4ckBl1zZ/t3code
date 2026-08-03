@@ -464,8 +464,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
   // Parent-wake policy for app-owned tasks: "always" offers a continuation on
-  // every terminal (async delegations; queue_after_active sequences it behind
-  // a live parent run), "settled_only" offers only when the parent has no
+  // every terminal (async delegations; a live parent run is steered, with
+  // queue_after_active as fallback), "settled_only" offers only when the parent has no
   // live run (wait-mode delegations, whose result returns through the
   // blocking tool call). Absent on legacy records; treated as settled_only.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
