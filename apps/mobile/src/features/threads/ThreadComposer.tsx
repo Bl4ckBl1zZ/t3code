@@ -51,6 +51,11 @@ import {
   ComposerToolbarScroller,
   ComposerToolbarTrigger,
 } from "../../components/ComposerToolbarTrigger";
+import {
+  ComposerAttachmentMenu,
+  type ComposerAttachmentMenuItem,
+} from "../../components/ComposerAttachmentMenu";
+import { ComposerCameraSheet } from "../../components/ComposerCameraSheet";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import {
@@ -128,6 +133,7 @@ export interface ThreadComposerProps {
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
   readonly onPickDraftDocuments: () => Promise<void>;
+  readonly onAddDraftAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
@@ -545,20 +551,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Handle command selection ──────────────────────────────
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
-  const attachmentMenuActions = useMemo(
+  const attachmentMenuItems = useMemo<ReadonlyArray<ComposerAttachmentMenuItem>>(
     () => [
-      {
-        id: "photos",
-        title: "Photo Library",
-        image: Platform.select({ ios: "photo.on.rectangle" }),
-      },
-      { id: "files", title: "Files", image: Platform.select({ ios: "folder" }) },
+      { id: "camera", title: "Camera", icon: "camera" },
+      { id: "photos", title: "Photos", icon: "photo.on.rectangle" },
+      { id: "files", title: "Files", icon: "paperclip" },
     ],
     [],
   );
-  const onAttachmentMenuAction = useCallback(
-    ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
-      if (nativeEvent.event === "files") {
+  const [cameraSheetVisible, setCameraSheetVisible] = useState(false);
+  const onAttachmentMenuSelect = useCallback(
+    (id: string) => {
+      if (id === "camera") {
+        setCameraSheetVisible(true);
+        return;
+      }
+      if (id === "files") {
         void props.onPickDraftDocuments();
         return;
       }
@@ -839,9 +847,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           ) : null}
 
           {!isExpanded ? (
-            <ControlPillMenu actions={attachmentMenuActions} onPressAction={onAttachmentMenuAction}>
+            <ComposerAttachmentMenu items={attachmentMenuItems} onSelect={onAttachmentMenuSelect}>
               <ControlPill icon="plus" accessibilityLabel="Add attachment" />
-            </ControlPillMenu>
+            </ComposerAttachmentMenu>
           ) : null}
           <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
             <ComposerEditor
@@ -981,16 +989,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 fadeOpaque={toolbarFadeOpaque}
                 fadeTransparent={toolbarFadeTransparent}
               >
-                <ControlPillMenu
-                  actions={attachmentMenuActions}
-                  onPressAction={onAttachmentMenuAction}
+                <ComposerAttachmentMenu
+                  items={attachmentMenuItems}
+                  onSelect={onAttachmentMenuSelect}
                 >
                   <ComposerToolbarButton
                     accessibilityLabel="Add attachment"
                     icon="plus"
                     showChevron={false}
                   />
-                </ControlPillMenu>
+                </ComposerAttachmentMenu>
                 <ControlPillMenu
                   actions={modelMenuActions}
                   onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
@@ -1062,6 +1070,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
         {/* Queue details now render as the QueuedMessageStrip above the surface. */}
       </Animated.View>
+
+      <ComposerCameraSheet
+        visible={cameraSheetVisible}
+        existingCount={props.draftAttachments.length}
+        onClose={() => setCameraSheetVisible(false)}
+        onCapture={(image) => props.onAddDraftAttachments([image])}
+      />
 
       <ImageViewing
         images={previewImageUri ? [{ uri: previewImageUri }] : []}

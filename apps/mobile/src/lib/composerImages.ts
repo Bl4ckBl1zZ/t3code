@@ -121,6 +121,48 @@ export async function pickComposerImages(input: { readonly existingCount: number
   };
 }
 
+/**
+ * Wraps an in-app camera capture (expo-camera takePictureAsync with base64)
+ * as a draft attachment, enforcing the same slot and size limits as the
+ * library picker.
+ */
+export function composerImageFromCameraCapture(input: {
+  readonly base64: string;
+  readonly uri: string;
+  readonly existingCount: number;
+}): {
+  readonly image: DraftComposerImageAttachment | null;
+  readonly error: string | null;
+} {
+  if (input.existingCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+    return {
+      image: null,
+      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`,
+    };
+  }
+
+  const sizeBytes = estimateBase64ByteSize(input.base64);
+  if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+    return {
+      image: null,
+      error: "The captured photo exceeds the 10 MB attachment limit.",
+    };
+  }
+
+  return {
+    image: {
+      id: uuidv4(),
+      type: "image",
+      name: `camera-${Date.now()}.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes,
+      dataUrl: `data:image/jpeg;base64,${input.base64}`,
+      previewUri: input.uri,
+    },
+    error: null,
+  };
+}
+
 export async function pasteComposerClipboard(input: { readonly existingCount: number }): Promise<{
   readonly images: ReadonlyArray<DraftComposerImageAttachment>;
   readonly text: string | null;

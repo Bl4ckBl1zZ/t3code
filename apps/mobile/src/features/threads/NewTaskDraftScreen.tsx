@@ -1,5 +1,6 @@
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
+import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
@@ -28,11 +29,13 @@ import {
 } from "../../components/ComposerToolbarTrigger";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+import { ComposerCameraSheet } from "../../components/ComposerCameraSheet";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ComposerSurface } from "./ThreadComposer";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { pickComposerDocuments } from "../../lib/composerDocuments";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
 import {
   applyProviderOptionMenuEvent,
@@ -64,6 +67,15 @@ import {
   VoiceRecordingBar,
 } from "../voice/VoiceComposerControls";
 import { useVoiceComposer } from "../voice/useVoiceComposer";
+
+// This screen presents as a native formSheet on iOS, which sits above the
+// OverlayPortal host — so unlike ThreadComposer it keeps the platform menu
+// (native UIMenu / AndroidAnchoredMenu) for the attachment sources.
+const attachmentMenuActions: MenuAction[] = [
+  { id: "camera", title: "Camera", image: "camera" },
+  { id: "photos", title: "Photos", image: "photo.on.rectangle" },
+  { id: "files", title: "Files", image: "paperclip" },
+];
 
 function formatWorkspaceLabel(input: {
   readonly workspaceMode: string;
@@ -133,6 +145,7 @@ export function NewTaskDraftScreen(props: {
   const voiceBusy = voice.busy;
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [cameraSheetVisible, setCameraSheetVisible] = useState(false);
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
   const [isCancellingShareImport, setIsCancellingShareImport] = useState(false);
   const [cancelledIncomingShareId, setCancelledIncomingShareId] = useState<string | null>(null);
@@ -829,6 +842,28 @@ export function NewTaskDraftScreen(props: {
     }
   }
 
+  async function handlePickDocuments(): Promise<void> {
+    if (isIncomingShareTransferPending) {
+      return;
+    }
+    const result = await pickComposerDocuments({ existingCount: flow.attachments.length });
+    if (result.documents.length > 0) {
+      flow.appendAttachments(result.documents);
+    }
+  }
+
+  function handleAttachmentMenuAction(event: string): void {
+    if (event === "camera") {
+      setCameraSheetVisible(true);
+      return;
+    }
+    if (event === "files") {
+      void handlePickDocuments();
+      return;
+    }
+    void handlePickImages();
+  }
+
   const handleNativePasteImages = useCallback(
     async (uris: ReadonlyArray<string>) => {
       try {
@@ -1058,12 +1093,17 @@ export function NewTaskDraftScreen(props: {
 
   const toolbarPills = (
     <>
-      <ComposerToolbarButton
-        icon="plus"
-        onPress={() => void handlePickImages()}
-        showChevron={false}
-        disabled={isIncomingShareTransferPending}
-      />
+      <ControlPillMenu
+        actions={attachmentMenuActions}
+        onPressAction={({ nativeEvent }) => handleAttachmentMenuAction(nativeEvent.event)}
+      >
+        <ComposerToolbarButton
+          icon="plus"
+          accessibilityLabel="Add attachment"
+          showChevron={false}
+          disabled={isIncomingShareTransferPending}
+        />
+      </ControlPillMenu>
       <ControlPillMenu
         actions={modelMenuActions}
         onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
@@ -1163,6 +1203,15 @@ export function NewTaskDraftScreen(props: {
     />
   );
 
+  const cameraSheet = (
+    <ComposerCameraSheet
+      visible={cameraSheetVisible}
+      existingCount={flow.attachments.length}
+      onClose={() => setCameraSheetVisible(false)}
+      onCapture={(image) => flow.appendAttachments([image])}
+    />
+  );
+
   if (isAndroid) {
     // The draft is a thread that doesn't exist yet, so it mirrors the thread
     // page: in-screen header, empty feed canvas above, and the same floating
@@ -1251,6 +1300,7 @@ export function NewTaskDraftScreen(props: {
             ) : null}
           </View>
         </KeyboardAvoidingView>
+        {cameraSheet}
       </View>
     );
   }
@@ -1287,6 +1337,7 @@ export function NewTaskDraftScreen(props: {
           </ComposerToolbarRow>
         </View>
       </KeyboardAvoidingView>
+      {cameraSheet}
     </View>
   );
 }
