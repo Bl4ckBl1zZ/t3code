@@ -362,6 +362,20 @@ export function useThreadComposerState(options?: {
     }
   }, [composerDrafts, selectedThreadShell]);
 
+  // Attachments produced in-app (camera captures) rather than through a
+  // system picker: already validated, so they append directly.
+  const onAddDraftAttachments = useCallback(
+    (attachments: ReadonlyArray<DraftComposerAttachment>) => {
+      if (!selectedThreadShell || attachments.length === 0) {
+        return;
+      }
+
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      appendComposerDraftAttachments(threadKey, attachments);
+    },
+    [selectedThreadShell],
+  );
+
   const onPasteIntoDraft = useCallback(async () => {
     if (!selectedThreadShell) {
       return;
@@ -472,6 +486,7 @@ export function useThreadComposerState(options?: {
     onChangeDraftMessage,
     onPickDraftImages,
     onPickDraftDocuments,
+    onAddDraftAttachments,
     onPasteIntoDraft,
     onNativePasteImages,
     onRemoveDraftImage,

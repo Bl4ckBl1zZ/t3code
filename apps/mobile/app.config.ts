@@ -382,7 +382,8 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
+        cameraPermission:
+          "Allow T3 Code to access your camera so you can scan pairing QR codes and take photos to attach to messages.",
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
@@ -434,9 +435,7 @@ const config: ExpoConfig = {
           // at prebuild; without it in the sandbox snapshot they archive as
           // '1' and Xcode rejects the mismatch with the parent app's injected
           // build number.
-          ...(managedIosBuildNumber
-            ? { T3CODE_IOS_BUILD_NUMBER: managedIosBuildNumber }
-            : {}),
+          ...(managedIosBuildNumber ? { T3CODE_IOS_BUILD_NUMBER: managedIosBuildNumber } : {}),
         },
       },
     ],
