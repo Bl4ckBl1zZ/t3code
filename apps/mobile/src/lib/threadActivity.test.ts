@@ -68,6 +68,24 @@ function userMessage(updatedAt = "2026-06-20T00:00:01.000Z") {
   };
 }
 
+function agentUserMessage(
+  id: string,
+  ordinal: number,
+  updatedAt = "2026-06-20T00:00:01.000Z",
+  text = `Delegated task "Task ${id}" completed. Use task_status with taskId ${id} to read the result.`,
+) {
+  return {
+    ...base(`item-${id}`, updatedAt, ordinal),
+    type: "user_message" as const,
+    messageId: MessageId.make(id),
+    createdBy: "agent" as const,
+    creationSource: "mobile" as const,
+    inputIntent: "turn_start" as const,
+    text,
+    attachments: [],
+  };
+}
+
 function command(updatedAt = "2026-06-20T00:00:02.000Z") {
   return {
     ...base("item-command", updatedAt, 1),
@@ -148,6 +166,50 @@ describe("buildThreadFeed", () => {
     const activity = feed.find((entry) => entry.type === "activity-group")?.activities[0];
     expect(activity?.projectedItem).toBe(rows[1]);
     expect(activity?.getFullDetail()).toContain('"input": "vp check"');
+  });
+
+  it("collapses runs of consecutive agent-sent user messages into one agent-updates group", () => {
+    const feed = buildThreadFeed([
+      projected(agentUserMessage("wake-1", 0), 0),
+      projected(agentUserMessage("wake-2", 1, "2026-06-20T00:00:02.000Z"), 1),
+      projected(agentUserMessage("wake-3", 2, "2026-06-20T00:00:03.000Z"), 2),
+      projected(assistantMessage("2026-06-20T00:00:04.000Z"), 3),
+    ]);
+
+    expect(feed.map((entry) => entry.type)).toEqual(["agent-updates", "message"]);
+    const group = feed[0];
+    if (group?.type !== "agent-updates") throw new Error("expected agent-updates entry");
+    // Anchored to the first message id so the group stays stable as updates append.
+    expect(group.id).toBe("agent-updates:wake-1");
+    expect(group.messages.map((message) => message.id)).toEqual(["wake-1", "wake-2", "wake-3"]);
+  });
+
+  it("keeps a single agent-sent message as an ordinary message entry", () => {
+    const feed = buildThreadFeed([
+      projected(agentUserMessage("wake-1", 0), 0),
+      projected(assistantMessage("2026-06-20T00:00:02.000Z"), 1),
+    ]);
+
+    expect(feed.map((entry) => entry.type)).toEqual(["message", "message"]);
+    expect(feed[0]?.type === "message" ? feed[0].message.createdBy : undefined).toBe("agent");
+  });
+
+  it("breaks an agent-update run on an interleaved user-sent message", () => {
+    const feed = buildThreadFeed([
+      projected(agentUserMessage("wake-1", 0), 0),
+      projected(
+        {
+          ...userMessage("2026-06-20T00:00:02.000Z"),
+          id: TurnItemId.make("item-user-mid"),
+          messageId: MessageId.make("message-user-mid"),
+        },
+        1,
+      ),
+      projected(agentUserMessage("wake-2", 2, "2026-06-20T00:00:03.000Z"), 2),
+    ]);
+
+    expect(feed.map((entry) => entry.type)).toEqual(["message", "message", "message"]);
+    expect(feed.map((entry) => entry.id)).toEqual(["wake-1", "message-user-mid", "wake-2"]);
   });
 
   it("retains inherited and synthetic rows with their original projected identity", () => {

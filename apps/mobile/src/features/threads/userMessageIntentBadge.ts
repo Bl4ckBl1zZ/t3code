@@ -1,9 +1,10 @@
 import type { OrchestrationV2UserMessageInputIntent } from "@t3tools/contracts";
 
+// Input intent is metadata, so it reads as quiet text alongside the timestamp
+// rather than a colored badge.
 export interface UserMessageIntentBadgePresentation {
   readonly label: string;
   readonly accessibilityLabel: string;
-  readonly tone: "queued" | "steer";
 }
 
 export function resolveUserMessageIntentBadge(
@@ -14,19 +15,16 @@ export function resolveUserMessageIntentBadge(
       return {
         label: "queued",
         accessibilityLabel: "Queued behind the active turn",
-        tone: "queued",
       };
     case "steer":
       return {
-        label: "steer",
+        label: "steered the run",
         accessibilityLabel: "Steered the active turn",
-        tone: "steer",
       };
     case "promoted_queued_to_steer":
       return {
-        label: "queued → steer",
+        label: "queued → steered the run",
         accessibilityLabel: "Originally queued, then promoted to steer the active turn",
-        tone: "steer",
       };
     case "turn_start":
     case undefined:

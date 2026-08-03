@@ -615,7 +615,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Steered the active turn");
-    expect(markup).toContain(">steer<");
+    expect(markup).toContain(">steered the run<");
   });
 
   it("shows a collapsed disclosure for superseded attempt output", async () => {

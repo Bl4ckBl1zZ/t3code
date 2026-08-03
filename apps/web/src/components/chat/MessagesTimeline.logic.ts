@@ -191,6 +191,12 @@ export type MessagesTimelineRow =
       projectedItem: OrchestrationV2ProjectedTurnItem;
     }
   | {
+      kind: "agent-updates";
+      id: string;
+      createdAt: string;
+      updates: Array<Extract<MessagesTimelineRow, { kind: "message" }>>;
+    }
+  | {
       kind: "proposed-plan";
       id: string;
       createdAt: string;
@@ -669,15 +675,60 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  const mergedRows = mergeAgentUpdateRuns(nextRows);
+
   if (input.isWorking) {
-    nextRows.push({
+    mergedRows.push({
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
     });
   }
 
-  return nextRows;
+  return mergedRows;
+}
+
+type AgentUpdateMessageRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+
+function isAgentUpdateMessageRow(row: MessagesTimelineRow): row is AgentUpdateMessageRow {
+  return row.kind === "message" && row.message.role === "user" && row.message.createdBy === "agent";
+}
+
+// Consecutive agent-authored prompts (delegated-task wakes and other injected
+// instructions) collapse into one "agent-updates" group — a run of near-
+// identical machine callbacks shouldn't occupy a bubble each. Singles keep
+// their ordinary message presentation.
+function mergeAgentUpdateRuns(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
+  const result: MessagesTimelineRow[] = [];
+  let index = 0;
+  while (index < rows.length) {
+    const row = rows[index]!;
+    if (!isAgentUpdateMessageRow(row)) {
+      result.push(row);
+      index += 1;
+      continue;
+    }
+    const run: AgentUpdateMessageRow[] = [row];
+    while (index + run.length < rows.length) {
+      const candidate = rows[index + run.length]!;
+      if (!isAgentUpdateMessageRow(candidate)) break;
+      run.push(candidate);
+    }
+    if (run.length < 2) {
+      result.push(row);
+    } else {
+      result.push({
+        kind: "agent-updates",
+        // Anchored to the first message so the group id stays stable as later
+        // updates append to it.
+        id: `agent-updates:${row.id}`,
+        createdAt: row.createdAt,
+        updates: run,
+      });
+    }
+    index += run.length;
+  }
+  return result;
 }
 
 export function computeStableMessagesTimelineRows(
@@ -739,6 +790,17 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
+      );
+    }
+
+    case "agent-updates": {
+      const bu = b as typeof a;
+      return (
+        a.updates.length === bu.updates.length &&
+        a.updates.every((update, index) => {
+          const other = bu.updates[index];
+          return other !== undefined && isRowUnchanged(update, other);
+        })
       );
     }
   }

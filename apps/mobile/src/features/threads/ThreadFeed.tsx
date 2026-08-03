@@ -11,6 +11,7 @@ import {
   type RunId,
 } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { parseDelegatedTaskWakeMessage } from "@t3tools/shared/delegatedTaskWake";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -72,8 +73,6 @@ import {
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
 
-import { agentHue } from "@t3tools/shared/agentIdentity";
-import { AgentOrb } from "../../components/AgentOrb";
 import { AppText as Text } from "../../components/AppText";
 import { CopyTextButton } from "../../components/CopyTextButton";
 import { HtmlEmbedView, isHtmlEmbedLanguage } from "../../components/HtmlEmbedView";
@@ -115,6 +114,7 @@ import {
   threadFeedRunIsUnsettled,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
+  type ThreadFeedMessage,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -1111,6 +1111,17 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "agent-updates") {
+    return (
+      <AgentUpdatesGroup
+        messages={entry.messages}
+        expanded={props.expandedWorkGroups[entry.id] ?? false}
+        onToggle={() => props.onToggleWorkGroup(entry.id)}
+        iconSubtleColor={iconSubtleColor}
+      />
+    );
+  }
+
   if (entry.type === "message") {
     const { message } = entry;
     const isUser = message.role === "user";
@@ -1129,28 +1140,20 @@ function renderFeedEntry(
       !message.streaming;
 
     if (isUser && message.createdBy === "agent") {
-      // Agent-sent instructions read as a left-aligned "agent report" rather
-      // than a user bubble: orb + tinted attribution, colored left border.
+      // Agent-sent prompts sit left on the neutral card material — quiet
+      // attribution, no color accents, matching the rest of the app chrome.
       const enterAnimated = isFreshTimestamp(message.createdAt);
-      const orbSeed = message.sourceThreadId ?? "agent";
-      const hue = agentHue(orbSeed);
       return (
         <Animated.View
           className="mb-5 items-start"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
-          <View className="mb-1 flex-row items-center gap-1.5 pl-0.5">
-            <AgentOrb seed={orbSeed} size={22} />
-            <Text className="font-t3-semibold text-xs" style={{ color: `hsl(${hue} 60% 50%)` }}>
-              Agent
-            </Text>
-          </View>
+          <Text className="mb-1 pl-1 text-2xs text-foreground-muted opacity-70">
+            Sent by another agent
+          </Text>
           <View
-            className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
+            className="min-w-0 gap-2 rounded-[20px] rounded-tl-md border border-neutral-300/50 bg-card px-3.5 py-2.5 dark:border-white/[0.08]"
             style={{
-              borderLeftWidth: 3,
-              borderLeftColor: `hsl(${hue} 70% 55%)`,
-              backgroundColor: `hsla(${hue}, 70%, 55%, 0.09)`,
               maxWidth: props.userBubbleMaxWidth,
               ...(hasReviewCommentContext ? { width: props.reviewCommentBubbleWidth } : null),
             }}
@@ -1246,28 +1249,14 @@ function renderFeedEntry(
               </View>
             ) : null}
             {intentBadge ? (
-              <View
+              <Text
                 accessible
                 accessibilityRole="text"
                 accessibilityLabel={intentBadge.accessibilityLabel}
-                className={cn(
-                  "rounded-full border px-1.5 py-0.5",
-                  intentBadge.tone === "queued"
-                    ? "border-amber-500/25 bg-amber-500/10 dark:border-amber-400/25 dark:bg-amber-400/10"
-                    : "border-sky-500/25 bg-sky-500/10 dark:border-sky-400/25 dark:bg-sky-400/10",
-                )}
+                className="text-xs text-neutral-600 opacity-80 dark:text-neutral-400"
               >
-                <Text
-                  className={cn(
-                    "font-t3-medium text-2xs tracking-wide",
-                    intentBadge.tone === "queued"
-                      ? "text-amber-700 dark:text-amber-300"
-                      : "text-sky-700 dark:text-sky-300",
-                  )}
-                >
-                  {intentBadge.label}
-                </Text>
-              </View>
+                {intentBadge.label}
+              </Text>
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
@@ -1369,6 +1358,94 @@ function renderFeedEntry(
       onToggleRow={(rowId) => props.onToggleWorkRow(rowId, entry.id)}
       workspaceRoot={props.workspaceRoot}
     />
+  );
+}
+
+// A run of consecutive agent-authored prompts (delegated-task wakes) collapses
+// into one quiet full-width card: header + latest line, expandable to every
+// update. All plain text on the app's neutral chrome — the raw task_status
+// boilerplate never renders (the parser strips it).
+function AgentUpdatesGroup(props: {
+  readonly messages: ReadonlyArray<ThreadFeedMessage>;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+  readonly iconSubtleColor: string | ColorValue;
+}) {
+  const latest = props.messages[props.messages.length - 1];
+  return (
+    <View className="mb-5 overflow-hidden rounded-2xl border border-neutral-300/50 bg-card dark:border-white/[0.08]">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: props.expanded }}
+        onPress={props.onToggle}
+        hitSlop={4}
+        className="flex-row items-center gap-2 px-3.5 py-2.5"
+      >
+        <Text className="text-xs text-foreground-muted">↳</Text>
+        <Text className="font-t3-medium text-xs text-foreground-muted">Agent updates</Text>
+        <Text className="text-xs tabular-nums text-foreground-muted">
+          · {props.messages.length}
+        </Text>
+        <View className="ml-auto">
+          <SymbolView
+            name={props.expanded ? "chevron.up" : "chevron.down"}
+            size={13}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
+          />
+        </View>
+      </Pressable>
+      {props.expanded ? (
+        props.messages.map((message) => (
+          <View
+            key={message.id}
+            className="border-t border-neutral-300/50 px-3.5 py-2 dark:border-white/[0.08]"
+          >
+            <AgentUpdateLine message={message} clamp={false} />
+          </View>
+        ))
+      ) : latest ? (
+        <View className="border-t border-neutral-300/50 px-3.5 py-2 dark:border-white/[0.08]">
+          <AgentUpdateLine message={latest} clamp />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function AgentUpdateLine(props: { readonly message: ThreadFeedMessage; readonly clamp: boolean }) {
+  const wake = parseDelegatedTaskWakeMessage(props.message.text);
+  const onLongPress = () =>
+    copyTextWithHaptic(props.message.text, { target: "agent update", feedback: "selection" });
+  if (wake !== null) {
+    return (
+      <Pressable onLongPress={onLongPress} className="min-h-5 flex-row items-baseline gap-2">
+        {wake.status === "completed" ? (
+          <Text className="text-xs text-foreground-muted">✓</Text>
+        ) : null}
+        <Text
+          className="min-w-0 flex-1 text-xs text-foreground"
+          {...(props.clamp ? { numberOfLines: 1 } : {})}
+        >
+          {wake.title}
+        </Text>
+        <Text
+          className={cn(
+            "text-2xs",
+            wake.status === "failed" ? "text-destructive" : "text-foreground-muted",
+          )}
+        >
+          {wake.status}
+        </Text>
+      </Pressable>
+    );
+  }
+  return (
+    <Pressable onLongPress={onLongPress}>
+      <Text className="text-xs text-foreground-muted" numberOfLines={props.clamp ? 1 : 3}>
+        {props.message.text}
+      </Text>
+    </Pressable>
   );
 }
 

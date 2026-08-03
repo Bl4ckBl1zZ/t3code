@@ -87,6 +87,10 @@
       "types": "./src/agentIdentity.ts",
       "import": "./src/agentIdentity.ts"
     },
+    "./delegatedTaskWake": {
+      "types": "./src/delegatedTaskWake.ts",
+      "import": "./src/delegatedTaskWake.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"
