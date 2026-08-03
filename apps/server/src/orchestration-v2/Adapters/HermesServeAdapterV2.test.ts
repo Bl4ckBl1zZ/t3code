@@ -1657,7 +1657,8 @@ describe("HermesServeAdapterV2", () => {
             Stream.runCollect,
           );
           const toolItems = [...projected].flatMap((event) =>
-            event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+            event.type === "turn_item.updated" &&
+            (event.turnItem.type === "dynamic_tool" || event.turnItem.type === "command_execution")
               ? [event.turnItem]
               : [],
           );
@@ -1707,18 +1708,25 @@ describe("HermesServeAdapterV2", () => {
             assistant?.type === "turn_item.updated" ? assistant.turnItem.ordinal : null,
             103,
           );
-          assert.deepEqual(firstCompleted?.input, {
-            command: "curl https://example.test/?token=[REDACTED]",
-            password: "[REDACTED]",
-          });
-          assert.deepEqual(firstCompleted?.output, {
-            output: "Authorization: Bearer [REDACTED]",
-            exit_code: 0,
-          });
-          assert.deepEqual(secondCompleted?.input, {
-            command: "echo two",
-            api_key: "[REDACTED]",
-          });
+          // Completed terminal tools project as native command cards with the
+          // sanitized command and extracted output/exit code.
+          assert.equal(firstCompleted?.type, "command_execution");
+          assert.equal(
+            firstCompleted?.type === "command_execution" ? firstCompleted.input : null,
+            "curl https://example.test/?token=[REDACTED]",
+          );
+          assert.equal(
+            firstCompleted?.type === "command_execution" ? firstCompleted.output : null,
+            "Authorization: Bearer [REDACTED]",
+          );
+          assert.equal(
+            firstCompleted?.type === "command_execution" ? firstCompleted.exitCode : null,
+            0,
+          );
+          assert.equal(
+            secondCompleted?.type === "command_execution" ? secondCompleted.input : null,
+            "echo two",
+          );
         }),
       ).pipe(Effect.provide(TestLayer)),
   );
@@ -1763,7 +1771,10 @@ describe("HermesServeAdapterV2", () => {
           Stream.runCollect,
           Effect.map((events) =>
             [...events].flatMap((event) =>
-              event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+              event.type === "turn_item.updated" &&
+              (event.turnItem.type === "dynamic_tool" ||
+                event.turnItem.type === "command_execution" ||
+                event.turnItem.type === "web_search")
                 ? [event.turnItem]
                 : [],
             ),
@@ -1774,10 +1785,12 @@ describe("HermesServeAdapterV2", () => {
         const completionOnly = byNativeId("completion-only");
 
         assert.equal(byNativeId("failed-tool")?.status, "failed");
+        assert.equal(byNativeId("failed-tool")?.type, "command_execution");
         assert.equal(completionOnly?.status, "completed");
+        assert.equal(completionOnly?.type, "web_search");
         assert.deepEqual(
-          completionOnly?.type === "dynamic_tool" ? completionOnly.output : undefined,
-          { results: ["one"] },
+          completionOnly?.type === "web_search" ? completionOnly.patterns : undefined,
+          ["Hermes"],
         );
       }),
     ).pipe(Effect.provide(TestLayer)),
@@ -1906,7 +1919,8 @@ describe("HermesServeAdapterV2", () => {
           (event) => event.type === "message.updated",
         );
         const toolItems = [...projected].filter(
-          (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
         );
 
         assert.equal(assistantItems.length, 0);
@@ -2010,7 +2024,7 @@ describe("HermesServeAdapterV2", () => {
           Effect.map((events) =>
             [...events]
               .flatMap((event) =>
-                event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+                event.type === "turn_item.updated" && event.turnItem.type === "command_execution"
                   ? [event.turnItem]
                   : [],
               )
@@ -2019,6 +2033,202 @@ describe("HermesServeAdapterV2", () => {
         );
 
         assert.equal(finalToolItem?.status, "cancelled");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("projects Hermes todo payloads as a live todo list", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("tool.complete", {
+            tool_id: "todo-1",
+            name: "todo_write",
+            result: "ok",
+            todos: [
+              { content: "outline", status: "completed" },
+              { content: "implement", status: "in_progress" },
+              { content: "verify", status: "pending" },
+            ],
+          }),
+        );
+        yield* Effect.promise(() =>
+          fake.emit("tool.complete", {
+            tool_id: "todo-2",
+            name: "todo_write",
+            result: "ok",
+            todos: [
+              { content: "outline", status: "completed" },
+              { content: "implement", status: "completed" },
+              { content: "verify", status: "completed" },
+            ],
+          }),
+        );
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const todoItems = [...projected].flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "todo_list"
+            ? [event.turnItem]
+            : [],
+        );
+        const plans = [...projected].flatMap((event) =>
+          event.type === "plan.updated" ? [event.plan] : [],
+        );
+
+        // Both payloads update the same todo list in place.
+        assert.equal(new Set(todoItems.map((item) => String(item.id))).size, 1);
+        assert.deepEqual(
+          todoItems.at(0)?.steps.map((step) => step.status),
+          ["completed", "running", "pending"],
+        );
+        assert.equal(todoItems.at(0)?.status, "running");
+        assert.equal(todoItems.at(-1)?.status, "completed");
+        const finalPlan = plans.at(-1);
+        assert.equal(finalPlan?.status, "completed");
+        assert.deepEqual(
+          finalPlan?.kind === "todo_list" ? finalPlan.steps.map((step) => step.text) : [],
+          ["outline", "implement", "verify"],
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("projects file edits as file-change cards carrying the inline diff", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("tool.start", {
+            tool_id: "edit-1",
+            name: "edit_file",
+            args: { path: "src/app.ts" },
+          }),
+        );
+        yield* Effect.promise(() =>
+          fake.emit("tool.complete", {
+            tool_id: "edit-1",
+            name: "edit_file",
+            result: "edited",
+            inline_diff: "--- a/src/app.ts\n+++ b/src/app.ts\n-old line\n+new line\n+second line",
+          }),
+        );
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+
+        const fileItems = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.map((events) =>
+            [...events].flatMap((event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "file_change"
+                ? [event.turnItem]
+                : [],
+            ),
+          ),
+        );
+        const finalItem = fileItems.at(-1);
+
+        assert.equal(finalItem?.status, "completed");
+        assert.equal(finalItem?.fileName, "src/app.ts");
+        assert.equal(
+          finalItem?.diffStr,
+          "--- a/src/app.ts\n+++ b/src/app.ts\n-old line\n+new line\n+second line",
+        );
+        assert.equal(finalItem?.additions, 2);
+        assert.equal(finalItem?.deletions, 1);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("switches the session model through the /model command before the prompt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn({
+          ...turnInput(providerThread),
+          modelSelection: { instanceId, model: "openai/gpt-6" },
+        });
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const sessionUpdates = [...projected].flatMap((event) =>
+          event.type === "provider_session.updated" ? [event.providerSession] : [],
+        );
+
+        assert.deepEqual(
+          fake.prompts.map((entry) => entry.params.text),
+          ["/model openai/gpt-6 --session", "hello Hermes"],
+        );
+        assert.equal(sessionUpdates.at(-1)?.model, "openai/gpt-6");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("carries the T3 orchestration instructions in the first MCP-leased prompt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = {
+          ...compatibility,
+          capabilities: [...compatibility.capabilities, "session_mcp"],
+        };
+        McpProviderSession.setMcpProviderSession({
+          credentialId: "credential-hermes-instructions",
+          environmentId: EnvironmentId.make("environment-hermes-test"),
+          threadId,
+          providerSessionId: "mcp-provider-session-hermes-instructions",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer scoped-hermes-token",
+          capabilities: ["orchestration"],
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+        );
+        const runtime = yield* makeRuntime(fake, true, undefined, true);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+
+        const promptText = fake.prompts.at(0)?.params.text ?? "";
+        assert.ok(promptText.includes("<t3_code_orchestration_instructions>"));
+        assert.ok(promptText.includes("t3-html"));
+        assert.ok(promptText.includes("<user_request>\nhello Hermes\n</user_request>"));
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
