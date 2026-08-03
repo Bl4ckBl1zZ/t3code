@@ -246,10 +246,10 @@ function subagentBadgeTone(status: OrchestrationV2TurnItem["status"]): RelatedTh
 type RelatedThreadBadgeTone = "neutral" | "info" | "success" | "danger";
 
 const RELATED_THREAD_BADGE_TONE_CLASS: Record<RelatedThreadBadgeTone, string> = {
-  neutral: "border-border/70 text-muted-foreground",
-  info: "border-info/35 bg-info/10 text-info",
-  success: "border-success/35 bg-success/10 text-success",
-  danger: "border-destructive/35 bg-destructive/10 text-destructive",
+  neutral: "text-muted-foreground",
+  info: "text-info",
+  success: "text-success",
+  danger: "text-destructive",
 };
 
 function RelatedThreadCard(props: {
@@ -269,9 +269,9 @@ function RelatedThreadCard(props: {
   const content = (
     <>
       {props.orb !== undefined ? (
-        <AgentOrb seed={props.orb.seed} state={props.orb.state} size={22} className="mt-px" />
+        <AgentOrb seed={props.orb.seed} state={props.orb.state} size={22} />
       ) : Icon !== undefined ? (
-        <span className="mt-px flex size-[22px] shrink-0 items-center justify-center">
+        <span className="flex size-[22px] shrink-0 items-center justify-center">
           <Icon className="size-3.5 text-muted-foreground" />
         </span>
       ) : null}
@@ -280,7 +280,7 @@ function RelatedThreadCard(props: {
           <span className="min-w-0 flex-1 truncate text-xs font-medium">{props.title}</span>
           <span
             className={cn(
-              "shrink-0 rounded-full border px-1.5 py-0.5 font-mono text-[10px]",
+              "shrink-0 text-[10px] font-bold uppercase tracking-wide",
               RELATED_THREAD_BADGE_TONE_CLASS[props.badgeTone ?? "neutral"],
             )}
           >
@@ -302,7 +302,7 @@ function RelatedThreadCard(props: {
   return threadId === null ? (
     <div
       data-v2-item-type={props.itemType}
-      className="flex min-w-0 items-start gap-2.5 rounded-xl border border-border/60 bg-card/30 px-3 py-2.5"
+      className="flex min-w-0 items-center gap-2.5 rounded-xl border border-border/60 bg-card/30 px-3 py-2.5"
     >
       {content}
     </div>
@@ -312,10 +312,10 @@ function RelatedThreadCard(props: {
       data-v2-item-type={props.itemType}
       aria-label={`Open ${props.title}`}
       onClick={() => props.onOpenThread(threadId)}
-      className="flex w-full min-w-0 items-start gap-2.5 rounded-xl border border-border/60 bg-card/30 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+      className="flex w-full min-w-0 items-center gap-2.5 rounded-xl border border-border/60 bg-card/30 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
     >
       {content}
-      <ExternalLinkIcon className="mt-1 size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
     </button>
   );
 }
