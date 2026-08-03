@@ -30,6 +30,29 @@ describe("nativeMarkdownTextRuns", () => {
     ]);
   });
 
+  it("renders file-like inline code as tappable file chips", () => {
+    const node: MarkdownNode = {
+      type: "paragraph",
+      children: [
+        { type: "text", content: "see " },
+        { type: "code_inline", content: "apps/web/src/ipc.ts:42" },
+        { type: "text", content: " and " },
+        { type: "code_inline", content: "index.html" },
+        { type: "text", content: " but not " },
+        { type: "code_inline", content: "Object.keys" },
+      ],
+    };
+
+    expect(nativeMarkdownTextRuns(node)).toEqual([
+      { text: "see " },
+      { text: "ipc.ts:42", href: "apps/web/src/ipc.ts:42", fileIcon: "typescript" },
+      { text: " and " },
+      { text: "index.html", href: "index.html", fileIcon: "html" },
+      { text: " but not " },
+      { text: "Object.keys", code: true },
+    ]);
+  });
+
   it("normalizes external and file links for native presentation", () => {
     const node: MarkdownNode = {
       type: "paragraph",

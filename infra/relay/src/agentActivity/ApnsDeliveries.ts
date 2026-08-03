@@ -140,9 +140,32 @@ function parsePreferences(value: string): RelayAgentAwarenessPreferences | null 
   return Option.getOrNull(decodeRelayAgentAwarenessPreferencesJson(value));
 }
 
-function aggregateNeedsAttention(aggregate: RelayAgentActivityAggregateState): boolean {
-  return aggregate.activities.some(
-    (row) => row.phase === "waiting_for_approval" || row.phase === "waiting_for_input",
+// Rows that first appear already in an attention phase (a brand-new thread
+// waiting for approval) are not caught by the phase-transition check below,
+// which only compares rows present in both aggregates.
+function aggregateHasNewAttentionRow(
+  previousAggregate: RelayAgentActivityAggregateState,
+  nextAggregate: RelayAgentActivityAggregateState,
+): boolean {
+  const previousKeys = new Set(
+    previousAggregate.activities.map((row) => `${row.environmentId}\0${row.threadId}`),
+  );
+  return nextAggregate.activities.some(
+    (row) =>
+      isAttentionPhase(row.phase) && !previousKeys.has(`${row.environmentId}\0${row.threadId}`),
+  );
+}
+
+// Key-order-insensitive JSON encoding: the previous aggregate round-trips
+// through the database and schema decoding, so plain JSON.stringify equality
+// could silently diverge on key order and cost a push for identical content.
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, node: unknown) =>
+    node !== null && typeof node === "object" && !Array.isArray(node)
+      ? Object.fromEntries(
+          Object.entries(node as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : node,
   );
 }
 
@@ -311,7 +334,7 @@ function shouldUpdateLiveActivity(input: {
   if (!input.previousAggregate) {
     return true;
   }
-  if (JSON.stringify(input.previousAggregate) === JSON.stringify(input.nextAggregate)) {
+  if (stableStringify(input.previousAggregate) === stableStringify(input.nextAggregate)) {
     return false;
   }
   if (input.previousAggregate.activeCount !== input.nextAggregate.activeCount) {
@@ -324,7 +347,12 @@ function shouldUpdateLiveActivity(input: {
   if (aggregateHasPhaseTransition(input.previousAggregate, input.nextAggregate)) {
     return true;
   }
-  if (aggregateNeedsAttention(input.nextAggregate)) {
+  // Attention only bypasses the interval on the way IN (new row already
+  // waiting; transitions into waiting are caught above). A steady-state
+  // waiting row must not exempt every unrelated publish from throttling — a
+  // busy account would burn through the iOS Live Activity update budget and
+  // get silently dropped by the system, which reads as the card "drifting".
+  if (aggregateHasNewAttentionRow(input.previousAggregate, input.nextAggregate)) {
     return true;
   }
   // A thread finishing must never be throttled away: when a completion and a

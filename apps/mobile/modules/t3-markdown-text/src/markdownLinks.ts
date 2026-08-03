@@ -349,6 +349,64 @@ export function resolveMarkdownFileIcon(value: string): MarkdownFileIcon {
   return "default";
 }
 
+export interface MarkdownInlineCodeFileLink {
+  readonly href: string;
+  readonly icon: MarkdownFileIcon;
+  readonly label: string;
+  readonly path: string;
+  readonly line?: number;
+  readonly column?: number;
+}
+
+const INLINE_CODE_DISQUALIFIER_PATTERN = /[\s`]/;
+const BASENAME_EXTENSION_PATTERN = /\.[A-Za-z0-9_-]+$/;
+
+// Decides whether an inline code span (`src/foo.ts`, `Manager.ts:42`) reads as
+// a file reference and should render as a tappable file chip, mirroring the
+// web chat's inline-code file links. Stricter than link-destination
+// classification because prose code spans are full of near-paths: bare dotted
+// names only qualify when the icon set recognizes the name or extension
+// (filtering `Object.keys`, hostnames, and version numbers), and
+// separator-joined words without an extension, position, or explicit path
+// prefix (`input/output`) stay plain code.
+export function resolveInlineCodeFileLink(codeText: string): MarkdownInlineCodeFileLink | null {
+  const value = codeText.trim();
+  if (value.length === 0 || INLINE_CODE_DISQUALIFIER_PATTERN.test(value)) {
+    return null;
+  }
+  const isWindowsPath =
+    WINDOWS_DRIVE_PATH_PATTERN.test(value) || WINDOWS_UNC_PATH_PATTERN.test(value);
+  const normalized = isWindowsPath ? value : value.replaceAll("\\", "/");
+  const target = splitFilePosition(normalized, "");
+  const icon = resolveMarkdownFileIcon(target.path);
+  const hasSeparator = isWindowsPath || target.path.includes("/");
+  if (hasSeparator) {
+    if (!looksLikeFilePath(normalized)) {
+      return null;
+    }
+    const hasExplicitPrefix =
+      isWindowsPath || normalized.startsWith("/") || RELATIVE_PATH_PREFIX_PATTERN.test(normalized);
+    const basename = fileLabel(target.path);
+    if (
+      !hasExplicitPrefix &&
+      target.line === undefined &&
+      !BASENAME_EXTENSION_PATTERN.test(basename)
+    ) {
+      return null;
+    }
+  } else if (icon === "default") {
+    return null;
+  }
+  return {
+    href: normalized,
+    icon,
+    label: fileLabel(normalized),
+    path: target.path,
+    ...(target.line !== undefined ? { line: target.line } : {}),
+    ...(target.column !== undefined ? { column: target.column } : {}),
+  };
+}
+
 export function resolveMarkdownLinkPresentation(href: string): MarkdownLinkPresentation {
   const normalized = normalizeDestination(href);
   try {

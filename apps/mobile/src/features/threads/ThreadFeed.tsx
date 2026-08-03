@@ -104,7 +104,10 @@ import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
-import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
+import {
+  resolveInlineCodeFileLink,
+  resolveMarkdownLinkPresentation,
+} from "@t3tools/mobile-markdown-text/links";
 import {
   deriveThreadFeedPresentation,
   threadFeedRunIsUnsettled,
@@ -853,6 +856,24 @@ function useMarkdownStyles(
       ),
       code_inline: ({ content }) => {
         const value = content ?? "";
+        // File references in inline code get the same chip treatment as
+        // `[label](path)` links: file icon, bold label, tap to open.
+        const fileLink = resolveInlineCodeFileLink(value);
+        if (fileLink) {
+          return (
+            <NativeText
+              className="font-t3-bold"
+              onPress={() => onLinkPress(fileLink.href)}
+              style={{ color: inlineTextColor }}
+            >
+              <Image
+                source={markdownFileIconSource(fileLink.icon)}
+                style={markdownLinkStyles.inlineIcon}
+              />
+              {fileLink.label}
+            </NativeText>
+          );
+        }
         return (
           <NativeText
             className="font-mono"

@@ -642,6 +642,138 @@ describe("ApnsDeliveries", () => {
     },
   );
 
+  it.effect("throttles unrelated changes while an existing row keeps awaiting input", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const waitingRow = {
+      ...aggregate.activities[0]!,
+      phase: "waiting_for_input" as const,
+      status: "Input",
+    };
+    const runningRow = {
+      ...aggregate.activities[0]!,
+      threadId: "thread-2" as RelayAgentActivityState["threadId"],
+      threadTitle: "Second thread",
+    };
+    const previousAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      activeCount: 2,
+      activities: [waitingRow, runningRow],
+    };
+    // Same phases, same count: only the running row's headline moved. A
+    // steady-state waiting row must not exempt this from the interval, or
+    // busy accounts would exhaust the iOS update budget.
+    const nextAggregate: RelayAgentActivityAggregateState = {
+      ...previousAggregate,
+      activities: [waitingRow, { ...runningRow, status: "Editing files" }],
+    };
+    const previousAggregateJson = JSON.stringify(previousAggregate);
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          last_aggregate_json: previousAggregateJson,
+          last_live_activity_delivery_at: "1970-01-01T00:00:04.000Z",
+        },
+        aggregate: nextAggregate,
+        nowMs: 5_000,
+      });
+
+      expect(result).toBeNull();
+      expect(queuedJobs).toEqual([]);
+    }).pipe(Effect.provide(makeLayer({ attempts, queuedJobs })));
+  });
+
+  it.effect(
+    "queues an update inside the throttle window when a new row arrives already awaiting input",
+    () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+      const newWaitingRow = {
+        ...aggregate.activities[0]!,
+        threadId: "thread-2" as RelayAgentActivityState["threadId"],
+        threadTitle: "Second thread",
+        phase: "waiting_for_approval" as const,
+        status: "Approval",
+      };
+      const nextAggregate: RelayAgentActivityAggregateState = {
+        ...aggregate,
+        activities: [...aggregate.activities, newWaitingRow],
+      };
+      const previousAggregateJson = JSON.stringify(aggregate);
+
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        const result = yield* deliveries.sendForTarget({
+          target: {
+            ...target,
+            last_aggregate_json: previousAggregateJson,
+            last_live_activity_delivery_at: "1970-01-01T00:00:04.000Z",
+          },
+          aggregate: nextAggregate,
+          nowMs: 5_000,
+        });
+
+        expect(result?.kind).toBe("live_activity_update");
+        expect(queuedJobs).toMatchObject([
+          {
+            payload: {
+              kind: "live_activity_update",
+              target: { token: "activity-token" },
+            },
+          },
+        ]);
+      }).pipe(Effect.provide(makeLayer({ attempts, queuedJobs })));
+    },
+  );
+
+  it.effect("suppresses identical aggregates regardless of JSON key order", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const row = aggregate.activities[0]!;
+    // Same content as the stored aggregate, different key order.
+    const reorderedAggregate: RelayAgentActivityAggregateState = {
+      activities: [
+        {
+          deepLink: row.deepLink,
+          updatedAt: row.updatedAt,
+          status: row.status,
+          phase: row.phase,
+          modelTitle: row.modelTitle,
+          threadTitle: row.threadTitle,
+          projectTitle: row.projectTitle,
+          threadId: row.threadId,
+          environmentId: row.environmentId,
+        },
+      ],
+      updatedAt: aggregate.updatedAt,
+      activeCount: aggregate.activeCount,
+      subtitle: aggregate.subtitle,
+      title: aggregate.title,
+    };
+    const storedAggregateJson = JSON.stringify(aggregate);
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          last_aggregate_json: storedAggregateJson,
+          // Far outside the throttle window: a null result can only come
+          // from equality, not the interval.
+          last_live_activity_delivery_at: "1970-01-01T00:00:04.000Z",
+        },
+        aggregate: reorderedAggregate,
+        nowMs: 60_000,
+      });
+
+      expect(result).toBeNull();
+      expect(queuedJobs).toEqual([]);
+    }).pipe(Effect.provide(makeLayer({ attempts, queuedJobs })));
+  });
+
   it.effect("queues an end for an active Live Activity when Live Activities are disabled", () => {
     const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
     const queuedJobs: Array<SignedApnsDeliveryJob> = [];

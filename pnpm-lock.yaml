@@ -80,6 +80,7 @@ patchedDependencies:
   '@react-navigation/native-stack@7.17.6': c7fc101b78d434904425e5a24c22fb0042298dec6f807250486e784f3c717273
   effect@4.0.0-beta.102: 71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488
   expo-modules-jsi@56.0.10: 9170f8074ae4e35a0a086e756c8f815794fd3abe51eac67ca3ba02804225ec1f
+  expo-widgets@56.0.19: e0aedfa55236fd0ace825841c604135b4dccf10f54a2abdbe7e32d62a7e5b741
   react-native-gesture-handler@2.31.2: 808eb26f9e57cf4945efd3985af4d9c764da6f91f4c9764433cc868602bbf4d3
   react-native-keyboard-controller@1.21.13: 20be72c84d74253acdcfefbc6defe36dc396944f1a44cab2bdd0e3cd572ae008
   react-native-nitro-modules@0.35.9: 825622aae63a8fb5b904f3c77908a0e216261d727ea171709f2c0b6088422675
@@ -369,7 +370,7 @@ importers:
         version: 56.0.5(expo@56.0.12)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.2.16)(bufferutil@4.1.0)(react@19.2.3)(utf-8-validate@6.0.6))
       expo-widgets:
         specifier: ~56.0.19
-        version: 56.0.19(3cdc0dde9f93166d952f1e1bd0cb25c0)
+        version: 56.0.19(patch_hash=e0aedfa55236fd0ace825841c604135b4dccf10f54a2abdbe7e32d62a7e5b741)(3cdc0dde9f93166d952f1e1bd0cb25c0)
       punycode:
         specifier: ^2.3.1
         version: 2.3.1
@@ -15924,7 +15925,7 @@ snapshots:
     optionalDependencies:
       '@babel/runtime': 7.29.7
       expo: 56.0.12(8895228379997a2a064f9644cda56ed0)
-      expo-widgets: 56.0.19(3cdc0dde9f93166d952f1e1bd0cb25c0)
+      expo-widgets: 56.0.19(patch_hash=e0aedfa55236fd0ace825841c604135b4dccf10f54a2abdbe7e32d62a7e5b741)(3cdc0dde9f93166d952f1e1bd0cb25c0)
     transitivePeerDependencies:
       - '@babel/core'
       - supports-color
@@ -15977,7 +15978,7 @@ snapshots:
     optionalDependencies:
       '@babel/runtime': 7.29.7
       expo: 56.0.12(8895228379997a2a064f9644cda56ed0)
-      expo-widgets: 56.0.19(3cdc0dde9f93166d952f1e1bd0cb25c0)
+      expo-widgets: 56.0.19(patch_hash=e0aedfa55236fd0ace825841c604135b4dccf10f54a2abdbe7e32d62a7e5b741)(3cdc0dde9f93166d952f1e1bd0cb25c0)
     transitivePeerDependencies:
       - '@babel/core'
       - supports-color
@@ -17372,7 +17373,7 @@ snapshots:
       expo: 56.0.12(8895228379997a2a064f9644cda56ed0)
       react-native: 0.85.3(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.2.16)(bufferutil@4.1.0)(react@19.2.3)(utf-8-validate@6.0.6)
 
-  expo-widgets@56.0.19(3cdc0dde9f93166d952f1e1bd0cb25c0):
+  expo-widgets@56.0.19(patch_hash=e0aedfa55236fd0ace825841c604135b4dccf10f54a2abdbe7e32d62a7e5b741)(3cdc0dde9f93166d952f1e1bd0cb25c0):
     dependencies:
       '@expo/plist': 0.7.0
       '@expo/ui': 56.0.18(3cdc0dde9f93166d952f1e1bd0cb25c0)
