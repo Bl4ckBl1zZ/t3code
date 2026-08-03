@@ -527,6 +527,108 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("applies device emulation and re-applies it across webview swaps", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const makeWebContents = (id: number) => {
+          const sendCommand = vi.fn(async () => undefined);
+          const setUserAgent = vi.fn();
+          const reload = vi.fn();
+          let userAgent = "DesktopUA";
+          setUserAgent.mockImplementation((next: string) => {
+            userAgent = next;
+          });
+          return {
+            sendCommand,
+            setUserAgent,
+            reload,
+            wc: {
+              id,
+              isDestroyed: () => false,
+              isDevToolsOpened: () => false,
+              getType: () => "webview",
+              getURL: () => "https://example.com",
+              getTitle: () => "Example",
+              isLoading: () => false,
+              getZoomFactor: () => 1,
+              setZoomFactor: vi.fn(),
+              getUserAgent: () => userAgent,
+              setUserAgent,
+              reload,
+              session: { getUserAgent: () => "DesktopUA" },
+              on: vi.fn(),
+              off: vi.fn(),
+              ipc: { on: vi.fn(), off: vi.fn() },
+              send: webviewSend,
+              navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+              setWindowOpenHandler: vi.fn(),
+              debugger: {
+                isAttached: () => false,
+                attach: vi.fn(),
+                sendCommand,
+                on: vi.fn(),
+                off: vi.fn(),
+              },
+            } as never,
+          };
+        };
+        const emulation = {
+          mobile: true,
+          touch: true,
+          deviceScaleFactor: 3,
+          userAgent: "MobileUA",
+        };
+        const first = makeWebContents(42);
+        fromId.mockReturnValue(first.wc);
+
+        yield* manager.createTab("tab_device");
+        yield* manager.registerWebview("tab_device", 42);
+        yield* Effect.yieldNow;
+
+        yield* manager.setDeviceEmulation("tab_device", emulation);
+
+        expect(first.setUserAgent).toHaveBeenCalledWith("MobileUA");
+        expect(first.sendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+          width: 0,
+          height: 0,
+          deviceScaleFactor: 3,
+          mobile: true,
+        });
+        expect(first.sendCommand).toHaveBeenCalledWith("Emulation.setTouchEmulationEnabled", {
+          enabled: true,
+          maxTouchPoints: 5,
+        });
+        expect(first.sendCommand).toHaveBeenCalledWith("Emulation.setUserAgentOverride", {
+          userAgent: "MobileUA",
+        });
+        expect(first.reload).toHaveBeenCalledTimes(1);
+
+        const replacement = makeWebContents(43);
+        fromId.mockReturnValue(replacement.wc);
+        yield* manager.registerWebview("tab_device", 43);
+        yield* Effect.yieldNow;
+
+        expect(replacement.setUserAgent).toHaveBeenCalledWith("MobileUA");
+        expect(replacement.sendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+          width: 0,
+          height: 0,
+          deviceScaleFactor: 3,
+          mobile: true,
+        });
+
+        yield* manager.setDeviceEmulation("tab_device", null);
+
+        expect(replacement.setUserAgent).toHaveBeenCalledWith("DesktopUA");
+        expect(replacement.sendCommand).toHaveBeenCalledWith(
+          "Emulation.clearDeviceMetricsOverride",
+        );
+        expect(replacement.sendCommand).toHaveBeenCalledWith("Emulation.setTouchEmulationEnabled", {
+          enabled: false,
+        });
+      }),
+    ),
+  );
+
   effectIt.effect("blocks late webview and capture starts during tab close", () =>
     withManager((manager) =>
       Effect.gen(function* () {

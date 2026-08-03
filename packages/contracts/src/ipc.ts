@@ -505,6 +505,33 @@ export type DesktopPreviewColorScheme = "system" | "light" | "dark";
 export const DesktopPreviewColorSchemeSchema: Schema.Codec<DesktopPreviewColorScheme> =
   Schema.Literals(["system", "light", "dark"]);
 
+/**
+ * Device identity emulated on the guest page while a mobile/tablet viewport
+ * preset is active. `null` (in the APIs that accept it) restores the desktop
+ * identity.
+ */
+export interface DesktopPreviewDeviceEmulation {
+  /** Chromium mobile mode: viewport meta handling, overlay scrollbars, pointer:coarse. */
+  mobile: boolean;
+  /** Report touch support (`navigator.maxTouchPoints > 0`). */
+  touch: boolean;
+  deviceScaleFactor: number;
+  /**
+   * User agent override; a literal "%s" is replaced with the host Chrome
+   * version when applied. `null` keeps the desktop user agent (touch-only
+   * devices such as the Surface Pro).
+   */
+  userAgent: string | null;
+}
+
+export const DesktopPreviewDeviceEmulationSchema: Schema.Codec<DesktopPreviewDeviceEmulation> =
+  Schema.Struct({
+    mobile: Schema.Boolean,
+    touch: Schema.Boolean,
+    deviceScaleFactor: Schema.Number,
+    userAgent: Schema.NullOr(Schema.String),
+  });
+
 export interface DesktopPreviewTabState {
   tabId: string;
   webContentsId: number | null;
@@ -917,6 +944,11 @@ export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
   colorScheme: DesktopPreviewColorSchemeSchema,
 });
 
+export const DesktopPreviewSetDeviceEmulationInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  emulation: Schema.NullOr(DesktopPreviewDeviceEmulationSchema),
+});
+
 export const DesktopPreviewAnnotationThemeInputSchema = Schema.Struct({
   theme: DesktopPreviewAnnotationThemeSchema,
 });
@@ -1045,6 +1077,15 @@ export interface DesktopPreviewBridge {
    * override). Persists per tab and is re-applied across webview swaps.
    */
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
+  /**
+   * Emulate a device identity (mobile UA, touch, device pixel ratio) on the
+   * guest page; `null` restores the desktop identity. Persists per tab and is
+   * re-applied across webview swaps.
+   */
+  setDeviceEmulation: (
+    tabId: string,
+    emulation: DesktopPreviewDeviceEmulation | null,
+  ) => Promise<void>;
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
