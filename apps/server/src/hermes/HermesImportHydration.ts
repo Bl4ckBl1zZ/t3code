@@ -199,6 +199,38 @@ function searchPatternFromInput(input: unknown): string | null {
   return readString(record, "query") ?? readString(record, "q") ?? readString(record, "search");
 }
 
+export type HermesToolClassification =
+  | { readonly kind: "command_execution"; readonly command: string }
+  | { readonly kind: "file_change"; readonly fileName: string }
+  | { readonly kind: "web_search"; readonly pattern: string | null }
+  | { readonly kind: "dynamic_tool" };
+
+/**
+ * Shared category mapping for Hermes tool calls, used by imported-history
+ * activities and live gateway tool events alike so both render with the same
+ * native turn-item presentation.
+ */
+export function classifyHermesToolCall(
+  name: string | null,
+  input: unknown,
+): HermesToolClassification {
+  const normalizedName = name === null ? "" : name.toLowerCase();
+  if (TERMINAL_TOOL_NAMES.has(normalizedName)) {
+    const command = commandFromInput(input);
+    if (command !== null) return { kind: "command_execution", command };
+  }
+  if (FILE_TOOL_NAMES.has(normalizedName)) {
+    const fileName = fileNameFromInput(input);
+    if (fileName !== null && fileName.trim().length > 0) {
+      return { kind: "file_change", fileName };
+    }
+  }
+  if (WEB_SEARCH_TOOL_NAMES.has(normalizedName)) {
+    return { kind: "web_search", pattern: searchPatternFromInput(input) };
+  }
+  return { kind: "dynamic_tool" };
+}
+
 function activityFromPairedCall(input: {
   readonly call: ParsedToolCall;
   readonly output: string | undefined;
@@ -207,40 +239,38 @@ function activityFromPairedCall(input: {
 }): HermesImportedActivity {
   const { call, status, ordinal } = input;
   const key = `tool:${call.ordinal}:${call.indexInMessage}:${call.callId}`;
-  const normalizedName = call.name.toLowerCase();
   const output = input.output === undefined ? undefined : truncateHermesToolOutput(input.output);
 
-  if (TERMINAL_TOOL_NAMES.has(normalizedName)) {
-    const command = commandFromInput(call.input);
-    if (command !== null) {
-      return {
-        kind: "command_execution",
-        key,
-        ordinal,
-        status,
-        title: command,
-        input: command,
-        output,
-      };
-    }
+  const classified = classifyHermesToolCall(call.name, call.input);
+  if (classified.kind === "command_execution") {
+    return {
+      kind: "command_execution",
+      key,
+      ordinal,
+      status,
+      title: classified.command,
+      input: classified.command,
+      output,
+    };
   }
-
-  if (FILE_TOOL_NAMES.has(normalizedName)) {
-    const fileName = fileNameFromInput(call.input);
-    if (fileName !== null) {
-      return { kind: "file_change", key, ordinal, status, title: fileName, fileName };
-    }
+  if (classified.kind === "file_change") {
+    return {
+      kind: "file_change",
+      key,
+      ordinal,
+      status,
+      title: classified.fileName,
+      fileName: classified.fileName,
+    };
   }
-
-  if (WEB_SEARCH_TOOL_NAMES.has(normalizedName)) {
-    const pattern = searchPatternFromInput(call.input);
+  if (classified.kind === "web_search") {
     return {
       kind: "web_search",
       key,
       ordinal,
       status,
-      title: pattern,
-      patterns: pattern === null ? [] : [pattern],
+      title: classified.pattern,
+      patterns: classified.pattern === null ? [] : [classified.pattern],
     };
   }
 

@@ -31,7 +31,9 @@ import {
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2PlanStep,
   type OrchestrationV2TurnItem,
+  type PlanId,
   type OrchestrationV2RuntimeRequest,
   type ProviderApprovalDecision,
   type ProviderUserInputAnswers,
@@ -67,8 +69,10 @@ import {
   type HermesGatewayOrderedEvent,
 } from "../../hermes/HermesGatewayClient.ts";
 import {
+  classifyHermesToolCall,
   hydrateImportedHermesActivities,
   normalizeImportedHermesUserText,
+  parseHermesToolArguments,
   type HermesImportedActivity,
 } from "../../hermes/HermesImportHydration.ts";
 import {
@@ -90,6 +94,7 @@ import {
   type HermesSessionBinding,
   type HermesSessionBindingRepositoryShape,
 } from "../../hermes/HermesSessionBindingRepository.ts";
+import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import {
@@ -124,6 +129,8 @@ const DEFAULT_HERMES_SETTINGS = Schema.decodeSync(HermesSettings)({});
 
 const LEASE_MINUTES = 30;
 const INTERRUPT_TERMINAL_TIMEOUT = "15 seconds";
+const HERMES_MODEL_SWITCH_POLL_ATTEMPTS = 40;
+const HERMES_MODEL_SWITCH_POLL_INTERVAL = "250 millis";
 
 /**
  * Hermes may receive T3's provider-session credential only when the negotiated
@@ -162,7 +169,7 @@ export function diagnoseHermesMcpIntegration(
 export const HermesProviderCapabilitiesV2 = {
   sessions: {
     supportsMultipleProviderThreadsPerSession: false,
-    supportsModelSwitchInSession: false,
+    supportsModelSwitchInSession: true,
     supportsProviderSwitchingViaHandoff: false,
     supportsRuntimeModeSwitchInSession: false,
     pendingRequestsSurviveRestart: false,
@@ -211,8 +218,8 @@ export const HermesProviderCapabilitiesV2 = {
     approvalsCanOriginateFromSubagents: false,
   },
   planning: {
-    emitsPlanUpdated: false,
-    emitsTodoList: false,
+    emitsPlanUpdated: true,
+    emitsTodoList: true,
     emitsProposedPlan: false,
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
@@ -416,6 +423,7 @@ interface ActiveHermesTurn {
   readonly toolsByNativeId: Map<string, ActiveHermesTool>;
   readonly generatingToolsByName: Map<string, Array<ActiveHermesTool>>;
   readonly seenEventIds: Set<string>;
+  planId: PlanId | null;
   gatewayRunId: string | null;
   /**
    * Completions to absorb before terminalizing: a steering prompt Hermes
@@ -436,6 +444,13 @@ interface ActiveHermesTool {
   output: unknown | undefined;
   outputRisk: unknown | undefined;
   outputRedacted: boolean;
+  inlineDiff: string | null;
+  /**
+   * True when `input` came from the tool's actual arguments rather than a
+   * context/preview display string, so category classification never
+   * mistakes a progress caption for a command.
+   */
+  structuredInput: boolean;
   title: string | null;
   status: OrchestrationV2TurnItem["status"];
   startedAt: DateTime.Utc | null;
@@ -453,6 +468,159 @@ const projectedToolOutput = (tool: ActiveHermesTool): unknown | undefined => {
   if (tool.outputRisk === undefined) return raw;
   return { result: raw ?? null, outputRisk: tool.outputRisk };
 };
+
+function hermesDiffLineCounts(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+const HERMES_TODO_COMPLETED_STATUSES = new Set(["completed", "complete", "done", "finished"]);
+const HERMES_TODO_RUNNING_STATUSES = new Set([
+  "in_progress",
+  "in-progress",
+  "inprogress",
+  "active",
+  "running",
+  "current",
+  "started",
+  "doing",
+]);
+
+/**
+ * Hermes todo payloads are declared as opaque entries on the wire, so the
+ * parse is tolerant: strings become pending steps and records may carry the
+ * step text and status under several historical key names.
+ */
+export function parseHermesTodoSteps(
+  todos: ReadonlyArray<unknown>,
+  keyPrefix: string,
+): Array<OrchestrationV2PlanStep> {
+  const steps: Array<OrchestrationV2PlanStep> = [];
+  for (const entry of todos) {
+    let text: string | null = null;
+    let status: OrchestrationV2PlanStep["status"] = "pending";
+    if (typeof entry === "string") {
+      text = entry.trim().length > 0 ? entry.trim() : null;
+    } else if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+      const record = entry as Record<string, unknown>;
+      const rawText = [
+        record["content"],
+        record["text"],
+        record["title"],
+        record["task"],
+        record["description"],
+      ].find((value) => typeof value === "string" && value.trim().length > 0);
+      text = typeof rawText === "string" ? rawText.trim() : null;
+      const rawStatus = [record["status"], record["state"]].find(
+        (value) => typeof value === "string",
+      );
+      const normalized = typeof rawStatus === "string" ? rawStatus.trim().toLowerCase() : "";
+      if (
+        HERMES_TODO_COMPLETED_STATUSES.has(normalized) ||
+        record["done"] === true ||
+        record["completed"] === true
+      ) {
+        status = "completed";
+      } else if (HERMES_TODO_RUNNING_STATUSES.has(normalized)) {
+        status = "running";
+      }
+    }
+    if (text === null) continue;
+    steps.push({ id: `${keyPrefix}:${steps.length + 1}`, text, status });
+  }
+  return steps;
+}
+
+type HermesToolTurnItemBase = {
+  readonly [K in
+    | "id"
+    | "threadId"
+    | "runId"
+    | "nodeId"
+    | "providerThreadId"
+    | "providerTurnId"
+    | "nativeItemRef"
+    | "parentItemId"
+    | "ordinal"
+    | "status"
+    | "title"
+    | "startedAt"
+    | "completedAt"
+    | "updatedAt"]: Exclude<OrchestrationV2TurnItem[K], undefined>;
+};
+
+/**
+ * Projects a live Hermes tool onto the same native turn-item categories the
+ * import path uses (terminal commands, file edits, web searches), so live
+ * turns render rich cards instead of generic tool calls. Risk-annotated or
+ * redacted tools keep the generic card: it is the only shape that carries the
+ * full projected output with the risk annotation.
+ */
+function hermesLiveToolTurnItem(
+  tool: ActiveHermesTool,
+  base: HermesToolTurnItemBase,
+): OrchestrationV2TurnItem {
+  const projected = projectedToolOutput(tool);
+  const classified =
+    tool.structuredInput && tool.outputRisk === undefined && !tool.outputRedacted
+      ? classifyHermesToolCall(tool.name, tool.input)
+      : ({ kind: "dynamic_tool" } as const);
+  if (classified.kind === "command_execution") {
+    const record =
+      typeof projected === "object" && projected !== null && !Array.isArray(projected)
+        ? (projected as Record<string, unknown>)
+        : null;
+    const outputText =
+      typeof projected === "string"
+        ? projected
+        : record !== null && typeof record["output"] === "string"
+          ? record["output"]
+          : undefined;
+    const exitCode =
+      record !== null &&
+      typeof record["exit_code"] === "number" &&
+      Number.isInteger(record["exit_code"])
+        ? record["exit_code"]
+        : undefined;
+    return {
+      ...base,
+      type: "command_execution",
+      input: classified.command,
+      ...(outputText === undefined ? {} : { output: outputText }),
+      ...(exitCode === undefined ? {} : { exitCode }),
+    };
+  }
+  if (classified.kind === "file_change") {
+    const diff = tool.inlineDiff;
+    const counts = diff === null ? null : hermesDiffLineCounts(diff);
+    return {
+      ...base,
+      type: "file_change",
+      fileName: classified.fileName,
+      ...(diff === null ? {} : { diffStr: diff }),
+      ...(counts === null ? {} : { additions: counts.additions, deletions: counts.deletions }),
+    };
+  }
+  if (classified.kind === "web_search") {
+    return {
+      ...base,
+      type: "web_search",
+      patterns: classified.pattern === null ? [] : [classified.pattern],
+    };
+  }
+  return {
+    ...base,
+    type: "dynamic_tool",
+    toolName: tool.name,
+    input: tool.input,
+    ...(projected === undefined ? {} : { output: projected }),
+  };
+}
 
 interface HermesThreadState {
   readonly binding: HermesSessionBinding;
@@ -836,15 +1004,10 @@ export function makeHermesServeAdapterV2(
     instanceId: options.instanceId,
     driver: HERMES_PROVIDER,
     getCapabilities: () => Effect.succeed(configuredCapabilities),
-    planSelectionTransition: (input) =>
-      Effect.succeed(
-        input.current.model === input.target.model
-          ? ({ type: "apply_on_next_turn" } as const)
-          : ({
-              type: "reject",
-              reason: "Hermes model switching requires a new provider thread.",
-            } as const),
-      ),
+    planSelectionTransition: () =>
+      // Model changes are applied when the next turn starts, through Hermes'
+      // `/model` command channel.
+      Effect.succeed({ type: "apply_on_next_turn" } as const),
     openSession: Effect.fn("HermesServeAdapterV2.openSession")(function* (
       input: ProviderAdapterV2OpenSessionInput,
     ) {
@@ -1273,7 +1436,7 @@ export function makeHermesServeAdapterV2(
             completedAt: tool.completedAt,
           },
         });
-        const turnItem: OrchestrationV2TurnItem = {
+        const turnItem = hermesLiveToolTurnItem(tool, {
           id: turnItemId,
           threadId: active.input.threadId,
           runId: active.input.runId,
@@ -1288,12 +1451,97 @@ export function makeHermesServeAdapterV2(
           startedAt: tool.startedAt,
           completedAt: tool.completedAt,
           updatedAt: now,
-          type: "dynamic_tool",
-          toolName: tool.name,
-          input: tool.input,
-          ...(projectedToolOutput(tool) === undefined ? {} : { output: projectedToolOutput(tool) }),
-        };
+        });
         yield* emit({ type: "turn_item.updated", driver: HERMES_PROVIDER, turnItem });
+      });
+
+      const todoArtifacts = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        active: ActiveHermesTurn,
+        todos: ReadonlyArray<unknown>,
+      ) {
+        const turn = active.providerTurn;
+        if (turn === null) return;
+        // One todo list per T3 turn: repeated todo payloads update the same
+        // item in place, mirroring the other todo-emitting adapters.
+        const nativeItemId = `hermes-todo:${active.operationId}`;
+        const steps = parseHermesTodoSteps(todos, nativeItemId);
+        if (steps.length === 0) return;
+        const now = yield* DateTime.now;
+        if (active.planId === null) {
+          active.planId = yield* options.idAllocator.allocate.plan({
+            threadId: active.input.threadId,
+            ...(active.input.runId === null ? {} : { runId: active.input.runId }),
+            driver: HERMES_PROVIDER,
+          });
+        }
+        const planId = active.planId;
+        const nodeId = options.idAllocator.derive.nodeFromProviderItem({
+          driver: HERMES_PROVIDER,
+          nativeItemId,
+        });
+        const turnItemId = options.idAllocator.derive.turnItemFromProviderItem({
+          driver: HERMES_PROVIDER,
+          nativeItemId,
+        });
+        const completed = steps.every((step) => step.status === "completed");
+        yield* emit({
+          type: "node.updated",
+          driver: HERMES_PROVIDER,
+          node: {
+            id: nodeId,
+            threadId: active.input.threadId,
+            runId: active.input.runId,
+            parentNodeId: active.input.rootNodeId,
+            rootNodeId: active.input.rootNodeId,
+            kind: "todo_list",
+            status: completed ? "completed" : "running",
+            countsForRun: false,
+            providerThreadId: state.providerThread.id,
+            providerTurnId: turn.id,
+            nativeItemRef: providerRef(nativeItemId, "weak"),
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt: turn.startedAt,
+            completedAt: completed ? now : null,
+          },
+        });
+        yield* emit({
+          type: "plan.updated",
+          driver: HERMES_PROVIDER,
+          plan: {
+            id: planId,
+            threadId: active.input.threadId,
+            runId: active.input.runId,
+            nodeId,
+            status: completed ? "completed" : "active",
+            kind: "todo_list",
+            steps,
+          },
+        });
+        yield* emit({
+          type: "turn_item.updated",
+          driver: HERMES_PROVIDER,
+          turnItem: {
+            id: turnItemId,
+            threadId: active.input.threadId,
+            runId: active.input.runId,
+            nodeId,
+            providerThreadId: state.providerThread.id,
+            providerTurnId: turn.id,
+            nativeItemRef: providerRef(nativeItemId, "weak"),
+            parentItemId: null,
+            ordinal: resolveItemOrdinal(active, nativeItemId),
+            status: completed ? "completed" : "running",
+            title: "Todo list",
+            startedAt: turn.startedAt,
+            completedAt: completed ? now : null,
+            updatedAt: now,
+            type: "todo_list",
+            planId,
+            steps,
+          },
+        });
       });
 
       const messageArtifacts = Effect.fnUntraced(function* (
@@ -1741,6 +1989,8 @@ export function makeHermesServeAdapterV2(
             output: undefined,
             outputRisk: undefined,
             outputRedacted: false,
+            inlineDiff: null,
+            structuredInput: false,
             title: name,
             status: eventType === "tool.generating" ? "pending" : "running",
             startedAt: null,
@@ -1769,15 +2019,21 @@ export function makeHermesServeAdapterV2(
           if (eventType === "tool.start") removeGeneratingTool(active, tool);
           tool.status = "running";
           tool.startedAt ??= now;
-          const startInput =
-            payload.args !== undefined
-              ? payload.args
-              : payload.arguments !== undefined
-                ? payload.arguments
-                : (nonEmptyString(payload.args_text) ??
-                  nonEmptyString(payload.context) ??
-                  nonEmptyString(payload.preview) ??
-                  {});
+          const argsText = nonEmptyString(payload.args_text);
+          let startInput: unknown;
+          if (payload.args !== undefined) {
+            startInput = payload.args;
+            tool.structuredInput = true;
+          } else if (payload.arguments !== undefined) {
+            startInput = payload.arguments;
+            tool.structuredInput = true;
+          } else if (argsText !== undefined) {
+            startInput = parseHermesToolArguments(argsText);
+            tool.structuredInput = true;
+          } else {
+            startInput = nonEmptyString(payload.context) ?? nonEmptyString(payload.preview) ?? {};
+            tool.structuredInput = false;
+          }
           tool.input = sanitizeHermesToolValue(startInput, { maxChars: 20_000 });
           tool.title =
             nonEmptyString(payload.context) ?? nonEmptyString(payload.preview) ?? tool.name;
@@ -1794,13 +2050,19 @@ export function makeHermesServeAdapterV2(
                 : undefined;
           if (completedInput !== undefined) {
             tool.input = sanitizeHermesToolValue(completedInput, { maxChars: 20_000 });
+            tool.structuredInput = true;
+          }
+          const inlineDiff = nonEmptyString(payload.inline_diff);
+          if (inlineDiff !== undefined) {
+            const sanitizedDiff = sanitizeHermesToolValue(inlineDiff);
+            if (typeof sanitizedDiff === "string") tool.inlineDiff = sanitizedDiff;
           }
           const completedOutput =
             payload.result !== undefined
               ? payload.result
               : (nonEmptyString(payload.result_text) ??
                 nonEmptyString(payload.summary) ??
-                nonEmptyString(payload.inline_diff));
+                inlineDiff);
           if (completedOutput !== undefined) {
             tool.output = sanitizeHermesToolValue(completedOutput);
           }
@@ -1811,6 +2073,9 @@ export function makeHermesServeAdapterV2(
             tool.name;
         }
         yield* toolArtifacts(state, active, tool);
+        if (payload.todos !== undefined) {
+          yield* todoArtifacts(state, active, payload.todos);
+        }
       });
 
       const handleToolOutputRisk = Effect.fnUntraced(function* (
@@ -1986,6 +2251,92 @@ export function makeHermesServeAdapterV2(
           failed ? "error" : "ready",
           failed ? "Hermes recovered external run failed." : null,
         );
+      });
+
+      /**
+       * Applies a mid-session model switch through Hermes' `/model` command
+       * channel: the pinned gateway protocol exposes no model mutation, but
+       * the command executes gateway-side and Hermes confirms the switch with
+       * a `session.info` event. The optimistic session update keeps
+       * back-to-back turns from resubmitting the switch while that event is
+       * still in flight.
+       */
+      const applySessionModelSwitch = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        turnInput: ProviderAdapterV2TurnInput,
+        model: string,
+      ) {
+        const operationId = `hermes:model:${turnInput.attemptId}`;
+        const prepared = yield* prepareBoundMutation(state, {
+          operationId,
+          mutationKind: "model_switch",
+          method: "prompt.submit",
+          payloadDigest: stableDigest(state.binding.storedSessionKey, model),
+        });
+        const submit = () =>
+          client.submitPrompt(
+            {
+              session_id: state.liveSessionId,
+              text: `/model ${model} --session`,
+            },
+            mutationOptions(operationId),
+          );
+        const submitted = prepared.replay
+          ? yield* gatewayEffect(submit).pipe(
+              Effect.tap(() =>
+                transitionIntent(
+                  state,
+                  operationId,
+                  prepared.intentState,
+                  prepared.intentState === "admitted" ? "confirmed" : "reconciled",
+                ),
+              ),
+            )
+          : yield* settleMutation(state, operationId, submit);
+        if (submitted.mutation_status === "completed") {
+          if (submitted.status === "error") {
+            return yield* new ProviderAdapterProtocolError({
+              driver: HERMES_PROVIDER,
+              detail: `Hermes rejected the model switch to ${model}`,
+            });
+          }
+        } else {
+          // The command was admitted as its own gateway run; wait for the
+          // session to settle so the actual prompt is not queued into the
+          // command run.
+          let settled = false;
+          for (let attempt = 0; attempt < HERMES_MODEL_SWITCH_POLL_ATTEMPTS; attempt += 1) {
+            const status = yield* gatewayEffect(() =>
+              client.readSessionStatus({
+                session_id: state.liveSessionId,
+                profile: options.settings.profileKey,
+              }),
+            );
+            if (!isActiveHermesStatus(hermesSessionRuntimeStatus(status))) {
+              settled = true;
+              break;
+            }
+            yield* Effect.sleep(HERMES_MODEL_SWITCH_POLL_INTERVAL);
+          }
+          if (!settled) {
+            return yield* new ProviderAdapterProtocolError({
+              driver: HERMES_PROVIDER,
+              detail: `Hermes did not settle the model switch to ${model}`,
+            });
+          }
+        }
+        if (providerSession.model !== model) {
+          providerSession = {
+            ...providerSession,
+            model,
+            updatedAt: yield* DateTime.now,
+          };
+          yield* emit({
+            type: "provider_session.updated",
+            driver: HERMES_PROVIDER,
+            providerSession,
+          });
+        }
       });
 
       // Consume one absorbed completion for a Hermes-side queued steering
@@ -2905,12 +3256,6 @@ export function makeHermesServeAdapterV2(
         startTurn: (turnInput) =>
           Effect.gen(function* () {
             const requestedModel = hermesModelOverride(turnInput.modelSelection.model).model;
-            if (requestedModel !== undefined && requestedModel !== providerSession.model) {
-              return yield* new ProviderAdapterProtocolError({
-                driver: HERMES_PROVIDER,
-                detail: "Hermes model switching is not supported in an open session",
-              });
-            }
             const state = stateForProviderThread(turnInput.providerThread);
             if (state === undefined) {
               return yield* new ProviderAdapterProtocolError({
@@ -2944,6 +3289,9 @@ export function makeHermesServeAdapterV2(
                   detail: "Hermes has a recovered external run in progress",
                 });
               }
+            }
+            if (requestedModel !== undefined && requestedModel !== providerSession.model) {
+              yield* applySessionModelSwitch(state, turnInput, requestedModel);
             }
             alignStateProviderThread(state, turnInput.providerThread);
             const projectedTitle = turnInput.appThread.title.trim();
@@ -3092,10 +3440,17 @@ export function makeHermesServeAdapterV2(
               { concurrency: 1 },
             );
             const promptRefs = attachmentRefs.filter((ref): ref is string => ref !== null);
+            // Hermes has no system/developer context channel, so the first
+            // prompt of a thread carries the T3 orchestration and t3-html
+            // embed instructions inline when the session-scoped MCP lease is
+            // available.
+            const promptBase = t3OrchestrationPromptForFirstRun({
+              prompt: turnInput.message.text,
+              runOrdinal: turnInput.runOrdinal,
+              hasT3Mcp: mcpAvailable,
+            });
             const promptText =
-              promptRefs.length > 0
-                ? `${turnInput.message.text}\n\n${promptRefs.join("\n")}`
-                : turnInput.message.text;
+              promptRefs.length > 0 ? `${promptBase}\n\n${promptRefs.join("\n")}` : promptBase;
             const operationId = `hermes:prompt:${turnInput.attemptId}`;
             const prepared = yield* prepareBoundMutation(state, {
               operationId,
@@ -3127,6 +3482,7 @@ export function makeHermesServeAdapterV2(
               toolsByNativeId: new Map(),
               generatingToolsByName: new Map(),
               seenEventIds: new Set(),
+              planId: null,
               gatewayRunId: null,
               pendingSteerCompletions: 0,
               interrupted: false,
