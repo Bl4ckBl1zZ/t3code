@@ -101,6 +101,8 @@ import {
   isLatestRunSettled,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
+import { WorkingTreeStatusBadge } from "./chat/WorkingTreeStatusBadge";
+import { deriveWorkingTreeBadgeState } from "./chat/WorkingTreeStatusBadge.logic";
 import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
@@ -2668,6 +2670,28 @@ function ChatViewContent(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
+  const workingTreeBadgeState = useMemo(
+    () =>
+      deriveWorkingTreeBadgeState({
+        plan: activePlan,
+        stats: gitStatusQuery.data
+          ? {
+              filesChanged: gitStatusQuery.data.workingTree.files.length,
+              insertions: gitStatusQuery.data.workingTree.insertions,
+              deletions: gitStatusQuery.data.workingTree.deletions,
+            }
+          : null,
+      }),
+    [activePlan, gitStatusQuery.data],
+  );
+  // The background broadcaster refreshes on a slow cadence; while an agent is
+  // actively editing, poll faster so the badge counts track the working tree live.
+  const refreshGitStatus = gitStatusQuery.refresh;
+  useEffect(() => {
+    if (!isWorking || gitStatusCwd === null) return;
+    const interval = window.setInterval(() => refreshGitStatus(), 3000);
+    return () => window.clearInterval(interval);
+  }, [isWorking, gitStatusCwd, refreshGitStatus]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   const showOpenInPicker = shouldShowOpenInPicker({
@@ -6550,22 +6574,27 @@ function ChatViewContent(props: ChatViewProps) {
                 topFadeEnabled={!hasTimelineTopBanner}
               />
 
-              {/* scroll to end pill — shown when user has scrolled away from the live edge */}
-              {showScrollToBottom && (
+              {/* floating pills above the composer: working-tree status + scroll-to-end */}
+              {((workingTreeBadgeState !== null && !isDraftHeroState) || showScrollToBottom) && (
                 <div
-                  className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex justify-center py-1.5"
+                  className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex flex-col items-center gap-1.5 py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}
                 >
-                  <button
-                    type="button"
-                    aria-label="Scroll to end"
-                    title="Scroll to end"
-                    onClick={() => scrollToEnd(true)}
-                    className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:border-border hover:text-foreground hover:cursor-pointer"
-                  >
-                    <ChevronDownIcon className="size-3.5" />
-                    Scroll to end
-                  </button>
+                  {workingTreeBadgeState !== null && !isDraftHeroState && (
+                    <WorkingTreeStatusBadge state={workingTreeBadgeState} isWorking={isWorking} />
+                  )}
+                  {showScrollToBottom && (
+                    <button
+                      type="button"
+                      aria-label="Scroll to end"
+                      title="Scroll to end"
+                      onClick={() => scrollToEnd(true)}
+                      className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:border-border hover:text-foreground hover:cursor-pointer"
+                    >
+                      <ChevronDownIcon className="size-3.5" />
+                      Scroll to end
+                    </button>
+                  )}
                 </div>
               )}
             </div>
