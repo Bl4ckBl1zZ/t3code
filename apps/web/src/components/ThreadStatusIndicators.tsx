@@ -190,7 +190,7 @@ export function ThreadStatusLabel({
         <TooltipTrigger
           render={
             <span
-              aria-label={status.label}
+              aria-label={status.tooltip ?? status.label}
               className={`inline-flex size-3.5 shrink-0 items-center justify-center ${status.colorClass}`}
             />
           }
@@ -201,7 +201,7 @@ export function ThreadStatusLabel({
             }`}
           />
         </TooltipTrigger>
-        <TooltipPopup side="top">{status.label}</TooltipPopup>
+        <TooltipPopup side="top">{status.tooltip ?? status.label}</TooltipPopup>
       </Tooltip>
     );
   }
@@ -211,7 +211,7 @@ export function ThreadStatusLabel({
       <TooltipTrigger
         render={
           <span
-            aria-label={status.label}
+            aria-label={status.tooltip ?? status.label}
             className={`inline-flex items-center gap-1 text-[10px] ${status.colorClass}`}
           />
         }
@@ -223,7 +223,7 @@ export function ThreadStatusLabel({
         />
         <span className="hidden md:inline">{status.label}</span>
       </TooltipTrigger>
-      <TooltipPopup side="top">{status.label}</TooltipPopup>
+      <TooltipPopup side="top">{status.tooltip ?? status.label}</TooltipPopup>
     </Tooltip>
   );
 }

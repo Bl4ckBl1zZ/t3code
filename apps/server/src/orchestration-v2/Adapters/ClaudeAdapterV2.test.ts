@@ -2986,6 +2986,309 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
+
+  // A backgrounded Bash resolves its tool_use immediately with an ACK while the
+  // command keeps running, and the CLI then goes silent until the task settles.
+  // Terminalizing on that ACK is what made a settled turn read as finished.
+  const BG_TASK_ID = "bs891h9i0";
+  const BG_TOOL_USE_ID = "toolu-background-bash";
+  const BG_OUTPUT_PATH = "/tmp/claude-tasks/bs891h9i0.output";
+
+  const backgroundBashToolUse = claudeSdkFrame({
+    type: "assistant",
+    message: {
+      model: "claude-sonnet-4-6",
+      id: "msg_background_bash",
+      type: "message",
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: BG_TOOL_USE_ID,
+          name: "Bash",
+          input: { command: "pnpm vitest run apps/web", run_in_background: true },
+        },
+      ],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+    parent_tool_use_id: null,
+    uuid: "00000000-0000-4000-8000-000000000601",
+    session_id: WAKE_NATIVE_SESSION,
+  });
+  const backgroundLaunchAck = claudeSdkFrame({
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: BG_TOOL_USE_ID,
+          content: [
+            {
+              type: "text",
+              text: `Command running in background with ID: ${BG_TASK_ID}. Output is being written to: ${BG_OUTPUT_PATH}. You will be notified when it completes.`,
+            },
+          ],
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: "00000000-0000-4000-8000-000000000602",
+    session_id: WAKE_NATIVE_SESSION,
+  });
+
+  type WakeHarness = Effect.Success<typeof makeWakeHarness>;
+
+  const backgroundCommandItems = (harness: WakeHarness) =>
+    harness.events.flatMap((event) =>
+      event.type === "turn_item.updated" &&
+      event.turnItem.type === "command_execution" &&
+      event.turnItem.background === true
+        ? [event.turnItem]
+        : [],
+    );
+
+  const startBackgroundCommand = Effect.fnUntraced(function* (input: {
+    readonly harness: WakeHarness;
+    readonly attemptId: string;
+    readonly beforeSettle?: ReadonlyArray<SDKMessage>;
+  }) {
+    const now = yield* DateTime.now;
+    yield* input.harness.runtime.startTurn(
+      makeClaudeTestTurnInput({
+        threadId: input.harness.threadId,
+        providerThread: input.harness.providerThread,
+        now,
+        attemptId: RunAttemptId.make(input.attemptId),
+        text: "Run the web tests in the background and tell me when they finish.",
+        attachments: [],
+      }),
+    );
+    yield* Queue.offer(input.harness.sdkMessages, wakeTaskStarted);
+    yield* Queue.offer(input.harness.sdkMessages, backgroundBashToolUse);
+    yield* Queue.offer(input.harness.sdkMessages, backgroundLaunchAck);
+    // Anything else the model does in the same turn has to land before the
+    // result frame: once the turn settles there is no active turn to attribute a
+    // tool call to, and later frames go to the wake buffer instead.
+    for (const frame of input.beforeSettle ?? []) {
+      yield* Queue.offer(input.harness.sdkMessages, frame);
+    }
+    yield* Queue.offer(input.harness.sdkMessages, turnOneResult);
+    yield* awaitUntil(
+      () => input.harness.terminalEvents().length === 1,
+      "turn settles while the command runs",
+    );
+  });
+
+  it.effect("keeps a backgrounded command visible after its turn settles", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* startBackgroundCommand({ harness, attemptId: "attempt-claude-bg-1" });
+
+        const items = backgroundCommandItems(harness);
+        assert.isAtLeast(items.length, 1);
+        const latest = items.at(-1);
+        // Not completed, not failed: the turn is over and the command is not.
+        assert.equal(latest?.status, "waiting");
+        assert.equal(latest?.taskId, BG_TASK_ID);
+        // A tail is available, without shipping the host path that carries the
+        // temp layout, uid and provider session id to every paired client.
+        assert.isTrue(latest?.hasOutputStream);
+        assert.isTrue(
+          Object.values(latest ?? {}).every(
+            (value) => typeof value !== "string" || !value.includes(BG_OUTPUT_PATH),
+          ),
+        );
+        assert.equal(latest?.input, "pnpm vitest run apps/web");
+        // The ACK text is provider bookkeeping and must not read as output.
+        assert.isUndefined(latest?.output);
+        assert.isUndefined(latest?.exitReason);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("settles a backgrounded command on its notification", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* startBackgroundCommand({ harness, attemptId: "attempt-claude-bg-2" });
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_notification",
+            task_id: BG_TASK_ID,
+            tool_use_id: BG_TOOL_USE_ID,
+            status: "completed",
+            output_file: BG_OUTPUT_PATH,
+            summary: "pnpm vitest run apps/web",
+            uuid: "00000000-0000-4000-8000-000000000603",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* awaitUntil(
+          () => backgroundCommandItems(harness).at(-1)?.status === "completed",
+          "background command completes",
+        );
+        assert.equal(backgroundCommandItems(harness).at(-1)?.exitReason, "exited");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("reports a command the CLI killed as stopped rather than failed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* startBackgroundCommand({ harness, attemptId: "attempt-claude-bg-3" });
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_updated",
+            task_id: BG_TASK_ID,
+            patch: { status: "killed", end_time: 1_785_852_376_600 },
+            uuid: "00000000-0000-4000-8000-000000000604",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* awaitUntil(
+          () => backgroundCommandItems(harness).at(-1)?.status === "cancelled",
+          "background command retired",
+        );
+        // Killed by teardown, not a command that chose to fail.
+        assert.equal(backgroundCommandItems(harness).at(-1)?.exitReason, "killed");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("stops the elapsed clock while a command is paused", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* startBackgroundCommand({ harness, attemptId: "attempt-claude-bg-4" });
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_updated",
+            task_id: BG_TASK_ID,
+            patch: { status: "paused" },
+            uuid: "00000000-0000-4000-8000-000000000605",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* awaitUntil(
+          () => backgroundCommandItems(harness).at(-1)?.paused === true,
+          "background command paused",
+        );
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_updated",
+            task_id: BG_TASK_ID,
+            patch: { status: "running" },
+            uuid: "00000000-0000-4000-8000-000000000606",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* awaitUntil(
+          () => backgroundCommandItems(harness).at(-1)?.paused === undefined,
+          "background command resumed",
+        );
+        // Resuming clears the flag rather than leaving the row paused for ever.
+        assert.equal(backgroundCommandItems(harness).at(-1)?.status, "waiting");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("projects a monitor as a wait on the task it watches", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const MONITOR_TASK_ID = "b8zv6rtg9";
+        const MONITOR_TOOL_USE_ID = "toolu-monitor";
+        const monitorToolUse = claudeSdkFrame({
+          type: "assistant",
+          message: {
+            model: "claude-sonnet-4-6",
+            id: "msg_monitor",
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: MONITOR_TOOL_USE_ID,
+                name: "Monitor",
+                input: {
+                  description: "Wait for the web tests to finish",
+                  command: `until grep -q DONE ${BG_OUTPUT_PATH}; do sleep 1; done`,
+                },
+              },
+            ],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+          parent_tool_use_id: null,
+          uuid: "00000000-0000-4000-8000-000000000607",
+          session_id: WAKE_NATIVE_SESSION,
+        });
+        // The monitor ACK is the only place its deadline is ever stated.
+        const monitorAck = claudeSdkFrame({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: MONITOR_TOOL_USE_ID,
+                content: [
+                  {
+                    type: "text",
+                    text: `Monitor started (task ${MONITOR_TASK_ID}, timeout 120000ms). You will be notified on each event.`,
+                  },
+                ],
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+          uuid: "00000000-0000-4000-8000-000000000608",
+          session_id: WAKE_NATIVE_SESSION,
+        });
+
+        const harness = yield* makeWakeHarness;
+        yield* startBackgroundCommand({
+          harness,
+          attemptId: "attempt-claude-bg-5",
+          beforeSettle: [monitorToolUse, monitorAck],
+        });
+
+        yield* awaitUntil(
+          () => backgroundCommandItems(harness).some((item) => item.waitKind === "monitor"),
+          "monitor projected",
+        );
+        const monitor = backgroundCommandItems(harness).findLast(
+          (item) => item.waitKind === "monitor",
+        );
+        assert.equal(monitor?.status, "waiting");
+        assert.equal(monitor?.taskId, MONITOR_TASK_ID);
+        // The declared deadline is the one real number a monitor has.
+        assert.equal(monitor?.timeoutMs, 120_000);
+        // Linked to its target by the output file it polls, so the two rows can
+        // be folded into one.
+        assert.equal(monitor?.waitingOnTaskId, BG_TASK_ID);
+        // A monitor's own output is its polling loop; there is no tail worth showing.
+        assert.isUndefined(monitor?.hasOutputStream);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
 });
 
 describe("ClaudeAdapterV2 query message stream", () => {

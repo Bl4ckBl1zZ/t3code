@@ -727,6 +727,19 @@ export const OrchestrationV2TurnItemStatus = Schema.Literals([
 ]);
 export type OrchestrationV2TurnItemStatus = typeof OrchestrationV2TurnItemStatus.Type;
 
+const ORCHESTRATION_V2_TERMINAL_TURN_ITEM_STATUSES = new Set<OrchestrationV2TurnItemStatus>([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+
+export function orchestrationV2TurnItemStatusIsTerminal(
+  status: OrchestrationV2TurnItemStatus,
+): boolean {
+  return ORCHESTRATION_V2_TERMINAL_TURN_ITEM_STATUSES.has(status);
+}
+
 export const OrchestrationV2ProviderFailureClass = Schema.Literals([
   "provider_error",
   "transport_error",
@@ -811,6 +824,66 @@ export const OrchestrationV2WebSearchResult = Schema.Struct({
 });
 export type OrchestrationV2WebSearchResult = typeof OrchestrationV2WebSearchResult.Type;
 
+/**
+ * How a command stopped, when that is more than "it exited". `killed` covers a
+ * provider session ending underneath a still-running command, `unknown` an
+ * outcome we can no longer observe (the server restarted while it ran), and
+ * `timeout` a declared deadline elapsing.
+ */
+export const OrchestrationV2CommandExitReason = Schema.Literals([
+  "exited",
+  "killed",
+  "timeout",
+  "unknown",
+]);
+export type OrchestrationV2CommandExitReason = typeof OrchestrationV2CommandExitReason.Type;
+
+/**
+ * A command whose only job is to wait for something else. Rendered as the
+ * agent being asleep rather than as work, so a monitor does not read like a
+ * second process doing something.
+ */
+export const OrchestrationV2CommandWaitKind = Schema.Literals(["monitor"]);
+export type OrchestrationV2CommandWaitKind = typeof OrchestrationV2CommandWaitKind.Type;
+
+/**
+ * Liveness metadata for a command that can outlive the tool call which
+ * launched it.
+ *
+ * Providers hand us complementary halves of this: Claude gives a handle
+ * without a stream (a task id plus an output file, and zero progress events
+ * while it runs), Codex gives a stream without a handle (output deltas on a
+ * blocking call, no task identity). Every field is therefore optional and the
+ * client chooses its presentation from what is actually present — an elapsed
+ * timer always, a tail only with output, a determinate bar only with a
+ * declared deadline.
+ */
+const commandExecutionLivenessFields = {
+  /** Detached from the turn: the turn can settle while this keeps running. */
+  background: Schema.optional(Schema.Boolean),
+  /** Provider-side task handle, used to stop or inspect the command. */
+  taskId: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The provider streams this command's output to a file the server tails, so a
+   * live tail is available even before the first byte arrives. The path itself
+   * stays server-side: it embeds the host's temp layout, uid and provider session
+   * id, and no client has any use for it.
+   */
+  hasOutputStream: Schema.optional(Schema.Boolean),
+  /** Declared deadline, the only honest source of determinate progress. */
+  timeoutMs: Schema.optional(NonNegativeInt),
+  /** Paused right now, so the elapsed timer must stop rather than keep counting. */
+  paused: Schema.optional(Schema.Boolean),
+  /** Time already spent paused, excluded from elapsed so it stays truthful. */
+  pausedMs: Schema.optional(NonNegativeInt),
+  /** Output hit its byte cap, so the tail is not the whole story. */
+  outputTruncated: Schema.optional(Schema.Boolean),
+  exitReason: Schema.optional(OrchestrationV2CommandExitReason),
+  waitKind: Schema.optional(OrchestrationV2CommandWaitKind),
+  /** Task this command is waiting on, so a monitor can fold into its target. */
+  waitingOnTaskId: Schema.optional(TrimmedNonEmptyString),
+} as const;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -866,6 +939,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
+    ...commandExecutionLivenessFields,
+    /** Last time output actually moved — distinguishes working from hung. */
+    lastOutputAt: Schema.optional(Schema.DateTimeUtc),
     type: Schema.Literal("command_execution"),
     input: Schema.String,
     output: Schema.optional(Schema.String),
@@ -987,6 +1063,63 @@ export const OrchestrationV2TurnItem = Schema.Union([
   }),
 ]);
 export type OrchestrationV2TurnItem = typeof OrchestrationV2TurnItem.Type;
+
+export type OrchestrationV2CommandExecutionItem = Extract<
+  OrchestrationV2TurnItem,
+  { readonly type: "command_execution" }
+>;
+
+/**
+ * A command that has outlived the tool call which launched it and is still
+ * running. The turn can be long settled while this is true, which is exactly
+ * the state the timeline has to keep visible.
+ */
+export function orchestrationV2CommandExecutionIsLiveInBackground(item: {
+  readonly type: OrchestrationV2TurnItem["type"];
+  readonly status: OrchestrationV2TurnItemStatus;
+  readonly background?: boolean | undefined;
+}): boolean {
+  return (
+    item.type === "command_execution" &&
+    item.background === true &&
+    !orchestrationV2TurnItemStatusIsTerminal(item.status)
+  );
+}
+
+/**
+ * How many distinct things a thread is waiting on in the background.
+ *
+ * A monitor exists only to watch another task, so counting it alongside its
+ * target would double every "waiting on a command" thread. A monitor whose
+ * target is not itself live still counts: the agent is asleep either way, and
+ * that is exactly what this number is asked to report.
+ *
+ * Must agree with the client's folding, or the sidebar and the timeline disagree
+ * about what is running.
+ */
+export function orchestrationV2BackgroundProcessCount(
+  items: ReadonlyArray<{
+    readonly type: OrchestrationV2TurnItem["type"];
+    readonly status: OrchestrationV2TurnItemStatus;
+    readonly background?: boolean | undefined;
+    readonly taskId?: string | undefined;
+    readonly waitKind?: OrchestrationV2CommandWaitKind | undefined;
+    readonly waitingOnTaskId?: string | undefined;
+  }>,
+): number {
+  const live = items.filter((item) => orchestrationV2CommandExecutionIsLiveInBackground(item));
+  const liveCommandTaskIds = new Set(
+    live.flatMap((item) =>
+      item.waitKind === undefined && item.taskId !== undefined ? [item.taskId] : [],
+    ),
+  );
+  return live.filter(
+    (item) =>
+      item.waitKind === undefined ||
+      item.waitingOnTaskId === undefined ||
+      !liveCommandTaskIds.has(item.waitingOnTaskId),
+  ).length;
+}
 
 export const OrchestrationV2ProjectedTurnItem = Schema.Struct({
   position: NonNegativeInt,
@@ -1239,6 +1372,13 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   hasActionableProposedPlan: Schema.Boolean,
+  /**
+   * Background commands still running for this thread. Deliberately never
+   * persisted: a background command dies with the provider CLI process, so the
+   * cached read path reports 0 and startup reconciliation retires the items
+   * that outlived their process. Absent on servers that predate the field.
+   */
+  backgroundProcessCount: Schema.optional(NonNegativeInt),
   itemCount: NonNegativeInt,
   visibleItemCount: NonNegativeInt,
   createdAt: Schema.DateTimeUtc,
@@ -1541,6 +1681,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
+    ...commandExecutionLivenessFields,
+    /** Last time output actually moved — distinguishes working from hung. */
+    lastOutputAt: Schema.optional(Schema.DateTimeUtcFromString),
     type: Schema.Literal("command_execution"),
     input: Schema.String,
     output: Schema.optional(Schema.String),

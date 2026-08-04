@@ -312,10 +312,13 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "Background";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
+  /** Longer form for the tooltip, when the label alone leaves out a count. */
+  tooltip?: string;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
@@ -325,6 +328,9 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Connecting: 3,
   "Plan Ready": 2,
   Completed: 1,
+  // Lowest of all: a thread that will speak again matters less than one whose
+  // result is already sitting there unread.
+  Background: 1,
 };
 
 type ThreadStatusInput = Pick<
@@ -337,6 +343,7 @@ type ThreadStatusInput = Pick<
   | "runtime"
 > & {
   lastVisitedAt?: string | null | undefined;
+  backgroundProcessCount?: number | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -888,6 +895,25 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
       pulse: false,
+    };
+  }
+
+  // The third state, between working and idle: nothing is generating right now,
+  // but a background command is still running and the thread will speak again on
+  // its own. Ranked below "Completed" so a result the reader has not seen yet
+  // still wins the dot.
+  const backgroundProcessCount = thread.backgroundProcessCount ?? 0;
+  if (backgroundProcessCount > 0) {
+    return {
+      label: "Background",
+      tooltip:
+        backgroundProcessCount === 1
+          ? "1 background process running"
+          : `${backgroundProcessCount} background processes running`,
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      // Hollow, so it reads as "will speak again" rather than "speaking now".
+      dotClass: "bg-transparent ring-1 ring-inset ring-sky-500 dark:ring-sky-300/80",
+      pulse: true,
     };
   }
 

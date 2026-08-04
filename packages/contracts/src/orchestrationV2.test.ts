@@ -28,6 +28,8 @@ import {
   OrchestrationV2Subagent,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
+  orchestrationV2BackgroundProcessCount,
 } from "./orchestrationV2.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
@@ -352,6 +354,140 @@ describe("orchestration V2 contracts", () => {
     expect(fileChange.fileName).toBe("package.json");
     expect(fileChange.additions).toBe(4);
     expect(dynamicTool.id).toBe(TurnItemId.make("turn-item-dynamic-1"));
+  });
+
+  it("carries background command liveness across the wire", () => {
+    // The in-memory and JSON item unions are declared separately, so the two
+    // have to be exercised together or a field added to one silently stops
+    // crossing the websocket.
+    const wireItem = {
+      id: "turn-item-background-1",
+      type: "command_execution",
+      threadId: "thread-1",
+      runId: "run-1",
+      nodeId: "node-background-1",
+      providerThreadId: "provider-thread-1",
+      providerTurnId: "provider-turn-1",
+      nativeItemRef: { driver: "claudeAgent", nativeId: "toolu-1", strength: "strong" },
+      parentItemId: null,
+      ordinal: 5,
+      status: "waiting",
+      title: null,
+      input: "pnpm vitest run apps/web",
+      output: "step 1 of 20\n",
+      background: true,
+      taskId: "bs891h9i0",
+      hasOutputStream: true,
+      timeoutMs: 120_000,
+      paused: true,
+      pausedMs: 4_000,
+      outputTruncated: true,
+      exitReason: "killed",
+      waitKind: "monitor",
+      waitingOnTaskId: "byggcdigy",
+      startedAt: "2026-08-04T12:00:00.000Z",
+      lastOutputAt: "2026-08-04T12:00:30.000Z",
+      completedAt: null,
+      updatedAt: "2026-08-04T12:00:30.000Z",
+    };
+
+    const decoded = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson)(wireItem);
+    expect(decoded.type).toBe("command_execution");
+    if (decoded.type !== "command_execution") {
+      throw new Error("expected command_execution");
+    }
+    expect(decoded.background).toBe(true);
+    expect(decoded.taskId).toBe("bs891h9i0");
+    expect(decoded.hasOutputStream).toBe(true);
+    expect(decoded.timeoutMs).toBe(120_000);
+    expect(decoded.paused).toBe(true);
+    expect(decoded.pausedMs).toBe(4_000);
+    expect(decoded.outputTruncated).toBe(true);
+    expect(decoded.exitReason).toBe("killed");
+    expect(decoded.waitKind).toBe("monitor");
+    expect(decoded.waitingOnTaskId).toBe("byggcdigy");
+    expect(decoded.lastOutputAt).toBeDefined();
+
+    // Re-encoding must round-trip, and the in-memory union must accept the same
+    // shape with real DateTimes.
+    const reEncoded = Schema.encodeUnknownSync(OrchestrationV2TurnItemJson)(decoded);
+    expect(reEncoded).toMatchObject({
+      background: true,
+      taskId: "bs891h9i0",
+      waitKind: "monitor",
+      lastOutputAt: "2026-08-04T12:00:30.000Z",
+    });
+    const inMemory = Schema.decodeUnknownSync(OrchestrationV2TurnItem)({
+      ...wireItem,
+      startedAt: DateTime.makeUnsafe("2026-08-04T12:00:00.000Z"),
+      lastOutputAt: DateTime.makeUnsafe("2026-08-04T12:00:30.000Z"),
+      updatedAt: DateTime.makeUnsafe("2026-08-04T12:00:30.000Z"),
+    });
+    expect(inMemory.type).toBe("command_execution");
+  });
+
+  it("counts live background commands and never counts a monitor twice", () => {
+    const base = {
+      type: "command_execution" as const,
+      status: "waiting" as const,
+      background: true,
+    };
+    // A command and the monitor watching it are one thing to wait on.
+    expect(
+      orchestrationV2BackgroundProcessCount([
+        { ...base, taskId: "bs891h9i0" },
+        {
+          ...base,
+          taskId: "b8zv6rtg9",
+          waitKind: "monitor" as const,
+          waitingOnTaskId: "bs891h9i0",
+        },
+        { ...base, status: "completed" as const },
+        { type: "command_execution" as const, status: "running" as const },
+      ]),
+    ).toBe(1);
+    // A monitor with no live target still counts: the agent is asleep either way,
+    // and the sidebar has to agree with the strip above the composer.
+    expect(
+      orchestrationV2BackgroundProcessCount([
+        { ...base, taskId: "b8zv6rtg9", waitKind: "monitor" as const },
+      ]),
+    ).toBe(1);
+    expect(
+      orchestrationV2BackgroundProcessCount([
+        {
+          ...base,
+          taskId: "b8zv6rtg9",
+          waitKind: "monitor" as const,
+          waitingOnTaskId: "already-finished",
+        },
+      ]),
+    ).toBe(1);
+    expect(orchestrationV2BackgroundProcessCount([])).toBe(0);
+  });
+
+  it("counts no background command in any terminal status", () => {
+    const live = {
+      type: "command_execution" as const,
+      status: "waiting" as const,
+      background: true,
+      taskId: "live",
+    };
+    for (const status of ["completed", "failed", "cancelled", "interrupted"] as const) {
+      expect(
+        orchestrationV2BackgroundProcessCount([{ ...live, status, taskId: `done-${status}` }]),
+      ).toBe(0);
+      // A settled command alongside a live one must not hide it either.
+      expect(
+        orchestrationV2BackgroundProcessCount([
+          { ...live, status, taskId: `done-${status}` },
+          live,
+        ]),
+      ).toBe(1);
+    }
+    for (const status of ["pending", "running", "waiting"] as const) {
+      expect(orchestrationV2BackgroundProcessCount([{ ...live, status }])).toBe(1);
+    }
   });
 
   it("decodes bounded provider failures as expected error turn items", () => {

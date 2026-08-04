@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  collapseWorkEntriesKeepingLiveBackground,
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
@@ -1563,5 +1564,156 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("turn folding with a live background command", () => {
+  const userEntry = {
+    id: "user-entry",
+    kind: "message" as const,
+    createdAt: "2026-01-01T00:00:00Z",
+    message: {
+      id: "user-1" as never,
+      role: "user" as const,
+      text: "Run the tests in the background.",
+      runId: "turn-1" as never,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      streaming: false,
+    },
+  };
+  const assistantFinalEntry = {
+    id: "assistant-final-entry",
+    kind: "message" as const,
+    createdAt: "2026-01-01T00:00:20Z",
+    message: {
+      id: "assistant-final" as never,
+      role: "assistant" as const,
+      text: "Started them; I will report back.",
+      runId: "turn-1" as never,
+      createdAt: "2026-01-01T00:00:20Z",
+      updatedAt: "2026-01-01T00:00:22Z",
+      streaming: false,
+    },
+  };
+  const backgroundWorkEntry = (status: string) => ({
+    id: "background-entry",
+    kind: "work" as const,
+    createdAt: "2026-01-01T00:00:08Z",
+    entry: {
+      id: "work-background",
+      createdAt: "2026-01-01T00:00:08Z",
+      runId: "turn-1" as never,
+      label: "Ran command",
+      tone: "tool" as const,
+      projectedItem: {
+        item: { type: "command_execution", status, background: true },
+      } as never,
+    },
+  });
+
+  const otherWorkEntry = {
+    id: "other-work-entry",
+    kind: "work" as const,
+    createdAt: "2026-01-01T00:00:05Z",
+    entry: {
+      id: "work-other",
+      createdAt: "2026-01-01T00:00:05Z",
+      runId: "turn-1" as never,
+      label: "Read a file",
+      tone: "tool" as const,
+    },
+  };
+
+  // The settled turn collapses to "Worked for 22s" plus its final message. A
+  // command still running has to survive that, or the row disappears exactly
+  // when it becomes the only thing still saying anything.
+  it("keeps a running background command outside the collapsed turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        userEntry,
+        otherWorkEntry,
+        backgroundWorkEntry("waiting"),
+        assistantFinalEntry,
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-entry",
+      "turn-fold:turn-1",
+      "background-entry",
+      "assistant-final-entry",
+    ]);
+  });
+
+  it("folds the command away once it settles", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        userEntry,
+        otherWorkEntry,
+        backgroundWorkEntry("completed"),
+        assistantFinalEntry,
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-entry",
+      "turn-fold:turn-1",
+      "assistant-final-entry",
+    ]);
+  });
+});
+
+describe("collapseWorkEntriesKeepingLiveBackground", () => {
+  function entry(id: string, item?: Record<string, unknown>) {
+    return {
+      id,
+      ...(item === undefined ? {} : { projectedItem: { item } as never }),
+    };
+  }
+
+  it("keeps the last entries when nothing is running in the background", () => {
+    const entries = [entry("a"), entry("b"), entry("c")];
+    expect(collapseWorkEntriesKeepingLiveBackground(entries, 1).map((e) => e.id)).toEqual(["c"]);
+  });
+
+  it("pins a running background command that the tail rule would have hidden", () => {
+    const entries = [
+      entry("bg", { type: "command_execution", status: "waiting", background: true }),
+      entry("b"),
+      entry("c"),
+    ];
+    expect(collapseWorkEntriesKeepingLiveBackground(entries, 1).map((e) => e.id)).toEqual([
+      "bg",
+      "c",
+    ]);
+  });
+
+  it("leaves nothing hidden when the pinned command is the only extra row", () => {
+    // One early background command plus exactly MAX_VISIBLE_WORK_LOG_ENTRIES later
+    // entries: everything stays visible, so no "+0 previous tool calls" control
+    // should be offered.
+    const entries = [
+      entry("bg", { type: "command_execution", status: "waiting", background: true }),
+      entry("last"),
+    ];
+    const visible = collapseWorkEntriesKeepingLiveBackground(entries, 1);
+    expect(visible.map((e) => e.id)).toEqual(["bg", "last"]);
+    expect(entries.length - visible.length).toBe(0);
+  });
+
+  it("stops pinning once the command settles", () => {
+    const entries = [
+      entry("bg", { type: "command_execution", status: "completed", background: true }),
+      entry("b"),
+      entry("c"),
+    ];
+    expect(collapseWorkEntriesKeepingLiveBackground(entries, 1).map((e) => e.id)).toEqual(["c"]);
   });
 });

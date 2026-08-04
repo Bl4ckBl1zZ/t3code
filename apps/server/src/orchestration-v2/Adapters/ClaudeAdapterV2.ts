@@ -24,6 +24,8 @@ import {
   ClaudeSettings,
   defaultInstanceIdForDriver,
   type ModelSelection,
+  type OrchestrationV2CommandExecutionItem,
+  type OrchestrationV2CommandExitReason,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
@@ -36,6 +38,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type OrchestrationV2WebSearchResult,
+  orchestrationV2TurnItemStatusIsTerminal,
   type ProviderApprovalDecision,
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -51,6 +54,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -61,6 +65,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import {
+  BACKGROUND_TAIL_FINAL_BYTES,
+  BACKGROUND_TAIL_LIVE_BYTES,
+  backgroundTaskIdFromWatchedPath,
+  parseBackgroundLaunchAck,
+  parseMonitorAck,
+} from "./backgroundCommand.ts";
+import { readBackgroundOutputTail } from "./backgroundTail.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
@@ -1300,6 +1312,11 @@ const CLAUDE_KNOWN_TOOL_CLASSIFICATIONS: Record<
   glob: { itemType: "dynamic_tool", requestKind: "file-read" },
   grep: { itemType: "dynamic_tool", requestKind: "file-read" },
   ls: { itemType: "dynamic_tool", requestKind: "file-read" },
+  // A monitor is a shell command that waits for a condition, and the CLI runs it
+  // as one (`task_type: "local_bash"`). Classifying it as a command rather than
+  // an opaque tool call is what lets it carry a deadline and a live status
+  // instead of rendering as an inert row.
+  monitor: { itemType: "command_execution", requestKind: "command" },
   multiedit: { itemType: "file_change", requestKind: "file-change" },
   notebookedit: { itemType: "file_change", requestKind: "file-change" },
   read: { itemType: "dynamic_tool", requestKind: "file-read" },
@@ -1398,6 +1415,18 @@ function jsonStringifyForTool(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
+/**
+ * The deadline a command declared for itself. `Bash` carries `timeout` in ms
+ * when the model sets one, and it is the only case where a progress bar can be
+ * drawn without inventing the numbers.
+ */
+function claudeCommandTimeoutMs(input: ClaudeNativeToolInput): number | null {
+  const value = inputRecordValue(input, "timeout");
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : null;
+}
+
 function commandInputFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
   return (
     firstStringInputField(input, ["command", "cmd", "script"]) ??
@@ -1439,6 +1468,13 @@ type ClaudeNativeToolOutput =
     };
 
 const NO_CLAUDE_NATIVE_TOOL_OUTPUT = { type: "none" } satisfies ClaudeNativeToolOutput;
+
+/**
+ * How often a running background command's output file is re-read. Slow enough
+ * that a chatty command cannot flood clients, fast enough that "last output 2s
+ * ago" stays a meaningful liveness signal.
+ */
+const BACKGROUND_TAIL_INTERVAL = "1500 millis" as const;
 
 function claudeNativeToolOutputFromToolResult(
   toolResult: ClaudeToolResultContentBlock,
@@ -1962,6 +1998,50 @@ interface ClaudeLiveQueryContext {
   readonly closed: Deferred.Deferred<void, never>;
 }
 
+/**
+ * Liveness fields set when a command is first detached from its turn. Later
+ * changes (pausing, the tail moving, the outcome) are applied to the stored item
+ * instead. Built with conditional spreads at every call site, because an
+ * explicit `undefined` is not the same as an absent key here.
+ */
+interface ClaudeCommandLiveness {
+  readonly background?: boolean;
+  readonly taskId?: string;
+  readonly hasOutputStream?: boolean;
+  readonly timeoutMs?: number;
+  readonly lastOutputAt?: DateTime.Utc;
+  readonly pausedMs?: number;
+  readonly outputTruncated?: boolean;
+  readonly exitReason?: OrchestrationV2CommandExitReason;
+  readonly waitKind?: "monitor";
+  readonly waitingOnTaskId?: string;
+}
+
+/**
+ * A command that outlived the tool call which launched it.
+ *
+ * Holds the last emitted node and item rather than the turn context, because
+ * every interesting update — the tail moving, the task being killed, the
+ * eventual notification — happens after the turn that started it has settled
+ * and the context is gone. Updating means copying these and re-emitting under
+ * the same derived ids.
+ */
+interface ActiveClaudeBackgroundTask {
+  readonly taskId: string;
+  readonly toolUseId: string;
+  node: OrchestrationV2ExecutionNode;
+  item: OrchestrationV2CommandExecutionItem;
+  readonly outputPath: string | null;
+  /** Tail already emitted, so an unchanged file costs nothing. */
+  emittedOutput: string;
+  lastOutputAt: DateTime.Utc | null;
+  pausedAt: DateTime.Utc | null;
+  pausedMs: number;
+  /** Set once the level signal has been observed without this task in it. */
+  missingFromLiveSet: boolean;
+  tailFiber: Fiber.Fiber<void, never> | null;
+}
+
 interface ActiveClaudeToolCall {
   readonly nativeItemId: string;
   readonly toolName: string;
@@ -2051,6 +2131,17 @@ export function makeClaudeAdapterV2(
         // ended, and its task_notification must both count as wake evidence
         // and hydrate the original subagent node instead of being dropped.
         const sessionSubagentsByTaskId = yield* Ref.make(new Map<string, ActiveClaudeSubagent>());
+        // Background commands that outlived their turn, keyed by provider task
+        // id. Survives settle for the same reason the subagent registry does.
+        const sessionBackgroundTasks = yield* Ref.make(
+          new Map<string, ActiveClaudeBackgroundTask>(),
+        );
+        // The `background_tasks_changed` level signal: the full live set,
+        // replaced wholesale on every payload. Null until the first one arrives,
+        // because the CLI emits nothing at startup — so an empty set and "not
+        // told yet" must stay distinguishable, or every session would open by
+        // retiring tasks it has simply not heard about.
+        const liveBackgroundTaskIds = yield* Ref.make<ReadonlySet<string> | null>(null);
         const wakeBuffers = yield* Ref.make(
           new Map<
             string,
@@ -2123,12 +2214,19 @@ export function makeClaudeAdapterV2(
           readonly output: ClaudeNativeToolOutput;
           readonly status: Extract<
             OrchestrationV2TurnItem["status"],
-            "running" | "completed" | "failed"
+            "running" | "waiting" | "completed" | "failed"
           >;
           readonly startedAt: DateTime.Utc;
           readonly updatedAt: DateTime.Utc;
+          /**
+           * Liveness for a command that outlives its tool call. `waiting` plus
+           * these fields is what keeps a background command visible after the
+           * turn settles instead of reading as finished.
+           */
+          readonly liveness?: ClaudeCommandLiveness;
         }) => {
-          const completedAt = input.status === "running" ? null : input.updatedAt;
+          const completedAt =
+            input.status === "running" || input.status === "waiting" ? null : input.updatedAt;
           const nodeId = idAllocator.derive.nodeFromProviderItem({
             driver: CLAUDE_PROVIDER,
             nativeItemId: input.nativeItemId,
@@ -2199,6 +2297,8 @@ export function makeClaudeAdapterV2(
           const webSearchResults = webSearchResultsFromClaudeOutput(input.output);
           const outputValue = claudeNativeToolOutputValue(input.output);
           const outputText = claudeNativeToolOutputText(input.output);
+          const declaredTimeoutMs =
+            itemType === "command_execution" ? claudeCommandTimeoutMs(input.toolInput) : null;
           const turnItem: OrchestrationV2TurnItem =
             itemType === "command_execution"
               ? {
@@ -2206,6 +2306,11 @@ export function makeClaudeAdapterV2(
                   type: "command_execution",
                   input: commandInputFromClaudeTool(input.toolName, input.toolInput),
                   ...(outputText.length === 0 ? {} : { output: outputText }),
+                  // A declared timeout is the only honest source of determinate
+                  // progress, and a foreground command is the one case that has
+                  // one. Anything else gets an elapsed timer and no bar.
+                  ...(declaredTimeoutMs === null ? {} : { timeoutMs: declaredTimeoutMs }),
+                  ...input.liveness,
                 }
               : itemType === "file_change"
                 ? {
@@ -2247,6 +2352,368 @@ export function makeClaudeAdapterV2(
             driver: CLAUDE_PROVIDER,
             turnItem: artifacts.turnItem,
           });
+        });
+
+        /**
+         * Re-emit a background command under the ids it was first emitted with.
+         *
+         * The turn that launched it is usually long gone, so this works from the
+         * stored node/item rather than a turn context. Run execution keeps
+         * ingesting provider events past root settlement while a
+         * `command_execution` item is non-terminal, which is what carries these
+         * updates through to clients.
+         */
+        const patchBackgroundTask = Effect.fnUntraced(function* (input: {
+          readonly taskId: string;
+          readonly status?: Extract<
+            OrchestrationV2TurnItem["status"],
+            "waiting" | "completed" | "failed" | "cancelled"
+          >;
+          readonly output?: string;
+          readonly outputTruncated?: boolean;
+          readonly lastOutputAt?: DateTime.Utc;
+          readonly exitCode?: number;
+          readonly exitReason?: OrchestrationV2CommandExitReason;
+        }) {
+          const registry = yield* Ref.get(sessionBackgroundTasks);
+          const entry = registry.get(input.taskId);
+          if (entry === undefined) {
+            return null;
+          }
+          // A liveness patch must never land on a settled command. The tail poll
+          // reads the output file between checking the status and patching, so a
+          // notification arriving in that window would otherwise see its final
+          // 64KB output replaced by the 2KB live tail, and its completion time
+          // pushed forward.
+          if (
+            input.status === undefined &&
+            orchestrationV2TurnItemStatusIsTerminal(entry.item.status)
+          ) {
+            return entry;
+          }
+          const now = yield* DateTime.now;
+          const status = input.status ?? entry.item.status;
+          const terminal = orchestrationV2TurnItemStatusIsTerminal(status);
+          const lastOutputAt = input.lastOutputAt ?? entry.lastOutputAt;
+          // `paused` is re-derived from the entry every time: a conditional
+          // spread can only add a key, so carrying the previous item's flag
+          // forward would leave a resumed command reading as paused forever.
+          const { paused: _wasPaused, ...previousItem } = entry.item;
+          const item: OrchestrationV2CommandExecutionItem = {
+            ...previousItem,
+            status,
+            updatedAt: now,
+            completedAt: terminal ? now : null,
+            ...(input.output === undefined ? {} : { output: input.output }),
+            ...(input.outputTruncated === undefined
+              ? {}
+              : { outputTruncated: input.outputTruncated }),
+            ...(lastOutputAt === null ? {} : { lastOutputAt }),
+            ...(entry.pausedAt === null || terminal ? {} : { paused: true }),
+            ...(entry.pausedMs === 0 ? {} : { pausedMs: entry.pausedMs }),
+            ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
+            ...(input.exitReason === undefined ? {} : { exitReason: input.exitReason }),
+          };
+          const node: OrchestrationV2ExecutionNode = {
+            ...entry.node,
+            status,
+            completedAt: terminal ? now : null,
+          };
+          entry.item = item;
+          entry.node = node;
+          if (input.output !== undefined) {
+            entry.emittedOutput = input.output;
+          }
+          if (input.lastOutputAt !== undefined) {
+            entry.lastOutputAt = input.lastOutputAt;
+          }
+          yield* emitToolCallArtifacts({ node, turnItem: item });
+          return entry;
+        });
+
+        const terminalizeBackgroundTask = Effect.fnUntraced(function* (input: {
+          readonly taskId: string;
+          readonly status: Extract<
+            OrchestrationV2TurnItem["status"],
+            "completed" | "failed" | "cancelled"
+          >;
+          readonly exitReason: OrchestrationV2CommandExitReason;
+        }) {
+          const registry = yield* Ref.get(sessionBackgroundTasks);
+          const entry = registry.get(input.taskId);
+          if (entry === undefined || orchestrationV2TurnItemStatusIsTerminal(entry.item.status)) {
+            return;
+          }
+          // The notification carries no output of its own, only the file path,
+          // so the closing read is the only way the full result is ever seen.
+          const finalOutput =
+            entry.outputPath === null
+              ? null
+              : yield* readBackgroundOutputTail({
+                  fileSystem,
+                  path: entry.outputPath,
+                  maxBytes: BACKGROUND_TAIL_FINAL_BYTES,
+                });
+          const tailFiber = entry.tailFiber;
+          entry.tailFiber = null;
+          yield* patchBackgroundTask({
+            taskId: input.taskId,
+            status: input.status,
+            exitReason: input.exitReason,
+            ...(finalOutput === null
+              ? {}
+              : { output: finalOutput.output, outputTruncated: finalOutput.truncated }),
+          });
+          if (tailFiber !== null) {
+            yield* Fiber.interrupt(tailFiber);
+          }
+        });
+
+        /**
+         * Poll the output file while the command runs.
+         *
+         * A poll rather than a watch because the file is written by another
+         * process on an arbitrary filesystem, and because the cadence is the
+         * thing worth controlling: every tick that finds new bytes ships an item
+         * update to every connected client.
+         */
+        const tailBackgroundTask = Effect.fnUntraced(function* (taskId: string) {
+          let ticksMissingFromLiveSet = 0;
+          while (true) {
+            yield* Effect.sleep(BACKGROUND_TAIL_INTERVAL);
+            const entry = (yield* Ref.get(sessionBackgroundTasks)).get(taskId);
+            if (entry === undefined || orchestrationV2TurnItemStatusIsTerminal(entry.item.status)) {
+              return;
+            }
+            if (entry.pausedAt !== null) {
+              continue;
+            }
+            if (entry.outputPath !== null) {
+              const snapshot = yield* readBackgroundOutputTail({
+                fileSystem,
+                path: entry.outputPath,
+                maxBytes: BACKGROUND_TAIL_LIVE_BYTES,
+              });
+              if (snapshot !== null && snapshot.output !== entry.emittedOutput) {
+                const now = yield* DateTime.now;
+                yield* patchBackgroundTask({
+                  taskId,
+                  output: snapshot.output,
+                  outputTruncated: snapshot.truncated,
+                  lastOutputAt: now,
+                });
+                ticksMissingFromLiveSet = 0;
+                continue;
+              }
+            }
+            // A task the level signal no longer lists, with no notification to
+            // explain it, is gone. Requiring two ticks keeps this clear of the
+            // ordinary case, where the level drops a task about a millisecond
+            // before its notification arrives.
+            if (entry.missingFromLiveSet) {
+              ticksMissingFromLiveSet += 1;
+              if (ticksMissingFromLiveSet >= 2) {
+                yield* terminalizeBackgroundTask({
+                  taskId,
+                  status: "cancelled",
+                  exitReason: "unknown",
+                });
+                return;
+              }
+            } else {
+              ticksMissingFromLiveSet = 0;
+            }
+          }
+        });
+
+        /**
+         * Retire every still-running background command. Called when the CLI
+         * session goes away: its tasks die with it, which the probes show the CLI
+         * doing explicitly (`task_updated` with `status: "killed"`), but a
+         * session that ends without saying so must not leave a live row behind.
+         */
+        const sweepBackgroundTasks = Effect.fnUntraced(function* () {
+          const registry = yield* Ref.get(sessionBackgroundTasks);
+          for (const entry of registry.values()) {
+            if (orchestrationV2TurnItemStatusIsTerminal(entry.item.status)) {
+              continue;
+            }
+            yield* terminalizeBackgroundTask({
+              taskId: entry.taskId,
+              status: "cancelled",
+              exitReason: "killed",
+            });
+          }
+          yield* Ref.set(sessionBackgroundTasks, new Map());
+          yield* Ref.set(liveBackgroundTaskIds, null);
+        });
+
+        /**
+         * Everything that can change a background command's state, handled
+         * whether or not a turn is active.
+         */
+        const handleBackgroundTaskLifecycleMessage = Effect.fnUntraced(function* (
+          message: SDKMessage,
+        ) {
+          if (message.type !== "system") {
+            return;
+          }
+          if (message.subtype === "init") {
+            // The level signal is per CLI process and says nothing at startup, so
+            // carrying a set across an init would let stale membership retire a
+            // task that is perfectly alive.
+            yield* Ref.set(liveBackgroundTaskIds, null);
+            const registry = yield* Ref.get(sessionBackgroundTasks);
+            for (const entry of registry.values()) {
+              entry.missingFromLiveSet = false;
+            }
+            return;
+          }
+          // The full live set, replaced wholesale. A cross-check rather than a
+          // trigger: it can precede the matching edge events and carries ids
+          // only, so an outcome still comes from the task's own notification.
+          if (message.subtype === "background_tasks_changed") {
+            const live = new Set(message.tasks.map((task) => task.task_id));
+            yield* Ref.set(liveBackgroundTaskIds, live);
+            const registry = yield* Ref.get(sessionBackgroundTasks);
+            for (const entry of registry.values()) {
+              entry.missingFromLiveSet = !live.has(entry.taskId);
+            }
+            return;
+          }
+          // Wire-safe partial updates. Pausing and the foreground-to-background
+          // flip are reported only here, and `killed` is how a session teardown
+          // admits to taking a running command down with it.
+          if (message.subtype === "task_updated") {
+            const entry = (yield* Ref.get(sessionBackgroundTasks)).get(message.task_id);
+            if (entry === undefined) {
+              return;
+            }
+            const now = yield* DateTime.now;
+            if (message.patch.status === "paused" && entry.pausedAt === null) {
+              entry.pausedAt = now;
+              yield* patchBackgroundTask({ taskId: message.task_id });
+              return;
+            }
+            if (message.patch.status === "running" && entry.pausedAt !== null) {
+              entry.pausedMs +=
+                DateTime.toEpochMillis(now) - DateTime.toEpochMillis(entry.pausedAt);
+              entry.pausedAt = null;
+              yield* patchBackgroundTask({ taskId: message.task_id });
+              return;
+            }
+            if (message.patch.status === "killed") {
+              yield* terminalizeBackgroundTask({
+                taskId: message.task_id,
+                status: "cancelled",
+                exitReason: "killed",
+              });
+            }
+            return;
+          }
+          if (message.subtype === "task_notification") {
+            yield* terminalizeBackgroundTask({
+              taskId: message.task_id,
+              status:
+                message.status === "completed"
+                  ? "completed"
+                  : message.status === "stopped"
+                    ? "cancelled"
+                    : "failed",
+              // "stopped" is the CLI reporting that it killed the task, not the
+              // command choosing to end.
+              exitReason: message.status === "stopped" ? "killed" : "exited",
+            });
+          }
+        });
+
+        /**
+         * Detect the acknowledgement that a command has been detached from the
+         * turn, and take ownership of it.
+         *
+         * Returns true when the tool result was such an acknowledgement, in which
+         * case the caller must not terminalize the item — that is the whole point.
+         */
+        const startBackgroundTaskFromToolResult = Effect.fnUntraced(function* (input: {
+          readonly context: ActiveClaudeTurnContext;
+          readonly toolCall: ActiveClaudeToolCall;
+          readonly output: ClaudeNativeToolOutput;
+          readonly startedAt: DateTime.Utc;
+        }) {
+          if (input.toolCall.classification.itemType !== "command_execution") {
+            return false;
+          }
+          const text = claudeNativeToolOutputText(input.output);
+          if (text.length === 0) {
+            return false;
+          }
+          const launch = parseBackgroundLaunchAck(text);
+          const monitor = launch === null ? parseMonitorAck(text) : null;
+          if (launch === null && monitor === null) {
+            return false;
+          }
+          const command = commandInputFromClaudeTool(input.toolCall.toolName, input.toolCall.input);
+          // A monitor's own output file holds its polling loop's stdout, which is
+          // silent by design, so it gets no tail. What it does have is a stated
+          // deadline and a target, which is what makes it legible.
+          const watchedTaskId = monitor === null ? null : backgroundTaskIdFromWatchedPath(command);
+          const taskId = launch?.taskId ?? monitor?.taskId;
+          if (taskId === undefined) {
+            return false;
+          }
+          const outputPath = launch?.outputPath ?? null;
+          const liveness: ClaudeCommandLiveness = {
+            background: true,
+            taskId,
+            // Only that a stream exists. The path stays in adapter state.
+            ...(outputPath === null ? {} : { hasOutputStream: true }),
+            ...(monitor?.timeoutMs == null ? {} : { timeoutMs: monitor.timeoutMs }),
+            ...(monitor === null ? {} : { waitKind: "monitor" as const }),
+            ...(watchedTaskId === null ? {} : { waitingOnTaskId: watchedTaskId }),
+          };
+          const artifacts = buildToolCallArtifacts({
+            context: input.context,
+            nativeItemId: input.toolCall.nativeItemId,
+            toolName: input.toolCall.toolName,
+            classification: input.toolCall.classification,
+            toolInput: input.toolCall.input,
+            threadId: input.toolCall.threadId,
+            runId: input.toolCall.runId,
+            rootNodeId: input.toolCall.rootNodeId,
+            parentNodeId: input.toolCall.parentNodeId,
+            ordinal: input.toolCall.ordinal,
+            // The acknowledgement text is provider bookkeeping, not command
+            // output. Showing it would be worse than showing nothing.
+            output: NO_CLAUDE_NATIVE_TOOL_OUTPUT,
+            status: "waiting",
+            startedAt: input.toolCall.startedAt,
+            updatedAt: input.startedAt,
+            liveness,
+          });
+          if (artifacts.turnItem.type !== "command_execution") {
+            return false;
+          }
+          const entry: ActiveClaudeBackgroundTask = {
+            taskId,
+            toolUseId: input.toolCall.nativeItemId,
+            node: artifacts.node,
+            item: artifacts.turnItem,
+            outputPath,
+            emittedOutput: "",
+            lastOutputAt: null,
+            pausedAt: null,
+            pausedMs: 0,
+            missingFromLiveSet: false,
+            tailFiber: null,
+          };
+          yield* Ref.update(sessionBackgroundTasks, (current) =>
+            new Map(current).set(taskId, entry),
+          );
+          yield* emitToolCallArtifacts(artifacts);
+          // Forked into the session scope so the poll cannot outlive the adapter
+          // even if the task never settles and no sweep ever reaches it.
+          entry.tailFiber = yield* tailBackgroundTask(taskId).pipe(Effect.forkIn(sessionScope));
+          return true;
         });
 
         const updateClaudeSubagentNode = Effect.fnUntraced(function* (input: {
@@ -3208,6 +3675,11 @@ export function makeClaudeAdapterV2(
           }
 
           const message = input.message;
+          // Background lifecycle first, and deliberately ahead of the wake
+          // buffer. A background command settles precisely when no turn is
+          // active, and buffering its outcome until the model happens to wake up
+          // would leave the row live for as long as that takes.
+          yield* handleBackgroundTaskLifecycleMessage(message);
           const context = yield* Ref.get(activeTurn);
           if (context === null) {
             yield* bufferWakeMessage({ nativeThreadId: liveQuery.nativeThreadId, message });
@@ -3370,6 +3842,20 @@ export function makeClaudeAdapterV2(
                 parentToolUseId,
               }));
             const completedAt = yield* DateTime.now;
+            // A backgrounded command and a monitor both resolve their tool_use
+            // immediately with an acknowledgement while the work keeps running.
+            // Terminalizing here is what made the turn read as finished; instead
+            // the item goes to `waiting` and lives on in the session registry.
+            const launched = yield* startBackgroundTaskFromToolResult({
+              context,
+              toolCall,
+              output,
+              startedAt: completedAt,
+            });
+            if (launched) {
+              context.toolCalls.delete(toolCall.nativeItemId);
+              continue;
+            }
             const artifacts = buildToolCallArtifacts({
               context,
               nativeItemId: toolCall.nativeItemId,
@@ -3680,6 +4166,12 @@ export function makeClaudeAdapterV2(
                   yield* finalizeActiveTurnAfterQueryExit(
                     exit._tag === "Failure" ? exit.cause : undefined,
                   );
+                  // The CLI process is gone and takes its background commands
+                  // with it. Retiring them here is what stops a settled turn
+                  // from keeping a row alive forever; the active-turn finalizer
+                  // above cannot do it, since it returns early in exactly the
+                  // case that matters — no turn is active any more.
+                  yield* sweepBackgroundTasks();
                 }
               }),
             ),

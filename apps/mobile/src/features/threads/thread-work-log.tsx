@@ -1,7 +1,8 @@
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2TurnItem, ThreadId } from "@t3tools/contracts";
+import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { useNavigation } from "@react-navigation/native";
 import { LayoutAnimation, Pressable, useColorScheme, View } from "react-native";
@@ -47,6 +48,18 @@ const WORK_LOG_LAYOUT_ANIMATION = {
     property: LayoutAnimation.Properties.opacity,
   },
 } as const;
+
+function keepRowsWithLiveBackgroundCommands<
+  Row extends { readonly projectedItem: { readonly item: OrchestrationV2TurnItem } },
+>(rows: ReadonlyArray<Row>, limit: number): ReadonlyArray<Row> {
+  const kept = new Set(rows.slice(-limit));
+  for (const row of rows) {
+    if (orchestrationV2CommandExecutionIsLiveInBackground(row.projectedItem.item)) {
+      kept.add(row);
+    }
+  }
+  return rows.filter((row) => kept.has(row));
+}
 
 function triggerDisclosureFeedback() {
   LayoutAnimation.configureNext(WORK_LOG_LAYOUT_ANIMATION);
@@ -474,9 +487,18 @@ export function ThreadWorkLog(props: {
 
   const hasOverflow = rows.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleRows =
-    hasOverflow && !props.expanded ? rows.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES) : rows;
-  const hiddenCount = rows.length - visibleRows.length;
-  const hiddenStats = sumActivityFileDiffStats(rows.slice(0, hiddenCount));
+    hasOverflow && !props.expanded
+      ? // A background command is usually launched early in a turn, so keeping
+        // only the last row would collapse away the one row still reporting.
+        keepRowsWithLiveBackgroundCommands(rows, MAX_VISIBLE_WORK_LOG_ENTRIES)
+      : rows;
+  // The complement of what is visible, not a prefix: pinning a live background
+  // command means the hidden rows are no longer contiguous, so slicing would
+  // total the diff stats of the wrong rows.
+  const visibleRowIds = new Set(visibleRows.map((row) => row.id));
+  const hiddenRows = rows.filter((row) => !visibleRowIds.has(row.id));
+  const hiddenCount = hiddenRows.length;
+  const hiddenStats = sumActivityFileDiffStats(hiddenRows);
   const onlyToolRows = rows.every((row) => row.toolLike);
   const overflowNoun = threadWorkLogOverflowNoun(onlyToolRows, hiddenCount);
 
@@ -665,7 +687,7 @@ export function ThreadWorkLog(props: {
         })}
       </View>
 
-      {hasOverflow ? (
+      {hasOverflow && (props.expanded || hiddenCount > 0) ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded: props.expanded }}

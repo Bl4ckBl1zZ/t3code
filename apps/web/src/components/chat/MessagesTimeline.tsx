@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   type MessageId,
+  type OrchestrationV2CommandExecutionItem,
   type OrchestrationV2TurnItem,
   type RunAttemptId,
   type ScopedThreadRef,
@@ -80,6 +81,7 @@ import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
+  collapseWorkEntriesKeepingLiveBackground,
   computeStableMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
@@ -117,6 +119,8 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { isBackgroundProcessItem } from "../../backgroundProcess";
+import { BackgroundProcessCard } from "./BackgroundProcessCard";
 import { V2ItemInspector } from "./V2ItemInspector";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { isV2LifecycleItem, V2LifecycleRow, type HandoffTimelineRun } from "./V2LifecycleRow";
@@ -1901,11 +1905,20 @@ const WorkGroupSection = memo(function WorkGroupSection({
     [groupedEntries],
   );
   const hasOverflow = nonEmptyEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-  const visibleEntries =
-    hasOverflow && !isExpanded
-      ? nonEmptyEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-      : nonEmptyEntries;
+  const visibleEntries = useMemo(
+    () =>
+      hasOverflow && !isExpanded
+        ? // A still-running background command is pinned past the collapse. It
+          // is usually launched early in a turn, so the plain "keep the last N"
+          // rule would hide the one row that is still saying something.
+          collapseWorkEntriesKeepingLiveBackground(nonEmptyEntries, MAX_VISIBLE_WORK_LOG_ENTRIES)
+        : nonEmptyEntries,
+    [hasOverflow, isExpanded, nonEmptyEntries],
+  );
   const hiddenCount = nonEmptyEntries.length - visibleEntries.length;
+  // Pinning a live background command can leave every entry visible, and a
+  // "+0 previous tool calls" control would be worse than none.
+  const showOverflowControl = isExpanded || hiddenCount > 0;
   const onlyToolEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
   const groupLabel = onlyToolEntries
     ? nonEmptyEntries.length === 1
@@ -1963,7 +1976,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
           />
         ))}
       </div>
-      {hasOverflow && (
+      {hasOverflow && showOverflowControl && (
         <button
           type="button"
           className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
@@ -2778,6 +2791,18 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 
 const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation();
 
+/**
+ * The `command_execution` item behind a work entry, when it is a command that
+ * can outlive its turn. Includes settled ones on purpose: the row that reported
+ * a background command while it ran is also where its outcome belongs.
+ */
+function backgroundProcessItemFromWorkEntry(
+  workEntry: TimelineWorkEntry,
+): OrchestrationV2CommandExecutionItem | null {
+  const item = workEntry.projectedItem?.item;
+  return item !== undefined && isBackgroundProcessItem(item) ? item : null;
+}
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
@@ -2786,6 +2811,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const activity = use(TimelineRowActivityCtx);
   const ctx = use(TimelineRowCtx);
   const [expanded, setExpanded] = useState(false);
+  const backgroundItem = backgroundProcessItemFromWorkEntry(workEntry);
+  if (backgroundItem !== null) {
+    // A command detached from its turn cannot be a one-line tool row: the row
+    // has to keep reporting after the turn that started it has settled.
+    return <BackgroundProcessCard item={backgroundItem} />;
+  }
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = false;
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);

@@ -1823,6 +1823,185 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  // Codex streams a running command's output and T3 used to discard it, so a
+  // command that took a minute showed an empty row for a minute.
+  const STREAM_SCENARIO = "codex-exec-output-stream";
+  const STREAM_NATIVE_THREAD = "native-codex-stream-thread";
+  const STREAM_NATIVE_TURN = "native-codex-stream-turn";
+
+  const streamOutputDelta = (input: {
+    readonly label: string;
+    readonly delta: string;
+    readonly afterMs?: number;
+  }) => ({
+    type: "emit_inbound" as const,
+    label: input.label,
+    ...(input.afterMs === undefined ? {} : { afterMs: input.afterMs }),
+    frame: {
+      method: "item/commandExecution/outputDelta",
+      params: {
+        delta: input.delta,
+        itemId: BG_COMMAND_ITEM,
+        threadId: STREAM_NATIVE_THREAD,
+        turnId: STREAM_NATIVE_TURN,
+      },
+    },
+  });
+
+  const streamCommandItem = (status: "inProgress" | "completed") => ({
+    type: "commandExecution",
+    id: BG_COMMAND_ITEM,
+    command: BG_COMMAND,
+    cwd: "/workspace",
+    status,
+    commandActions: [{ type: "unknown", command: BG_COMMAND }],
+    aggregatedOutput:
+      status === "completed" ? "step 1\nstep 2\nstep 3\nCODEX_BG_WAKE_DONE\n" : null,
+    exitCode: status === "completed" ? 0 : null,
+    durationMs: status === "completed" ? 25_000 : null,
+  });
+
+  const streamingOutputTranscript = makeCodexReplayTranscript({
+    scenario: STREAM_SCENARIO,
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: STREAM_NATIVE_THREAD,
+        nativeTurnId: STREAM_NATIVE_TURN,
+        prompt: BG_PROMPT,
+      }),
+      {
+        type: "emit_inbound",
+        label: "item/started/command",
+        frame: {
+          method: "item/started",
+          params: {
+            item: streamCommandItem("inProgress"),
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+            startedAtMs: 1782622440500,
+          },
+        },
+      },
+      streamOutputDelta({ label: "outputDelta/first", delta: "step 1\n" }),
+      // Immediately after the first, inside the throttle window.
+      streamOutputDelta({ label: "outputDelta/throttled", delta: "step 2\n" }),
+      {
+        type: "emit_inbound",
+        label: "item/completed/root-answer",
+        frame: {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "agentMessage",
+              id: "root-answer-stream",
+              text: "STARTED",
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+            completedAtMs: 1782622441000,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "turn/completed",
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: STREAM_NATIVE_THREAD,
+            turn: makeCodexReplayTurn({ id: STREAM_NATIVE_TURN, status: "completed" }),
+          },
+        },
+      },
+      // Past the throttle window and past the turn settling: Codex keeps the
+      // command running, so its output has to keep reaching the row.
+      streamOutputDelta({ label: "outputDelta/post-settle", delta: "step 3\n", afterMs: 1_000 }),
+      {
+        type: "emit_inbound",
+        label: "item/completed/command",
+        afterMs: 30_000,
+        frame: {
+          method: "item/completed",
+          params: {
+            item: streamCommandItem("completed"),
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+            completedAtMs: 1782622465500,
+          },
+        },
+      },
+    ],
+  });
+
+  it.effect("streams command output while it runs, throttled, and past turn settle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(streamingOutputTranscript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-output-stream"),
+            text: BG_PROMPT,
+          }),
+        );
+
+        const runningOutputs = () =>
+          harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "command_execution" &&
+            event.turnItem.status === "running" &&
+            event.turnItem.output !== undefined
+              ? [event.turnItem.output]
+              : [],
+          );
+        yield* awaitUntil(() => runningOutputs().includes("step 1\n"), "first streamed output");
+        // The second delta landed inside the 500ms window, so it is accumulated
+        // but not broadcast: a per-line command must not become hundreds of
+        // websocket messages.
+        assert.isFalse(runningOutputs().some((output) => output.includes("step 2")));
+
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* TestClock.adjust("1 second");
+        // Past the settle, and the accumulated deltas arrive together.
+        yield* awaitUntil(
+          () => runningOutputs().some((output) => output.includes("step 3")),
+          "post-settle streamed output",
+        );
+        const postSettle = runningOutputs().find((output) => output.includes("step 3"));
+        assert.equal(postSettle, "step 1\nstep 2\nstep 3\n");
+        assert.isTrue(
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "running" &&
+              event.turnItem.lastOutputAt !== undefined,
+          ),
+        );
+
+        yield* TestClock.adjust("30 seconds");
+        // The completion still carries the authoritative full output.
+        yield* awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "command_execution" &&
+                event.turnItem.status === "completed" &&
+                event.turnItem.output === "step 1\nstep 2\nstep 3\nCODEX_BG_WAKE_DONE\n",
+            ),
+          "authoritative completion output",
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   const PRE_SETTLE_SCENARIO = "codex-bg-exec-pre-settle";
   const PRE_SETTLE_NATIVE_THREAD = "native-codex-pre-settle-thread";
   const PRE_SETTLE_NATIVE_TURN = "native-codex-pre-settle-turn";

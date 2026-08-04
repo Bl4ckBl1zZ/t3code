@@ -26,6 +26,7 @@ import {
   OrchestrationV2RuntimeRequestJson as OrchestrationV2RuntimeRequestJsonSchema,
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
+  orchestrationV2BackgroundProcessCount,
   RunId,
   ThreadId,
   TurnItemId,
@@ -38,6 +39,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -427,7 +429,51 @@ type ShellThreadRow = {
   readonly has_actionable_proposed_plan: number;
   readonly item_count: number;
   readonly runless_item_count: number;
+  readonly live_background_commands_json: string | null;
 };
+
+/**
+ * The `json_object` rows the shell query selects for live background commands.
+ * `json_extract` yields SQL NULL for a missing key, so every field is nullable.
+ */
+const LiveBackgroundCommandRows = Schema.Array(
+  Schema.Struct({
+    taskId: Schema.NullOr(Schema.String),
+    waitKind: Schema.NullOr(Schema.String),
+    waitingOnTaskId: Schema.NullOr(Schema.String),
+  }),
+);
+const decodeLiveBackgroundCommandRows = Schema.decodeUnknownOption(
+  Schema.fromJsonString(LiveBackgroundCommandRows),
+);
+
+/**
+ * Count live background commands from the shell row, using the same shared rule
+ * the clients apply. The SQL side deliberately selects rows rather than a count:
+ * whether a monitor folds into the command it watches is one rule, and it lives
+ * in `orchestrationV2BackgroundProcessCount`.
+ */
+function backgroundProcessCountFromRow(liveBackgroundCommandsJson: string | null): number {
+  if (liveBackgroundCommandsJson === null) {
+    return 0;
+  }
+  // A malformed row costs a sidebar dot, not the whole shell read.
+  const rows = Option.getOrElse(
+    decodeLiveBackgroundCommandRows(liveBackgroundCommandsJson),
+    () => [],
+  );
+  return orchestrationV2BackgroundProcessCount(
+    rows.map((row) => ({
+      type: "command_execution" as const,
+      // The query already filtered to non-terminal rows.
+      status: "waiting" as const,
+      background: true,
+      ...(row.taskId === null ? {} : { taskId: row.taskId }),
+      ...(row.waitKind === "monitor" ? { waitKind: "monitor" as const } : {}),
+      ...(row.waitingOnTaskId === null ? {} : { waitingOnTaskId: row.waitingOnTaskId }),
+    })),
+  );
+}
 
 type ShellRunRow = {
   readonly thread_id: string;
@@ -870,6 +916,7 @@ export function threadShellFromProjection(
     hasActionableProposedPlan: projection.plans.some(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
     ),
+    backgroundProcessCount: orchestrationV2BackgroundProcessCount(projection.turnItems),
     itemCount: activeLocalTurnItems(projection).length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
@@ -905,6 +952,7 @@ type ShellThreadState = {
   readonly latestVisibleMessage: OrchestrationV2ConversationMessage | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
+  readonly backgroundProcessCount: number;
   readonly itemCount: number;
   readonly runlessItemCount: number;
   readonly updatedAt: OrchestrationV2ThreadProjection["updatedAt"];
@@ -1044,6 +1092,7 @@ function shellFromState(input: {
           },
     latestUserMessageAt: input.state.latestUserMessageAt,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
+    backgroundProcessCount: input.state.backgroundProcessCount,
     itemCount: input.state.itemCount,
     visibleItemCount: input.visibleItemCount,
     createdAt: input.state.thread.createdAt,
@@ -2284,7 +2333,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 FROM orchestration_v2_projection_turn_items i
                 WHERE i.thread_id = t.thread_id
                   AND i.run_id IS NULL
-              ) AS runless_item_count
+              ) AS runless_item_count,
+              -- Background commands still running. The rows rather than a count,
+              -- because whether a monitor folds into the command it watches is a
+              -- rule shared with the clients; recomputing it in SQL would let the
+              -- sidebar and the timeline disagree.
+              (
+                SELECT json_group_array(
+                  json_object(
+                    'taskId', json_extract(i.payload_json, '$.taskId'),
+                    'waitKind', json_extract(i.payload_json, '$.waitKind'),
+                    'waitingOnTaskId', json_extract(i.payload_json, '$.waitingOnTaskId')
+                  )
+                )
+                FROM orchestration_v2_projection_turn_items i
+                WHERE i.thread_id = t.thread_id
+                  AND i.type = 'command_execution'
+                  AND i.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted')
+                  AND json_extract(i.payload_json, '$.background') = 1
+              ) AS live_background_commands_json
             FROM orchestration_v2_projection_threads t
             WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
             ORDER BY t.updated_at ASC, t.thread_id ASC
@@ -2382,6 +2449,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ? null
               : DateTime.makeUnsafe(row.latest_user_message_at),
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
+          // This is the path the live shell streams read, so it has to report the
+          // real number. Freshness is guaranteed at the other end instead: a
+          // background command dies with the provider CLI process, and startup
+          // reconciliation retires every item that outlived one before any client
+          // reads this.
+          backgroundProcessCount: backgroundProcessCountFromRow(row.live_background_commands_json),
           itemCount: row.item_count,
           runlessItemCount: row.runless_item_count,
           updatedAt: thread.updatedAt,

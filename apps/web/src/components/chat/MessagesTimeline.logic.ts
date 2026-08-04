@@ -8,6 +8,7 @@ import {
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import {
   type MessageId,
+  orchestrationV2CommandExecutionIsLiveInBackground,
   type OrchestrationV2ProjectedTurnItem,
   type RunAttemptId,
   type RunId,
@@ -28,6 +29,26 @@ export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 export interface TimelineEndState {
   readonly isAtEnd?: boolean;
   readonly isNearEnd?: boolean;
+}
+
+/**
+ * Collapse a work group to its last `limit` entries, but never drop a background
+ * command that is still running.
+ *
+ * Order is preserved, so a pinned row stays where it happened rather than
+ * jumping to the end of the group.
+ */
+export function collapseWorkEntriesKeepingLiveBackground<
+  Entry extends { readonly projectedItem?: OrchestrationV2ProjectedTurnItem | undefined },
+>(entries: ReadonlyArray<Entry>, limit: number): ReadonlyArray<Entry> {
+  const kept = new Set(entries.slice(-limit));
+  for (const entry of entries) {
+    const item = entry.projectedItem?.item;
+    if (item !== undefined && orchestrationV2CommandExecutionIsLiveInBackground(item)) {
+      kept.add(entry);
+    }
+  }
+  return entries.filter((entry) => kept.has(entry));
 }
 
 export function resolveTimelineIsAtEnd(state: TimelineEndState | undefined): boolean | undefined {
