@@ -37,6 +37,19 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, T3_HTML_EMBED_INSTRUCTIONS);
   });
 
+  it("names the situations that should trigger an embed", () => {
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "### When to use it");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "Reach for an embed by default");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "The user asks what something looks like");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "You changed UI");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "You are proposing UI");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "A visual change has a meaningful before");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "Skip it for code the user is meant to read");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "not evidence that the app behaves that way");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, ">BEFORE<");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, ">AFTER<");
+  });
+
   it("injects prompt fallback only for an MCP-enabled first run", () => {
     const prompt = "Inspect the repository.";
     const injected = t3OrchestrationPromptForFirstRun({
