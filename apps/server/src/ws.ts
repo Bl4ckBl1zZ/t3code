@@ -27,6 +27,7 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2DispatchCommandError,
+  OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ThreadLaunchError,
@@ -116,6 +117,11 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import {
+  makeThreadHandoffScript,
+  makeThreadHandoffTranscript,
+} from "./orchestration-v2/ThreadHandoffScript.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -141,6 +147,8 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
 import * as RelayClient from "@t3tools/shared/relayClient";
 
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
+
+const HANDOFF_SCRIPT_SUMMARY_TIMEOUT_MS = 120_000;
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
@@ -426,6 +434,7 @@ const makeWsRpcLayer = (
       const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
       const projectService = yield* ProjectService.ProjectService;
+      const textGeneration = yield* TextGeneration.TextGeneration;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -1181,6 +1190,67 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "orchestration",
               "orchestration_v2.command_id": input.commandId,
               "orchestration_v2.project_id": input.projectId,
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.generateHandoffScript]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.generateHandoffScript,
+            Effect.gen(function* () {
+              const projection = yield* threadManagement.getThreadProjection(input.threadId);
+              const project = yield* projectService.getById(projection.thread.projectId);
+              const cwd =
+                projection.thread.worktreePath ??
+                (Option.isSome(project) ? project.value.workspaceRoot : null);
+              const transcript = makeThreadHandoffTranscript(projection.messages);
+              let summary: string | null = null;
+              if (cwd !== null && transcript.length > 0) {
+                const generated = yield* Effect.result(
+                  textGeneration
+                    .generateHandoffSummary({
+                      cwd,
+                      transcript,
+                      fromProvider: projection.thread.providerInstanceId,
+                      toProvider: "a new agent session",
+                      modelSelection: projection.thread.modelSelection,
+                    })
+                    .pipe(Effect.timeoutOption(HANDOFF_SCRIPT_SUMMARY_TIMEOUT_MS)),
+                );
+                if (generated._tag === "Success" && Option.isSome(generated.success)) {
+                  const trimmed = generated.success.value.summary.trim();
+                  summary = trimmed.length > 0 ? trimmed : null;
+                }
+                if (summary === null) {
+                  yield* Effect.logWarning(
+                    "Handoff script AI summary unavailable; falling back to transcript digest.",
+                    { threadId: input.threadId },
+                  );
+                }
+              }
+              return {
+                script: makeThreadHandoffScript({
+                  title: projection.thread.title,
+                  branch: projection.thread.branch,
+                  worktreePath: projection.thread.worktreePath,
+                  workspaceRoot: Option.isSome(project) ? project.value.workspaceRoot : null,
+                  providerInstanceId: projection.thread.providerInstanceId,
+                  summary,
+                  messages: projection.messages,
+                }),
+                aiGenerated: summary !== null,
+              };
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GenerateHandoffScriptError({
+                    threadId: input.threadId,
+                    message: `Failed to generate handoff script for thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            ),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.thread_id": input.threadId,
             },
           ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: (_input) =>

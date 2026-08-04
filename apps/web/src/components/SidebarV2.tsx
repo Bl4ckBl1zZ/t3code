@@ -98,6 +98,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
@@ -1395,6 +1396,9 @@ export default function SidebarV2() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const generateHandoffScript = useAtomCommand(orchestrationEnvironment.v2.generateHandoffScript, {
+    reportFailure: false,
+  });
   const toggleThreadPin = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -1462,6 +1466,25 @@ export default function SidebarV2() {
         stackedThreadToast({
           type: "error",
           title: "Failed to copy branch",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
+  const { copyToClipboard: copyHandoffScriptToClipboard } = useCopyToClipboard({
+    target: "handoff script",
+    onCopy: () => {
+      toastManager.add({
+        type: "success",
+        title: "Handoff script copied",
+        description: "Paste it into a new agent session to continue this thread.",
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy handoff script",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -2854,6 +2877,7 @@ export default function SidebarV2() {
               { id: "mark-unread", label: "Mark unread" },
               { id: "copy-path", label: "Copy path", icon: "copy" },
               ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
+              { id: "copy-handoff-script", label: "Copy handoff script", icon: "copy" },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
             position,
@@ -2946,6 +2970,34 @@ export default function SidebarV2() {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
             return;
+          case "copy-handoff-script": {
+            const loadingToastId = toastManager.add({
+              type: "loading",
+              title: "Generating handoff script…",
+              description: thread.title,
+              timeout: 0,
+            });
+            const result = await generateHandoffScript({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId },
+            });
+            toastManager.close(loadingToastId);
+            if (result._tag === "Failure") {
+              if (!isAtomCommandInterrupted(result)) {
+                const error = squashAtomCommandFailure(result);
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Failed to generate handoff script",
+                    description: error instanceof Error ? error.message : "An error occurred.",
+                  }),
+                );
+              }
+              return;
+            }
+            copyHandoffScriptToClipboard(result.value.script);
+            return;
+          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -3548,11 +3600,7 @@ export default function SidebarV2() {
                   ) => {
                     if (sectionThreads.length === 0) return;
                     items.push(
-                      <li
-                        key={`${key}-header`}
-                        data-thread-selection-safe
-                        className="list-none"
-                      >
+                      <li key={`${key}-header`} data-thread-selection-safe className="list-none">
                         <div className="mb-1 mt-3 flex items-center gap-2 px-2.5">
                           <span
                             className={cn(

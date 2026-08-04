@@ -6,7 +6,9 @@ import { useCallback, useRef } from "react";
 import { Alert } from "react-native";
 
 import { showConfirmDialog } from "../../components/ConfirmDialogHost";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -156,6 +158,55 @@ function useThreadActionExecutor(
   );
 
   return executeAction;
+}
+
+/**
+ * Generates a prompt-ready handoff document for the thread on the server and
+ * puts it on the clipboard. Generation can take a while (AI summary); repeat
+ * requests for the same thread are ignored while one is in flight.
+ */
+export function useCopyThreadHandoffScript(): (thread: EnvironmentThreadShell) => void {
+  const generateMutation = useAtomCommand(orchestrationEnvironment.v2.generateHandoffScript, {
+    reportFailure: false,
+  });
+  const inFlightThreadKeys = useRef(new Set<string>());
+
+  return useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void (async () => {
+        const key = scopedThreadKey(thread.environmentId, thread.id);
+        if (inFlightThreadKeys.current.has(key)) {
+          return;
+        }
+        inFlightThreadKeys.current.add(key);
+        selectionHaptic();
+        try {
+          const result = await generateMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id },
+          });
+          if (result._tag === "Failure") {
+            const error = Cause.squash(result.cause);
+            Alert.alert(
+              "Could not create handoff script",
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The handoff script could not be generated.",
+            );
+            return;
+          }
+          copyTextWithHaptic(result.value.script, { target: "handoff script" });
+          Alert.alert(
+            "Handoff script copied",
+            "Paste it into a new agent session to continue this thread.",
+          );
+        } finally {
+          inFlightThreadKeys.current.delete(key);
+        }
+      })();
+    },
+    [generateMutation],
+  );
 }
 
 function useConfirmDeleteThread(
