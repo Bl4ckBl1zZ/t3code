@@ -2,6 +2,7 @@ import {
   CommandId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadProjection,
+  orchestrationV2TurnItemStatusIsTerminal,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -253,6 +254,32 @@ export const make = Effect.gen(function* () {
           });
         }
       }
+      // A background command outlives the turn that launched it, so its run is
+      // normally already completed and the per-run sweep above never sees it.
+      // The command itself died with the provider CLI process, and its outcome
+      // went with it — say so rather than leaving a row that reads as running.
+      for (const item of projection.turnItems) {
+        if (item.type !== "command_execution" || item.background !== true) continue;
+        if (orchestrationV2TurnItemStatusIsTerminal(item.status)) continue;
+        if (runs.some((run) => run.id === item.runId)) continue;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "turn-item.updated",
+          threadId: projection.thread.id,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...item,
+            status: "cancelled",
+            exitReason: trigger === "startup" ? "unknown" : "killed",
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+
       // Pending provider-switch handoffs are broadcast before their command
       // commits (Orchestrator.dispatchMessage), and the in-memory rejection
       // compensation does not survive a process stop. A non-terminal handoff

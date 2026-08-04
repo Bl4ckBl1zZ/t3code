@@ -1,4 +1,5 @@
 import {
+  orchestrationV2CommandExecutionIsLiveInBackground,
   ProviderDriverKind,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
@@ -363,9 +364,15 @@ const PERSISTENT_RESOURCE_V2_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"
 ]);
 
 export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boolean {
-  return (
-    entry.kind === "event" && PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type)
-  );
+  if (entry.kind === "event") {
+    return PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type);
+  }
+  // A settled turn folds down to "Worked for 1m 8s" and its final message. A
+  // command still running inside that turn has to survive the fold, or the one
+  // row that is still reporting disappears at the exact moment it starts to
+  // matter.
+  const item = entry.kind === "work" ? entry.entry.projectedItem?.item : undefined;
+  return item !== undefined && orchestrationV2CommandExecutionIsLiveInBackground(item);
 }
 
 function projectedItemCreatedAt(row: OrchestrationV2ProjectedTurnItem): string {

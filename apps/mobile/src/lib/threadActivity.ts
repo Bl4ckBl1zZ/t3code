@@ -20,6 +20,7 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { orchestrationV2TurnItemStatusIsTerminal } from "@t3tools/contracts";
 import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
@@ -266,7 +267,14 @@ function itemSummary(
     case "reasoning":
       return "Thinking";
     case "command_execution":
-      return "Command";
+      // A command that outlives its turn needs to say so: on a phone the turn
+      // footer is often the only thing on screen, and "Command" next to a
+      // finished turn reads as finished.
+      return item.background === true
+        ? item.waitKind === "monitor"
+          ? "Waiting for a condition"
+          : "Background command"
+        : "Command";
     case "file_change":
       return `Changed ${item.fileName}`;
     case "file_search":
@@ -308,12 +316,29 @@ function itemSummary(
   }
 }
 
+/** Last line a background command printed, which is its only live signal. */
+function backgroundCommandTail(output: string | undefined): string | null {
+  if (output === undefined) return null;
+  const lines = output.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = (lines[index] ?? "").trim();
+    if (line.length > 0) return line;
+  }
+  return null;
+}
+
 function itemPreview(item: OrchestrationV2TurnItem): string | null {
   switch (item.type) {
     case "reasoning":
       return item.text || null;
-    case "command_execution":
+    case "command_execution": {
+      // While a background command runs, what it is printing beats what it was
+      // asked to do — the command text is already in the summary line.
+      if (item.background === true && !orchestrationV2TurnItemStatusIsTerminal(item.status)) {
+        return backgroundCommandTail(item.output) ?? (item.input || null);
+      }
       return item.input || null;
+    }
     case "file_change":
       return item.fileName;
     case "file_search":

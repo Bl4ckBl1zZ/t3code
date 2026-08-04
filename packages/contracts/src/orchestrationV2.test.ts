@@ -28,6 +28,8 @@ import {
   OrchestrationV2Subagent,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
+  orchestrationV2BackgroundProcessCount,
 } from "./orchestrationV2.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
@@ -352,6 +354,92 @@ describe("orchestration V2 contracts", () => {
     expect(fileChange.fileName).toBe("package.json");
     expect(fileChange.additions).toBe(4);
     expect(dynamicTool.id).toBe(TurnItemId.make("turn-item-dynamic-1"));
+  });
+
+  it("carries background command liveness across the wire", () => {
+    // The in-memory and JSON item unions are declared separately, so the two
+    // have to be exercised together or a field added to one silently stops
+    // crossing the websocket.
+    const wireItem = {
+      id: "turn-item-background-1",
+      type: "command_execution",
+      threadId: "thread-1",
+      runId: "run-1",
+      nodeId: "node-background-1",
+      providerThreadId: "provider-thread-1",
+      providerTurnId: "provider-turn-1",
+      nativeItemRef: { driver: "claudeAgent", nativeId: "toolu-1", strength: "strong" },
+      parentItemId: null,
+      ordinal: 5,
+      status: "waiting",
+      title: null,
+      input: "pnpm vitest run apps/web",
+      output: "step 1 of 20\n",
+      background: true,
+      taskId: "bs891h9i0",
+      outputPath: "/tmp/claude-tasks/bs891h9i0.output",
+      timeoutMs: 120_000,
+      paused: true,
+      pausedMs: 4_000,
+      outputTruncated: true,
+      exitReason: "killed",
+      waitKind: "monitor",
+      waitingOnTaskId: "byggcdigy",
+      startedAt: "2026-08-04T12:00:00.000Z",
+      lastOutputAt: "2026-08-04T12:00:30.000Z",
+      completedAt: null,
+      updatedAt: "2026-08-04T12:00:30.000Z",
+    };
+
+    const decoded = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson)(wireItem);
+    expect(decoded.type).toBe("command_execution");
+    if (decoded.type !== "command_execution") {
+      throw new Error("expected command_execution");
+    }
+    expect(decoded.background).toBe(true);
+    expect(decoded.taskId).toBe("bs891h9i0");
+    expect(decoded.outputPath).toBe("/tmp/claude-tasks/bs891h9i0.output");
+    expect(decoded.timeoutMs).toBe(120_000);
+    expect(decoded.paused).toBe(true);
+    expect(decoded.pausedMs).toBe(4_000);
+    expect(decoded.outputTruncated).toBe(true);
+    expect(decoded.exitReason).toBe("killed");
+    expect(decoded.waitKind).toBe("monitor");
+    expect(decoded.waitingOnTaskId).toBe("byggcdigy");
+    expect(decoded.lastOutputAt).toBeDefined();
+
+    // Re-encoding must round-trip, and the in-memory union must accept the same
+    // shape with real DateTimes.
+    const reEncoded = Schema.encodeUnknownSync(OrchestrationV2TurnItemJson)(decoded);
+    expect(reEncoded).toMatchObject({
+      background: true,
+      taskId: "bs891h9i0",
+      waitKind: "monitor",
+      lastOutputAt: "2026-08-04T12:00:30.000Z",
+    });
+    const inMemory = Schema.decodeUnknownSync(OrchestrationV2TurnItem)({
+      ...wireItem,
+      startedAt: DateTime.makeUnsafe("2026-08-04T12:00:00.000Z"),
+      lastOutputAt: DateTime.makeUnsafe("2026-08-04T12:00:30.000Z"),
+      updatedAt: DateTime.makeUnsafe("2026-08-04T12:00:30.000Z"),
+    });
+    expect(inMemory.type).toBe("command_execution");
+  });
+
+  it("counts live background commands and never counts a monitor twice", () => {
+    const base = {
+      type: "command_execution" as const,
+      status: "waiting" as const,
+      background: true,
+    };
+    expect(
+      orchestrationV2BackgroundProcessCount([
+        base,
+        { ...base, waitKind: "monitor" as const },
+        { ...base, status: "completed" as const },
+        { type: "command_execution" as const, status: "running" as const },
+      ]),
+    ).toBe(1);
   });
 
   it("decodes bounded provider failures as expected error turn items", () => {

@@ -267,6 +267,7 @@ import {
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { BackgroundProcessesControl } from "./chat/BackgroundProcessesControl";
 import { QueuedRunsControl } from "./chat/QueuedRunsControl";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
@@ -6641,6 +6642,12 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
+                  {isServerThread ? (
+                    <BackgroundProcessesControl
+                      timelineEntries={timelineEntries}
+                      turnInProgress={isWorking || !latestRunSettled}
+                    />
+                  ) : null}
                   {isServerThread && activeThread ? (
                     <QueuedRunsControl
                       environmentId={activeThread.environmentId}

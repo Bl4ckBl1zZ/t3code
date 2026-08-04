@@ -200,6 +200,93 @@ it.effect("fails orphaned pending handoffs whose command never committed", () =>
   }).pipe(Effect.provide(layer));
 });
 
+// A background command's run completes as soon as the turn settles, so the
+// per-run sweep never reaches it. The command died with the CLI process and its
+// outcome went with it, which is a different thing from failing.
+it.effect("retires background commands that outlived their provider process", () => {
+  const threadId = ThreadId.make("thread_recovery_background");
+  let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
+    null;
+  const committed = vi.fn(
+    (input: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0]) => {
+      committedInput = input;
+      return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
+    },
+  );
+  const projection = {
+    thread: { id: threadId, providerInstanceId: ProviderInstanceId.make("claude") },
+    runtimeRequests: [],
+    providerSessions: [],
+    providerThreads: [],
+    // The run that launched it finished long ago.
+    runs: [{ id: RunId.make("run_settled"), status: "completed" }],
+    nodes: [],
+    turnItems: [
+      {
+        id: TurnItemId.make("turn-item_background_command"),
+        type: "command_execution",
+        status: "waiting",
+        runId: RunId.make("run_settled"),
+        nodeId: null,
+        input: "pnpm vitest run apps/web",
+        background: true,
+        taskId: "bs891h9i0",
+      },
+      // A foreground command from the same settled run is not ours to touch.
+      {
+        id: TurnItemId.make("turn-item_foreground_command"),
+        type: "command_execution",
+        status: "completed",
+        runId: RunId.make("run_settled"),
+        nodeId: null,
+        input: "git status",
+      },
+    ],
+    contextHandoffs: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layer = ProviderRuntimeRecovery.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getShellSnapshot: () =>
+            Effect.succeed({
+              schemaVersion: 2,
+              snapshotSequence: 0,
+              threads: [{ id: threadId }],
+              archivedThreads: [],
+            } as never),
+          getThreadProjection: () => Effect.succeed(projection),
+        }),
+        Layer.mock(EventSink.EventSinkV2)({ commitCommand: committed }),
+        IdAllocator.layer,
+        Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.succeed(false) }),
+        Layer.mock(EffectOutbox.EffectOutboxV2)({
+          reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+        }),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).recover;
+    const command = committedInput;
+    assert.isNotNull(command);
+    if (command === null) return;
+    const itemEvents = command.events.filter((event) => event.type === "turn-item.updated");
+    assert.lengthOf(itemEvents, 1);
+    const itemEvent = itemEvents[0];
+    if (itemEvent?.type === "turn-item.updated") {
+      assert.equal(itemEvent.payload.id, "turn-item_background_command");
+      assert.equal(itemEvent.payload.status, "cancelled");
+      assert.isNotNull(itemEvent.payload.completedAt);
+      if (itemEvent.payload.type === "command_execution") {
+        // Startup means we can no longer observe what happened; shutdown means we
+        // took it down ourselves.
+        assert.equal(itemEvent.payload.exitReason, "unknown");
+      }
+    }
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("uses the same reconciliation path to cancel runtime requests during shutdown", () => {
   const threadId = ThreadId.make("thread_shutdown_requests");
   let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =

@@ -1823,6 +1823,155 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  // Codex streams a running command's output and T3 used to discard it, so a
+  // command that took a minute showed an empty row for a minute.
+  const STREAM_SCENARIO = "codex-exec-output-stream";
+  const STREAM_NATIVE_THREAD = "native-codex-stream-thread";
+  const STREAM_NATIVE_TURN = "native-codex-stream-turn";
+
+  const streamingOutputTranscript = makeCodexReplayTranscript({
+    scenario: STREAM_SCENARIO,
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: STREAM_NATIVE_THREAD,
+        nativeTurnId: STREAM_NATIVE_TURN,
+        prompt: BG_PROMPT,
+      }),
+      {
+        type: "emit_inbound",
+        label: "item/started/command",
+        frame: {
+          method: "item/started",
+          params: {
+            item: {
+              type: "commandExecution",
+              id: BG_COMMAND_ITEM,
+              command: BG_COMMAND,
+              cwd: "/workspace",
+              status: "inProgress",
+              commandActions: [{ type: "unknown", command: BG_COMMAND }],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+            startedAtMs: 1782622440500,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "item/commandExecution/outputDelta",
+        frame: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            delta: "step 1 of 20\n",
+            itemId: BG_COMMAND_ITEM,
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "item/completed/root-answer",
+        afterMs: 1_000,
+        frame: {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "agentMessage",
+              id: "root-answer-stream",
+              text: "STARTED",
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+            completedAtMs: 1782622441000,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "item/completed/command",
+        frame: {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "commandExecution",
+              id: BG_COMMAND_ITEM,
+              command: BG_COMMAND,
+              cwd: "/workspace",
+              status: "completed",
+              commandActions: [{ type: "unknown", command: BG_COMMAND }],
+              aggregatedOutput: "step 1 of 20\nCODEX_BG_WAKE_DONE\n",
+              exitCode: 0,
+              durationMs: 25_000,
+            },
+            threadId: STREAM_NATIVE_THREAD,
+            turnId: STREAM_NATIVE_TURN,
+            completedAtMs: 1782622465500,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "turn/completed",
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: STREAM_NATIVE_THREAD,
+            turn: makeCodexReplayTurn({ id: STREAM_NATIVE_TURN, status: "completed" }),
+          },
+        },
+      },
+    ],
+  });
+
+  it.effect("projects streamed output while a command is still running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(streamingOutputTranscript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-output-stream"),
+            text: BG_PROMPT,
+          }),
+        );
+        const runningWithOutput = () =>
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "running" &&
+              event.turnItem.output === "step 1 of 20\n" &&
+              event.turnItem.lastOutputAt !== undefined,
+          );
+        yield* awaitUntil(runningWithOutput, "streamed output on a running command");
+
+        yield* TestClock.adjust("1 second");
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        // The completion still carries the authoritative full output.
+        assert.isTrue(
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "completed" &&
+              event.turnItem.output === "step 1 of 20\nCODEX_BG_WAKE_DONE\n",
+          ),
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   const PRE_SETTLE_SCENARIO = "codex-bg-exec-pre-settle";
   const PRE_SETTLE_NATIVE_THREAD = "native-codex-pre-settle-thread";
   const PRE_SETTLE_NATIVE_TURN = "native-codex-pre-settle-turn";

@@ -71,6 +71,7 @@ import {
   type ProviderContinuationRequest,
   ProviderContinuationRequests,
 } from "../ProviderContinuationRequests.ts";
+import { capBackgroundOutput } from "./backgroundCommand.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
 import {
@@ -102,6 +103,16 @@ import {
 } from "../SubagentProjection.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+
+/**
+ * Streamed command output ships on this cadence at most. A command that prints
+ * per line would otherwise turn one turn item into hundreds of broadcasts, and
+ * `item/completed` carries the full output anyway.
+ */
+const CODEX_OUTPUT_DELTA_EMIT_INTERVAL_MS = 500;
+
+/** Live output retained for a running command. The tail is what gets read. */
+const CODEX_COMMAND_OUTPUT_CAP_BYTES = 64_000;
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
@@ -843,6 +854,10 @@ interface TrackedRunningCommandItem {
   readonly command: string;
   readonly aggregatedOutput?: string;
   readonly processId?: string;
+  /** Output grew past its cap, so what we hold is only the tail. */
+  readonly outputTruncated?: boolean;
+  /** Throttle mark for streamed output, in epoch ms. */
+  readonly outputEmittedAtMs?: number;
 }
 
 type CodexRootTerminalEvent = Extract<ProviderAdapterV2Event, { readonly type: "turn.terminal" }>;
@@ -1591,6 +1606,57 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
             const context = yield* awaitActiveTurn(nativeTurnId);
             return context === undefined ? undefined : ({ context, settled: false } as const);
+          });
+
+        /**
+         * Re-emit a still-running command with the output it has produced so far.
+         * Same derived ids as the original `item/started`, so this updates the
+         * existing row rather than adding one.
+         */
+        const emitRunningCommandOutput = (input: {
+          readonly context: ActiveCodexTurnContext;
+          readonly nativeItemId: string;
+          readonly command: string;
+          readonly output: string;
+          readonly truncated: boolean;
+          readonly lastOutputAt: DateTime.Utc;
+        }) =>
+          Effect.gen(function* () {
+            const nodeId = idAllocator.derive.nodeFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: input.nativeItemId,
+            });
+            const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: input.nativeItemId,
+            });
+            const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
+            const turnItem: OrchestrationV2TurnItem = {
+              id: turnItemId,
+              threadId: input.context.projectionThreadId,
+              runId: input.context.projectionRunId,
+              nodeId,
+              providerThreadId: input.context.providerThread.id,
+              providerTurnId: input.context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(input.nativeItemId),
+              parentItemId: null,
+              ordinal,
+              status: "running",
+              title: null,
+              startedAt: input.context.startedAt,
+              completedAt: null,
+              updatedAt: input.lastOutputAt,
+              type: "command_execution",
+              input: input.command,
+              output: input.output,
+              lastOutputAt: input.lastOutputAt,
+              ...(input.truncated ? { outputTruncated: true } : {}),
+            };
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem,
+            });
           });
 
         const trackRunningCommandItem = (nativeTurnId: string, item: TrackedRunningCommandItem) =>
@@ -3088,6 +3154,62 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             itemId: payload.itemId,
             delta: payload.delta,
           }),
+        );
+
+        /**
+         * Live output for a running command.
+         *
+         * Codex blocks the turn on a long command and streams its output as it
+         * arrives, so unlike Claude there is a real stream here — it was simply
+         * never consumed, which is why a command that takes a minute used to show
+         * an empty row for a minute. Emission is throttled because a chatty
+         * command produces deltas per line and `item/completed` carries the
+         * authoritative full output regardless.
+         */
+        yield* client.handleServerNotification("item/commandExecution/outputDelta", (payload) =>
+          Effect.gen(function* () {
+            if (payload.delta.length === 0) {
+              return;
+            }
+            const context = yield* awaitActiveTurn(payload.turnId);
+            if (context === undefined) {
+              return;
+            }
+            const tracked = (yield* Ref.get(runningCommandItemsByTurn))
+              .get(payload.turnId)
+              ?.get(payload.itemId);
+            if (tracked === undefined) {
+              return;
+            }
+            const capped = capBackgroundOutput(
+              `${tracked.aggregatedOutput ?? ""}${payload.delta}`,
+              CODEX_COMMAND_OUTPUT_CAP_BYTES,
+            );
+            const now = yield* DateTime.now;
+            const nowMs = DateTime.toEpochMillis(now);
+            const shouldEmit =
+              tracked.outputEmittedAtMs === undefined ||
+              nowMs - tracked.outputEmittedAtMs >= CODEX_OUTPUT_DELTA_EMIT_INTERVAL_MS;
+            yield* trackRunningCommandItem(payload.turnId, {
+              ...tracked,
+              aggregatedOutput: capped.output,
+              ...(capped.truncated || tracked.outputTruncated === true
+                ? { outputTruncated: true }
+                : {}),
+              ...(shouldEmit ? { outputEmittedAtMs: nowMs } : {}),
+            });
+            if (!shouldEmit) {
+              return;
+            }
+            yield* emitRunningCommandOutput({
+              context,
+              nativeItemId: payload.itemId,
+              command: tracked.command,
+              output: capped.output,
+              truncated: capped.truncated || tracked.outputTruncated === true,
+              lastOutputAt: now,
+            });
+          }).pipe(Effect.orDie),
         );
 
         yield* client.handleServerNotification("item/plan/delta", (payload) =>
