@@ -60,6 +60,18 @@ export function createEnvironmentThreadDetailAtoms<E>(
       Atom.withLabel(`environment-thread-status:${key}`),
     ),
   );
+  // How many older visible items a windowed snapshot omitted (0 when the
+  // history is complete) — drives "load earlier history" affordances without
+  // subscribing consumers to every projection change.
+  const truncatedVisibleItemCountAtomFamily = Atom.family((key: string) =>
+    Atom.make(
+      (get) =>
+        Option.getOrNull(get(threadStateValueAtomFamily(key)).data)?.truncatedVisibleItemCount ?? 0,
+    ).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-truncated-count:${key}`),
+    ),
+  );
   const errorAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => Option.getOrNull(get(threadStateValueAtomFamily(key)).error)).pipe(
       Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
@@ -72,6 +84,8 @@ export function createEnvironmentThreadDetailAtoms<E>(
     threadAtom: (ref: ScopedThreadRef) => threadAtomFamily(threadKey(ref)),
     visibleTurnItemsAtom: (ref: ScopedThreadRef) => visibleTurnItemsAtomFamily(threadKey(ref)),
     statusAtom: (ref: ScopedThreadRef) => statusAtomFamily(threadKey(ref)),
+    truncatedVisibleItemCountAtom: (ref: ScopedThreadRef) =>
+      truncatedVisibleItemCountAtomFamily(threadKey(ref)),
     errorAtom: (ref: ScopedThreadRef) => errorAtomFamily(threadKey(ref)),
   };
 }

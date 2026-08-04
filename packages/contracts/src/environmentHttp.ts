@@ -476,6 +476,17 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
+const EnvironmentOrchestrationThreadSnapshotQuery = Schema.Struct({
+  /**
+   * Windows the snapshot to roughly the last N visible turn items; the
+   * projection reports what was omitted via `truncatedVisibleItemCount`.
+   * Omit for the complete history.
+   */
+  maxVisibleItems: Schema.optional(
+    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+});
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
@@ -488,6 +499,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
+      query: EnvironmentOrchestrationThreadSnapshotQuery,
       success: OrchestrationV2ThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),

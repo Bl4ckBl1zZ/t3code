@@ -39,6 +39,53 @@ export function isOrchestrationV2SupersededInterrupt(input: {
   return !hasMatchingRequest;
 }
 
+/**
+ * Precomputed visibility lookups for scanning many turn items at once. The
+ * per-item checks in {@link isOrchestrationV2TurnItemVisible} scan runs,
+ * attempts, and items per call — O(N²) over a whole timeline. This context
+ * builds the same answers as set lookups so a full scan is O(N).
+ */
+export function makeOrchestrationV2VisibilityContext(input: {
+  readonly runs: ReadonlyArray<TimelineRun>;
+  readonly attempts: ReadonlyArray<TimelineRunAttempt>;
+  readonly items: ReadonlyArray<TimelineTurnItem>;
+}): (item: TimelineTurnItem) => boolean {
+  const rolledBackRuns = new Set<unknown>();
+  const cancelledRuns = new Set<unknown>();
+  for (const run of input.runs) {
+    if (run.status === "rolled_back") rolledBackRuns.add(run.id);
+    else if (run.status === "cancelled") cancelledRuns.add(run.id);
+  }
+  const supersededAttempts = new Set<string>();
+  for (const attempt of input.attempts) {
+    if (attempt.status === "superseded") {
+      supersededAttempts.add(`${String(attempt.runId)}:${String(attempt.rootNodeId)}`);
+    }
+  }
+  const interruptRequestRuns = new Set<unknown>();
+  for (const item of input.items) {
+    if (item.type === "run_interrupt_request") interruptRequestRuns.add(item.runId);
+  }
+
+  return (item) => {
+    if (item.runId !== null && rolledBackRuns.has(item.runId)) return false;
+    if (
+      item.type === "user_message" &&
+      item.inputIntent === "queued_turn" &&
+      item.runId !== null &&
+      cancelledRuns.has(item.runId)
+    ) {
+      return false;
+    }
+    if (item.type !== "run_interrupt_result" || item.runId === null || item.nodeId === null) {
+      return true;
+    }
+    const isSuperseded = supersededAttempts.has(`${String(item.runId)}:${String(item.nodeId)}`);
+    if (!isSuperseded) return true;
+    return interruptRequestRuns.has(item.runId);
+  };
+}
+
 export function isOrchestrationV2TurnItemVisible(input: {
   readonly item: TimelineTurnItem;
   readonly runs: ReadonlyArray<TimelineRun>;
