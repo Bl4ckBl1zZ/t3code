@@ -20,11 +20,15 @@ export function portsMenuTintColor(
   return endpoints.some((endpoint) => endpoint.status === "live") ? PORTS_LIVE_TINT : undefined;
 }
 
+/**
+ * Neutral wording: rows can be starting or no longer responding, so describing
+ * them all as "serving" would announce something untrue.
+ */
 export function portsMenuAccessibilityLabel(
   endpoints: ReadonlyArray<MobileThreadEndpoint>,
 ): string {
-  if (endpoints.length === 1) return "1 port serving in this thread";
-  return `${endpoints.length} ports serving in this thread`;
+  if (endpoints.length === 1) return "1 port in this thread";
+  return `${endpoints.length} ports in this thread`;
 }
 
 /** SF Symbol per endpoint state, so the list reads without relying on colour. */

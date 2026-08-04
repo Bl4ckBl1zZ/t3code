@@ -452,6 +452,15 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
       Alert.alert("Cannot open this port", endpoint.reachability.reason);
       return;
     }
+    // A stale row is a server that stopped answering. Opening it would hand the
+    // user a connection error with no explanation of why.
+    if (endpoint.status === "stale") {
+      Alert.alert(
+        "Port no longer responding",
+        "This server has stopped. Start it again to open it.",
+      );
+      return;
+    }
     const opened = await tryOpenExternalUrl(endpoint.reachability.url, "dev-server");
     if (!opened) {
       Alert.alert("Could not open port", "No app on this device could open that address.");
@@ -484,7 +493,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
             <NativeHeaderToolbar.MenuAction
               key={endpoint.key}
               icon={portEndpointIcon(endpoint)}
-              disabled={endpoint.reachability.kind === "unreachable"}
+              disabled={endpoint.reachability.kind === "unreachable" || endpoint.status === "stale"}
               onPress={() => void openEndpoint(endpoint)}
               subtitle={portEndpointSubtitle(endpoint)}
             >

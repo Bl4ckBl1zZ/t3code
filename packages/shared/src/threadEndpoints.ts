@@ -240,15 +240,17 @@ export function mergeThreadEndpoints(
       // Was live and went quiet: hold it briefly, then drop it entirely.
       if (input.nowMs - previous.lastLiveAtMs > ENDPOINT_STALE_GRACE_MS) continue;
       status = "stale";
-    } else if (candidate.source === "declared") {
-      // Configuration with nothing behind it yet is not worth a row.
-      continue;
     } else if (!candidate.announcerRunning) {
-      // Announced but never confirmed listening, and the process that printed
-      // it is gone. Interrupting a dev server kills the child without killing
-      // the shell, so the announcement itself is never retracted — without
-      // this the row would sit on "Starting…" forever wherever the socket scan
+      // Nothing is backing this endpoint: either it is configuration with no
+      // process behind it yet, or it was announced by a process that has since
+      // gone. Interrupting a dev server kills the child without killing the
+      // shell, so the announcement itself is never retracted — without this
+      // the row would sit on "Starting…" forever wherever the socket scan
       // cannot confirm it (no `lsof`, or a containerised listener).
+      //
+      // Note this deliberately does not special-case `declared`: a configured
+      // previewUrl that a *running* process has also announced is exactly the
+      // case that should show as starting.
       continue;
     } else {
       status = "starting";

@@ -247,7 +247,10 @@ function EndpointRow(props: {
               type="button"
               className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
               disabled={unreachable}
-              aria-label={`Open ${endpoint.url}`}
+              // `label` rather than the raw URL: a Jupyter-style access token
+              // lives in the query string, and must not surface in accessible
+              // or hover text just because it is needed in the href.
+              aria-label={`Open ${label}`}
               onClick={() => void props.onOpen(endpoint)}
             />
           }
@@ -267,7 +270,7 @@ function EndpointRow(props: {
           </span>
         </TooltipTrigger>
         <TooltipPopup side="top">
-          {unreachable ? reachability.reason : `${STATUS_LABEL[endpoint.status]} · ${endpoint.url}`}
+          {unreachable ? reachability.reason : `${STATUS_LABEL[endpoint.status]} · ${label}`}
         </TooltipPopup>
       </Tooltip>
       <Menu highlightItemOnHover={false}>

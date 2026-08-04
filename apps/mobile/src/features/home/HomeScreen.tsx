@@ -853,8 +853,17 @@ export function HomeScreen(props: HomeScreenProps) {
       savedConnectionsById: props.savedConnectionsById,
       searchQuery: props.searchQuery,
       threadSearchMatchByKey,
+      // Rows are recycled, so a capability flip (server connect or upgrade)
+      // has to invalidate them or their menus keep the stale action set.
+      titleRegenerationEnvironmentIds,
     }),
-    [projectCwdByKey, props.savedConnectionsById, props.searchQuery, threadSearchMatchByKey],
+    [
+      projectCwdByKey,
+      props.savedConnectionsById,
+      props.searchQuery,
+      threadSearchMatchByKey,
+      titleRegenerationEnvironmentIds,
+    ],
   );
 
   const renderItem = useCallback(

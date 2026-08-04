@@ -14,6 +14,7 @@
  */
 
 import { isLoopbackHost, normalizePreviewUrl } from "./preview.ts";
+import { WILDCARD_BIND_HOSTS } from "./terminalUrlDetection.ts";
 
 export type EndpointReachability =
   | {
@@ -98,8 +99,13 @@ export function resolveEndpointUrl(input: {
     return { kind: "unreachable", reason: "This port has no valid URL to open." };
   }
 
+  // A wildcard bind is an interface selector, not a destination — browsers
+  // refuse it — so it always needs rewriting even though `::` is not itself
+  // classified as a loopback host.
+  const isWildcardBind = WILDCARD_BIND_HOSTS.has(parsed.hostname);
+
   // Non-loopback URLs are already absolute addresses; nothing to rewrite.
-  if (!isLoopbackHost(parsed.hostname)) {
+  if (!isLoopbackHost(parsed.hostname) && !isWildcardBind) {
     return { kind: "reachable", url: parsed.toString(), via: "direct" };
   }
 
@@ -114,9 +120,10 @@ export function resolveEndpointUrl(input: {
     return { kind: "unreachable", reason: "This environment has no usable address." };
   }
 
-  // The environment is this machine, so loopback already points at it. `0.0.0.0`
-  // still needs rewriting: it is a bind address and browsers refuse it.
-  if (isLocalLoopbackHost(environmentUrl.hostname) && parsed.hostname !== "0.0.0.0") {
+  // The environment is this machine, so loopback already points at it. A
+  // wildcard bind still needs rewriting: it is an interface selector, not a
+  // destination, and browsers refuse it.
+  if (isLocalLoopbackHost(environmentUrl.hostname) && !isWildcardBind) {
     return { kind: "reachable", url: parsed.toString(), via: "direct" };
   }
 

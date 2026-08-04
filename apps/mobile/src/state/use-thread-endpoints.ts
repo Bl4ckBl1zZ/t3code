@@ -100,6 +100,15 @@ export function useThreadEndpoints(input: {
 
   const declaredUrls = input.declaredUrls ?? EMPTY_DECLARED;
   const previousRef = useRef<ReadonlyMap<number, PreviousEndpointState>>(new Map());
+  // Endpoint history is keyed by port, so it must not survive a change of
+  // scope: thread B's freshly announced :3000 would otherwise inherit thread
+  // A's liveness and appear stale — or be dropped — the moment it showed up.
+  const scopeRef = useRef<string | null>(null);
+  const scope = `${input.environmentId ?? ""} ${input.threadId ?? ""}`;
+  if (scopeRef.current !== scope) {
+    scopeRef.current = scope;
+    previousRef.current = new Map();
+  }
   const [tick, setTick] = useState(0);
 
   const endpoints = useMemo(() => {
@@ -115,8 +124,13 @@ export function useThreadEndpoints(input: {
     // Unattributed sockets still belong to this thread when it announced the
     // same port: the scanner can see a listener before the process tree is
     // registered, and never sees containerised or detached servers at all.
-    const relevant = (scanned ?? []).filter(
-      (server) => server.terminal?.threadId === input.threadId || announcedPorts.has(server.port),
+    // A socket attributed to *another* thread is never ours, even on a port we
+    // once announced — otherwise a thread whose server died would adopt the
+    // live one that took its port.
+    const relevant = (scanned ?? []).filter((server) =>
+      server.terminal === null
+        ? announcedPorts.has(server.port)
+        : server.terminal.threadId === input.threadId,
     );
 
     return mergeThreadEndpoints({

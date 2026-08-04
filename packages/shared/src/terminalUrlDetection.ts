@@ -64,7 +64,7 @@ const CLOSING_TO_OPENING: ReadonlyMap<string, string> = new Map([
 const URL_PATTERN = /https?:\/\/[^\s]+/gu;
 
 /** Bind-everything addresses, rewritten to `localhost` for display and navigation. */
-const WILDCARD_BIND_HOSTS: ReadonlySet<string> = new Set(["0.0.0.0", "::", "[::]"]);
+export const WILDCARD_BIND_HOSTS: ReadonlySet<string> = new Set(["0.0.0.0", "::", "[::]"]);
 
 /**
  * Ports that listen but never serve a page worth previewing. Dev stacks bring

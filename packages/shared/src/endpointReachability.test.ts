@@ -18,6 +18,16 @@ describe("local environment", () => {
     });
   });
 
+  it.each(["http://0.0.0.0:5000/", "http://[::]:5000/"])(
+    "rewrites the wildcard bind %s on a local environment",
+    (rawUrl) => {
+      // Both forms are interface selectors rather than destinations; browsers
+      // refuse them, so neither may be handed back as directly reachable.
+      const result = resolve(rawUrl, "http://localhost:3773");
+      expect(endpointDisplayAddress(result)).toBe("localhost:5000");
+    },
+  );
+
   it("rewrites a wildcard bind even on a local environment", () => {
     // Browsers refuse 0.0.0.0 as a destination, so it must not survive.
     const result = resolve("http://0.0.0.0:5000/", "http://localhost:3773");

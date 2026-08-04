@@ -193,6 +193,24 @@ describe("status", () => {
     expect(merge({ declaredUrls: ["http://localhost:9999/"] })).toEqual([]);
   });
 
+  it("shows a declared URL that a running process has announced", () => {
+    // Configuration plus a live announcer, with the socket scan yet to catch
+    // up (or unable to). Dropping this on the grounds that it is "declared"
+    // hid the row for exactly the setup the previewUrl field exists for.
+    const [endpoint] = merge({
+      declaredUrls: ["http://localhost:3000/"],
+      terminals: [
+        {
+          terminalId: "term-1",
+          detectedUrls: ["http://localhost:3000/"],
+          hasRunningSubprocess: true,
+        },
+      ],
+    });
+    expect(endpoint?.status).toBe("starting");
+    expect(endpoint?.source).toBe("declared");
+  });
+
   it("shows a declared URL once a socket confirms it", () => {
     const [endpoint] = merge({
       declaredUrls: ["http://localhost:3000/"],

@@ -121,13 +121,21 @@ describe("portsMenuTintColor", () => {
 
 describe("portsMenuAccessibilityLabel", () => {
   it("singularises", () => {
-    expect(portsMenuAccessibilityLabel([endpoint()])).toBe("1 port serving in this thread");
+    expect(portsMenuAccessibilityLabel([endpoint()])).toBe("1 port in this thread");
   });
 
   it("pluralises", () => {
     expect(portsMenuAccessibilityLabel([endpoint(), endpoint({ key: "3000", port: 3000 })])).toBe(
-      "2 ports serving in this thread",
+      "2 ports in this thread",
     );
+  });
+
+  it("does not claim a starting or stale port is serving", () => {
+    const label = portsMenuAccessibilityLabel([
+      endpoint({ status: "starting" }),
+      endpoint({ key: "3000", port: 3000, status: "stale" }),
+    ]);
+    expect(label).not.toContain("serving");
   });
 });
 
