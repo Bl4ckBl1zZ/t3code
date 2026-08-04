@@ -1179,6 +1179,11 @@ export const OrchestrationV2ThreadProjection = Schema.Struct({
   contextHandoffs: Schema.Array(OrchestrationV2ContextHandoff),
   contextTransfers: Schema.Array(OrchestrationV2ContextTransfer),
   visibleTurnItems: Schema.Array(OrchestrationV2ProjectedTurnItem),
+  /**
+   * When the snapshot was windowed to the most recent turn items, the number
+   * of older visible items omitted. Absent on complete projections.
+   */
+  truncatedVisibleItemCount: Schema.optional(NonNegativeInt),
   updatedAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2ThreadProjection = typeof OrchestrationV2ThreadProjection.Type;
@@ -2298,6 +2303,12 @@ export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
   afterSequence: Schema.optionalKey(NonNegativeInt),
   /** Requests a marker between initial catch-up and live delivery. */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Bounds any snapshot frame this subscription sends to roughly the last N
+   * visible turn items (see `truncatedVisibleItemCount` on the projection).
+   * Full history stays available over the HTTP snapshot endpoint.
+   */
+  snapshotMaxVisibleItems: Schema.optionalKey(PositiveInt),
 });
 export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;
 

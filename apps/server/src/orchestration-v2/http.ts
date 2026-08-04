@@ -3,6 +3,7 @@ import {
   EnvironmentHttpApi,
   type OrchestrationProjectShell,
 } from "@t3tools/contracts";
+import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -111,9 +112,13 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               }),
             ),
           );
+          const maxVisibleItems = args.query.maxVisibleItems;
           return {
             snapshotSequence: snapshot.snapshotSequence,
-            projection: snapshot.projection,
+            projection:
+              maxVisibleItems === undefined
+                ? snapshot.projection
+                : windowOrchestrationV2ThreadProjection(snapshot.projection, maxVisibleItems),
           };
         }),
       );

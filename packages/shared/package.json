@@ -7,6 +7,10 @@
       "types": "./src/Array.ts",
       "import": "./src/Array.ts"
     },
+    "./orchestrationV2Window": {
+      "types": "./src/orchestrationV2Window.ts",
+      "import": "./src/orchestrationV2Window.ts"
+    },
     "./changedFilesPreview": {
       "types": "./src/changedFilesPreview.ts",
       "import": "./src/changedFilesPreview.ts"

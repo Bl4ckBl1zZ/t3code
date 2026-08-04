@@ -3,7 +3,10 @@ import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
-import { isOrchestrationV2TurnItemVisible } from "@t3tools/shared/orchestrationV2Timeline";
+import {
+  isOrchestrationV2TurnItemVisible,
+  makeOrchestrationV2VisibilityContext,
+} from "@t3tools/shared/orchestrationV2Timeline";
 
 function upsertEntity<T extends { readonly id: unknown }>(
   items: ReadonlyArray<T>,
@@ -47,10 +50,17 @@ function activeVisibleTurnItems(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadProjection["visibleTurnItems"] {
   const rows = projection.visibleTurnItems;
+  // Precomputed lookups keep the full scan O(N); the per-item checks would be
+  // O(N × runs/attempts/items) on long threads.
+  const isVisible = makeOrchestrationV2VisibilityContext({
+    runs: projection.runs,
+    attempts: projection.attempts,
+    items: projection.turnItems,
+  });
   let next: Array<(typeof rows)[number]> | null = null;
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
-    const keep = row.visibility !== "local" || shouldShowLocalTurnItem(projection, row.item);
+    const keep = row.visibility !== "local" || isVisible(row.item);
     if (!keep) {
       next ??= rows.slice(0, index);
       continue;
@@ -175,7 +185,14 @@ export function applyOrchestrationV2ProjectionEvent(
       return { ...base, plans: upsertEntity(base.plans, event.payload) };
     case "turn-item.updated": {
       const next = { ...base, turnItems: upsertEntity(base.turnItems, event.payload) };
-      const visible = { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
+      // Visibility of OTHER rows only depends on runs, attempts, and interrupt
+      // requests. Ordinary item updates (the token-streaming hot path) can
+      // therefore patch just their own row; a full rescan on every delta made
+      // streaming O(N²) on long threads.
+      const visible =
+        event.payload.type === "run_interrupt_request"
+          ? { ...next, visibleTurnItems: activeVisibleTurnItems(next) }
+          : next;
       return {
         ...next,
         visibleTurnItems: shouldShowLocalTurnItem(next, event.payload)

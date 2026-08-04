@@ -1,7 +1,9 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
+import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { requestThreadFullHistory } from "@t3tools/client-runtime/state/threads";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   ThreadId,
@@ -126,7 +128,11 @@ import {
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
 import { appAtomRegistry } from "../../state/atom-registry";
-import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import {
+  environmentThreadDetails,
+  environmentThreadShells,
+  threadEnvironment,
+} from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
@@ -2115,6 +2121,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setExpandedImage({ uri, headers });
   }, []);
 
+  // Cold loads window the projection to the most recent turn items. Scrolling
+  // to the top of a truncated feed hydrates the full history in place.
+  const truncatedHistoryCount = useAtomValue(
+    environmentThreadDetails.truncatedVisibleItemCountAtom(
+      scopeThreadRef(props.environmentId, props.threadId),
+    ),
+  );
+  const onStartReached = useCallback(() => {
+    if (truncatedHistoryCount > 0) {
+      requestThreadFullHistory(props.environmentId, props.threadId);
+    }
+  }, [truncatedHistoryCount, props.environmentId, props.threadId]);
+
   // Rows whose height is known before they ever render. Without this, every
   // row above the viewport is assumed to be estimatedItemSize tall, and
   // scrolling up through unmeasured content corrects each row's height as it
@@ -2321,6 +2340,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
+            onStartReached={onStartReached}
             scrollEventThrottle={16}
             ListHeaderComponent={
               <>

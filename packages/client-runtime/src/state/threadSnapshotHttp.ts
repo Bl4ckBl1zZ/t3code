@@ -33,6 +33,8 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly threadId: ThreadId;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly timeoutMs?: number;
+  /** Windows the snapshot to roughly the last N visible turn items. */
+  readonly maxVisibleItems?: number;
 }) {
   const requestUrl = environmentEndpointUrl(
     input.prepared.httpBaseUrl,
@@ -52,6 +54,8 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
       input.prepared.httpAuthorization,
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
+        query:
+          input.maxVisibleItems === undefined ? {} : { maxVisibleItems: input.maxVisibleItems },
         headers,
       }),
     ),
@@ -72,6 +76,7 @@ export class ThreadSnapshotLoader extends Context.Service<
     readonly load: (
       prepared: PreparedConnection,
       threadId: ThreadId,
+      options?: { readonly maxVisibleItems?: number },
     ) => Effect.Effect<Option.Option<OrchestrationV2ThreadDetailSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -89,8 +94,19 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     return ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId) =>
-        fetchEnvironmentThreadSnapshot({ prepared, threadId, signer }).pipe(
+      load: (
+        prepared: PreparedConnection,
+        threadId: ThreadId,
+        options?: { readonly maxVisibleItems?: number },
+      ) =>
+        fetchEnvironmentThreadSnapshot({
+          prepared,
+          threadId,
+          signer,
+          ...(options?.maxVisibleItems !== undefined
+            ? { maxVisibleItems: options.maxVisibleItems }
+            : {}),
+        }).pipe(
           Effect.map(Option.some<OrchestrationV2ThreadDetailSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           // A genuinely missing thread (404) is expected — the socket

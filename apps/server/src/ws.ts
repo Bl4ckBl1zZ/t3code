@@ -64,6 +64,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -343,9 +344,12 @@ const ServerWsRpcGroup = WsRpcGroup;
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 
-// Thread resume needs no such bound: the v2 replay reads this thread's own
-// event range (`readAgentEvents({ threadId, ... })`) rather than the global
-// range, so a stale cursor never decodes other threads' payloads.
+// Thread resume replays only this thread's own event range
+// (`readAgentEvents({ threadId, ... })`), but a very stale cursor still ships
+// and applies every intervening delta on the client — one projection fold per
+// event. Past this gap a single snapshot frame is both smaller on the wire and
+// a single client-side apply, so replay falls back to the snapshot path.
+const THREAD_RESUME_MAX_GAP = 1_000;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -592,6 +596,7 @@ const makeWsRpcLayer = (
           settings,
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
+          threadSnapshotWindow: true,
         };
       });
 
@@ -605,6 +610,7 @@ const makeWsRpcLayer = (
           readonly threadId: ThreadId;
           readonly afterSequence?: number;
           readonly requestCompletionMarker?: boolean;
+          readonly snapshotMaxVisibleItems?: number;
         }) {
           yield* Effect.annotateCurrentSpan({
             "orchestration_v2.thread_id": input.threadId,
@@ -689,10 +695,15 @@ const makeWsRpcLayer = (
                   }),
               ),
             );
-            return Stream.concat(
-              Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
-              eventStreamFrom(highWater),
-            );
+            const replayGap = highWater - input.afterSequence;
+            if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+              return Stream.concat(
+                Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
+                eventStreamFrom(highWater),
+              );
+            }
+            // Too far behind (or a cursor from a rebuilt event log): fall
+            // through to the snapshot path below.
           }
 
           const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
@@ -705,7 +716,14 @@ const makeWsRpcLayer = (
                 }),
             ),
           );
-          const { projection, snapshotSequence } = snapshot;
+          const { snapshotSequence } = snapshot;
+          const projection =
+            input.snapshotMaxVisibleItems === undefined
+              ? snapshot.projection
+              : windowOrchestrationV2ThreadProjection(
+                  snapshot.projection,
+                  input.snapshotMaxVisibleItems,
+                );
 
           return Stream.concat(
             Stream.concat(
