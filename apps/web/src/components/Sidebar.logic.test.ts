@@ -37,6 +37,7 @@ import {
   sortSidebarV2ProjectGroups,
   resolveThreadLastVisitedAt,
   sortSettledThreadsForSidebarV2,
+  applyManualThreadOrderForSidebarV2,
   sortThreadsForSidebarV2,
   workInboxActiveSection,
   sortScopedProjectsForSidebar,
@@ -1235,6 +1236,39 @@ describe("sortThreadsForSidebarV2", () => {
       "regular-new",
       "regular-old",
     ]);
+  });
+});
+
+describe("applyManualThreadOrderForSidebarV2", () => {
+  const getKey = (thread: { id: string }) => thread.id;
+
+  it("returns the base order untouched when nothing was ever dragged", () => {
+    const threads = [{ id: "b" }, { id: "a" }];
+
+    expect(applyManualThreadOrderForSidebarV2(threads, [], getKey)).toEqual(threads);
+  });
+
+  it("places dragged threads by stored position and undragged (newer) threads first", () => {
+    const ordered = applyManualThreadOrderForSidebarV2(
+      // Base sort: newest first. "fresh" was created after the last drag,
+      // so it has no stored slot and must stay on top.
+      [{ id: "fresh" }, { id: "a" }, { id: "b" }, { id: "c" }],
+      ["c", "a", "b"],
+      getKey,
+    );
+
+    expect(ordered.map((thread) => thread.id)).toEqual(["fresh", "c", "a", "b"]);
+  });
+
+  it("keeps pinned threads above unpinned ones regardless of stored positions", () => {
+    const ordered = applyManualThreadOrderForSidebarV2(
+      [{ id: "pinned" }, { id: "a" }, { id: "b" }],
+      ["a", "b", "pinned"],
+      getKey,
+      (thread) => thread.id === "pinned",
+    );
+
+    expect(ordered.map((thread) => thread.id)).toEqual(["pinned", "a", "b"]);
   });
 });
 

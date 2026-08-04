@@ -20,6 +20,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
+  threadOrder?: string[];
   threadLastVisitedAtById?: Record<string, string>;
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
@@ -35,6 +36,7 @@ export interface UiProjectState {
 }
 
 export interface UiThreadState {
+  threadOrder: string[];
   threadLastVisitedAtById: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
@@ -48,6 +50,7 @@ export interface UiState extends UiProjectState, UiThreadState, UiEndpointState 
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
+  threadOrder: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -125,6 +128,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
   return {
     projectExpandedById,
     projectOrder,
+    threadOrder: sanitizeStringArray(parsed.threadOrder),
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
@@ -203,6 +207,7 @@ export function persistState(state: UiState): void {
       JSON.stringify({
         projectExpandedById,
         projectOrder: state.projectOrder,
+        threadOrder: state.threadOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
@@ -337,47 +342,105 @@ export function setProjectExpanded(
   };
 }
 
-export function reorderProjects(
-  state: UiState,
-  currentProjectOrder: readonly string[],
-  draggedProjectIds: readonly string[],
-  targetProjectIds: readonly string[],
-): UiState {
-  if (draggedProjectIds.length === 0) {
-    return state;
+function reorderIdList(
+  currentOrder: readonly string[],
+  draggedIds: readonly string[],
+  targetIds: readonly string[],
+): string[] | null {
+  if (draggedIds.length === 0) {
+    return null;
   }
-  const draggedSet = new Set(draggedProjectIds);
-  const targetSet = new Set(targetProjectIds);
-  if (draggedProjectIds.every((id) => targetSet.has(id))) {
-    return state;
+  const draggedSet = new Set(draggedIds);
+  const targetSet = new Set(targetIds);
+  if (draggedIds.every((id) => targetSet.has(id))) {
+    return null;
   }
 
-  const originalTargetIndex = currentProjectOrder.findIndex((id) => targetSet.has(id));
+  const originalTargetIndex = currentOrder.findIndex((id) => targetSet.has(id));
   if (originalTargetIndex < 0) {
-    return state;
+    return null;
   }
 
-  const projectOrder = [...currentProjectOrder];
+  const order = [...currentOrder];
 
   const removed: string[] = [];
   let draggedBeforeTarget = 0;
-  for (let i = projectOrder.length - 1; i >= 0; i--) {
-    if (draggedSet.has(projectOrder[i]!)) {
-      removed.unshift(projectOrder.splice(i, 1)[0]!);
+  for (let i = order.length - 1; i >= 0; i--) {
+    if (draggedSet.has(order[i]!)) {
+      removed.unshift(order.splice(i, 1)[0]!);
       if (i < originalTargetIndex) {
         draggedBeforeTarget++;
       }
     }
   }
   if (removed.length === 0) {
-    return state;
+    return null;
   }
 
   const insertIndex = originalTargetIndex - Math.max(0, draggedBeforeTarget - 1);
-  projectOrder.splice(insertIndex, 0, ...removed);
+  order.splice(insertIndex, 0, ...removed);
+  return order;
+}
+
+export function reorderProjects(
+  state: UiState,
+  currentProjectOrder: readonly string[],
+  draggedProjectIds: readonly string[],
+  targetProjectIds: readonly string[],
+): UiState {
+  const projectOrder = reorderIdList(currentProjectOrder, draggedProjectIds, targetProjectIds);
+  if (projectOrder === null) {
+    return state;
+  }
   return {
     ...state,
     projectOrder,
+  };
+}
+
+/** Sync the ids the user is looking at into the persisted order without
+    disturbing ids from other scopes/workspaces that aren't on screen: known
+    ids keep their stored positions, unknown displayed ids slot in before
+    their nearest displayed successor that IS stored (append when none is). */
+export function mergeDisplayedIdsIntoOrder(
+  order: readonly string[],
+  displayedIds: readonly string[],
+): string[] {
+  const next = [...order];
+  const present = new Set(order);
+  for (let i = displayedIds.length - 1; i >= 0; i--) {
+    const id = displayedIds[i]!;
+    if (present.has(id)) {
+      continue;
+    }
+    let insertIndex = next.length;
+    for (let j = i + 1; j < displayedIds.length; j++) {
+      const successorIndex = next.indexOf(displayedIds[j]!);
+      if (successorIndex !== -1) {
+        insertIndex = successorIndex;
+        break;
+      }
+    }
+    next.splice(insertIndex, 0, id);
+    present.add(id);
+  }
+  return next;
+}
+
+export function reorderThreads(
+  state: UiState,
+  displayedThreadKeys: readonly string[],
+  draggedThreadKeys: readonly string[],
+  targetThreadKeys: readonly string[],
+): UiState {
+  const mergedOrder = mergeDisplayedIdsIntoOrder(state.threadOrder, displayedThreadKeys);
+  const threadOrder = reorderIdList(mergedOrder, draggedThreadKeys, targetThreadKeys);
+  if (threadOrder === null) {
+    return state;
+  }
+  return {
+    ...state,
+    threadOrder,
   };
 }
 
@@ -391,6 +454,11 @@ interface UiStateStore extends UiState {
     currentProjectOrder: readonly string[],
     draggedProjectIds: readonly string[],
     targetProjectIds: readonly string[],
+  ) => void;
+  reorderThreads: (
+    displayedThreadKeys: readonly string[],
+    draggedThreadKeys: readonly string[],
+    targetThreadKeys: readonly string[],
   ) => void;
 }
 
@@ -410,6 +478,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) =>
       reorderProjects(state, currentProjectOrder, draggedProjectIds, targetProjectIds),
     ),
+  reorderThreads: (displayedThreadKeys, draggedThreadKeys, targetThreadKeys) =>
+    set((state) => reorderThreads(state, displayedThreadKeys, draggedThreadKeys, targetThreadKeys)),
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
