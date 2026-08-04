@@ -41,7 +41,11 @@ require_file() {
 require_file "${APPLE_DISTRIBUTION_P12:-}" APPLE_DISTRIBUTION_P12
 require_file "${APPLE_MAIN_PROFILE:-}" APPLE_MAIN_PROFILE
 require_file "${APPLE_WIDGETS_PROFILE:-}" APPLE_WIDGETS_PROFILE
-require_file "${ASC_API_KEY_PATH:-}" ASC_API_KEY_PATH
+# Only needed to look up the next build number and to upload. A local
+# archive-only run needs neither, and should not have to hold an API key.
+if [ -z "${T3CODE_IOS_BUILD_NUMBER:-}" ] || [ "${SKIP_UPLOAD:-}" != "1" ]; then
+  require_file "${ASC_API_KEY_PATH:-}" ASC_API_KEY_PATH
+fi
 
 log "Resolving signing identity from the provisioning profiles"
 # Team, bundle id, App Group and profile names all come out of the profiles
@@ -117,6 +121,12 @@ node "${repo_root}/scripts/ios-release.ts" check-config \
   "$(pnpm exec expo config --type public --json)"
 
 log "Generating the native iOS project"
+# CocoaPods normalizes the installation root as Unicode, which raises
+# `Encoding::CompatibilityError` when the locale leaves Ruby's strings tagged
+# ASCII-8BIT — a plain `pod install` failure with a stack trace and no mention
+# of locale. CI images happen to set this; a developer shell often does not.
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 # --clean: a stale ios/ predating a config change is the classic source of a
 # build that succeeds locally and ships the wrong entitlements.
 EXPO_NO_GIT_STATUS=1 pnpm exec expo prebuild --clean --platform ios
@@ -129,11 +139,22 @@ node "${repo_root}/scripts/ios-release.ts" check-build-number "${T3CODE_IOS_BUIL
   ios/*/Info.plist
 
 workspace="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
-[ -n "${workspace}" ] || { echo "expo prebuild produced no Xcode workspace." >&2; exit 1; }
+# `expo prebuild` exits 0 even when its `pod install` fails, so the missing
+# workspace is the only reliable signal that it did.
+[ -n "${workspace}" ] || {
+  echo "expo prebuild produced no Xcode workspace — 'pod install' failed above." >&2
+  exit 1
+}
 scheme="$(basename "${workspace}" .xcworkspace)"
 
 log "Archiving ${scheme}"
 rm -rf "${archive_path}" "${export_dir}"
+# Signing settings are deliberately NOT passed here. An xcodebuild command-line
+# setting is global, and the Pods project contains ~80 static libraries and
+# resource bundles that must not be signed at all — forcing CODE_SIGNING_ALLOWED
+# on them fails the archive with "an empty code signing identity is not valid".
+# The three app targets already carry per-target manual signing, applied to the
+# project by plugins/withIosManualSigning.cjs.
 xcodebuild archive \
   -workspace "${workspace}" \
   -scheme "${scheme}" \
@@ -141,9 +162,7 @@ xcodebuild archive \
   -destination 'generic/platform=iOS' \
   -archivePath "${archive_path}" \
   -quiet \
-  OTHER_CODE_SIGN_FLAGS="--keychain ${keychain_path}" \
-  CODE_SIGNING_REQUIRED=YES \
-  CODE_SIGNING_ALLOWED=YES
+  OTHER_CODE_SIGN_FLAGS="--keychain ${keychain_path}"
 
 log "Exporting the archive"
 export_options="${output_dir}/ExportOptions.plist"
