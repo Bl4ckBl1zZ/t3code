@@ -706,6 +706,42 @@ export function sortThreadsForSidebarV2<
   });
 }
 
+// Manual drag order overlays the static v2 sort. Pinned stays the primary
+// key (a pin must always hoist), then threads the user has never dragged
+// come first — they're newer than every stored entry, so this preserves the
+// newest-on-top default for threads created after the last drag — and
+// finally dragged threads hold their stored positions. Ties keep the base
+// sort's order (the input must already be base-sorted).
+export function applyManualThreadOrderForSidebarV2<T>(
+  threads: readonly T[],
+  manualOrder: readonly string[],
+  getKey: (thread: T) => string,
+  isPinned: (thread: T) => boolean = () => false,
+): T[] {
+  if (manualOrder.length === 0) {
+    return [...threads];
+  }
+  const manualIndexByKey = new Map(manualOrder.map((key, index) => [key, index] as const));
+  return threads
+    .map((thread, baseIndex) => ({
+      thread,
+      baseIndex,
+      manualIndex: manualIndexByKey.get(getKey(thread)),
+    }))
+    .toSorted((left, right) => {
+      const pinOrder = Number(isPinned(right.thread)) - Number(isPinned(left.thread));
+      if (pinOrder !== 0) return pinOrder;
+      const leftDragged = left.manualIndex !== undefined;
+      const rightDragged = right.manualIndex !== undefined;
+      if (leftDragged !== rightDragged) return leftDragged ? 1 : -1;
+      if (leftDragged && rightDragged && left.manualIndex !== right.manualIndex) {
+        return left.manualIndex! - right.manualIndex!;
+      }
+      return left.baseIndex - right.baseIndex;
+    })
+    .map((entry) => entry.thread);
+}
+
 /**
  * Search the already-ordered sidebar thread collection by title only.
  * Keeping the input order means lifecycle ordering (active, snoozed, settled)

@@ -6,8 +6,20 @@ import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { useNavigation } from "@react-navigation/native";
 import { LayoutAnimation, Pressable, useColorScheme, View } from "react-native";
 
+import {
+  changedFileName,
+  selectChangedFilePreview,
+  summarizeChangedFileScopes,
+} from "@t3tools/shared/changedFilesPreview";
+import { deriveThreadCheckpointSummaries } from "@t3tools/client-runtime/state/thread-checkpoints";
+
 import { AppText as Text } from "../../components/AppText";
+import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { ShimmerText } from "../../components/ShimmerText";
+import { scopedThreadKey } from "../../lib/scopedEntities";
+import { useThreadProjection } from "../../state/use-thread-detail";
+import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
+import { setReviewSelectedFilePath, setReviewSelectedSectionId } from "../review/reviewState";
 import { T3_CODE_BRAND_MARK_SOURCE } from "../../components/brandAssets";
 import { scaledTypographyLineHeight } from "../../lib/appearancePreferences";
 import { cn } from "../../lib/cn";
@@ -127,8 +139,12 @@ function WorkRowDiffStat(props: { readonly additions: number; readonly deletions
 }
 
 // Checkpoint rows render as a "changed files" summary card: a header with the
-// file count and total diffstat, expanding to one row per file.
+// file count, total diffstat, and an Open diff shortcut into the review
+// screen. Collapsed, it previews the touched scopes and a few file chips
+// (compact form of the web timeline card); expanded, one row per file.
 function ChangedFilesSummaryCard(props: {
+  readonly checkpointId: string;
+  readonly environmentId: EnvironmentId;
   readonly expanded: boolean;
   readonly files: ReadonlyArray<{
     readonly path: string;
@@ -139,51 +155,152 @@ function ChangedFilesSummaryCard(props: {
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly onToggle: () => void;
   readonly pressedBackground: string;
+  readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
 }) {
+  const navigation = useNavigation();
+  const thread = useThreadProjection({
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+  });
   const totalAdditions = props.files.reduce((sum, file) => sum + file.additions, 0);
   const totalDeletions = props.files.reduce((sum, file) => sum + file.deletions, 0);
+  const scopeSummary = summarizeChangedFileScopes(props.files);
+  const previewFiles = selectChangedFilePreview(props.files);
+
+  // "Open diff" = the mobile review screen, pre-selected to this checkpoint's
+  // turn section (and file, when a chip was tapped). A checkpoint that hasn't
+  // reached "ready" has no section yet — the review screen falls back to its
+  // default selection.
+  const openDiff = (filePath: string | null) => {
+    void Haptics.selectionAsync();
+    const threadKey = scopedThreadKey(props.environmentId, props.threadId);
+    const checkpoint =
+      thread === null
+        ? undefined
+        : deriveThreadCheckpointSummaries(thread.projection).find(
+            (summary) => summary.checkpointId === props.checkpointId,
+          );
+    if (checkpoint !== undefined) {
+      setReviewSelectedSectionId(threadKey, getReviewSectionIdForCheckpoint(checkpoint));
+    }
+    setReviewSelectedFilePath(threadKey, filePath);
+    navigation.navigate("ThreadReview", {
+      environmentId: props.environmentId,
+      threadId: props.threadId,
+    });
+  };
 
   return (
     <View className="mb-2 overflow-hidden rounded-xl border border-neutral-300/60 bg-card dark:border-white/[0.1]">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: props.expanded }}
-        accessibilityLabel={`${props.files.length} changed ${props.files.length === 1 ? "file" : "files"}`}
-        accessibilityHint={
-          props.expanded ? "Double tap to hide files." : "Double tap to show files."
-        }
-        hitSlop={4}
-        onPress={() => {
-          triggerDisclosureFeedback();
-          props.onToggle();
-        }}
-        style={({ pressed }) => ({
-          backgroundColor: pressed ? props.pressedBackground : "transparent",
-        })}
-        className="min-h-9 flex-row items-center gap-1.5 px-2 py-1"
-      >
-        <View className="h-4 w-4 items-center justify-center">
+      <View className="flex-row items-center">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: props.expanded }}
+          accessibilityLabel={`${props.files.length} changed ${props.files.length === 1 ? "file" : "files"}`}
+          accessibilityHint={
+            props.expanded ? "Double tap to hide files." : "Double tap to show files."
+          }
+          hitSlop={4}
+          onPress={() => {
+            triggerDisclosureFeedback();
+            props.onToggle();
+          }}
+          style={({ pressed }) => ({
+            backgroundColor: pressed ? props.pressedBackground : "transparent",
+          })}
+          className="min-h-9 min-w-0 flex-1 flex-row items-center gap-1.5 px-2 py-1"
+        >
+          <View className="h-4 w-4 items-center justify-center">
+            <SymbolView
+              name={
+                props.expanded
+                  ? { ios: "chevron.up", android: "keyboard_arrow_up" }
+                  : { ios: "chevron.down", android: "keyboard_arrow_down" }
+              }
+              size={11}
+              tintColor={props.iconSubtleColor}
+              type="monochrome"
+            />
+          </View>
+          <Text className="font-t3-medium text-xs text-foreground">
+            {props.files.length} changed {props.files.length === 1 ? "file" : "files"}
+          </Text>
+          <WorkRowDiffStat additions={totalAdditions} deletions={totalDeletions} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open diff"
+          hitSlop={4}
+          onPress={() => openDiff(null)}
+          style={({ pressed }) => ({
+            backgroundColor: pressed ? props.pressedBackground : "transparent",
+          })}
+          className="mx-2 my-1 shrink-0 flex-row items-center gap-1 rounded-md border border-neutral-300/60 px-1.5 py-1 dark:border-white/[0.1]"
+        >
           <SymbolView
-            name={
-              props.expanded
-                ? { ios: "chevron.up", android: "keyboard_arrow_up" }
-                : { ios: "chevron.down", android: "keyboard_arrow_down" }
-            }
+            name={{ ios: "doc.text", android: "description" }}
             size={11}
             tintColor={props.iconSubtleColor}
             type="monochrome"
           />
+          <Text className="font-t3-medium text-2xs text-foreground">Open diff</Text>
+        </Pressable>
+      </View>
+
+      {!props.expanded ? (
+        <View className="border-t border-neutral-300/60 px-2 pb-2 pt-1.5 dark:border-white/[0.08]">
+          <View className="flex-row flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            {scopeSummary.map((scope, index) => (
+              <View key={scope.label} className="flex-row items-center gap-1">
+                {index > 0 ? (
+                  <Text className="text-2xs text-foreground-muted opacity-60">·</Text>
+                ) : null}
+                <Text className="font-mono text-2xs text-foreground opacity-75">{scope.label}</Text>
+                <Text className="text-2xs text-foreground-muted opacity-60">
+                  {scope.fileCount} file{scope.fileCount === 1 ? "" : "s"}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <View className="mt-1.5 flex-row flex-wrap items-center gap-1.5">
+            {previewFiles.map((file) => (
+              <Pressable
+                key={file.path}
+                accessibilityRole="button"
+                accessibilityLabel={`Open diff for ${changedFileName(file.path)}`}
+                onPress={() => openDiff(file.path)}
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? props.pressedBackground : "transparent",
+                })}
+                className="max-w-48 flex-row items-center gap-1 rounded-md border border-neutral-300/60 px-1.5 py-1 dark:border-white/[0.1]"
+              >
+                <PierreEntryIcon path={file.path} kind="file" size={12} />
+                <Text className="shrink font-mono text-2xs text-foreground-muted" numberOfLines={1}>
+                  {changedFileName(file.path)}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Show all ${props.files.length} files`}
+              hitSlop={4}
+              onPress={() => {
+                triggerDisclosureFeedback();
+                props.onToggle();
+              }}
+              style={({ pressed }) => ({
+                backgroundColor: pressed ? props.pressedBackground : "transparent",
+              })}
+              className="rounded-md px-1.5 py-1"
+            >
+              <Text className="font-t3-medium text-2xs text-foreground-muted">
+                Show all {props.files.length} files
+              </Text>
+            </Pressable>
+          </View>
         </View>
-        <Text className="font-t3-medium text-xs text-foreground">
-          {props.files.length} changed {props.files.length === 1 ? "file" : "files"}
-        </Text>
-        <WorkRowDiffStat additions={totalAdditions} deletions={totalDeletions} />
-        <View className="flex-1" />
-        <Text className="text-2xs text-foreground-muted opacity-60">
-          {props.expanded ? "Hide files" : "Show files"}
-        </Text>
-      </Pressable>
+      ) : null}
 
       {props.expanded ? (
         <View className="border-t border-neutral-300/60 px-2 py-1 dark:border-white/[0.08]">
@@ -402,11 +519,14 @@ export function ThreadWorkLog(props: {
                 {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
               >
                 <ChangedFilesSummaryCard
+                  checkpointId={item.checkpointId}
+                  environmentId={props.environmentId}
                   expanded={expanded}
                   files={item.files}
                   iconSubtleColor={props.iconSubtleColor}
                   onToggle={() => props.onToggleRow(row.id)}
                   pressedBackground={pressedBackground}
+                  threadId={props.currentThreadId}
                   workspaceRoot={props.workspaceRoot}
                 />
               </Animated.View>
