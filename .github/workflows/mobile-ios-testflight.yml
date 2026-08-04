@@ -6,14 +6,17 @@ name: iOS TestFlight
 # here rather than in the cloud (`eas build --local`), so its sandbox bought
 # nothing but constraints — see mobile-eas-production.yml, kept as a fallback.
 
+# Deliberately NOT triggered by pushes to main. A release archive takes ~40
+# minutes, and with a push trigger plus cancel-in-progress every merge killed the
+# build before it finished — four consecutive runs were cancelled that way, and
+# none reached TestFlight. A merge is also not a release: shipping a build per
+# commit burns macOS runner minutes for versions nobody installs.
+#
+# Ship on demand, or by tagging a release.
 on:
   push:
-    branches:
-      - main
-      # TEMPORARY: proves the pipeline on a stable CI Xcode before it reaches
-      # main. Branch runs never upload (see SKIP_UPLOAD below). Remove once the
-      # pipeline has produced a green archive.
-      - t3code/139f72d1
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       build-number:
@@ -31,7 +34,10 @@ permissions:
 
 concurrency:
   group: ios-testflight
-  cancel-in-progress: true
+  # Queue rather than cancel: a release build that is 30 minutes into an archive
+  # is worth more than the one behind it, and cancelling mid-upload is the one
+  # way to burn a build number without producing a build.
+  cancel-in-progress: false
 
 jobs:
   build-and-submit:
@@ -155,11 +161,12 @@ jobs:
           # variable is here so a fork can point at its own record.
           ASC_APP_ID: ${{ vars.ASC_APP_ID || '6796384276' }}
           T3CODE_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
-          # Only main ever reaches TestFlight. Dispatching this against a branch
-          # archives and exports but stops short of uploading, which is what
-          # makes it safe to prove the pipeline out before merging.
+          # Only main and release tags reach TestFlight. Dispatching this against
+          # a branch archives and exports but stops short of uploading, which is
+          # what makes it safe to prove the pipeline out on a branch.
           SKIP_UPLOAD: >-
-            ${{ (inputs.skip-upload || github.ref != 'refs/heads/main') && '1' || '' }}
+            ${{ (inputs.skip-upload || (github.ref != 'refs/heads/main'
+            && !startsWith(github.ref, 'refs/tags/'))) && '1' || '' }}
         run: ./apps/mobile/scripts/ios-testflight.sh
 
       - name: Report ccache stats
