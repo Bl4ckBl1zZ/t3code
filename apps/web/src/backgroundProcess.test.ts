@@ -67,7 +67,7 @@ function projected(item: OrchestrationV2CommandExecutionItem): OrchestrationV2Pr
 describe("resolveBackgroundProcessView", () => {
   it("shows a tail and no progress bar when output is readable", () => {
     const view = resolveBackgroundProcessView(
-      commandItem({ outputPath: "/tmp/tasks/x.output", output: "step 1\nstep 2\n" }),
+      commandItem({ hasOutputStream: true, output: "step 1\nstep 2\n" }),
       NOW_MS,
     );
     expect(view.variant).toBe("tail");
@@ -193,6 +193,20 @@ describe("liveBackgroundProcesses", () => {
     const monitor = commandItem({ id: TurnItemId.make("mon"), waitKind: "monitor" });
     const processes = liveBackgroundProcesses([projected(monitor)]);
     expect(processes).toHaveLength(1);
+    expect(processes[0]?.monitor).toBeNull();
+  });
+
+  it("does not fold a monitor into an unrelated command when neither has a handle", () => {
+    const command = commandItem({ id: TurnItemId.make("cmd"), taskId: undefined });
+    const monitor = commandItem({
+      id: TurnItemId.make("mon"),
+      taskId: undefined,
+      waitKind: "monitor",
+      waitingOnTaskId: undefined,
+    });
+    const processes = liveBackgroundProcesses([projected(command), projected(monitor)]);
+    // Two undefined handles are not a match; both stay visible in their own right.
+    expect(processes).toHaveLength(2);
     expect(processes[0]?.monitor).toBeNull();
   });
 

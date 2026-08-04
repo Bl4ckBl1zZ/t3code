@@ -3094,7 +3094,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         // Not completed, not failed: the turn is over and the command is not.
         assert.equal(latest?.status, "waiting");
         assert.equal(latest?.taskId, BG_TASK_ID);
-        assert.equal(latest?.outputPath, BG_OUTPUT_PATH);
+        // A tail is available, without shipping the host path that carries the
+        // temp layout, uid and provider session id to every paired client.
+        assert.isTrue(latest?.hasOutputStream);
+        assert.isTrue(
+          Object.values(latest ?? {}).every(
+            (value) => typeof value !== "string" || !value.includes(BG_OUTPUT_PATH),
+          ),
+        );
         assert.equal(latest?.input, "pnpm vitest run apps/web");
         // The ACK text is provider bookkeeping and must not read as output.
         assert.isUndefined(latest?.output);
@@ -3278,7 +3285,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         // be folded into one.
         assert.equal(monitor?.waitingOnTaskId, BG_TASK_ID);
         // A monitor's own output is its polling loop; there is no tail worth showing.
-        assert.isUndefined(monitor?.outputPath);
+        assert.isUndefined(monitor?.hasOutputStream);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

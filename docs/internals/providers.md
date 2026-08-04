@@ -85,9 +85,11 @@ immediately with an acknowledgement carrying a task id and an output file path, 
 silent until the task settles. Verified against claude-code 2.1.221: no `task_progress` and no
 `tool_progress` frames arrive for a `local_bash` task, even with `includePartialMessages` on. The live
 tail therefore comes from the server polling that output file
-([`backgroundTail.ts`][bgtail], `BACKGROUND_TAIL_INTERVAL`), not from provider events. A foreground
-`Bash` reports `output_file: ""`, so there is nothing to tail and the row shows elapsed time plus, when
-the model set `timeout`, a determinate bar.
+([`backgroundTail.ts`][bgtail], `BACKGROUND_TAIL_INTERVAL`), not from provider events. The path stays
+in adapter state; the item carries only `hasOutputStream`, since the path embeds the host's temp
+layout, uid and provider session id and clients need nothing but the boolean. A foreground `Bash`
+reports `output_file: ""`, so there is nothing to tail and the row shows elapsed time plus, when the
+model set `timeout`, a determinate bar.
 
 `Monitor` is also a `local_bash` task, so a thread waiting on one command reports two peer tasks. The
 monitor is linked to its target through the output file inside its own command
@@ -106,9 +108,14 @@ code and leaves nothing to track.
 Three safety nets stop a row spinning for ever, in order: `task_notification`, the sweep when the
 query stream closes ([`ClaudeAdapterV2.ts`][claudeadapter], `sweepBackgroundTasks`), and startup
 reconciliation ([`ProviderRuntimeRecoveryService.ts`][recovery]), which retires background items whose
-run has already completed — the per-run sweep never reaches those. `backgroundProcessCount` on the
-thread shell is deliberately never persisted: a background command dies with the CLI process, so the
-cached read path reports 0.
+run has already completed — the per-run sweep never reaches those.
+
+`backgroundProcessCount` on the thread shell is read from SQL, because `getThreadShell` is what feeds
+the live shell streams behind the sidebar. Its freshness rests on that startup reconciliation rather
+than on the read path: a background command dies with its CLI process, and the reconciler retires
+every item that outlived one before any client reads. The query selects the live rows rather than a
+count, so the monitor-folding rule stays in `orchestrationV2BackgroundProcessCount` and the sidebar
+cannot disagree with the timeline.
 
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts

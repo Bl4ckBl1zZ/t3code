@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import * as DateTime from "effect/DateTime";
 
 import {
   formatBackgroundElapsed,
@@ -7,7 +8,7 @@ import {
 } from "../../backgroundProcess";
 import type { TimelineEntry } from "../../session-logic";
 import { cn } from "../../lib/utils";
-import { BackgroundProcessCard } from "./BackgroundProcessCard";
+import { BackgroundProcessCard, LiveDuration } from "./BackgroundProcessCard";
 
 /**
  * Persistent strip stating that a thread is waiting on work of its own.
@@ -34,12 +35,20 @@ export const BackgroundProcessesControl = memo(function BackgroundProcessesContr
     return null;
   }
 
+  const nowMs = Date.now();
+  // Compared on epoch millis, not on stringified DateTimes: those only sort
+  // correctly because Effect happens to render them ISO-prefixed, and an item
+  // with no start time would sort ahead of every real one.
   const oldest = processes.reduce((earliest, candidate) => {
-    const earliestStarted = String(earliest.item.startedAt ?? "");
-    const candidateStarted = String(candidate.item.startedAt ?? "");
-    return candidateStarted !== "" && candidateStarted < earliestStarted ? candidate : earliest;
+    const earliestStartedMs =
+      earliest.item.startedAt === null ? nowMs : DateTime.toEpochMillis(earliest.item.startedAt);
+    const candidateStartedMs =
+      candidate.item.startedAt === null ? nowMs : DateTime.toEpochMillis(candidate.item.startedAt);
+    return candidateStartedMs < earliestStartedMs ? candidate : earliest;
   });
-  const oldestView = resolveBackgroundProcessView(oldest.item, Date.now());
+  const oldestView = resolveBackgroundProcessView(oldest.item, nowMs);
+  const oldestStartedAtMs =
+    oldest.item.startedAt === null ? nowMs : DateTime.toEpochMillis(oldest.item.startedAt);
   const label =
     processes.length === 1
       ? oldestView.variant === "monitor"
@@ -64,7 +73,15 @@ export const BackgroundProcessesControl = memo(function BackgroundProcessesContr
             <span className="font-medium">{label}</span>
             <span className="text-muted-foreground/70">
               {" · "}
-              {formatBackgroundElapsed(oldestView.elapsedMs)}
+              {/* Self-ticking: the live set does not change while a command runs,
+                  so this component does not re-render and a value rendered once
+                  would sit frozen for the whole wait. */}
+              <LiveDuration
+                format={formatBackgroundElapsed}
+                startedAtMs={oldestStartedAtMs}
+                pausedMs={oldest.item.pausedMs ?? 0}
+                paused={oldestView.paused}
+              />
             </span>
           </span>
           <button

@@ -107,9 +107,20 @@ describe("capBackgroundOutput", () => {
     assert.deepStrictEqual(capBackgroundOutput("abc", 10), { output: "abc", truncated: false });
   });
 
-  it("keeps the tail and snaps to a line boundary", () => {
+  it("keeps whole lines when the cut already lands on a line boundary", () => {
     const result = capBackgroundOutput("aaaa\nbbbb\ncccc\n", 10);
     assert.strictEqual(result.truncated, true);
+    assert.strictEqual(result.output, "bbbb\ncccc\n");
+  });
+
+  it("drops only the fragment when the cut lands mid-line", () => {
+    const result = capBackgroundOutput("aaaa\nbbbb\ncccc\n", 8);
+    assert.strictEqual(result.truncated, true);
     assert.strictEqual(result.output, "cccc\n");
+  });
+
+  it("keeps a cut-off single line rather than reporting nothing", () => {
+    const result = capBackgroundOutput("aaaaaaaaaaaa", 4);
+    assert.deepStrictEqual(result, { output: "aaaa", truncated: true });
   });
 });

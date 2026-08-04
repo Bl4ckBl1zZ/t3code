@@ -1916,6 +1916,9 @@ const WorkGroupSection = memo(function WorkGroupSection({
     [hasOverflow, isExpanded, nonEmptyEntries],
   );
   const hiddenCount = nonEmptyEntries.length - visibleEntries.length;
+  // Pinning a live background command can leave every entry visible, and a
+  // "+0 previous tool calls" control would be worse than none.
+  const showOverflowControl = isExpanded || hiddenCount > 0;
   const onlyToolEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
   const groupLabel = onlyToolEntries
     ? nonEmptyEntries.length === 1
@@ -1973,7 +1976,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
           />
         ))}
       </div>
-      {hasOverflow && (
+      {hasOverflow && showOverflowControl && (
         <button
           type="button"
           className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"

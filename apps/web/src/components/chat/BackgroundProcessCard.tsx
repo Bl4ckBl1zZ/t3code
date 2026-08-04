@@ -30,7 +30,7 @@ import { cn } from "../../lib/utils";
  * `textContent` directly, and slows to a 30s cadence once the label stops
  * showing seconds.
  */
-function LiveDuration({
+export function LiveDuration({
   className,
   format,
   startedAtMs,
@@ -69,6 +69,52 @@ function LiveDuration({
   return (
     <span ref={ref} aria-hidden="true" className={cn("tabular-nums", className)}>
       {initial}
+    </span>
+  );
+}
+
+/**
+ * Determinate progress against a declared deadline, driven by one CSS
+ * transition rather than a timer.
+ *
+ * A ticking bar would be wrong here anyway: the case with a deadline is a
+ * foreground command, which emits nothing at all while it runs, so a bar redrawn
+ * on re-render would simply never move. Scales a transform instead of animating
+ * width, so the browser has no layout work to do per frame.
+ */
+function DeadlineBar({
+  fraction,
+  remainingMs,
+  live,
+}: {
+  readonly fraction: number;
+  readonly remainingMs: number;
+  readonly live: boolean;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (element === null || !live || remainingMs <= 0) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      element.style.transition = `transform ${remainingMs}ms linear`;
+      element.style.transform = "scaleX(1)";
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [live, remainingMs]);
+
+  return (
+    <span
+      aria-hidden="true"
+      className="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-border/60"
+    >
+      <span
+        ref={ref}
+        className="block h-full origin-left rounded-full bg-info/70"
+        style={{ width: "100%", transform: `scaleX(${Math.min(1, Math.max(0, fraction))})` }}
+      />
     </span>
   );
 }
@@ -135,6 +181,8 @@ export const BackgroundProcessCard = memo(function BackgroundProcessCard({
   const monitorView =
     monitor === null || monitor === undefined ? null : resolveBackgroundProcessView(monitor, nowMs);
   const startedAtMs = item.startedAt === null ? nowMs : DateTime.toEpochMillis(item.startedAt);
+  const lastOutputAtMs =
+    item.lastOutputAt === undefined ? null : DateTime.toEpochMillis(item.lastOutputAt);
   const isMonitorRow = view.variant === "monitor";
 
   return (
@@ -187,20 +235,21 @@ export const BackgroundProcessCard = memo(function BackgroundProcessCard({
       </div>
 
       {isMonitorRow ? (
-        <MonitorLine view={view} command={view.command} />
+        <MonitorLine
+          view={view}
+          command={view.command}
+          startedAtMs={startedAtMs}
+          timeoutMs={item.timeoutMs}
+        />
       ) : view.variant === "deadline" ? (
         <div className="flex min-w-0 items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-border/60"
-          >
-            <span
-              className="block h-full rounded-full bg-info/70"
-              style={{ width: `${Math.round((view.deadlineFraction ?? 0) * 100)}%` }}
-            />
-          </span>
+          <DeadlineBar
+            fraction={view.deadlineFraction ?? 0}
+            remainingMs={view.deadlineRemainingMs ?? 0}
+            live={view.live}
+          />
           <span className="shrink-0 text-[10.5px] text-muted-foreground/50">
-            no output until it exits
+            {view.live ? "no output until it exits" : "output arrived only at exit"}
           </span>
         </div>
       ) : (
@@ -209,17 +258,32 @@ export const BackgroundProcessCard = memo(function BackgroundProcessCard({
             {view.tail ?? (view.live ? "no output yet" : "no output")}
             {view.outputTruncated ? " · output capped" : ""}
           </span>
-          {view.live && view.sinceOutputMs !== null ? (
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/40">
-              {formatBackgroundSinceOutput(view.sinceOutputMs)}
-            </span>
+          {view.live && lastOutputAtMs !== null ? (
+            // Counts up on its own. When output stops, no further events arrive
+            // for this row, so a value rendered once would freeze at "2s ago" —
+            // asserting freshness at the exact moment there is none.
+            <LiveDuration
+              className="shrink-0 text-[10px] text-muted-foreground/40"
+              format={formatBackgroundSinceOutput}
+              startedAtMs={lastOutputAtMs}
+              pausedMs={0}
+              paused={false}
+            />
           ) : null}
         </div>
       )}
 
-      {monitorView !== null ? (
+      {monitorView !== null && monitor != null ? (
         <div className="ml-3 min-w-0 border-l border-border/50 pl-2">
-          <MonitorLine view={monitorView} command={monitorView.command} folded />
+          <MonitorLine
+            view={monitorView}
+            command={monitorView.command}
+            startedAtMs={
+              monitor.startedAt === null ? nowMs : DateTime.toEpochMillis(monitor.startedAt)
+            }
+            timeoutMs={monitor.timeoutMs}
+            folded
+          />
         </div>
       ) : null}
     </div>
@@ -234,17 +298,44 @@ export const BackgroundProcessCard = memo(function BackgroundProcessCard({
 function MonitorLine({
   view,
   command,
+  startedAtMs,
+  timeoutMs,
   folded,
 }: {
   readonly view: BackgroundProcessView;
   readonly command: string;
+  readonly startedAtMs: number;
+  readonly timeoutMs: number | undefined;
   readonly folded?: boolean;
 }) {
-  const remaining = view.deadlineRemainingMs;
   return (
     <p className="min-w-0 truncate text-[10.5px] text-muted-foreground/50">
-      {folded ? "agent is waiting on this" : "the agent is asleep until this passes"}
-      {remaining === null ? "" : ` · gives up in ${formatBackgroundElapsed(remaining)}`}
+      {view.live
+        ? folded
+          ? "agent is waiting on this"
+          : "the agent is asleep until this passes"
+        : folded
+          ? "the agent stopped waiting on this"
+          : "the wait is over"}
+      {!view.live || timeoutMs === undefined ? (
+        ""
+      ) : (
+        <>
+          {" · gives up in "}
+          {view.live ? (
+            // Counts down on its own. Nothing else re-renders this row, so a
+            // value computed once would sit frozen for the whole wait.
+            <LiveDuration
+              format={(elapsedMs) => formatBackgroundElapsed(Math.max(0, timeoutMs - elapsedMs))}
+              startedAtMs={startedAtMs}
+              pausedMs={0}
+              paused={false}
+            />
+          ) : (
+            formatBackgroundElapsed(Math.max(0, timeoutMs - view.elapsedMs))
+          )}
+        </>
+      )}
       {folded ? "" : ` · ${command}`}
     </p>
   );

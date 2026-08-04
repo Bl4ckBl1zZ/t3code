@@ -377,7 +377,7 @@ describe("orchestration V2 contracts", () => {
       output: "step 1 of 20\n",
       background: true,
       taskId: "bs891h9i0",
-      outputPath: "/tmp/claude-tasks/bs891h9i0.output",
+      hasOutputStream: true,
       timeoutMs: 120_000,
       paused: true,
       pausedMs: 4_000,
@@ -398,7 +398,7 @@ describe("orchestration V2 contracts", () => {
     }
     expect(decoded.background).toBe(true);
     expect(decoded.taskId).toBe("bs891h9i0");
-    expect(decoded.outputPath).toBe("/tmp/claude-tasks/bs891h9i0.output");
+    expect(decoded.hasOutputStream).toBe(true);
     expect(decoded.timeoutMs).toBe(120_000);
     expect(decoded.paused).toBe(true);
     expect(decoded.pausedMs).toBe(4_000);
@@ -432,14 +432,62 @@ describe("orchestration V2 contracts", () => {
       status: "waiting" as const,
       background: true,
     };
+    // A command and the monitor watching it are one thing to wait on.
     expect(
       orchestrationV2BackgroundProcessCount([
-        base,
-        { ...base, waitKind: "monitor" as const },
+        { ...base, taskId: "bs891h9i0" },
+        {
+          ...base,
+          taskId: "b8zv6rtg9",
+          waitKind: "monitor" as const,
+          waitingOnTaskId: "bs891h9i0",
+        },
         { ...base, status: "completed" as const },
         { type: "command_execution" as const, status: "running" as const },
       ]),
     ).toBe(1);
+    // A monitor with no live target still counts: the agent is asleep either way,
+    // and the sidebar has to agree with the strip above the composer.
+    expect(
+      orchestrationV2BackgroundProcessCount([
+        { ...base, taskId: "b8zv6rtg9", waitKind: "monitor" as const },
+      ]),
+    ).toBe(1);
+    expect(
+      orchestrationV2BackgroundProcessCount([
+        {
+          ...base,
+          taskId: "b8zv6rtg9",
+          waitKind: "monitor" as const,
+          waitingOnTaskId: "already-finished",
+        },
+      ]),
+    ).toBe(1);
+    expect(orchestrationV2BackgroundProcessCount([])).toBe(0);
+  });
+
+  it("counts no background command in any terminal status", () => {
+    const live = {
+      type: "command_execution" as const,
+      status: "waiting" as const,
+      background: true,
+      taskId: "live",
+    };
+    for (const status of ["completed", "failed", "cancelled", "interrupted"] as const) {
+      expect(
+        orchestrationV2BackgroundProcessCount([{ ...live, status, taskId: `done-${status}` }]),
+      ).toBe(0);
+      // A settled command alongside a live one must not hide it either.
+      expect(
+        orchestrationV2BackgroundProcessCount([
+          { ...live, status, taskId: `done-${status}` },
+          live,
+        ]),
+      ).toBe(1);
+    }
+    for (const status of ["pending", "running", "waiting"] as const) {
+      expect(orchestrationV2BackgroundProcessCount([{ ...live, status }])).toBe(1);
+    }
   });
 
   it("decodes bounded provider failures as expected error turn items", () => {

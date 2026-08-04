@@ -1695,6 +1695,19 @@ describe("collapseWorkEntriesKeepingLiveBackground", () => {
     ]);
   });
 
+  it("leaves nothing hidden when the pinned command is the only extra row", () => {
+    // One early background command plus exactly MAX_VISIBLE_WORK_LOG_ENTRIES later
+    // entries: everything stays visible, so no "+0 previous tool calls" control
+    // should be offered.
+    const entries = [
+      entry("bg", { type: "command_execution", status: "waiting", background: true }),
+      entry("last"),
+    ];
+    const visible = collapseWorkEntriesKeepingLiveBackground(entries, 1);
+    expect(visible.map((e) => e.id)).toEqual(["bg", "last"]);
+    expect(entries.length - visible.length).toBe(0);
+  });
+
   it("stops pinning once the command settles", () => {
     const entries = [
       entry("bg", { type: "command_execution", status: "completed", background: true }),

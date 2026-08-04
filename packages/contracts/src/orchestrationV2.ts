@@ -863,8 +863,13 @@ const commandExecutionLivenessFields = {
   background: Schema.optional(Schema.Boolean),
   /** Provider-side task handle, used to stop or inspect the command. */
   taskId: Schema.optional(TrimmedNonEmptyString),
-  /** File the provider streams output to, tailed by the server. */
-  outputPath: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The provider streams this command's output to a file the server tails, so a
+   * live tail is available even before the first byte arrives. The path itself
+   * stays server-side: it embeds the host's temp layout, uid and provider session
+   * id, and no client has any use for it.
+   */
+  hasOutputStream: Schema.optional(Schema.Boolean),
   /** Declared deadline, the only honest source of determinate progress. */
   timeoutMs: Schema.optional(NonNegativeInt),
   /** Paused right now, so the elapsed timer must stop rather than keep counting. */
@@ -1081,19 +1086,38 @@ export function orchestrationV2CommandExecutionIsLiveInBackground(item: {
   );
 }
 
+/**
+ * How many distinct things a thread is waiting on in the background.
+ *
+ * A monitor exists only to watch another task, so counting it alongside its
+ * target would double every "waiting on a command" thread. A monitor whose
+ * target is not itself live still counts: the agent is asleep either way, and
+ * that is exactly what this number is asked to report.
+ *
+ * Must agree with the client's folding, or the sidebar and the timeline disagree
+ * about what is running.
+ */
 export function orchestrationV2BackgroundProcessCount(
   items: ReadonlyArray<{
     readonly type: OrchestrationV2TurnItem["type"];
     readonly status: OrchestrationV2TurnItemStatus;
     readonly background?: boolean | undefined;
+    readonly taskId?: string | undefined;
     readonly waitKind?: OrchestrationV2CommandWaitKind | undefined;
+    readonly waitingOnTaskId?: string | undefined;
   }>,
 ): number {
-  // Monitors are excluded: one exists only to watch another task, so counting
-  // it would double every "waiting on a command" thread.
-  return items.filter(
+  const live = items.filter((item) => orchestrationV2CommandExecutionIsLiveInBackground(item));
+  const liveCommandTaskIds = new Set(
+    live.flatMap((item) =>
+      item.waitKind === undefined && item.taskId !== undefined ? [item.taskId] : [],
+    ),
+  );
+  return live.filter(
     (item) =>
-      orchestrationV2CommandExecutionIsLiveInBackground(item) && item.waitKind === undefined,
+      item.waitKind === undefined ||
+      item.waitingOnTaskId === undefined ||
+      !liveCommandTaskIds.has(item.waitingOnTaskId),
   ).length;
 }
 

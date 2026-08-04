@@ -2007,7 +2007,7 @@ interface ClaudeLiveQueryContext {
 interface ClaudeCommandLiveness {
   readonly background?: boolean;
   readonly taskId?: string;
-  readonly outputPath?: string;
+  readonly hasOutputStream?: boolean;
   readonly timeoutMs?: number;
   readonly lastOutputAt?: DateTime.Utc;
   readonly pausedMs?: number;
@@ -2380,6 +2380,17 @@ export function makeClaudeAdapterV2(
           if (entry === undefined) {
             return null;
           }
+          // A liveness patch must never land on a settled command. The tail poll
+          // reads the output file between checking the status and patching, so a
+          // notification arriving in that window would otherwise see its final
+          // 64KB output replaced by the 2KB live tail, and its completion time
+          // pushed forward.
+          if (
+            input.status === undefined &&
+            orchestrationV2TurnItemStatusIsTerminal(entry.item.status)
+          ) {
+            return entry;
+          }
           const now = yield* DateTime.now;
           const status = input.status ?? entry.item.status;
           const terminal = orchestrationV2TurnItemStatusIsTerminal(status);
@@ -2654,7 +2665,8 @@ export function makeClaudeAdapterV2(
           const liveness: ClaudeCommandLiveness = {
             background: true,
             taskId,
-            ...(outputPath === null ? {} : { outputPath }),
+            // Only that a stream exists. The path stays in adapter state.
+            ...(outputPath === null ? {} : { hasOutputStream: true }),
             ...(monitor?.timeoutMs == null ? {} : { timeoutMs: monitor.timeoutMs }),
             ...(monitor === null ? {} : { waitKind: "monitor" as const }),
             ...(watchedTaskId === null ? {} : { waitingOnTaskId: watchedTaskId }),

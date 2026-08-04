@@ -146,7 +146,14 @@ export function capBackgroundOutput(
   if (output.length <= maxBytes) {
     return { output, truncated: false };
   }
-  return { output: dropPartialFirstLine(output.slice(output.length - maxBytes)), truncated: true };
+  const cut = output.length - maxBytes;
+  const clipped = output.slice(cut);
+  // A cut that already lands on a line boundary has no partial line to drop, and
+  // dropping one anyway would throw away a complete line for nothing.
+  return {
+    output: output[cut - 1] === "\n" ? clipped : dropPartialFirstLine(clipped),
+    truncated: true,
+  };
 }
 
 /**

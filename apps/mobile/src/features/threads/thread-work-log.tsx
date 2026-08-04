@@ -492,8 +492,13 @@ export function ThreadWorkLog(props: {
         // only the last row would collapse away the one row still reporting.
         keepRowsWithLiveBackgroundCommands(rows, MAX_VISIBLE_WORK_LOG_ENTRIES)
       : rows;
-  const hiddenCount = rows.length - visibleRows.length;
-  const hiddenStats = sumActivityFileDiffStats(rows.slice(0, hiddenCount));
+  // The complement of what is visible, not a prefix: pinning a live background
+  // command means the hidden rows are no longer contiguous, so slicing would
+  // total the diff stats of the wrong rows.
+  const visibleRowIds = new Set(visibleRows.map((row) => row.id));
+  const hiddenRows = rows.filter((row) => !visibleRowIds.has(row.id));
+  const hiddenCount = hiddenRows.length;
+  const hiddenStats = sumActivityFileDiffStats(hiddenRows);
   const onlyToolRows = rows.every((row) => row.toolLike);
   const overflowNoun = threadWorkLogOverflowNoun(onlyToolRows, hiddenCount);
 
@@ -682,7 +687,7 @@ export function ThreadWorkLog(props: {
         })}
       </View>
 
-      {hasOverflow ? (
+      {hasOverflow && (props.expanded || hiddenCount > 0) ? (
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded: props.expanded }}

@@ -90,7 +90,7 @@ function backgroundProcessVariant(
   }
   // Output beats a bar: a command that is visibly printing needs no estimate,
   // and one with a deadline but no output has nothing else to show.
-  if (item.outputPath !== undefined || (item.output ?? "").length > 0) {
+  if (item.hasOutputStream === true || (item.output ?? "").length > 0) {
     return "tail";
   }
   return item.timeoutMs === undefined ? "tail" : "deadline";
@@ -240,14 +240,21 @@ export function liveBackgroundProcesses(
     if (item.waitKind === "monitor") {
       continue;
     }
-    const monitor = monitors.find((candidate) => candidate.waitingOnTaskId === item.taskId) ?? null;
+    // Guarded on taskId: two commands with no handle must not both match a
+    // monitor whose target is likewise undefined.
+    const monitor =
+      item.taskId === undefined
+        ? null
+        : (monitors.find((candidate) => candidate.waitingOnTaskId === item.taskId) ?? null);
     if (monitor !== null) {
       foldedMonitorIds.add(monitor.id);
     }
     processes.push({ item, monitor });
   }
   // An orphan monitor still deserves a row: the agent is asleep either way, and
-  // silence is the failure mode this whole feature exists to remove.
+  // silence is the failure mode this whole feature exists to remove. This also
+  // keeps the row count equal to `orchestrationV2BackgroundProcessCount`, which
+  // drives the sidebar dot.
   for (const monitor of monitors) {
     if (!foldedMonitorIds.has(monitor.id)) {
       processes.push({ item: monitor, monitor: null });

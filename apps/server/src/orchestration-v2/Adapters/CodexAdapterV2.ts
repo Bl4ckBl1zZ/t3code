@@ -1750,6 +1750,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 ...(tracked.aggregatedOutput === undefined
                   ? {}
                   : { output: tracked.aggregatedOutput }),
+                // What we hold may be only the tail of a chatty command; saying so
+                // matters most here, where there is no completion to correct it.
+                ...(tracked.outputTruncated === true ? { outputTruncated: true } : {}),
               };
               yield* emitProviderEvent({
                 type: "node.updated",
@@ -3171,10 +3174,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             if (payload.delta.length === 0) {
               return;
             }
-            const context = yield* awaitActiveTurn(payload.turnId);
-            if (context === undefined) {
+            // Resolved the same way `item/completed` resolves it, so a delta that
+            // lands after the turn settles still reaches the row. Codex can keep
+            // a command running past turn/completed, and dropping its output then
+            // would stop the tail at exactly the moment it starts to matter.
+            // Resolved the same way `item/completed` resolves it, so a delta that
+            // lands after the turn settles still reaches the row. Codex can keep
+            // a command running past turn/completed, and dropping its output then
+            // would stop the tail at exactly the moment it starts to matter.
+            const resolved = yield* resolveItemEventContext(payload.turnId);
+            if (resolved === undefined) {
               return;
             }
+            const context = resolved.context;
             const tracked = (yield* Ref.get(runningCommandItemsByTurn))
               .get(payload.turnId)
               ?.get(payload.itemId);

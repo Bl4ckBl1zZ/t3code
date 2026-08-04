@@ -500,6 +500,146 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("counts live background commands in the shell the sidebar reads", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const nowIso = DateTime.formatIso(now);
+      const threadId = ThreadId.make("thread:projection-shell-background");
+      const projectId = ProjectId.make("project:projection-shell-background");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-background-thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId,
+          title: "Background shell",
+          providerInstanceId,
+          modelSelection: modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      const insertCommandItem = (input: {
+        readonly id: string;
+        readonly ordinal: number;
+        readonly status: string;
+        readonly background?: boolean;
+        readonly taskId?: string;
+        readonly waitKind?: "monitor";
+        readonly waitingOnTaskId?: string;
+      }) =>
+        sql`
+          INSERT INTO orchestration_v2_projection_turn_items (
+            turn_item_id, thread_id, run_id, node_id, provider_thread_id,
+            provider_turn_id, parent_item_id, ordinal, type, status, updated_at,
+            payload_json
+          )
+          VALUES (
+            ${input.id}, ${threadId}, ${null}, ${null}, ${null}, ${null}, ${null},
+            ${input.ordinal}, ${"command_execution"}, ${input.status}, ${nowIso},
+            ${encodeUnknownJsonString({
+              id: input.id,
+              threadId,
+              runId: null,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: input.ordinal,
+              status: input.status,
+              title: null,
+              startedAt: nowIso,
+              completedAt: null,
+              updatedAt: nowIso,
+              type: "command_execution",
+              input: "pnpm vitest run apps/web",
+              ...(input.background === undefined ? {} : { background: input.background }),
+              ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+              ...(input.waitKind === undefined ? {} : { waitKind: input.waitKind }),
+              ...(input.waitingOnTaskId === undefined
+                ? {}
+                : { waitingOnTaskId: input.waitingOnTaskId }),
+            })}
+          )
+        `;
+
+      // Two live background commands, one monitor folded into the first, one
+      // settled command, and one foreground command.
+      yield* insertCommandItem({
+        id: "turn-item:bg-live-1",
+        ordinal: 0,
+        status: "waiting",
+        background: true,
+        taskId: "task-live-1",
+      });
+      yield* insertCommandItem({
+        id: "turn-item:bg-monitor",
+        ordinal: 1,
+        status: "waiting",
+        background: true,
+        taskId: "task-monitor",
+        waitKind: "monitor",
+        waitingOnTaskId: "task-live-1",
+      });
+      yield* insertCommandItem({
+        id: "turn-item:bg-live-2",
+        ordinal: 2,
+        status: "waiting",
+        background: true,
+        taskId: "task-live-2",
+      });
+      yield* insertCommandItem({
+        id: "turn-item:bg-settled",
+        ordinal: 3,
+        status: "completed",
+        background: true,
+        taskId: "task-settled",
+      });
+      yield* insertCommandItem({
+        id: "turn-item:foreground",
+        ordinal: 4,
+        status: "running",
+      });
+
+      const shell = yield* projectionStore.getShellSnapshot();
+      const threadShell = yield* projectionStore.getThreadShell(threadId);
+
+      // The two live commands; the monitor folds into its target and neither the
+      // settled nor the foreground command counts.
+      assert.equal(
+        shell.threads.find((thread) => thread.id === threadId)?.backgroundProcessCount,
+        2,
+      );
+      // getThreadShell feeds the live shell streams, so it must agree.
+      assert.equal(threadShell?.backgroundProcessCount, 2);
+    }),
+  );
+
   it.effect("counts imported runless history inherited by fork shells", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
