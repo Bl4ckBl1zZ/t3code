@@ -63,7 +63,7 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
-} from "./orchestration.ts";
+} from "./threadSearch.ts";
 import {
   HermesHistoryResetInput,
   HermesHistoryResetResult,

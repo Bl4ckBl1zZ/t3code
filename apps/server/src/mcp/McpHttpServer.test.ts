@@ -12,6 +12,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type OrchestrationV2ThreadProjection,
+  type Project,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -21,7 +23,8 @@ import { McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -51,42 +54,34 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
-const stubProjectionSnapshotQueryLayer = Layer.succeed(
-  ProjectionSnapshotQuery.ProjectionSnapshotQuery,
-  {
-    getCommandReadModel: () => Effect.die("unused"),
-    getSnapshot: () => Effect.die("unused"),
-    getShellSnapshot: () => Effect.die("unused"),
-    getShellSnapshotWithoutEnrichment: () => Effect.die("unused"),
-    getArchivedShellSnapshot: () => Effect.die("unused"),
-    getSnapshotSequence: () => Effect.die("unused"),
-    getCounts: () => Effect.die("unused"),
-    getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
-    getProjectShellById: () => Effect.die("unused"),
-    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-    searchThreads: () => Effect.die("unused"),
-    getThreadCheckpointContext: (contextThreadId) =>
-      Effect.succeed(
-        contextThreadId === threadId
-          ? Option.some({
-              threadId,
-              projectId: ProjectId.make("project-mcp-test"),
-              workspaceRoot: testWorkspaceRoot,
-              worktreePath: null,
-              checkpoints: [],
-            })
-          : Option.none(),
-      ),
-    getFullThreadDiffContext: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.die("unused"),
-    getThreadDetailById: () => Effect.die("unused"),
-    getThreadDetailSnapshot: () => Effect.die("unused"),
-  },
-);
+const projectId = ProjectId.make("project-mcp-test");
+const stubThreadManagementLayer = Layer.mock(ThreadManagementService)({
+  getThreadProjection: (projectionThreadId) =>
+    projectionThreadId === threadId
+      ? Effect.succeed({
+          thread: {
+            id: threadId,
+            projectId,
+            worktreePath: null,
+            archivedAt: null,
+            deletedAt: null,
+          },
+        } as OrchestrationV2ThreadProjection)
+      : Effect.die("unused"),
+} satisfies Partial<ThreadManagementService["Service"]>);
+const stubProjectServiceLayer = Layer.mock(ProjectService.ProjectService)({
+  getById: (lookupProjectId) =>
+    Effect.succeed(
+      lookupProjectId === projectId
+        ? Option.some({ id: projectId, workspaceRoot: testWorkspaceRoot } as Project)
+        : Option.none(),
+    ),
+} satisfies Partial<ProjectService.ProjectService["Service"]>);
 const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
-  Layer.provideMerge(stubProjectionSnapshotQueryLayer),
+  Layer.provideMerge(stubThreadManagementLayer),
+  Layer.provideMerge(stubProjectServiceLayer),
   Layer.provideMerge(WorkspacePaths.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-test-" })),
   Layer.provideMerge(NodeServices.layer),

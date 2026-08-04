@@ -25,7 +25,8 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as ServerConfig from "../../../config.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -38,7 +39,8 @@ const dependencies = [
 const snapshotDependencies = [
   ...dependencies,
   ServerConfig.ServerConfig,
-  ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+  ThreadManagementService.ThreadManagementService,
+  ProjectService.ProjectService,
   WorkspacePaths.WorkspacePaths,
   FileSystem.FileSystem,
   Path.Path,

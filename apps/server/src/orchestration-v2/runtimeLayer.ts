@@ -40,6 +40,7 @@ import { layerFromProjectRepository as runtimePolicyLayerFromProjectRepository }
 import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts";
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
+import { layer as threadSearchQueryLayer } from "./ThreadSearchQuery.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
@@ -262,6 +263,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   providerRuntimeRecoveryProvided,
   projectionMaintenanceProvided,
   legacyV1ThreadImporterProvided,
+  threadSearchQueryLayer,
 );
 
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(

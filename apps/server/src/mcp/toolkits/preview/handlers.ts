@@ -20,7 +20,8 @@ import type {
 import { PreviewAutomationScreenshotSaveError } from "@t3tools/contracts";
 
 import * as ServerConfig from "../../../config.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -146,14 +147,27 @@ const saveSnapshotScreenshot = Effect.fn("PreviewToolkit.saveSnapshotScreenshot"
       return yield* fail("savePath must end with .png");
     }
 
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-    const threadContext = yield* projectionSnapshotQuery
-      .getThreadCheckpointContext(scope.threadId)
+    const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const projection = yield* threadManagement
+      .getThreadProjection(scope.threadId)
       .pipe(Effect.mapError((cause) => fail("failed to resolve the thread workspace", cause)));
-    if (Option.isNone(threadContext)) {
+    if (projection.thread.deletedAt !== null) {
       return yield* fail("thread was not found");
     }
-    const workspaceRoot = threadContext.value.worktreePath ?? threadContext.value.workspaceRoot;
+
+    // A worktree-bound thread writes into its worktree; otherwise the project's
+    // workspace root is the sandbox boundary for the save path.
+    let workspaceRoot = projection.thread.worktreePath;
+    if (workspaceRoot === null) {
+      const projects = yield* ProjectService.ProjectService;
+      const project = yield* projects
+        .getById(projection.thread.projectId)
+        .pipe(Effect.mapError((cause) => fail("failed to resolve the thread workspace", cause)));
+      if (Option.isNone(project)) {
+        return yield* fail("thread was not found");
+      }
+      workspaceRoot = project.value.workspaceRoot;
+    }
 
     const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
     const resolved = yield* workspacePaths

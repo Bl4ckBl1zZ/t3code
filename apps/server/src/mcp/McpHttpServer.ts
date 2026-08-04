@@ -13,7 +13,8 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -143,7 +144,8 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const snapshotHandlerContext = yield* Effect.context<
     | ServerConfig.ServerConfig
-    | ProjectionSnapshotQuery.ProjectionSnapshotQuery
+    | ThreadManagementService.ThreadManagementService
+    | ProjectService.ProjectService
     | WorkspacePaths.WorkspacePaths
     | FileSystem.FileSystem
     | Path.Path

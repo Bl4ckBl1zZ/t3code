@@ -89,6 +89,7 @@ import {
   shellStreamItemsFromInitialSnapshot,
 } from "./orchestration-v2/ShellStream.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ThreadSearchQuery from "./orchestration-v2/ThreadSearchQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import {
@@ -404,6 +405,7 @@ const makeWsRpcLayer = (
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const threadSearchQuery = yield* ThreadSearchQuery.ThreadSearchQuery;
       const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
       const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
         (projects: ReadonlyArray<OrchestrationProjectShell>) =>
@@ -750,12 +752,12 @@ const makeWsRpcLayer = (
           const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
             const base = yield* sql.withTransaction(
               Effect.gen(function* () {
-                const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
+                const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
                 const threads = yield* threadManagement.getShellSnapshot();
                 return {
                   schemaVersion: threads.schemaVersion,
                   snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                  projects: projects.projects,
+                  projects,
                   threads: threads.threads,
                   archivedThreads: threads.archivedThreads,
                 } as const;
@@ -933,12 +935,12 @@ const makeWsRpcLayer = (
       const getOrchestrationV2ArchivedShellSnapshot = sql
         .withTransaction(
           Effect.gen(function* () {
-            const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
+            const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
             const threads = yield* threadManagement.getShellSnapshot();
             return {
               schemaVersion: threads.schemaVersion,
               snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-              projects: projects.projects,
+              projects,
               threads: threads.archivedThreads,
             } as const;
           }),
@@ -1125,7 +1127,7 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.searchThreads]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.searchThreads,
-            projectionSnapshotQuery.searchThreads(input).pipe(
+            threadSearchQuery.searchThreads(input).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationSearchThreadsError({

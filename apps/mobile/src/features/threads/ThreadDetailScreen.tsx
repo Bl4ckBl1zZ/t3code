@@ -7,7 +7,6 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
-  OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,

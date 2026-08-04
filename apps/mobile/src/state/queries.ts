@@ -1,4 +1,4 @@
-import type { EnvironmentId, OrchestrationThread, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,

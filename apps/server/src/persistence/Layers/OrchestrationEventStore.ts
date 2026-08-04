@@ -274,7 +274,7 @@ const makeEventStore = Effect.gen(function* () {
           metadata_json AS "metadata"
         FROM orchestration_events
         WHERE sequence > ${request.sequenceExclusive}
-          AND (application_event_version = 1 OR aggregate_kind = 'project')
+          AND aggregate_kind = 'project'
         ORDER BY sequence ASC
         LIMIT ${request.limit}
       `,
