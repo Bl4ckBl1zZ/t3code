@@ -102,6 +102,14 @@ database migrations. Cloudflare Worker logs provide initial operational diagnost
 external tracing account. Production adopts the configured relay API and tunnel DNS zones as retained
 Cloudflare resources. Personal stages reference the production-owned zones.
 
+The relay also serves the `t3.json` JSON Schema at `/schema/t3.json`,
+unauthenticated, generated from the contracts it was built with. That is what
+`$schema` in a project's `t3.json` points at (for production,
+`https://relay.8u9yhy8fewf.org/schema/t3.json`), so editors validate project
+files against the same build the relay is running. A stage serves its own copy
+and stamps its own address as the schema's `$id`; no extra domain or deploy is
+involved.
+
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
@@ -127,6 +135,13 @@ Optional GitHub Actions variables:
 - `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
 - `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
 - `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
+- `T3CODE_PROJECT_FILE_SCHEMA_URL`: overrides where `t3.json` files are told to
+  find their JSON Schema. Unset, the server derives it from the relay it talks
+  to (`<relay>/schema/t3.json`), which is where the relay publishes it — see
+  [T3 Connect relay deployment](#t3-connect-relay-deployment). Only override it
+  for a host serving _this_ build's document: the schema forbids additional
+  properties, so a copy from a different build makes editors reject every field
+  the two do not share. A `$schema` already written in a file is always kept.
 
 Required Vercel domains:
 

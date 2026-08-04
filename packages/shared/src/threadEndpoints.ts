@@ -14,6 +14,10 @@
  *
  * So: sockets decide whether something is live, output decides how it is
  * presented, and a declared `ProjectScript.previewUrl` outranks both.
+ *
+ * A third input answers a different question. The project's `t3.json`
+ * `previewUrl` is *pinned*: it is not evidence that anything is running, so it
+ * is listed from the moment the thread opens and survives the server stopping.
  */
 
 import type { DetectedTerminalUrl } from "./terminalUrlDetection.ts";
@@ -25,7 +29,9 @@ export type ThreadEndpointStatus =
   /** Announced in output but not yet confirmed listening. */
   | "starting"
   /** Was live, has stopped answering — held briefly so restarts do not flicker. */
-  | "stale";
+  | "stale"
+  /** Pinned by configuration with nothing serving it. Only pinned rows reach this. */
+  | "idle";
 
 export type ThreadEndpointSource = "declared" | "stdout" | "scanner";
 
@@ -41,6 +47,11 @@ export interface ThreadEndpoint {
   /** Project script attributed to the owning terminal, when there is one. */
   readonly scriptId: string | null;
   readonly processName: string | null;
+  /**
+   * True for the project's configured `previewUrl`: the row is listed whether
+   * or not anything is serving it, and sorts above the discovered ones.
+   */
+  readonly pinned: boolean;
   /** Epoch ms when this endpoint was first observed; drives stable ordering. */
   readonly firstSeenAtMs: number;
 }
@@ -98,6 +109,8 @@ interface Candidate {
   readonly listening: boolean;
   /** False once the announcing terminal has no foreground process left. */
   readonly announcerRunning: boolean;
+  /** Configured as the project's preview URL, so the row is never dropped. */
+  readonly pinned: boolean;
 }
 
 /**
@@ -132,6 +145,10 @@ function absorb(byPort: Map<number, Candidate>, next: Candidate): void {
     processName: current.processName ?? next.processName,
     listening: current.listening || next.listening,
     announcerRunning: current.announcerRunning || next.announcerRunning,
+    // Pinning is a property of the port, not of whichever URL won: a dev server
+    // that announces the pinned port must not turn the row back into a
+    // droppable one when it exits.
+    pinned: current.pinned || next.pinned,
   });
 }
 
@@ -142,6 +159,7 @@ function candidateFromUrl(
     readonly terminalId: string | null;
     readonly scriptId: string | null;
     readonly announcerRunning: boolean;
+    readonly pinned?: boolean;
   },
 ): Candidate | null {
   const detected: DetectedTerminalUrl | null = toDetectedUrl(rawUrl);
@@ -157,6 +175,7 @@ function candidateFromUrl(
     processName: null,
     listening: false,
     announcerRunning: attribution.announcerRunning,
+    pinned: attribution.pinned ?? false,
   };
 }
 
@@ -167,6 +186,13 @@ export interface MergeThreadEndpointsInput {
   readonly terminals: ReadonlyArray<TerminalEndpointInput>;
   /** `ProjectScript.previewUrl` values configured for the active project. */
   readonly declaredUrls: ReadonlyArray<string>;
+  /**
+   * `previewUrl` from the project's checked-in `t3.json`. Unlike every other
+   * source these are not evidence that a server exists — they are the user
+   * saying "this is where this project lives", so they are listed from the
+   * moment the thread opens and stay listed after the server stops.
+   */
+  readonly pinnedUrls?: ReadonlyArray<string> | undefined;
   /** Per-port state carried from the previous merge, for ordering and the grace window. */
   readonly previous: ReadonlyMap<number, PreviousEndpointState>;
   readonly nowMs: number;
@@ -183,8 +209,18 @@ export function mergeThreadEndpoints(
 ): ReadonlyArray<ThreadEndpoint> {
   const byPort = new Map<number, Candidate>();
 
-  // Declared URLs first so they seed the identity; they are not "listening"
+  // Configured URLs first so they seed the identity; they are not "listening"
   // until a socket or a terminal detection says so.
+  for (const pinned of input.pinnedUrls ?? []) {
+    const candidate = candidateFromUrl(pinned, "declared", {
+      terminalId: null,
+      scriptId: null,
+      announcerRunning: false,
+      pinned: true,
+    });
+    if (candidate !== null) absorb(byPort, candidate);
+  }
+
   for (const declared of input.declaredUrls) {
     const candidate = candidateFromUrl(declared, "declared", {
       terminalId: null,
@@ -223,12 +259,15 @@ export function mergeThreadEndpoints(
       scriptId: terminalId === null ? null : (scriptByTerminalId.get(terminalId) ?? null),
       processName: scanned.processName,
       listening: true,
+      pinned: false,
     });
   }
 
   const excluded = input.excludedPorts;
   const endpoints: Array<ThreadEndpoint> = [];
   for (const candidate of byPort.values()) {
+    // Applies to pinned rows too: T3's own port is never this thread's server,
+    // whatever a project file claims.
     if (excluded?.has(candidate.port) === true) continue;
     const previous = input.previous.get(candidate.port);
     const firstSeenAtMs = previous?.firstSeenAtMs ?? input.nowMs;
@@ -238,8 +277,16 @@ export function mergeThreadEndpoints(
       status = "live";
     } else if (previous !== undefined && previous.lastLiveAtMs > 0) {
       // Was live and went quiet: hold it briefly, then drop it entirely.
-      if (input.nowMs - previous.lastLiveAtMs > ENDPOINT_STALE_GRACE_MS) continue;
-      status = "stale";
+      if (input.nowMs - previous.lastLiveAtMs > ENDPOINT_STALE_GRACE_MS) {
+        if (!candidate.pinned) continue;
+        status = "idle";
+      } else {
+        status = "stale";
+      }
+    } else if (candidate.pinned && !candidate.announcerRunning) {
+      // Configuration with nothing behind it yet — the case this whole flag
+      // exists for. Never "starting": nothing has been started.
+      status = "idle";
     } else if (!candidate.announcerRunning) {
       // Nothing is backing this endpoint: either it is configuration with no
       // process behind it yet, or it was announced by a process that has since
@@ -266,16 +313,21 @@ export function mergeThreadEndpoints(
       terminalId: candidate.terminalId,
       scriptId: candidate.scriptId,
       processName: candidate.processName,
+      pinned: candidate.pinned,
       firstSeenAtMs,
     });
   }
 
-  // First-seen then port: rows must never reshuffle under the pointer when a
-  // sibling endpoint changes state.
+  // Pinned first, then first-seen, then port: the project's own URL holds the
+  // top row (surfaces above any "+N more" cut), and rows must never reshuffle
+  // under the pointer when a sibling endpoint changes state.
   // .sort() on the local array, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods, and this runs on mobile.
   return endpoints.sort(
-    (left, right) => left.firstSeenAtMs - right.firstSeenAtMs || left.port - right.port,
+    (left, right) =>
+      Number(right.pinned) - Number(left.pinned) ||
+      left.firstSeenAtMs - right.firstSeenAtMs ||
+      left.port - right.port,
   );
 }
 

@@ -35,7 +35,7 @@ export function portsMenuAccessibilityLabel(
 export function portEndpointIcon(endpoint: MobileThreadEndpoint): string {
   if (endpoint.reachability.kind === "unreachable") return "exclamationmark.triangle";
   if (endpoint.status === "starting") return "clock";
-  if (endpoint.status === "stale") return "moon.zzz";
+  if (endpoint.status === "stale" || endpoint.status === "idle") return "moon.zzz";
   return "globe";
 }
 
@@ -63,7 +63,8 @@ export function portEndpointSubtitle(endpoint: MobileThreadEndpoint): string {
   if (endpoint.reachability.kind === "unreachable") return endpoint.reachability.reason;
   if (endpoint.status === "starting") return "Starting…";
   const address = endpoint.displayAddress ?? `port ${endpoint.port}`;
-  return endpoint.status === "stale" ? `${address} · no longer responding` : address;
+  if (endpoint.status === "stale") return `${address} · no longer responding`;
+  return endpoint.status === "idle" ? `${address} · not running` : address;
 }
 
 /** Endpoints that can be opened right now, in menu order. */

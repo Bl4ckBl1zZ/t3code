@@ -3,8 +3,8 @@
  * `t3.json` in sync, in both directions:
  *
  * - When actions change in the app (DB side), they are written to `t3.json`
- *   at the workspace root with the published `$schema` URL, so the file is
- *   always the durable, shareable source of the project's actions.
+ *   at the workspace root, so the file is always the durable, shareable source
+ *   of the project's actions.
  * - When `t3.json` is edited on disk, the changes are decoded and applied to
  *   the project's actions, so edits show up in the app without a restart.
  *
@@ -22,7 +22,6 @@ import {
   CommandId,
   MAX_SCRIPT_ID_LENGTH,
   T3_PROJECT_FILE_NAME,
-  T3_PROJECT_FILE_SCHEMA_URL,
   type Project,
   type ProjectScript,
   type T3ProjectFile,
@@ -39,6 +38,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
+import { resolveProjectFileSchemaUrl } from "./projectFileSchemaUrl.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const SYNC_INTERVAL = Duration.millis(1500);
@@ -137,10 +137,17 @@ function fileScriptFromProjectScript(script: ProjectScript): T3ProjectFileScript
 function renderProjectFile(
   existing: T3ProjectFile | null,
   scripts: ReadonlyArray<ProjectScript>,
+  schemaUrl: string | null,
 ): string {
+  // Only `scripts` is owned by the app; every other field is the user's and is
+  // carried through untouched, or an in-app script edit would quietly delete it.
+  // `$schema` included: a hand-written one is never replaced — a project may
+  // legitimately pin an internal mirror — but a file without one gets ours.
+  const resolvedSchemaUrl = existing?.$schema ?? schemaUrl;
   const document = {
-    $schema: T3_PROJECT_FILE_SCHEMA_URL,
+    ...(resolvedSchemaUrl === null ? {} : { $schema: resolvedSchemaUrl }),
     ...(existing?.iconPath === undefined ? {} : { iconPath: existing.iconPath }),
+    ...(existing?.previewUrl === undefined ? {} : { previewUrl: existing.previewUrl }),
     scripts: scripts.map(fileScriptFromProjectScript),
   };
   return `${JSON.stringify(document, null, 2)}\n`;
@@ -181,7 +188,10 @@ const syncLoop = Effect.gen(function* () {
     filePath: string,
     existing: T3ProjectFile | null,
   ) {
-    yield* fileSystem.writeFileString(filePath, renderProjectFile(existing, project.scripts));
+    yield* fileSystem.writeFileString(
+      filePath,
+      renderProjectFile(existing, project.scripts, resolveProjectFileSchemaUrl()),
+    );
     yield* Effect.logInfo("Saved project actions to t3.json.", {
       projectId: project.id,
       filePath,

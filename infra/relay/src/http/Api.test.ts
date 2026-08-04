@@ -24,6 +24,7 @@ import {
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
+  relayProjectFileSchemaRoute,
   revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
@@ -473,6 +474,52 @@ describe("relay request tracing", () => {
       expect(response.status).toBe(504);
       expect(spans[0]?.attributes.get("relay.request.deadline_exceeded")).toBe(true);
       expect(spans[0]?.attributes.get("http.response.status_code")).toBe(504);
+    }),
+  );
+});
+
+describe("project file schema", () => {
+  const fetchSchema = (options?: { readonly requestHost?: string }) =>
+    Effect.gen(function* () {
+      const request = HttpServerRequest.fromWeb(
+        new Request(`https://${options?.requestHost ?? "relay.example.test"}/schema/t3.json`),
+      );
+      const httpEffect = yield* HttpRouter.toHttpEffect(
+        Layer.mergeAll(
+          relayProjectFileSchemaRoute("https://relay.example.test/schema/t3.json"),
+          relayNotFoundRoute,
+          relayCors,
+        ),
+      );
+      const response = yield* httpEffect.pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      );
+      const body = yield* Effect.promise(() => HttpServerResponse.toWeb(response).json());
+      return { response, body: body as Record<string, unknown> };
+    }).pipe(Effect.scoped);
+
+  it.effect("serves the t3.json schema without authentication", () =>
+    Effect.gen(function* () {
+      // An editor resolving `$schema` sends no credentials, so a 401 here
+      // would silently cost every user completion in their project file.
+      const { response, body } = yield* fetchSchema();
+
+      expect(response.status).toBe(200);
+      expect(body.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+      expect(Object.keys(body.properties as Record<string, unknown>)).toContain("previewUrl");
+      expect(response.headers["access-control-allow-origin"]).toBe("*");
+    }),
+  );
+
+  it.effect("stamps this relay's configured origin as $id, whatever host was asked for", () =>
+    Effect.gen(function* () {
+      // Each deployment publishes its own build's document, and says so from
+      // configuration — never from the caller-controlled request host.
+      const direct = yield* fetchSchema();
+      const spoofed = yield* fetchSchema({ requestHost: "attacker.test" });
+
+      expect(direct.body.$id).toBe("https://relay.example.test/schema/t3.json");
+      expect(spoofed.body.$id).toBe("https://relay.example.test/schema/t3.json");
     }),
   );
 });

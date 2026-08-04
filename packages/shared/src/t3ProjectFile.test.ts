@@ -1,18 +1,32 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildT3ProjectFileJsonSchema, T3ProjectFileFromJson } from "./t3ProjectFile.ts";
+import {
+  buildT3ProjectFileJsonSchema,
+  T3ProjectFileFromJson,
+  t3ProjectFileSchemaUrl,
+} from "./t3ProjectFile.ts";
 
 const decodeJson = Schema.decodeUnknownSync(T3ProjectFileFromJson);
 
 describe("buildT3ProjectFileJsonSchema", () => {
-  it("emits a draft 2020-12 schema with the published $id", () => {
+  it("emits a draft 2020-12 schema", () => {
     const schema = buildT3ProjectFileJsonSchema();
 
     expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
-    expect(schema.$id).toBe("https://t3.codes/schema/t3.json");
     expect(schema.type).toBe("object");
     expect(schema.additionalProperties).toBe(false);
+  });
+
+  it("stamps the serving deployment's $id, and none when it is not given one", () => {
+    // The $id must name a URL that serves *this* build's document: it declares
+    // additionalProperties: false, so a mismatched copy rejects real fields.
+    // The relay passes the request it is answering; nothing is hardcoded.
+    expect(
+      buildT3ProjectFileJsonSchema({ id: "https://relay.example.test/schema/t3.json" }).$id,
+    ).toBe("https://relay.example.test/schema/t3.json");
+    expect(buildT3ProjectFileJsonSchema().$id).toBeUndefined();
+    expect(buildT3ProjectFileJsonSchema({ id: null }).$id).toBeUndefined();
   });
 
   it("documents every supported field", () => {
@@ -27,9 +41,15 @@ describe("buildT3ProjectFileJsonSchema", () => {
       required?: ReadonlyArray<string>;
     };
 
-    expect(Object.keys(schema.properties).sort()).toEqual(["$schema", "iconPath", "scripts"]);
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "$schema",
+      "iconPath",
+      "previewUrl",
+      "scripts",
+    ]);
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
+    expect(schema.properties.previewUrl?.description).toContain("Ports section");
 
     const script = schema.properties.scripts?.items;
     expect(script?.required).toEqual(["name", "command"]);
@@ -40,6 +60,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "name",
       "previewUrl",
       "runOnWorktreeCreate",
+      "runOnWorktreeDelete",
       "singleRun",
     ]);
   });
@@ -47,6 +68,24 @@ describe("buildT3ProjectFileJsonSchema", () => {
   it("stays JSON-serializable", () => {
     const schema = buildT3ProjectFileJsonSchema();
     expect(JSON.parse(JSON.stringify(schema))).toEqual(schema);
+  });
+});
+
+describe("t3ProjectFileSchemaUrl", () => {
+  it("resolves against the relay that serves the document", () => {
+    expect(t3ProjectFileSchemaUrl("https://relay.example.test")).toBe(
+      "https://relay.example.test/schema/t3.json",
+    );
+    // Relay URLs are normalized with a trailing slash elsewhere; both shapes
+    // must land on the same address, not `/schema/schema/t3.json`.
+    expect(t3ProjectFileSchemaUrl("https://relay.example.test/")).toBe(
+      "https://relay.example.test/schema/t3.json",
+    );
+  });
+
+  it("returns null for a relay URL it cannot resolve against", () => {
+    expect(t3ProjectFileSchemaUrl("")).toBeNull();
+    expect(t3ProjectFileSchemaUrl("relay.example.test")).toBeNull();
   });
 });
 

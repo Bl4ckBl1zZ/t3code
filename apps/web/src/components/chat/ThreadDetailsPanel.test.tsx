@@ -4,12 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   useT3ProjectFileScripts: vi.fn(),
+  useT3ProjectFilePreviewUrl: vi.fn(),
   projectScriptsControl: vi.fn(),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
   useT3ProjectFileScripts: (...args: ReadonlyArray<unknown>) =>
     testState.useT3ProjectFileScripts(...args),
+  useT3ProjectFilePreviewUrl: (...args: ReadonlyArray<unknown>) =>
+    testState.useT3ProjectFilePreviewUrl(...args),
 }));
 vi.mock("../BranchToolbar", () => ({
   BranchToolbar: () => null,
@@ -32,6 +35,8 @@ import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetail
 describe("ThreadDetailsPanel", () => {
   beforeEach(() => {
     testState.useT3ProjectFileScripts.mockReset();
+    testState.useT3ProjectFilePreviewUrl.mockReset();
+    testState.useT3ProjectFilePreviewUrl.mockReturnValue(null);
     testState.projectScriptsControl.mockReset();
   });
 

@@ -10,7 +10,10 @@ import { AlertTriangleIcon, XIcon } from "lucide-react";
 
 import type { OpenPreviewMutation } from "../../browser/openFileInPreview";
 import type { DraftId } from "../../composerDraftStore";
-import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
+import {
+  useT3ProjectFilePreviewUrl,
+  useT3ProjectFileScripts,
+} from "../../hooks/useT3ProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
@@ -81,6 +84,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
+  );
+  // Not gated on `activeProjectScripts`: the pinned preview URL is independent
+  // of whether this surface offers the scripts menu at all.
+  const pinnedPreviewUrl = useT3ProjectFilePreviewUrl(
+    props.environmentId,
+    props.isProjectlessConversation ? null : props.gitCwd,
   );
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: props.environmentId,
@@ -256,6 +265,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             threadId={props.threadId}
             threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
             scripts={props.activeProjectScripts}
+            pinnedPreviewUrl={pinnedPreviewUrl}
             openPreview={props.openPreview}
           />
         ) : null}

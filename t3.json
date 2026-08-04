@@ -1,5 +1,5 @@
 {
-  "$schema": "https://t3.codes/schema/t3.json",
+  "$schema": "https://relay.8u9yhy8fewf.org/schema/t3.json",
   "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
   "scripts": [
     {

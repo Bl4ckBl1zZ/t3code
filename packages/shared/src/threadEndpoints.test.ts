@@ -221,6 +221,77 @@ describe("status", () => {
   });
 });
 
+describe("pinned project preview url", () => {
+  it("lists a pinned URL with nothing running at all", () => {
+    const [endpoint] = merge({ pinnedUrls: ["http://localhost:5173/"] });
+    expect(endpoint?.status).toBe("idle");
+    expect(endpoint?.pinned).toBe(true);
+    expect(endpoint?.url).toBe("http://localhost:5173/");
+  });
+
+  it("turns live once a socket confirms the pinned port", () => {
+    const [endpoint] = merge({
+      pinnedUrls: ["http://localhost:5173/app"],
+      scanned: [scanned(5173)],
+    });
+    expect(endpoint?.status).toBe("live");
+    // The pinned URL still decides presentation: the scanner cannot know the path.
+    expect(endpoint?.url).toBe("http://localhost:5173/app");
+  });
+
+  it("returns to idle instead of disappearing when the server stops", () => {
+    const first = merge({ pinnedUrls: ["http://localhost:5173/"], scanned: [scanned(5173)] });
+    const carried = nextEndpointState(first, new Map(), NOW);
+    const later = mergeThreadEndpoints({
+      scanned: [],
+      terminals: [],
+      declaredUrls: [],
+      pinnedUrls: ["http://localhost:5173/"],
+      previous: carried,
+      nowMs: NOW + ENDPOINT_STALE_GRACE_MS + 1,
+    });
+    expect(later).toHaveLength(1);
+    expect(later[0]?.status).toBe("idle");
+  });
+
+  it("stays pinned after the announcing terminal exits", () => {
+    const [endpoint] = merge({
+      pinnedUrls: ["http://localhost:5173/"],
+      terminals: [
+        {
+          terminalId: "term-1",
+          detectedUrls: ["http://localhost:5173/"],
+          hasRunningSubprocess: false,
+        },
+      ],
+    });
+    expect(endpoint?.status).toBe("idle");
+    expect(endpoint?.pinned).toBe(true);
+  });
+
+  it("sorts above endpoints that were discovered first", () => {
+    const previous = new Map<number, PreviousEndpointState>([
+      [3000, { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW }],
+    ]);
+    const endpoints = merge({
+      pinnedUrls: ["http://localhost:5173/"],
+      scanned: [scanned(3000)],
+      previous,
+    });
+    expect(endpoints.map((endpoint) => endpoint.port)).toEqual([5173, 3000]);
+  });
+
+  it("never advertises T3's own port, pinned or not", () => {
+    expect(
+      merge({ pinnedUrls: ["http://localhost:13773/"], excludedPorts: new Set([13773]) }),
+    ).toEqual([]);
+  });
+
+  it("ignores a pinned URL that is not a loopback address", () => {
+    expect(merge({ pinnedUrls: ["https://example.com/"] })).toEqual([]);
+  });
+});
+
 describe("dedupe and filtering", () => {
   it("collapses every signal for one port into a single row", () => {
     const endpoints = merge({
