@@ -4,6 +4,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import { resolvePathWithinRoot } from "../attachmentPaths.ts";
+import { threadUploadsRelativeDir } from "../attachments/uploadPaths.ts";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -20,9 +22,11 @@ export class ResourceCleanupError extends Schema.TaggedErrorClass<ResourceCleanu
 
 export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupTerminals: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
-  readonly cleanupAttachments: (
-    attachmentIds: ReadonlyArray<string>,
-  ) => Effect.Effect<void, ResourceCleanupError>;
+  readonly cleanupAttachments: (input: {
+    readonly attachmentIds: ReadonlyArray<string>;
+    readonly threadId: string;
+    readonly workspaceRoot?: string;
+  }) => Effect.Effect<void, ResourceCleanupError>;
 }>("t3/orchestration-v2/ResourceCleanupService", {
   defaultValue: () => ({
     cleanupTerminals: () => Effect.void,
@@ -45,9 +49,9 @@ export const live = Layer.effect(
               (cause) => new ResourceCleanupError({ operation: "terminal", threadId, cause }),
             ),
           ),
-      cleanupAttachments: (attachmentIds: ReadonlyArray<string>) =>
+      cleanupAttachments: (input) =>
         Effect.forEach(
-          attachmentIds,
+          input.attachmentIds,
           (attachmentId) => {
             const path = resolveAttachmentPathById({
               attachmentsDir: config.attachmentsDir,
@@ -65,6 +69,21 @@ export const live = Layer.effect(
                   );
           },
           { discard: true, concurrency: 4 },
+        ).pipe(
+          Effect.andThen(() => {
+            if (input.workspaceRoot === undefined) return Effect.void;
+            const uploadsDir = resolvePathWithinRoot({
+              root: input.workspaceRoot,
+              relativePath: threadUploadsRelativeDir(input.threadId),
+            });
+            // A workspace we can no longer resolve is not worth failing a
+            // delete over; the files are gitignored scratch either way.
+            return uploadsDir === null
+              ? Effect.void
+              : fileSystem
+                  .remove(uploadsDir, { recursive: true, force: true })
+                  .pipe(Effect.catch(() => Effect.void));
+          }),
         ),
     };
   }),

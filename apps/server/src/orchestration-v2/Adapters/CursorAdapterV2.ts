@@ -2011,8 +2011,10 @@ export function makeCursorAdapterV2(
             runOrdinal: turnInput.runOrdinal,
             hasT3Mcp: cursorMcpServers(turnInput.threadId) !== undefined,
           });
+          // Cursor only accepts images inline. Everything else reaches the
+          // agent as a path in the prompt text.
           const images = yield* Effect.forEach(
-            turnInput.message.attachments,
+            turnInput.message.attachments.filter((attachment) => attachment.type === "image"),
             (attachment: ChatAttachment) =>
               Effect.gen(function* () {
                 const path = resolveAttachmentPath({

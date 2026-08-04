@@ -1500,13 +1500,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
       if (attachmentIds.length > 0) {
+        // Uploads inside a worktree vanish with it; uploads in a project root
+        // outlive the thread, so name the root and let cleanup remove them.
+        const workspaceRoot = projection.thread.worktreePath;
         yield* Ref.update(effects, (existing) => [
           ...existing,
           {
             id: `effect:${command.commandId}:attachment.cleanup`,
             commandId: command.commandId,
             threadId: command.threadId,
-            request: { type: "attachment.cleanup", attachmentIds },
+            request: {
+              type: "attachment.cleanup",
+              attachmentIds,
+              ...(workspaceRoot === null ? {} : { workspaceRoot }),
+            },
           } satisfies PendingOrchestrationEffectV2,
         ]);
       }

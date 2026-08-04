@@ -775,7 +775,11 @@ describe("ClaudeAdapterV2 attachments", () => {
     ),
   );
 
-  it.effect("rejects unsupported image types before opening a provider query", () =>
+  // An SVG reaches the adapter only on the degraded path — normally it is
+  // materialized into the workspace and named in the prompt. Killing the turn
+  // over one attachment the SDK cannot encode is strictly worse than sending
+  // the text, since the file is readable from disk either way.
+  it.effect("skips an image type it cannot encode instead of failing the turn", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -833,22 +837,18 @@ describe("ClaudeAdapterV2 attachments", () => {
         });
         const now = yield* DateTime.now;
 
-        const error = yield* runtime
-          .startTurn(
-            makeClaudeTestTurnInput({
-              threadId,
-              providerThread,
-              now,
-              attemptId: RunAttemptId.make("attempt-claude-unsupported-attachment"),
-              text: "Inspect this image.",
-              attachments: [attachment],
-            }),
-          )
-          .pipe(Effect.flip);
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-unsupported-attachment"),
+            text: "Inspect this image.",
+            attachments: [attachment],
+          }),
+        );
 
-        assert.equal(error._tag, "ProviderAdapterTurnStartError");
-        assert.include(String(error.cause), "Unsupported Claude image attachment type");
-        assert.equal(openCount, 0);
+        assert.equal(openCount, 1);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

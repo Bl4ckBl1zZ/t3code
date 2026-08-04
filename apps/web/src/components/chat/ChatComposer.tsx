@@ -20,6 +20,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import { ATTACHMENT_COPY } from "@t3tools/shared/composerAttachments";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
@@ -181,8 +182,6 @@ import {
   BotIcon,
   CircleAlertIcon,
   EraserIcon,
-  FileIcon,
-  FileTextIcon,
   ListTodoIcon,
   LoaderCircleIcon,
   PencilRulerIcon,
@@ -194,7 +193,6 @@ import {
   PaperclipIcon,
   SquarePenIcon,
   SparklesIcon,
-  XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderDisplayName, getProviderInteractionModeToggle } from "../../providerModels";
@@ -226,11 +224,10 @@ import { formatProviderSkillDisplayName } from "../../providerSkillPresentation"
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
-import {
-  composerAttachmentAccept,
-  partitionComposerAttachments,
-  validateComposerAttachment,
-} from "./composerAttachmentValidation";
+import { partitionComposerAttachments } from "./composerAttachmentValidation";
+import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
+import { isAttachmentLimitReached } from "./ComposerAttachmentChips.logic";
+import { partitionDroppedDataTransfer, resolvePastePolicy } from "./composerAttachmentIntake.logic";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
 const runtimeModeConfig: Record<
@@ -2537,19 +2534,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const reservedCount = composerImagesRef.current.length + pendingCount;
     const acceptedFiles: File[] = [];
     const directAttachments: ComposerAttachment[] = [];
-    const partitioned = partitionComposerAttachments(files, selectedProvider, reservedCount);
+    const partitioned = partitionComposerAttachments(files, reservedCount);
     for (const entry of partitioned.accepted) {
       if (entry.type === "image") {
-        acceptedFiles.push(entry.file);
+        acceptedFiles.push(entry.item);
       } else {
         directAttachments.push({
           type: entry.type,
           id: randomUUID(),
-          name: entry.file.name || "attachment",
+          // The shared validator already normalized and length-capped this.
+          name: entry.name,
           mimeType: entry.mimeType,
-          sizeBytes: entry.file.size,
-          previewUrl: URL.createObjectURL(entry.file),
-          file: entry.file,
+          sizeBytes: entry.item.size,
+          previewUrl: URL.createObjectURL(entry.item),
+          file: entry.item,
         });
       }
     }
@@ -2625,11 +2623,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length === 0) return;
-    // Claim the paste only when something is actually attachable: otherwise
-    // the clipboard's text fallback (a file path, HTML, plain text) should
-    // still land in the composer.
-    if (!files.some((file) => validateComposerAttachment(file, selectedProvider).accepted)) return;
-    event.preventDefault();
+    const policy = resolvePastePolicy({
+      types: Array.from(event.clipboardData.types),
+      files,
+    });
+    if (policy === "ignore") return;
+    // Attach the file, but let real text through: a clipboard carrying both a
+    // file and plain text should not lose the text.
+    if (policy === "attach-only") {
+      event.preventDefault();
+    }
     void addComposerImages(files);
   };
 
@@ -2663,8 +2666,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     event.preventDefault();
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
-    const files = Array.from(event.dataTransfer.files);
-    void addComposerImages(files);
+    // Read the items synchronously: they are invalidated once this handler
+    // returns, and a dropped folder would then look like an ordinary file.
+    const dropped = partitionDroppedDataTransfer({
+      items: Array.from(event.dataTransfer.items),
+      files: Array.from(event.dataTransfer.files),
+    });
+    if (dropped.directoryNames.length > 0 && activeThreadId) {
+      setThreadError(
+        activeThreadId,
+        `${ATTACHMENT_COPY.dropFolderTitle}. ${ATTACHMENT_COPY.dropFolderSubtitle}`,
+      );
+    }
+    if (dropped.files.length > 0) {
+      void addComposerImages([...dropped.files]);
+    }
     focusComposer();
   };
 
@@ -2936,7 +2952,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ref={composerSurfaceRef}
           data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
           className={cn(
-            "rounded-[20px] transition-[background-color] duration-200",
+            "relative rounded-[20px] transition-[background-color] duration-200",
             isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
             environmentUnavailable || projectSelectionRequired ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
@@ -2960,6 +2976,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             scheduleComposerCollapseCheck();
           }}
         >
+          {isDragOverComposer && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1 rounded-[20px] border-2 border-dashed border-primary/60 bg-background/70 px-4 text-center backdrop-blur-[2px]">
+              <PaperclipIcon className="size-5 text-primary" aria-hidden="true" />
+              <span className="text-sm font-medium">
+                {isAttachmentLimitReached(composerImages.length)
+                  ? ATTACHMENT_COPY.dropLimitTitle
+                  : ATTACHMENT_COPY.dropTitle}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {isAttachmentLimitReached(composerImages.length)
+                  ? ATTACHMENT_COPY.dropLimitSubtitle
+                  : ATTACHMENT_COPY.dropSubtitle}
+              </span>
+            </div>
+          )}
           {!isComposerCollapsedMobile &&
             (activePendingApproval ? (
               <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
@@ -3210,97 +3241,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
             {!isComposerCollapsedMobile &&
               !isComposerApprovalState &&
-              pendingUserInputs.length === 0 &&
-              composerImages.some(
-                (image) =>
-                  !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
-              ) && (
-                <div className="mb-3 flex flex-wrap gap-2">
-                  {composerImages
+              pendingUserInputs.length === 0 && (
+                <ComposerAttachmentChips
+                  attachments={composerImages
                     .filter(
                       (image) =>
                         !composerPreviewAnnotations.some(
                           (annotation) => annotation.id === image.id,
                         ),
                     )
-                    .map((image) => (
-                      <div
-                        key={image.id}
-                        className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background"
-                      >
-                        {image.type === "image" && image.previewUrl ? (
-                          <button
-                            type="button"
-                            className="h-full w-full cursor-zoom-in"
-                            aria-label={`Preview ${image.name}`}
-                            onClick={() => {
-                              const preview = buildExpandedImagePreview(composerImages, image.id);
-                              if (!preview) return;
-                              onExpandImage(preview);
-                            }}
-                          >
-                            <img
-                              src={image.previewUrl}
-                              alt={image.name}
-                              className="h-full w-full object-cover"
-                            />
-                          </button>
-                        ) : image.type === "video" && image.previewUrl ? (
-                          <video
-                            src={image.previewUrl}
-                            controls
-                            playsInline
-                            preload="metadata"
-                            aria-label={image.name}
-                            className="h-full w-full bg-black object-contain"
-                          />
-                        ) : (
-                          <div
-                            className="flex h-full w-full flex-col items-center justify-center gap-1 px-1 text-center text-[9px] text-muted-foreground"
-                            title={image.name}
-                          >
-                            {image.type === "pdf" ? (
-                              <FileTextIcon className="size-5" aria-hidden="true" />
-                            ) : (
-                              <FileIcon className="size-5" aria-hidden="true" />
-                            )}
-                            <span className="w-full truncate px-0.5">{image.name}</span>
-                          </div>
-                        )}
-                        {nonPersistedComposerImageIdSet.has(image.id) && (
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <span
-                                  role="img"
-                                  aria-label="Draft attachment may not persist"
-                                  className="absolute left-1 top-1 inline-flex items-center justify-center rounded bg-background/85 p-0.5 text-amber-600"
-                                >
-                                  <CircleAlertIcon className="size-3" />
-                                </span>
-                              }
-                            />
-                            <TooltipPopup
-                              side="top"
-                              className="max-w-64 whitespace-normal leading-tight"
-                            >
-                              Draft attachment could not be saved locally and may be lost on
-                              navigation.
-                            </TooltipPopup>
-                          </Tooltip>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          className="absolute right-1 top-1 bg-background/80 hover:bg-background/90"
-                          onClick={() => removeComposerImage(image.id)}
-                          aria-label={`Remove ${image.name}`}
-                        >
-                          <XIcon />
-                        </Button>
-                      </div>
-                    ))}
-                </div>
+                    .map((image) => ({
+                      id: image.id,
+                      type: image.type,
+                      name: image.name,
+                      mimeType: image.mimeType,
+                      sizeBytes: image.sizeBytes,
+                      previewUrl: image.previewUrl,
+                    }))}
+                  nonPersistedIds={nonPersistedComposerImageIdSet}
+                  onRemove={removeComposerImage}
+                  onPreview={(id) => {
+                    const preview = buildExpandedImagePreview(composerImages, id);
+                    if (!preview) return;
+                    onExpandImage(preview);
+                  }}
+                  onFocusEditor={focusComposer}
+                />
               )}
 
             <div className="relative">
@@ -3339,7 +3305,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             : isProjectlessConversation
                               ? "Message Hermes"
                               : phase === "disconnected"
-                                ? "Ask for follow-up changes or attach images"
+                                ? "Ask for follow-up changes or attach files"
                                 : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
@@ -3400,7 +3366,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   ref={attachmentInputRef}
                   type="file"
                   multiple
-                  accept={composerAttachmentAccept(selectedProvider)}
                   className="hidden"
                   aria-label="Choose attachments"
                   onChange={(event) => {
@@ -3424,7 +3389,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     <PlusIcon className="size-4" />
                   </MenuTrigger>
                   <MenuPopup side="top" align="start" className="w-44">
-                    <MenuItem onClick={() => attachmentInputRef.current?.click()}>
+                    <MenuItem
+                      disabled={isAttachmentLimitReached(composerImages.length)}
+                      {...(isAttachmentLimitReached(composerImages.length)
+                        ? {
+                            title: `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`,
+                          }
+                        : {})}
+                      onClick={() => attachmentInputRef.current?.click()}
+                    >
                       <PaperclipIcon />
                       Attach files
                     </MenuItem>

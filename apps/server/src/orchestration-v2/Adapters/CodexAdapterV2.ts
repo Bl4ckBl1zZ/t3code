@@ -2313,8 +2313,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 text: turnInput.message.text,
               });
             }
+            // Non-images are materialized into the agent's working directory
+            // and named in the prompt text, so they never need a data URL.
             const attachmentItems = yield* Effect.forEach(
-              turnInput.message.attachments,
+              turnInput.message.attachments.filter((attachment) => attachment.type === "image"),
               resolveCodexAttachment,
               { concurrency: 1 },
             );

@@ -11,6 +11,10 @@
       "types": "./src/changedFilesPreview.ts",
       "import": "./src/changedFilesPreview.ts"
     },
+    "./composerAttachments": {
+      "types": "./src/composerAttachments.ts",
+      "import": "./src/composerAttachments.ts"
+    },
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"

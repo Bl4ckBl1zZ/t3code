@@ -530,6 +530,9 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         if (screenshotFile && annotation.screenshot) {
           addImage(threadRef, {
             type: "image",
+            // Not a user upload: this screenshot belongs in the model's
+            // context, not written into the user's project.
+            role: "preview-annotation",
             id: annotation.id,
             name: screenshotFile.name,
             mimeType: screenshotFile.type,

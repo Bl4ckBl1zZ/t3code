@@ -187,6 +187,8 @@ function buildProps() {
     onRevertUserMessage: () => {},
     isRevertingCheckpoint: false,
     onImageExpand: () => {},
+    onOpenWorkspaceFile: () => {},
+    onCopyWorkspacePath: () => {},
     activeThreadEnvironmentId: ACTIVE_THREAD_ENVIRONMENT_ID,
     markdownCwd: undefined,
     resolvedTheme: "light" as const,

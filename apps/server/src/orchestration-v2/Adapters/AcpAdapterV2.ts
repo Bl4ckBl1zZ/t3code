@@ -4535,13 +4535,19 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           if (text.length > 0) {
             prompt.push({ type: "text", text });
           }
-          if (turnInput.message.attachments.length > 0 && !supportsImagePrompts) {
-            return yield* new ProviderAdapterProtocolError({
-              driver,
-              detail: "ACP driver did not negotiate image prompt support",
-            });
-          }
+          // Only images travel inline. Anything else was materialized into the
+          // agent's working directory and named in the prompt text, so an agent
+          // that never negotiated image support still gets the file — it reads
+          // it off disk instead of being told the turn cannot run.
           for (const attachment of turnInput.message.attachments) {
+            if (attachment.type !== "image" || !supportsImagePrompts) {
+              yield* Effect.logWarning("Skipping an attachment ACP cannot send inline.", {
+                attachmentId: attachment.id,
+                mimeType: attachment.mimeType,
+                supportsImagePrompts,
+              });
+              continue;
+            }
             const path = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,
               attachment: attachment as ChatAttachment,

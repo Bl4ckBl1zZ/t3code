@@ -14,6 +14,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import {
+  AttachmentMaterialization,
+  annotateAttachmentPlacement,
+} from "../attachments/AttachmentMaterialization.ts";
+import { appendUploadedFilesBlock } from "../attachments/uploadPaths.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import {
   ContextHandoffServiceV2,
@@ -61,6 +66,7 @@ export class ProviderTurnStartServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   never,
+  | AttachmentMaterialization
   | EventSinkV2
   | ContextHandoffServiceV2
   | IdAllocatorV2
@@ -71,6 +77,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const attachmentMaterialization = yield* AttachmentMaterialization;
     const eventSink = yield* EventSinkV2;
     const contextHandoffService = yield* ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocatorV2;
@@ -165,6 +172,35 @@ export const layer: Layer.Layer<
           ? {}
           : { resumeFromSession: existingSessionProjection }),
       });
+      // Uploads become files in the agent's own working directory, announced in
+      // the prompt, so every provider can open any file type. Whatever comes
+      // back in `inlineAttachments` still travels as a payload: images by
+      // policy, plus anything the workspace write could not take.
+      const uploads = yield* attachmentMaterialization.materialize({
+        threadId: projection.thread.id,
+        driver: session.driver,
+        cwd: resolvedRuntimePolicy.cwd,
+        attachments: message.attachments,
+      });
+      // Tell the client where each file landed so the message bubble can offer
+      // the path. Silent when nothing was written, which is the normal state for
+      // a projectless thread and must not look like a failure.
+      const placement = annotateAttachmentPlacement(message.attachments, uploads);
+      if (placement !== null) {
+        yield* eventSink.write({
+          events: [
+            {
+              id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+              type: "message.updated",
+              threadId: projection.thread.id,
+              driver: session.driver,
+              providerInstanceId: run.providerInstanceId,
+              occurredAt: yield* DateTime.now,
+              payload: { ...message, attachments: placement },
+            },
+          ],
+        });
+      }
       let effectiveHandoffs = handoffs;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (nativeForkTransfer !== undefined) {
@@ -476,14 +512,19 @@ export const layer: Layer.Layer<
           session.providerSession.capabilities.checkpointing.appCanCheckpointFilesystem,
         message: {
           messageId: message.id,
-          text:
+          // Appended after the handoff composition on purpose: the upload list
+          // should be the last thing the model reads, not something buried
+          // inside a handoff summary.
+          text: appendUploadedFilesBlock(
             effectiveHandoffs.length === 0
               ? message.text
               : providerMessageWithContextHandoffs({
                   handoffs: effectiveHandoffs,
                   userText: message.text,
                 }),
-          attachments: message.attachments,
+            uploads.promptBlock,
+          ),
+          attachments: uploads.inlineAttachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,
         },

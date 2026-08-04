@@ -23,7 +23,9 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { AttachmentMaterialization } from "../attachments/AttachmentMaterialization.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import {
@@ -235,7 +237,24 @@ it.effect(
         }),
       );
       const controlLayer = providerTurnControlLayer.pipe(
-        Layer.provide(Layer.merge(projectionLayer, sessionManagerLayer)),
+        Layer.provide(
+          Layer.mergeAll(
+            projectionLayer,
+            sessionManagerLayer,
+            // Interrupt and restart never carry a message, so neither of these
+            // is reached on this path.
+            Layer.succeed(
+              AttachmentMaterialization,
+              AttachmentMaterialization.of({
+                materialize: () => Effect.die("unused materialize"),
+              }),
+            ),
+            Layer.succeed(
+              RuntimePolicyV2,
+              RuntimePolicyV2.of({ resolve: () => Effect.die("unused resolve") }),
+            ),
+          ),
+        ),
       );
 
       const [ordinaryInterrupt, unrelatedRestart] = yield* Effect.gen(function* () {

@@ -1,4 +1,5 @@
 import type { UploadChatAttachment, UploadChatImageAttachment } from "@t3tools/contracts";
+import { classifyComposerAttachment } from "@t3tools/shared/composerAttachments";
 
 /**
  * Pure attachment-kind helpers, kept free of native imports so they stay
@@ -22,7 +23,9 @@ export interface DraftComposerDocumentAttachment {
 }
 
 /** Anything the composer can hold as a pending attachment. */
-export type DraftComposerAttachment = DraftComposerImageAttachment | DraftComposerDocumentAttachment;
+export type DraftComposerAttachment =
+  | DraftComposerImageAttachment
+  | DraftComposerDocumentAttachment;
 
 export function isDraftComposerImageAttachment(
   attachment: DraftComposerAttachment,
@@ -30,18 +33,16 @@ export function isDraftComposerImageAttachment(
   return attachment.type === "image";
 }
 
-const VIDEO_MIME_PATTERN = /^video\//i;
-
-/** The contract splits these three by MIME, so the picker must agree. */
-export function documentAttachmentKind(mimeType: string): "file" | "pdf" | "video" {
-  const normalized = mimeType.toLowerCase();
-  if (normalized === "application/pdf") return "pdf";
-  if (VIDEO_MIME_PATTERN.test(normalized)) return "video";
-  return "file";
-}
-
-export function formatAttachmentSizeLimitError(name: string): string {
-  return `'${name}' exceeds the 20 MB attachment limit.`;
+/**
+ * The contract splits these three by MIME, so the picker must agree.
+ *
+ * Delegates to the shared classifier rather than keeping mobile's own copy:
+ * the two used to disagree, which is how a mobile user on Claude could attach a
+ * PDF that web refused and the server then rejected at turn time.
+ */
+export function documentAttachmentKind(mimeType: string, name = ""): "file" | "pdf" | "video" {
+  const kind = classifyComposerAttachment(mimeType, name);
+  return kind === "image" ? "file" : kind;
 }
 
 /**
