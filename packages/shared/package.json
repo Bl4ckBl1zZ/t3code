@@ -195,6 +195,14 @@
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
     },
+    "./terminalUrlDetection": {
+      "types": "./src/terminalUrlDetection.ts",
+      "import": "./src/terminalUrlDetection.ts"
+    },
+    "./threadEndpoints": {
+      "types": "./src/threadEndpoints.ts",
+      "import": "./src/threadEndpoints.ts"
+    },
     "./relayClient": {
       "types": "./src/relayClient.ts",
       "import": "./src/relayClient.ts"

@@ -27,7 +27,8 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { useCopyThreadHandoffScript } from "../home/useThreadListActions";
+import { useCopyThreadHandoffScript, useRegenerateThreadTitle } from "../home/useThreadListActions";
+import { REGENERATE_TITLE_MENU_ACTION_ID, withTitleRegenerationMenuAction } from "./threadRowMenu";
 import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -379,6 +380,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly settlementSupported: boolean;
   /** False on servers that predate thread.snooze/unsnooze. */
   readonly snoozeSupported: boolean;
+  /** False on servers that predate regenerateTitle on thread.meta.update:
+      the menu action is hidden rather than sent and rejected. */
+  readonly titleRegenerationSupported: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   /** Reports this row's live PR state up so the partition can auto-settle
@@ -444,6 +448,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleUnsettle = useCallback(() => onUnsettleThread(thread), [onUnsettleThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const copyHandoffScript = useCopyThreadHandoffScript();
+  const regenerateTitle = useRegenerateThreadTitle();
+  const isRegeneratingTitle = thread.titleRegeneration != null;
 
   // Swipe: the v2 primary action is the lifecycle transition. Every settled
   // row can un-settle — explicit settles clear the override, auto-settled
@@ -500,6 +506,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "copy-handoff-script") copyHandoffScript(thread);
+      if (nativeEvent.event === REGENERATE_TITLE_MENU_ACTION_ID && !isRegeneratingTitle) {
+        regenerateTitle(thread);
+      }
       if (nativeEvent.event === "delete") handleDelete();
       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
         event: nativeEvent.event,
@@ -520,8 +529,34 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleSnooze,
       handleUnsettle,
       handleUnsnooze,
+      isRegeneratingTitle,
+      regenerateTitle,
       snoozePresets,
       thread,
+    ],
+  );
+  const menuActions = useMemo(
+    () =>
+      withTitleRegenerationMenuAction(
+        snoozedRow
+          ? SNOOZED_MENU_ACTIONS
+          : !props.settlementSupported
+            ? LEGACY_MENU_ACTIONS
+            : canUnsettle
+              ? SLIM_MENU_ACTIONS
+              : swipeActions.secondary === "snooze"
+                ? snoozableCardMenuActions
+                : CARD_MENU_ACTIONS,
+        { supported: props.titleRegenerationSupported, regenerating: isRegeneratingTitle },
+      ),
+    [
+      canUnsettle,
+      isRegeneratingTitle,
+      props.settlementSupported,
+      props.titleRegenerationSupported,
+      snoozableCardMenuActions,
+      snoozedRow,
+      swipeActions.secondary,
     ],
   );
   const primaryAction = useMemo(() => {
@@ -847,17 +882,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => (
           <ControlPillMenu
-            actions={
-              snoozedRow
-                ? SNOOZED_MENU_ACTIONS
-                : !props.settlementSupported
-                  ? LEGACY_MENU_ACTIONS
-                  : canUnsettle
-                    ? SLIM_MENU_ACTIONS
-                    : swipeActions.secondary === "snooze"
-                      ? snoozableCardMenuActions
-                      : CARD_MENU_ACTIONS
-            }
+            actions={menuActions}
             onPressAction={handleMenuAction}
             shouldOpenOnLongPress
           >

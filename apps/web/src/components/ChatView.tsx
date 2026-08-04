@@ -151,8 +151,10 @@ import {
   setActivePreviewTab,
   useThreadPreviewState,
 } from "../previewStateStore";
+import { resolveEndpointReachability } from "../browser/browserTargetResolver";
 import { addBrowserSurface } from "./preview/addBrowserSurface";
 import { closePreviewSession } from "./preview/closePreviewSession";
+import { openPreviewSession } from "./preview/openPreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
@@ -3189,6 +3191,24 @@ function ChatViewContent(props: ChatViewProps) {
           activeThreadId,
           error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
         );
+        return;
+      }
+
+      // Only ever for a URL the user configured on the script themselves —
+      // never for a detected one. Terminal output is attacker-controllable, so
+      // automatic navigation stays opt-in and explicit.
+      if (script.autoOpenPreview !== true || !script.previewUrl) return;
+      const reachability = resolveEndpointReachability(environmentId, script.previewUrl);
+      if (reachability.kind === "unreachable" || !isPreviewSupportedInRuntime()) return;
+      const previewResult = await openPreviewSession({
+        openPreview,
+        threadRef: { environmentId, threadId: activeThreadId },
+        url: reachability.url,
+      });
+      if (previewResult._tag === "Success") {
+        useRightPanelStore
+          .getState()
+          .openBrowser({ environmentId, threadId: activeThreadId }, previewResult.value.tabId);
       }
     },
     [
@@ -6410,6 +6430,7 @@ function ChatViewContent(props: ChatViewProps) {
     onAddProjectScript: saveProjectScript,
     onUpdateProjectScript: updateProjectScript,
     onDeleteProjectScript: deleteProjectScript,
+    openPreview,
   };
   const panelToggleControlProps = {
     terminalAvailable: activeProject !== null && !isHermesConversation,

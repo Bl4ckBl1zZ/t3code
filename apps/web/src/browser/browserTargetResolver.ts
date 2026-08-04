@@ -128,6 +128,43 @@ export function resolveBrowserNavigationTarget(
   return resolveEnvironmentPortTarget(environmentId, target, readEnvironmentUrl(environmentId));
 }
 
+export type EndpointReachability =
+  | { readonly kind: "reachable"; readonly url: string }
+  | { readonly kind: "unreachable"; readonly reason: string };
+
+/**
+ * Whether this client can actually open a detected dev-server URL, and if not,
+ * why.
+ *
+ * `resolveDiscoveredServerUrl` below swallows the failure and hands back the
+ * raw loopback URL, which is right for the preview panel's own error surface
+ * but wrong for a list of clickable rows: it would present a link that cannot
+ * work with nothing to explain it. Callers rendering an affordance should use
+ * this and disable the row instead.
+ */
+export function resolveEndpointReachability(
+  environmentId: EnvironmentId,
+  rawUrl: string,
+): EndpointReachability {
+  try {
+    return {
+      kind: "reachable",
+      url: resolveBrowserNavigationTarget(environmentId, {
+        kind: "url",
+        url: normalizePreviewUrl(rawUrl),
+      }).resolvedUrl,
+    };
+  } catch (error) {
+    return {
+      kind: "unreachable",
+      reason:
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "This environment's address is not reachable from here.",
+    };
+  }
+}
+
 export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl: string): string {
   try {
     const normalizedUrl = normalizePreviewUrl(rawUrl);

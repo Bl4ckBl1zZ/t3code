@@ -35,6 +35,10 @@ import {
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import {
+  createTerminalUrlScanner,
+  type TerminalUrlScanner,
+} from "@t3tools/shared/terminalUrlDetection";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -263,6 +267,14 @@ export interface TerminalSessionState {
   activeScriptId: string | null;
   /** Epoch ms when `activeScriptId` was attributed; bounds the launch grace window. */
   activeScriptStartedAtMs: number | null;
+  /** Incremental scanner over this session's output; see `detectedUrls`. */
+  urlScanner: TerminalUrlScanner;
+  /**
+   * Loopback dev-server URLs announced in this session's output. Bound to the
+   * process, not the session: cleared everywhere the process is replaced, so a
+   * URL can never outlive the server that printed it.
+   */
+  detectedUrls: ReadonlyArray<string>;
   runtimeEnv: Record<string, string> | null;
 }
 
@@ -284,6 +296,8 @@ type DrainProcessEventAction =
       sequence: number;
       history: string | null;
       data: string;
+      /** Non-null only on the chunk that introduced a new dev-server URL. */
+      detectedUrls: ReadonlyArray<string> | null;
     }
   | {
       type: "exit";
@@ -362,9 +376,28 @@ function summary(session: TerminalSessionState): TerminalSummary {
     exitSignal: session.exitSignal,
     hasRunningSubprocess: session.hasRunningSubprocess,
     activeScriptId: session.activeScriptId,
+    detectedUrls: session.detectedUrls,
     label: terminalWireLabel(session),
     updatedAt: session.updatedAt,
   };
+}
+
+/**
+ * Clears everything attributed to a terminal's *process* rather than to its
+ * session: subprocess state, script attribution, and announced dev-server URLs.
+ *
+ * Called from every path that replaces or loses the process — exit, stop,
+ * restart, and spawn failure. Keeping it in one place is the point: a detected
+ * URL that outlives the server which printed it becomes a row that navigates
+ * somewhere wrong, and that bug hides until a port gets reused.
+ */
+function resetProcessAttribution(session: TerminalSessionState): void {
+  session.hasRunningSubprocess = false;
+  session.childCommandLabel = null;
+  session.activeScriptId = null;
+  session.activeScriptStartedAtMs = null;
+  session.detectedUrls = [];
+  session.urlScanner.reset();
 }
 
 function shouldPublishTerminalMetadataEvent(event: TerminalEvent): boolean {
@@ -1687,11 +1720,24 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
+          let detectedUrls: ReadonlyArray<string> | null = null;
           if (sanitized.visibleText.length > 0) {
             session.history = capHistory(
               `${session.history}${sanitized.visibleText}`,
               historyLineLimit,
             );
+            // Scan the same text the history keeps. `sanitizeTerminalHistoryChunk`
+            // preserves colour sequences, so the scanner strips them itself —
+            // Vite emphasises the port inside the URL, and matching around that
+            // would silently drop it.
+            const found = session.urlScanner.push(sanitized.visibleText);
+            if (found.length > 0) {
+              session.detectedUrls = [
+                ...session.detectedUrls,
+                ...found.map((detected) => detected.url),
+              ];
+              detectedUrls = session.detectedUrls;
+            }
           }
           const eventStamp = advanceEventSequence(session);
 
@@ -1702,6 +1748,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             sequence: eventStamp.sequence,
             history: sanitized.visibleText.length > 0 ? session.history : null,
             data: nextEvent.data,
+            detectedUrls,
           } as const;
         }
 
@@ -1709,10 +1756,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         cleanupProcessHandles(session);
         session.process = null;
         session.pid = null;
-        session.hasRunningSubprocess = false;
-        session.childCommandLabel = null;
-        session.activeScriptId = null;
-        session.activeScriptStartedAtMs = null;
+        resetProcessAttribution(session);
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
         session.pendingProcessEvents = [];
@@ -1753,6 +1797,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           sequence: action.sequence,
           data: action.data,
         });
+        // Output itself is excluded from the metadata stream, so a newly
+        // announced URL needs an activity beat to reach clients. Only fires on
+        // the chunk that introduced one, so a chatty dev server costs nothing.
+        if (action.detectedUrls !== null) {
+          yield* publishEvent({
+            type: "activity",
+            threadId: action.threadId,
+            terminalId: action.terminalId,
+            sequence: advanceEventSequence(session).sequence,
+            hasRunningSubprocess: session.hasRunningSubprocess,
+            label: terminalWireLabel(session),
+          });
+        }
         continue;
       }
 
@@ -1783,10 +1840,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       cleanupProcessHandles(session);
       session.process = null;
       session.pid = null;
-      session.hasRunningSubprocess = false;
-      session.childCommandLabel = null;
-      session.activeScriptId = null;
-      session.activeScriptStartedAtMs = null;
+      resetProcessAttribution(session);
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
       session.pendingProcessEvents = [];
@@ -1882,10 +1936,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.rows = input.rows;
       session.exitCode = null;
       session.exitSignal = null;
-      session.hasRunningSubprocess = false;
-      session.childCommandLabel = null;
-      session.activeScriptId = null;
-      session.activeScriptStartedAtMs = null;
+      resetProcessAttribution(session);
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -1961,10 +2012,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.status = "error";
         session.pid = null;
         session.process = null;
-        session.hasRunningSubprocess = false;
-        session.childCommandLabel = null;
-        session.activeScriptId = null;
-        session.activeScriptStartedAtMs = null;
+        resetProcessAttribution(session);
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2218,6 +2266,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         childCommandLabel: null,
         activeScriptId: null,
         activeScriptStartedAtMs: null,
+        urlScanner: createTerminalUrlScanner(),
+        detectedUrls: [],
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
 
@@ -2653,6 +2703,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             childCommandLabel: null,
             activeScriptId: null,
             activeScriptStartedAtMs: null,
+            urlScanner: createTerminalUrlScanner(),
+            detectedUrls: [],
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
           const createdSession = session;

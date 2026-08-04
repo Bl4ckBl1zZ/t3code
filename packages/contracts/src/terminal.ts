@@ -131,6 +131,16 @@ export const TerminalSummary = Schema.Struct({
    * script command is written, cleared once the subprocess goes idle).
    */
   activeScriptId: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
+  /**
+   * Loopback dev-server URLs this terminal's process announced in its output,
+   * in the order first seen. Carries what a listening-socket scan cannot know:
+   * the scheme, base path, and query the server actually intends to serve.
+   *
+   * Optional so clients on older servers simply fall back to socket discovery
+   * rather than needing a capability negotiation. Cleared whenever the process
+   * is replaced, so a row can never outlive what produced it.
+   */
+  detectedUrls: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
   /** Server-computed display title (idle shell vs subprocess command). */
   label: Schema.String.check(Schema.isMaxLength(128)),
   updatedAt: Schema.String,

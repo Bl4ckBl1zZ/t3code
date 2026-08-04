@@ -8,6 +8,7 @@ import type {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 
+import type { OpenPreviewMutation } from "../../browser/openFileInPreview";
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
@@ -24,6 +25,7 @@ import { useKnownTerminalSessions } from "../../state/terminalSessions";
 import { useProjectScriptRunStates } from "../../state/projectScriptRuns";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadPortsPanel } from "./ThreadPortsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
 interface VersionMismatchIssue {
@@ -71,6 +73,8 @@ export interface ThreadDetailsPanelProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /** Opens a preview tab; absent for surfaces that have no browser to open into. */
+  openPreview?: OpenPreviewMutation<unknown>;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -244,6 +248,16 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               Coding tasks Hermes delegates through T3 Code will appear here.
             </p>
           </section>
+        ) : null}
+
+        {!props.isProjectlessConversation && !props.draftId && props.openPreview ? (
+          <ThreadPortsPanel
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
+            scripts={props.activeProjectScripts}
+            openPreview={props.openPreview}
+          />
         ) : null}
 
         {!props.isProjectlessConversation && props.gitCwd ? (
