@@ -1,9 +1,15 @@
-name: iOS TestFlight
+name: iOS TestFlight (EAS fallback)
+
+# Superseded by mobile-ios-testflight.yml, which builds the same app with
+# xcodebuild and uploads it directly. Kept, and manual-only, until the direct
+# path has produced a few TestFlight builds — it is the known-good route back if
+# something about signing or the archive turns out to be EAS-specific.
+#
+# Note that the two disagree about build numbers by design: this workflow uses
+# the EAS remote counter, the direct one asks App Store Connect. Running this
+# after the direct pipeline may need the EAS counter nudged forward first.
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:

@@ -75,6 +75,7 @@ import {
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { MessageAttachmentPlacement } from "./MessageAttachmentPlacement";
+import { MessageFileAttachmentTile } from "./MessageFileAttachmentTile";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
@@ -132,7 +133,7 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
-import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { formatPathWithinWorkspace, formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
   formatReviewCommentFence,
@@ -1164,19 +1165,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       preload="metadata"
                       className="block h-auto max-h-[220px] w-full bg-black object-contain"
                     />
-                  ) : attachment.previewUrl ? (
-                    <a
-                      href={attachment.previewUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-xs text-foreground underline-offset-2 hover:underline"
-                    >
-                      {attachment.name}
-                    </a>
                   ) : (
-                    <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
-                      {attachment.name}
-                    </div>
+                    <MessageFileAttachmentTile attachment={attachment} />
                   )}
                   <MessageAttachmentPlacement
                     attachment={attachment}
@@ -2655,9 +2645,13 @@ function workEntryPreview(
 ) {
   // File changes read as their path (with a diffstat rendered separately) —
   // the raw diff text in `detail` is inspector material, not a preview.
+  //
+  // These rows drop the workspace name: every path in a turn shares one working
+  // directory, so a repeated `t3code-139f72d1/` prefix is noise that pushes the
+  // filename toward the truncation.
   if (workEntry.itemType === "file_change" && (workEntry.changedFiles?.length ?? 0) > 0) {
     const [filePath] = workEntry.changedFiles!;
-    return filePath ? formatWorkspaceRelativePath(filePath, workspaceRoot) : null;
+    return filePath ? formatPathWithinWorkspace(filePath, workspaceRoot) : null;
   }
   // Native read-style tools (Read, Glob, Grep, …) arrive as dynamic_tool items
   // whose arguments otherwise stay buried in the expanded inspector JSON.
@@ -2666,7 +2660,7 @@ function workEntryPreview(
     const inputPreview = dynamicToolInputPreview(input);
     if (inputPreview) {
       return inputPreview.kind === "path"
-        ? formatWorkspaceRelativePath(inputPreview.value, workspaceRoot)
+        ? formatPathWithinWorkspace(inputPreview.value, workspaceRoot)
         : inputPreview.value;
     }
   }

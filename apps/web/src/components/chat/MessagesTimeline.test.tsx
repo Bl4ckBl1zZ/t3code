@@ -1637,7 +1637,9 @@ describe("MessagesTimeline", () => {
     expect(failedMarkup).toContain('aria-label="Tool call failed"');
   });
 
-  it("formats changed file paths from the workspace root", async () => {
+  // The row has one working directory, so the workspace name on every line is
+  // width spent on the part the user already knows.
+  it("shows changed file paths relative to the workspace, without its name", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1662,8 +1664,49 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("t3code/apps/web/src/session-logic.ts");
+    expect(markup).toContain("apps/web/src/session-logic.ts");
     expect(markup).not.toContain("C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts");
+    expect(markup).not.toContain("t3code/apps/web/src/session-logic.ts");
+  });
+
+  it("shows the added and removed line counts for a file change", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={
+          [
+            {
+              id: "entry-1",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry: {
+                id: "work-1",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                label: "Updated files",
+                tone: "tool",
+                itemType: "file_change",
+                toolLifecycleStatus: "completed",
+                changedFiles: ["apps/web/src/session-logic.ts"],
+                projectedItem: {
+                  item: {
+                    type: "file_change",
+                    fileName: "apps/web/src/session-logic.ts",
+                    additions: 17,
+                    deletions: 12,
+                  },
+                },
+              },
+            },
+          ] as never
+        }
+        workspaceRoot="C:/Users/mike/dev-stuff/t3code"
+      />,
+    );
+
+    expect(markup).toContain("+17");
+    expect(markup).toContain("-12");
+    expect(markup).toContain("17 additions, 12 deletions");
   });
 
   it("renders review comment contexts as structured cards instead of raw tags", () => {
