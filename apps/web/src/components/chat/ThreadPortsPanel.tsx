@@ -5,7 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ThreadEndpoint } from "@t3tools/shared/threadEndpoints";
 import { ChevronDownIcon, CopyIcon, ExternalLinkIcon, Globe2Icon } from "lucide-react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { resolveEndpointReachability } from "~/browser/browserTargetResolver";
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
@@ -55,7 +55,12 @@ const EMPTY_PINNED_URLS: ReadonlyArray<string> = Object.freeze([]);
 
 function EndpointFavicon({ url }: { readonly url: string }) {
   const faviconUrl = faviconUrlForOrigin(url, 32);
-  if (!faviconUrl) return <Globe2Icon className={THREAD_DETAILS_PANEL_ICON_CLASS} />;
+  // A lookup that fails still owes the row an icon; without this the broken
+  // image renders as an empty box where every sibling row has a glyph.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (!faviconUrl || failedUrl === faviconUrl) {
+    return <Globe2Icon className={THREAD_DETAILS_PANEL_ICON_CLASS} />;
+  }
   return (
     <img
       src={faviconUrl}
@@ -63,6 +68,7 @@ function EndpointFavicon({ url }: { readonly url: string }) {
       aria-hidden
       draggable={false}
       className="-mx-0.5 size-4 shrink-0 rounded-sm"
+      onError={() => setFailedUrl(faviconUrl)}
     />
   );
 }
