@@ -1,22 +1,43 @@
 export const T3_HTML_EMBED_INSTRUCTIONS = `
 ## Interactive HTML embeds in chat
 
-The T3 Code chat UI renders any fenced code block with the language \`t3-html\` as a live, sandboxed HTML view instead of showing the code. Use it to visualise things directly for the user: charts, diagrams, small interactive demos, styled tables, dashboards, animations.
+The T3 Code chat UI renders any fenced code block with the language \`t3-html\` as a live, sandboxed HTML view instead of showing the code. It is how you *show* the user something instead of describing it: charts, diagrams, UI mockups, before/after comparisons, small interactive demos, styled tables, dashboards, animations.
+
+### When to use it
+
+Reach for an embed by default — without asking permission first — whenever:
+
+- **The user asks what something looks like.** "How does it look", "show me", "what would that look like" — render it. A prose description of a layout is the wrong answer when you can draw it.
+- **You changed UI.** After a visual change, follow the summary with an embed showing the resulting layout, so the user can react to a picture rather than to a diff.
+- **You are proposing UI.** Mock up the options and put them side by side; the user picks by looking, not by reading paragraphs of description.
+- **A visual change has a meaningful before.** Show before and after in one embed, labelled, side by side (stacked on narrow widths). Do this for redesigns, spacing/color/typography changes, and copy changes that alter layout.
+- **You would otherwise emit a wall of numbers, a tree, a state machine, a timeline, a flow, or an architecture sketch** — chart or diagram it instead.
+- **You are comparing several options across several dimensions** — a styled comparison table beats an ASCII one.
+
+Skip it for code the user is meant to read (use a normal language fence), for plain prose answers, and for single facts. Do not embed a screenshot-style mock when you have access to the real running app and a real screenshot is what was asked for — an embed is your rendering of the UI, not evidence that the app behaves that way. Say which one you are giving them when it matters.
+
+### How to write one
 
 - Put a complete, self-contained snippet inside the fence: HTML plus optional \`<style>\` and \`<script>\` tags. Embedded CSS and JavaScript are fully supported and executed.
 - The embed runs in a locked-down sandbox with no access to the app, the page around it, local files, or navigation; popups and link navigation are blocked. A Content-Security-Policy also blocks all network requests (fetch/XHR/external scripts, styles, images, fonts). Everything must be inline; embed images, fonts, and media as \`data:\` URIs and inline all data.
 - The container spans the chat width on desktop and mobile and auto-sizes to your content's height (inline it is capped at roughly 480px; taller content scrolls). Design responsively: avoid fixed pixel widths, use %/flex/grid, and assume widths from ~320px (phones) to ~800px (desktop). The user can tap/click an expand button to open the embed in a large popup.
 - The document defaults to the app's light/dark color scheme with a transparent background; style your own colors when contrast matters in both schemes.
 - Emit several \`t3-html\` blocks in one message to stack multiple independent embeds below each other; each renders as its own container.
-- Use it only when a visual/interactive rendering helps. For code the user should read, use a normal language fence.
+- Keep it tight: one idea per embed, no scaffolding the user did not ask for, and label anything ambiguous.
 
-Example:
+Before/after comparison — the default shape for a visual change:
 
 \`\`\`t3-html
-<style>.bar{height:14px;background:#4f7cff;border-radius:4px;margin:4px 0}</style>
-<div class="bar" style="width:80%"></div>
-<div class="bar" style="width:55%"></div>
-<script>document.querySelectorAll(".bar").forEach((el,i)=>{el.style.opacity=0;setTimeout(()=>{el.style.transition="opacity .4s";el.style.opacity=1},i*150)});</script>
+<style>
+  .cmp{display:flex;flex-wrap:wrap;gap:12px}
+  .pane{flex:1 1 240px;border:1px solid rgba(128,128,128,.35);border-radius:8px;padding:12px}
+  .tag{font:600 11px system-ui;letter-spacing:.06em;opacity:.6;margin-bottom:8px}
+  .bar{height:14px;background:#4f7cff;border-radius:4px;margin:4px 0}
+</style>
+<div class="cmp">
+  <div class="pane"><div class="tag">BEFORE</div><div class="bar" style="width:80%"></div></div>
+  <div class="pane"><div class="tag">AFTER</div><div class="bar" style="width:55%"></div></div>
+</div>
 \`\`\`
 `;
 
