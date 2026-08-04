@@ -1130,6 +1130,145 @@ it.layer(
     }),
   );
 
+  /**
+   * Detected URLs are attributed to the *process*, not the session, so every
+   * path that replaces the process has to forget them. A URL that outlives the
+   * server which printed it becomes a row pointing somewhere wrong, and that
+   * only surfaces once a port gets reused — hence one test per reset path.
+   */
+  const readDetectedUrls = (manager: TerminalManager.TerminalManager["Service"]) =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+      const unsubscribe = yield* manager.subscribeMetadata((event) =>
+        event.type === "remove"
+          ? Effect.void
+          : Ref.set(
+              seen,
+              (event.type === "snapshot" ? event.terminals : [event.terminal]).find(
+                (summary) => summary.terminalId === DEFAULT_TERMINAL_ID,
+              )?.detectedUrls ?? [],
+            ),
+      );
+      const urls = yield* Ref.get(seen);
+      unsubscribe();
+      return urls;
+    });
+
+  it.effect("detects a dev-server URL announced in terminal output", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      // Vite emphasises the port inside the URL; matching around the escape
+      // codes rather than through them would silently drop it.
+      process.emitData(`  \u001b[36mhttp://localhost:\u001b[1m5173\u001b[22m/\u001b[39m\n`);
+
+      yield* waitFor(
+        Effect.map(readDetectedUrls(manager), (urls) => urls.includes("http://localhost:5173/")),
+      );
+    }),
+  );
+
+  it.effect("detects a URL split across two PTY reads", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("  Local: http://local");
+      process.emitData("host:4321/\n");
+
+      yield* waitFor(
+        Effect.map(readDetectedUrls(manager), (urls) => urls.includes("http://localhost:4321/")),
+      );
+    }),
+  );
+
+  it.effect("ignores non-loopback links printed alongside the banner", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("See https://vitejs.dev/guide/ for details.\n");
+      process.emitData("  Local: http://localhost:5173/\n");
+
+      yield* waitFor(
+        Effect.map(readDetectedUrls(manager), (urls) => urls.includes("http://localhost:5173/")),
+      );
+      expect(yield* readDetectedUrls(manager)).toEqual(["http://localhost:5173/"]);
+    }),
+  );
+
+  it.effect("forgets detected URLs when the process exits", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("  Local: http://localhost:5173/\n");
+      yield* waitFor(Effect.map(readDetectedUrls(manager), (urls) => urls.length === 1));
+
+      process.emitExit({ exitCode: 0, signal: 0 });
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "exited")),
+      );
+
+      expect(yield* readDetectedUrls(manager)).toEqual([]);
+    }),
+  );
+
+  it.effect("forgets detected URLs when the terminal restarts", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("  Local: http://localhost:5173/\n");
+      yield* waitFor(Effect.map(readDetectedUrls(manager), (urls) => urls.length === 1));
+
+      yield* manager.restart(restartInput());
+
+      expect(yield* readDetectedUrls(manager)).toEqual([]);
+    }),
+  );
+
+  it.effect("re-detects the same port after a restart", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput());
+      const first = ptyAdapter.processes[0];
+      expect(first).toBeDefined();
+      if (!first) return;
+
+      first.emitData("  Local: http://localhost:5173/\n");
+      yield* waitFor(Effect.map(readDetectedUrls(manager), (urls) => urls.length === 1));
+
+      yield* manager.restart(restartInput());
+      const second = ptyAdapter.processes[1];
+      expect(second).toBeDefined();
+      if (!second) return;
+
+      // The dedupe set has to reset with the process, or a restarted dev
+      // server never reappears in the panel.
+      second.emitData("  Local: http://localhost:5173/\n");
+      yield* waitFor(
+        Effect.map(readDetectedUrls(manager), (urls) => urls.includes("http://localhost:5173/")),
+      );
+    }),
+  );
+
   it.effect("escalates terminal shutdown to SIGKILL when process does not exit in time", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, { processKillGraceMs: 10 });

@@ -22,8 +22,9 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { useCopyThreadHandoffScript } from "../home/useThreadListActions";
+import { useCopyThreadHandoffScript, useRegenerateThreadTitle } from "../home/useThreadListActions";
 import { resolveThreadStatus } from "./threadPresentation";
+import { REGENERATE_TITLE_MENU_ACTION_ID, withTitleRegenerationMenuAction } from "./threadRowMenu";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -421,6 +422,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
   readonly projectCwd: string | null;
+  /** False on servers that predate regenerateTitle on thread.meta.update:
+      the menu action is hidden rather than sent and rejected. */
+  readonly titleRegenerationSupported: boolean;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly isLast: boolean;
@@ -473,6 +477,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const copyHandoffScript = useCopyThreadHandoffScript();
+  const regenerateTitle = useRegenerateThreadTitle();
+  const isRegeneratingTitle = thread.titleRegeneration != null;
   const primaryAction = useMemo(
     () => ({
       accessibilityLabel: `Archive ${thread.title}`,
@@ -486,9 +492,20 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "copy-handoff-script") copyHandoffScript(thread);
+      if (nativeEvent.event === REGENERATE_TITLE_MENU_ACTION_ID && !isRegeneratingTitle) {
+        regenerateTitle(thread);
+      }
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [copyHandoffScript, handleArchive, handleDelete, thread],
+    [copyHandoffScript, handleArchive, handleDelete, isRegeneratingTitle, regenerateTitle, thread],
+  );
+  const menuActions = useMemo(
+    () =>
+      withTitleRegenerationMenuAction(THREAD_ROW_MENU_ACTIONS, {
+        supported: props.titleRegenerationSupported,
+        regenerating: isRegeneratingTitle,
+      }),
+    [isRegeneratingTitle, props.titleRegenerationSupported],
   );
 
   const statusPill = effectiveStatus ? (
@@ -677,7 +694,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         // ControlPillMenu injects onLongPress into the row and anchors the
         // token-styled dropdown to it; taps and swipes are untouched.
         <ControlPillMenu
-          actions={THREAD_ROW_MENU_ACTIONS}
+          actions={menuActions}
           onPressAction={handleMenuAction}
           shouldOpenOnLongPress
         >

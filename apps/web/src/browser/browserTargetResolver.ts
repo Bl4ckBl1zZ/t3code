@@ -3,50 +3,17 @@ import type {
   EnvironmentId,
   PreviewUrlResolution,
 } from "@t3tools/contracts";
+import {
+  isLocalLoopbackHost,
+  isPrivateNetworkHost,
+  resolveEndpointUrl,
+  type EndpointReachability,
+} from "@t3tools/shared/endpointReachability";
 import { isLoopbackHost, normalizePreviewUrl } from "@t3tools/shared/preview";
 
 import { readPreparedConnection } from "~/state/session";
 
-const normalizeHostname = (host: string): string => host.toLowerCase().replace(/^\[|\]$/g, "");
-
-const parseIpv4Address = (host: string): readonly number[] | null => {
-  const parts = normalizeHostname(host).split(".").map(Number);
-  return parts.length === 4 &&
-    parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
-    ? parts
-    : null;
-};
-
-const isLocalLoopbackHost = (host: string): boolean => {
-  const normalized = normalizeHostname(host);
-  if (normalized === "localhost" || normalized === "::1") return true;
-  return parseIpv4Address(normalized)?.[0] === 127;
-};
-
-const isPrivateNetworkHost = (host: string): boolean => {
-  const normalized = normalizeHostname(host);
-  if (isLocalLoopbackHost(normalized) || normalized.endsWith(".local")) {
-    return true;
-  }
-  if (normalized.endsWith(".ts.net")) return true;
-  const parts = parseIpv4Address(normalized);
-  if (parts) {
-    return (
-      parts[0] === 10 ||
-      (parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127) ||
-      (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
-      (parts[0] === 192 && parts[1] === 168) ||
-      (parts[0] === 169 && parts[1] === 254)
-    );
-  }
-  const firstIpv6Token = normalized.split(":", 1)[0] ?? "";
-  if (!normalized.includes(":") || !/^[\da-f]{1,4}$/u.test(firstIpv6Token)) return false;
-  const firstIpv6Hextet = Number.parseInt(firstIpv6Token, 16);
-  return (
-    Number.isInteger(firstIpv6Hextet) &&
-    ((firstIpv6Hextet & 0xfe00) === 0xfc00 || (firstIpv6Hextet & 0xffc0) === 0xfe80)
-  );
-};
+export type { EndpointReachability };
 
 const readEnvironmentUrl = (environmentId: EnvironmentId): URL => {
   const connection = readPreparedConnection(environmentId);
@@ -126,6 +93,26 @@ export function resolveBrowserNavigationTarget(
     };
   }
   return resolveEnvironmentPortTarget(environmentId, target, readEnvironmentUrl(environmentId));
+}
+
+/**
+ * Whether this client can actually open a detected dev-server URL, and if not,
+ * why.
+ *
+ * `resolveDiscoveredServerUrl` below swallows the failure and hands back the
+ * raw loopback URL, which is right for the preview panel's own error surface
+ * but wrong for a list of clickable rows: it would present a link that cannot
+ * work with nothing to explain it. Callers rendering an affordance should use
+ * this and disable the row instead.
+ */
+export function resolveEndpointReachability(
+  environmentId: EnvironmentId,
+  rawUrl: string,
+): EndpointReachability {
+  return resolveEndpointUrl({
+    rawUrl,
+    environmentHttpBaseUrl: readPreparedConnection(environmentId)?.httpBaseUrl ?? null,
+  });
 }
 
 export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl: string): string {

@@ -14,7 +14,16 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { useThreadEndpoints, type MobileThreadEndpoint } from "../../state/use-thread-endpoints";
+import {
+  portEndpointIcon,
+  portEndpointLabel,
+  portEndpointSubtitle,
+  portsMenuAccessibilityLabel,
+  portsMenuTintColor,
+} from "./threadPortsMenu";
 import {
   basename,
   getTerminalStatusLabel,
@@ -420,6 +429,51 @@ export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): He
 export function ThreadGitControls(props: ThreadGitControlsProps) {
   const model = useThreadGitControlModel(props);
   const showActionControls = props.showActionControls ?? true;
+  // The icon's presence is the status signal: the toolbar sprouts a globe when
+  // this thread starts serving, and loses it when nothing is listening. That
+  // costs no transcript space and survives any scroll position, which a card
+  // in the feed header would not — the transcript sits pinned to the bottom.
+  const endpoints = useThreadEndpoints({
+    // Props are loosely typed as `Id | string` for legacy callers; the hook
+    // keys atom families, so it needs the branded forms.
+    environmentId: EnvironmentId.make(String(props.environmentId)),
+    threadId: ThreadId.make(String(props.threadId)),
+    declaredUrls: useMemo(
+      () =>
+        props.projectScripts
+          .map((script) => script.previewUrl)
+          .filter((url): url is string => typeof url === "string" && url.trim().length > 0),
+      [props.projectScripts],
+    ),
+  });
+
+  const openEndpoint = useCallback(async (endpoint: MobileThreadEndpoint) => {
+    if (endpoint.reachability.kind === "unreachable") {
+      Alert.alert("Cannot open this port", endpoint.reachability.reason);
+      return;
+    }
+    // A stale row is a server that stopped answering. Opening it would hand the
+    // user a connection error with no explanation of why.
+    if (endpoint.status === "stale") {
+      Alert.alert(
+        "Port no longer responding",
+        "This server has stopped. Start it again to open it.",
+      );
+      return;
+    }
+    const opened = await tryOpenExternalUrl(endpoint.reachability.url, "dev-server");
+    if (!opened) {
+      Alert.alert("Could not open port", "No app on this device could open that address.");
+    }
+  }, []);
+
+  const copyEndpointUrl = useCallback((endpoint: MobileThreadEndpoint) => {
+    // Copy the reachable form when there is one; otherwise the announced URL is
+    // still useful to paste somewhere that can reach it.
+    const url =
+      endpoint.reachability.kind === "reachable" ? endpoint.reachability.url : endpoint.url;
+    copyTextWithHaptic(url, { target: "port URL" });
+  }, []);
 
   if (!showActionControls) {
     return null;
@@ -427,6 +481,42 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
 
   return (
     <NativeHeaderToolbar placement="right">
+      {endpoints.length > 0 ? (
+        <NativeHeaderToolbar.Menu
+          icon="globe"
+          accessibilityLabel={portsMenuAccessibilityLabel(endpoints)}
+          title="Ports"
+          tintColor={portsMenuTintColor(endpoints)}
+          separateBackground
+        >
+          {endpoints.map((endpoint) => (
+            <NativeHeaderToolbar.MenuAction
+              key={endpoint.key}
+              icon={portEndpointIcon(endpoint)}
+              disabled={endpoint.reachability.kind === "unreachable" || endpoint.status === "stale"}
+              onPress={() => void openEndpoint(endpoint)}
+              subtitle={portEndpointSubtitle(endpoint)}
+            >
+              <NativeHeaderToolbar.Label>
+                {portEndpointLabel(endpoint, props.projectScripts)}
+              </NativeHeaderToolbar.Label>
+            </NativeHeaderToolbar.MenuAction>
+          ))}
+          <NativeHeaderToolbar.Menu icon="doc.on.doc" title="Copy URL">
+            {endpoints.map((endpoint) => (
+              <NativeHeaderToolbar.MenuAction
+                key={endpoint.key}
+                icon="doc.on.doc"
+                onPress={() => copyEndpointUrl(endpoint)}
+              >
+                <NativeHeaderToolbar.Label>
+                  {portEndpointLabel(endpoint, props.projectScripts)}
+                </NativeHeaderToolbar.Label>
+              </NativeHeaderToolbar.MenuAction>
+            ))}
+          </NativeHeaderToolbar.Menu>
+        </NativeHeaderToolbar.Menu>
+      ) : null}
       {showActionControls && props.auxiliaryPaneControl ? (
         <NativeHeaderToolbar.Button
           accessibilityLabel={props.auxiliaryPaneControl.accessibilityLabel}

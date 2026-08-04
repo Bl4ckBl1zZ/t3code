@@ -513,6 +513,15 @@ function ThreadNavigationSidebarPane(
     }
     return supported;
   }, [serverConfigs]);
+  const titleRegenerationEnvironmentIds = useMemo(() => {
+    const supported = new Set<EnvironmentId>();
+    for (const [environmentId, config] of serverConfigs) {
+      if (config.environment.capabilities.threadTitleRegeneration === true) {
+        supported.add(environmentId);
+      }
+    }
+    return supported;
+  }, [serverConfigs]);
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return {
@@ -943,9 +952,7 @@ function ThreadNavigationSidebarPane(
         case "v2-inbox":
           return <ThreadListV2InboxHeader pane="sidebar" />;
         case "v2-work-section":
-          return (
-            <ThreadListV2SectionDivider label={item.label} pane="sidebar" tone={item.tone} />
-          );
+          return <ThreadListV2SectionDivider label={item.label} pane="sidebar" tone={item.tone} />;
         case "v2-pending": {
           const pendingScopeKey = scopedProjectKey(
             item.pendingTask.message.environmentId,
@@ -1013,6 +1020,7 @@ function ThreadNavigationSidebarPane(
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
               onSettleThread={settleThread}
               snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               onSnoozeThread={snoozeThread}
               onUnsnoozeThread={unsnoozeThread}
               onUnsettleThread={unsettleThread}
@@ -1113,6 +1121,7 @@ function ThreadNavigationSidebarPane(
                 scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
               }
               fullSwipeWidth={props.width - 20}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               onArchiveThread={archiveThread}
               onDeleteThread={confirmDeleteThread}
               onSelectThread={handleSelectThread}
@@ -1159,6 +1168,7 @@ function ThreadNavigationSidebarPane(
       sidebarScrollGesture,
       snoozeEnvironmentIds,
       snoozeThread,
+      titleRegenerationEnvironmentIds,
       nowMinute,
       toggleSettledShelf,
       toggleSnoozedShelf,
