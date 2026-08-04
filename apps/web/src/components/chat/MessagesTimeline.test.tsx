@@ -1123,6 +1123,56 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work Log");
   });
 
+  it("renders consecutive subagent cards inside one divided group card", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const subagentEntry = (index: number) => ({
+      id: `subagent-${index}`,
+      kind: "event" as const,
+      createdAt: MESSAGE_CREATED_AT,
+      projectedItem: {
+        position: index,
+        visibility: "local",
+        sourceThreadId: "thread-1",
+        sourceItemId: `subagent-${index}`,
+        item: {
+          id: `subagent-${index}`,
+          threadId: "thread-1",
+          runId: "run-1",
+          nodeId: `node-subagent-${index}`,
+          providerThreadId: "provider-thread-1",
+          providerTurnId: "provider-turn-1",
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: index,
+          status: "running",
+          title: `Map surface ${index}`,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: {},
+          type: "subagent",
+          subagentId: `node-subagent-${index}`,
+          origin: "provider_native",
+          driver: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          childThreadId: `thread-subagent-${index}`,
+          prompt: "Inspect the package",
+          progress: `Reading src/${index}.ts`,
+          result: null,
+        },
+      } as never,
+    });
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[subagentEntry(1), subagentEntry(2)]} />,
+    );
+
+    expect(markup).toContain('data-v2-event-group-count="2"');
+    expect(markup).toContain('aria-label="Open Map surface 1"');
+    expect(markup).toContain('aria-label="Open Map surface 2"');
+    // The group owns the single border; the cards inside it draw dividers only.
+    expect(markup.match(/border-border\/60/g)?.length).toBe(1);
+    expect(markup).toContain("divide-border/60");
+  });
+
   it("shows the final Codex subagent result on a card that opens the child thread", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

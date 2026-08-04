@@ -212,6 +212,12 @@ export type MessagesTimelineRow =
       projectedItem: OrchestrationV2ProjectedTurnItem;
     }
   | {
+      kind: "event-group";
+      id: string;
+      createdAt: string;
+      events: Array<Extract<MessagesTimelineRow, { kind: "event" }>>;
+    }
+  | {
       kind: "agent-updates";
       id: string;
       createdAt: string;
@@ -696,7 +702,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  const mergedRows = mergeAgentUpdateRuns(nextRows);
+  const mergedRows = mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(nextRows));
 
   if (input.isWorking) {
     mergedRows.push({
@@ -745,6 +751,53 @@ function mergeAgentUpdateRuns(rows: MessagesTimelineRow[]): MessagesTimelineRow[
         id: `agent-updates:${row.id}`,
         createdAt: row.createdAt,
         updates: run,
+      });
+    }
+    index += run.length;
+  }
+  return result;
+}
+
+type EventRow = Extract<MessagesTimelineRow, { kind: "event" }>;
+
+// The lifecycle items V2LifecycleRow renders as a bordered "related thread"
+// card (subagent, thread_created) — see RelatedThreadCard.
+const RELATED_THREAD_CARD_ITEM_TYPES = new Set(["subagent", "thread_created"]);
+
+function isRelatedThreadCardRow(row: MessagesTimelineRow): row is EventRow {
+  return row.kind === "event" && RELATED_THREAD_CARD_ITEM_TYPES.has(row.projectedItem.item.type);
+}
+
+// Consecutive related-thread cards (a fan-out of subagents, say) are identically
+// shaped boxes stacked with a gap between them. They read as one list, so a run
+// collapses into a single bordered card whose entries are separated by dividers.
+// Singles keep their ordinary standalone card.
+function mergeRelatedThreadCardRuns(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
+  const result: MessagesTimelineRow[] = [];
+  let index = 0;
+  while (index < rows.length) {
+    const row = rows[index]!;
+    if (!isRelatedThreadCardRow(row)) {
+      result.push(row);
+      index += 1;
+      continue;
+    }
+    const run: EventRow[] = [row];
+    while (index + run.length < rows.length) {
+      const candidate = rows[index + run.length]!;
+      if (!isRelatedThreadCardRow(candidate)) break;
+      run.push(candidate);
+    }
+    if (run.length < 2) {
+      result.push(row);
+    } else {
+      result.push({
+        kind: "event-group",
+        // Anchored to the first card so the group id stays stable as later
+        // cards join it.
+        id: `event-group:${row.id}`,
+        createdAt: row.createdAt,
+        events: run,
       });
     }
     index += run.length;
@@ -821,6 +874,17 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.updates.every((update, index) => {
           const other = bu.updates[index];
           return other !== undefined && isRowUnchanged(update, other);
+        })
+      );
+    }
+
+    case "event-group": {
+      const be = b as typeof a;
+      return (
+        a.events.length === be.events.length &&
+        a.events.every((event, index) => {
+          const other = be.events[index];
+          return other !== undefined && isRowUnchanged(event, other);
         })
       );
     }
