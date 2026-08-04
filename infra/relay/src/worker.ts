@@ -16,6 +16,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 import { RelayApi } from "@t3tools/contracts/relay";
+import { t3ProjectFileSchemaUrl } from "@t3tools/shared/t3ProjectFile";
 
 import {
   clientApi,
@@ -30,6 +31,7 @@ import {
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
+  relayProjectFileSchemaRoute,
   serverApi,
   traceRelayHttpRequestWith,
   tokenApi,
@@ -316,6 +318,7 @@ export const ApiLive = Api.make(
         ),
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         relayDocsRedirectRoute,
+        relayProjectFileSchemaRoute(t3ProjectFileSchemaUrl(relayPublicOrigin)),
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(

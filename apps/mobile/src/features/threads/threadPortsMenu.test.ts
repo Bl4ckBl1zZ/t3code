@@ -22,6 +22,7 @@ const endpoint = (overrides: Partial<MobileThreadEndpoint> = {}): MobileThreadEn
   terminalId: "term-1",
   scriptId: null,
   processName: null,
+  pinned: false,
   firstSeenAtMs: 0,
   reachability: { kind: "reachable", url: "http://192.168.1.24:5173/", via: "private-network" },
   displayAddress: "192.168.1.24:5173",

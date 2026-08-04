@@ -38,16 +38,20 @@ const STATUS_DOT_CLASS: Record<ThreadEndpoint["status"], string> = {
   starting: "animate-pulse bg-sky-500",
   live: "bg-emerald-500",
   stale: "bg-muted-foreground/40",
+  idle: "bg-muted-foreground/30",
 };
 
 const STATUS_LABEL: Record<ThreadEndpoint["status"], string> = {
   starting: "Starting",
   live: "Running",
   stale: "No longer responding",
+  idle: "Not running",
 };
 
 /** Rows beyond this collapse; a docker-compose stack can bring up a dozen. */
 const VISIBLE_ENDPOINT_LIMIT = 4;
+
+const EMPTY_PINNED_URLS: ReadonlyArray<string> = Object.freeze([]);
 
 function EndpointFavicon({ url }: { readonly url: string }) {
   const faviconUrl = faviconUrlForOrigin(url, 32);
@@ -96,12 +100,18 @@ function endpointDetail(
  * sockets the server sees listening — so a row appears the moment a server
  * starts and disappears when it actually stops. Renders nothing when the thread
  * is not serving anything, which is most threads most of the time.
+ *
+ * The exception is `previewUrl` from the project's `t3.json`: that row is
+ * pinned to the top and stays listed even with nothing running, so a project
+ * can hand everyone who opens it the same one-click preview.
  */
 export function ThreadPortsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly threadRef: ScopedThreadRef;
   readonly scripts: ReadonlyArray<ProjectScript> | undefined;
+  /** `previewUrl` from the project's checked-in `t3.json`, if it declares one. */
+  readonly pinnedPreviewUrl?: string | null | undefined;
   readonly openPreview: OpenPreviewMutation<unknown>;
 }) {
   const declaredUrls = useMemo(
@@ -112,10 +122,19 @@ export function ThreadPortsPanel(props: {
     [props.scripts],
   );
 
+  const pinnedUrls = useMemo(
+    () =>
+      typeof props.pinnedPreviewUrl === "string" && props.pinnedPreviewUrl.trim().length > 0
+        ? [props.pinnedPreviewUrl]
+        : EMPTY_PINNED_URLS,
+    [props.pinnedPreviewUrl],
+  );
+
   const endpoints = useThreadEndpoints({
     environmentId: props.environmentId,
     threadId: props.threadId,
     declaredUrls,
+    pinnedUrls,
   });
 
   const reportFailure = useCallback((title: string, error: unknown) => {

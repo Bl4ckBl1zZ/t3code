@@ -3,8 +3,8 @@
  * `t3.json` in sync, in both directions:
  *
  * - When actions change in the app (DB side), they are written to `t3.json`
- *   at the workspace root with the published `$schema` URL, so the file is
- *   always the durable, shareable source of the project's actions.
+ *   at the workspace root, so the file is always the durable, shareable source
+ *   of the project's actions.
  * - When `t3.json` is edited on disk, the changes are decoded and applied to
  *   the project's actions, so edits show up in the app without a restart.
  *
@@ -22,7 +22,8 @@ import {
   CommandId,
   MAX_SCRIPT_ID_LENGTH,
   T3_PROJECT_FILE_NAME,
-  T3_PROJECT_FILE_SCHEMA_URL,
+  T3_PROJECT_FILE_SCHEMA_URL_ENV_VAR,
+  t3ProjectFileSchemaUrl,
   type Project,
   type ProjectScript,
   type T3ProjectFile,
@@ -39,6 +40,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
+import { relayUrlConfig } from "../cloud/publicConfig.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const SYNC_INTERVAL = Duration.millis(1500);
@@ -134,13 +136,36 @@ function fileScriptFromProjectScript(script: ProjectScript): T3ProjectFileScript
   };
 }
 
+/**
+ * URL of the JSON Schema to stamp into files that carry none, or null when
+ * this install has no relay to serve one.
+ *
+ * The relay publishes the document built from its own contracts, so pointing
+ * at the relay this install talks to keeps the schema and the fields it
+ * describes on the same version. Resolved per write rather than cached: the
+ * relay URL is a runtime config a user can change without restarting.
+ */
+const schemaUrlForNewFiles = Effect.gen(function* () {
+  const override = process.env[T3_PROJECT_FILE_SCHEMA_URL_ENV_VAR]?.trim();
+  if (override) return override;
+  const relayUrl = yield* Effect.option(relayUrlConfig);
+  return Option.isNone(relayUrl) ? null : t3ProjectFileSchemaUrl(relayUrl.value);
+}).pipe(Effect.orElseSucceed(() => null));
+
 function renderProjectFile(
   existing: T3ProjectFile | null,
   scripts: ReadonlyArray<ProjectScript>,
+  schemaUrl: string | null,
 ): string {
+  // Only `scripts` is owned by the app; every other field is the user's and is
+  // carried through untouched, or an in-app script edit would quietly delete it.
+  // `$schema` included: a hand-written one is never replaced — a project may
+  // legitimately pin an internal mirror — but a file without one gets ours.
+  const resolvedSchemaUrl = existing?.$schema ?? schemaUrl;
   const document = {
-    $schema: T3_PROJECT_FILE_SCHEMA_URL,
+    ...(resolvedSchemaUrl === null ? {} : { $schema: resolvedSchemaUrl }),
     ...(existing?.iconPath === undefined ? {} : { iconPath: existing.iconPath }),
+    ...(existing?.previewUrl === undefined ? {} : { previewUrl: existing.previewUrl }),
     scripts: scripts.map(fileScriptFromProjectScript),
   };
   return `${JSON.stringify(document, null, 2)}\n`;
@@ -181,7 +206,11 @@ const syncLoop = Effect.gen(function* () {
     filePath: string,
     existing: T3ProjectFile | null,
   ) {
-    yield* fileSystem.writeFileString(filePath, renderProjectFile(existing, project.scripts));
+    const schemaUrl = yield* schemaUrlForNewFiles;
+    yield* fileSystem.writeFileString(
+      filePath,
+      renderProjectFile(existing, project.scripts, schemaUrl),
+    );
     yield* Effect.logInfo("Saved project actions to t3.json.", {
       projectId: project.id,
       filePath,
