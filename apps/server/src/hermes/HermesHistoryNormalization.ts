@@ -477,9 +477,10 @@ export function hermesHistoryMediaRoots(input: {
   return [...new Set(roots)];
 }
 
-class PersistHermesHistoryMediaFailed extends Data.TaggedError(
-  "PersistHermesHistoryMediaFailed",
-)<{ readonly sourcePath: string; readonly cause: unknown }> {}
+class PersistHermesHistoryMediaFailed extends Data.TaggedError("PersistHermesHistoryMediaFailed")<{
+  readonly sourcePath: string;
+  readonly cause: unknown;
+}> {}
 
 export const persistHermesHistoryMedia = Effect.fn("persistHermesHistoryMedia")(function* (input: {
   readonly sourcePath: string;

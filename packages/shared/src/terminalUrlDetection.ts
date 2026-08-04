@@ -223,11 +223,20 @@ export function trimUrlBoundary(raw: string): string {
  * Validates and normalizes one candidate. Returns null for anything that is
  * not a previewable loopback dev server — which is what drops documentation
  * links, telemetry notices, and npm audit URLs printed alongside the banner.
+ *
+ * `allowAnyHost` lifts both of those noise filters — the loopback host gate and
+ * the non-HTTP port list — for URLs that were not scraped out of a stream of
+ * arbitrary text but written down deliberately, where there is no noise to
+ * reject and the address may legitimately be a tunnel or a staging host.
  */
-export function toDetectedUrl(candidate: string): DetectedTerminalUrl | null {
+export function toDetectedUrl(
+  candidate: string,
+  options?: { readonly allowAnyHost?: boolean },
+): DetectedTerminalUrl | null {
+  const allowAnyHost = options?.allowAnyHost === true;
   const trimmed = trimUrlBoundary(candidate.trim());
   if (trimmed.length === 0) return null;
-  if (!isPreviewableUrl(trimmed)) return null;
+  if (!allowAnyHost && !isPreviewableUrl(trimmed)) return null;
 
   let parsed: URL;
   try {
@@ -247,7 +256,7 @@ export function toDetectedUrl(candidate: string): DetectedTerminalUrl | null {
   const defaultPort = scheme === "https" ? 443 : 80;
   const port = parsed.port.length > 0 ? Number.parseInt(parsed.port, 10) : defaultPort;
   if (!Number.isInteger(port) || port <= 0 || port >= 65536) return null;
-  if (NON_HTTP_DEV_PORTS.has(port)) return null;
+  if (!allowAnyHost && NON_HTTP_DEV_PORTS.has(port)) return null;
 
   return {
     url: parsed.href,

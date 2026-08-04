@@ -59,9 +59,7 @@ export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
             {isDraftComposerImageAttachment(attachment) ? (
               <Pressable
                 onPress={
-                  props.onPressImage
-                    ? () => props.onPressImage!(attachment.previewUri)
-                    : undefined
+                  props.onPressImage ? () => props.onPressImage!(attachment.previewUri) : undefined
                 }
               >
                 <Image

@@ -800,7 +800,11 @@ describe("buildThreadListV2ListItems", () => {
 
     expect(
       items.map((item) =>
-        item.type === "v2-work-section" ? `#${item.label}` : item.type === "v2-thread" ? item.item.thread.id : item.type,
+        item.type === "v2-work-section"
+          ? `#${item.label}`
+          : item.type === "v2-thread"
+            ? item.item.thread.id
+            : item.type,
       ),
     ).toEqual(["#Main", "main", "#Needs you", "blocked", "#Active", "ordinary"]);
     // Blocked-on-you work is the only section drawn in the attention tone.
@@ -822,10 +826,9 @@ describe("buildThreadListV2ListItems", () => {
       workSections: true,
     });
 
-    expect(items.map((item) => (item.type === "v2-work-section" ? item.label : item.type))).toEqual([
-      "Active",
-      "v2-thread",
-    ]);
+    expect(items.map((item) => (item.type === "v2-work-section" ? item.label : item.type))).toEqual(
+      ["Active", "v2-thread"],
+    );
   });
 
   it("leaves the Code active block undifferentiated", () => {

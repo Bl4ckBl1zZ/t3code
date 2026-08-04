@@ -31,20 +31,9 @@ const IsoDateTime = Schema.String.check(
     // the pattern above cannot catch, using the month's real length.
     const isLeapYear =
       Number(year) % 4 === 0 && (Number(year) % 100 !== 0 || Number(year) % 400 === 0);
-    const daysInMonth = [
-      31,
-      isLeapYear ? 29 : 28,
-      31,
-      30,
-      31,
-      30,
-      31,
-      31,
-      30,
-      31,
-      30,
-      31,
-    ][monthValue - 1]!;
+    const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][
+      monthValue - 1
+    ]!;
     if (dayValue > daysInMonth) return "Expected an ISO 8601 date-time string.";
     return true;
   }),
