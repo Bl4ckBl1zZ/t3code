@@ -44,12 +44,14 @@ export function summarizeChangedFileScopes(
     });
   });
 
+  // .sort() on the array Array.from just built, not .toSorted(): Hermes doesn't
+  // ship the ES2023 change-by-copy array methods, and this runs on mobile.
   return Array.from(scopes, ([label, scope]) => ({
     label,
     fileCount: scope.fileCount,
     firstIndex: scope.firstIndex,
   }))
-    .toSorted(
+    .sort(
       (left, right) =>
         right.fileCount - left.fileCount ||
         left.firstIndex - right.firstIndex ||

@@ -272,7 +272,9 @@ export function mergeThreadEndpoints(
 
   // First-seen then port: rows must never reshuffle under the pointer when a
   // sibling endpoint changes state.
-  return endpoints.toSorted(
+  // .sort() on the local array, not .toSorted(): Hermes doesn't ship the ES2023
+  // change-by-copy array methods, and this runs on mobile.
+  return endpoints.sort(
     (left, right) => left.firstSeenAtMs - right.firstSeenAtMs || left.port - right.port,
   );
 }
