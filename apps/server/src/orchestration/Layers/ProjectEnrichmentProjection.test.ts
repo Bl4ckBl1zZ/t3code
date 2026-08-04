@@ -78,11 +78,15 @@ it.effect("keeps shell snapshots and later deltas moving while project enrichmen
       `;
 
       const snapshotFiber = yield* query
-        .getShellSnapshot()
+        .getProjectShellsWithoutEnrichment()
         .pipe(Effect.forkChild({ startImmediately: true }));
-      const snapshot = yield* Fiber.join(snapshotFiber);
-      assert.equal(snapshot.projects[0]?.id, projectId);
-      assert.isNull(snapshot.projects[0]?.repositoryIdentity ?? null);
+      const projects = yield* Fiber.join(snapshotFiber);
+      assert.equal(projects[0]?.id, projectId);
+      assert.isNull(projects[0]?.repositoryIdentity ?? null);
+
+      // Kick off enrichment through the single-project read so the hung
+      // resolver is in flight for the delivery assertion below.
+      yield* query.getProjectShellById(projectId).pipe(Effect.forkChild());
       yield* Deferred.await(repositoryStarted);
 
       const delivered = yield* Stream.fromIterable(["project", "thread"] as const).pipe(
