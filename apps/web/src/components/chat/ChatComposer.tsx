@@ -207,6 +207,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
+import { HERMES_DRIVER_KIND } from "../../t3WorkProject";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
@@ -548,6 +549,12 @@ export interface ChatComposerProps {
   isServerThread: boolean;
   isLocalDraftThread: boolean;
   isProjectlessConversation: boolean;
+  /**
+   * Whether the Hermes driver may appear in the model picker. Hermes is the
+   * T3 Work assistant, so it is offered only on the T3 Work composer (and on
+   * threads already running it), never as a coding provider.
+   */
+  allowHermesProvider: boolean;
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
@@ -669,6 +676,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     isProjectlessConversation,
+    allowHermesProvider,
     forceExpandedOnMobile,
     projectSelectionRequired,
     phase,
@@ -784,12 +792,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Instance-aware projection of the wire provider list. One entry per
   // configured instance (default built-in + any custom `providerInstances.*`),
   // sorted default-first per driver kind for a stable picker order.
+  // Hermes is dropped here rather than in the picker so every consumer of the
+  // list agrees: the picker rows, the model options map, and the selection
+  // fallbacks that decide what a Code thread dispatches to.
   const providerInstanceEntries = useMemo<ReadonlyArray<ProviderInstanceEntry>>(
     () =>
       sortProviderInstanceEntries(
         applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
-      ),
-    [providerStatuses, settings],
+      ).filter((entry) => allowHermesProvider || entry.driverKind !== HERMES_DRIVER_KIND),
+    [allowHermesProvider, providerStatuses, settings],
   );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
@@ -962,12 +973,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const composerProviderControls = useMemo(
     () => ({
-      showInteractionModeToggle: getProviderInteractionModeToggle(
-        providerStatuses,
-        selectedProvider,
-      ),
+      // Plan mode targets a project's codebase; Hermes work conversations
+      // have none, so the provider-level flag doesn't apply there.
+      showInteractionModeToggle:
+        !isProjectlessConversation &&
+        getProviderInteractionModeToggle(providerStatuses, selectedProvider),
     }),
-    [providerStatuses, selectedProvider],
+    [isProjectlessConversation, providerStatuses, selectedProvider],
   );
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),

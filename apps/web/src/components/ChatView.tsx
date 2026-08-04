@@ -239,6 +239,7 @@ import {
   resolveThreadDetailRef,
   useProject,
   useProjects,
+  useServerConfigs,
   useThreadProjection,
   useThreadShell,
   useThreadRefs,
@@ -246,6 +247,7 @@ import {
   waitForThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
+import { HERMES_DRIVER_KIND, isT3WorkBackingProject } from "../t3WorkProject";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
@@ -1766,6 +1768,7 @@ function ChatViewContent(props: ChatViewProps) {
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
   const activeProject = useProject(activeProjectRef);
+  const serverConfigs = useServerConfigs();
   const handleNewThreadInActiveProject = useCallback(() => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   }, [activeProjectRef, handleNewThread]);
@@ -2259,6 +2262,17 @@ function ChatViewContent(props: ChatViewProps) {
     providers: providerStatuses,
     selectedProvider,
   });
+  // Hermes is the T3 Work assistant, not a coding provider: it stays out of
+  // the model picker except on the T3 Work backing project. A thread already
+  // running on Hermes keeps it selectable so its picker can still show what
+  // is driving it. This must not depend on `selectedProvider` — that comes
+  // from the picker, and gating the picker on it would be circular.
+  const allowHermesProvider =
+    (activeProject !== null && isT3WorkBackingProject(activeProject, serverConfigs)) ||
+    (isServerThread &&
+      providerStatuses.find(
+        (candidate) => candidate.instanceId === activeRuntime?.providerInstanceId,
+      )?.driver === HERMES_DRIVER_KIND);
   const phase = derivePhase(activeRuntime);
   const pendingRequests = useMemo(
     () =>
@@ -6706,6 +6720,7 @@ function ChatViewContent(props: ChatViewProps) {
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
                             isProjectlessConversation={isHermesConversation}
+                            allowHermesProvider={allowHermesProvider}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}

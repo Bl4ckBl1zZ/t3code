@@ -1600,22 +1600,6 @@ export default function SidebarV2() {
     () => projects.filter((project) => !isT3WorkBackingProject(project, serverConfigs)),
     [projects, serverConfigs],
   );
-  // Hermes threads on these projects are Hermes-as-coding-provider Code
-  // threads, not T3 Work conversations; only classify projects whose
-  // environment config has loaded so the Work partition stays conservative.
-  const hermesCodeProjectKeys = useMemo(
-    () =>
-      new Set(
-        projects
-          .filter(
-            (project) =>
-              serverConfigs.has(project.environmentId) &&
-              !isT3WorkBackingProject(project, serverConfigs),
-          )
-          .map((project) => sidebarProjectKey(project.environmentId, project.id)),
-      ),
-    [projects, serverConfigs],
-  );
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -2001,12 +1985,7 @@ export default function SidebarV2() {
     const preciseNow = new Date().toISOString();
     const visible = threads.filter(
       (thread) =>
-        isThreadVisibleInSidebarWorkspace(
-          thread,
-          workspace,
-          providerDriverKindByInstance,
-          hermesCodeProjectKeys,
-        ) &&
+        isThreadVisibleInSidebarWorkspace(thread, workspace, providerDriverKindByInstance) &&
         (workspace === "work"
           ? workEnvironmentScopeId === null || thread.environmentId === workEnvironmentScopeId
           : scopedProjectKeys === null ||
@@ -2065,7 +2044,6 @@ export default function SidebarV2() {
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
-    hermesCodeProjectKeys,
     nowMinute,
     pinnedThreadKeySet,
     providerDriverKindByInstance,
@@ -2437,7 +2415,6 @@ export default function SidebarV2() {
           threadKey: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         })),
         providerDriverKindByInstance,
-        hermesCodeProjectKeys,
       });
       if (navigation.kind === "remembered-thread") {
         const rememberedThread = threads.find(
@@ -2461,7 +2438,6 @@ export default function SidebarV2() {
       }
     },
     [
-      hermesCodeProjectKeys,
       navigateToThread,
       openWorkComposer,
       projects,
