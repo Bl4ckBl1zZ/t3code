@@ -148,6 +148,13 @@ export const relayCors = HttpRouter.middleware(
   { global: true },
 );
 
+// Delegated-task thread ids embed the parent command id and a task slug, so
+// they routinely exceed find-my-way's default 100-character path-parameter
+// limit. Under that limit the router reports RouteNotFound for otherwise valid
+// requests. 512 comfortably covers current id shapes while still bounding
+// adversarial input.
+export const RELAY_MAX_PATH_PARAM_LENGTH = 512;
+
 export const relayNotFoundRoute = HttpRouter.add(
   "*",
   "/*",

@@ -26,6 +26,7 @@ import {
   relayClientAuthLayer,
   relayDpopClientAuthLayer,
   relayCors,
+  RELAY_MAX_PATH_PARAM_LENGTH,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
@@ -319,6 +320,12 @@ export const ApiLive = Api.make(
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
+      // Delegated-task thread ids exceed find-my-way's default 100-character
+      // path-parameter limit, which makes the router treat the route as
+      // unmatched and surfaces as a 500 instead of handling the publish.
+      Effect.provideService(HttpRouter.RouterConfig, {
+        maxParamLength: RELAY_MAX_PATH_PARAM_LENGTH,
+      }),
       withoutCapturedParentSpan,
       Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, Layer.empty)),
     );

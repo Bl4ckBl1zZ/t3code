@@ -18,6 +18,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { RelayEnvironmentAuth } from "@t3tools/contracts/relay";
 
 import {
+  RELAY_MAX_PATH_PARAM_LENGTH,
   RELAY_REQUEST_DEADLINE_MS,
   relayCors,
   relayDocsRedirectRoute,
@@ -505,6 +506,43 @@ describe("relay routing fallback", () => {
 
       expect(response.status).toBe(404);
       expect(response.headers["access-control-allow-origin"]).toBe("*");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("matches routes whose path parameters exceed the router's default length limit", () =>
+    Effect.gen(function* () {
+      // Shaped like a real delegated-task thread id: it embeds the
+      // percent-encoded parent command id and a task slug, far past
+      // find-my-way's default 100-character parameter cutoff. Past the cutoff
+      // the router bails without backtracking to the `/*` fallback, so the
+      // request surfaced as RouteNotFound instead of a handled response.
+      const threadId = `thread:delegated-task:command%3Amcp%3A${"a".repeat(36)}%3Adelegate-task%3A${"b".repeat(60)}`;
+      expect(threadId.length).toBeGreaterThan(100);
+      expect(threadId.length).toBeLessThanOrEqual(RELAY_MAX_PATH_PARAM_LENGTH);
+
+      const agentActivityRoute = HttpRouter.add(
+        "POST",
+        "/v1/environments/:environmentId/threads/:threadId/agent-activity",
+        HttpServerResponse.empty({ status: 200 }),
+      );
+      const request = HttpServerRequest.fromWeb(
+        new Request(
+          `https://relay.test/v1/environments/env-1/threads/${encodeURIComponent(threadId)}/agent-activity`,
+          { method: "POST" },
+        ),
+      );
+      const httpEffect = yield* HttpRouter.toHttpEffect(
+        Layer.merge(agentActivityRoute, relayNotFoundRoute),
+      ).pipe(
+        Effect.provideService(HttpRouter.RouterConfig, {
+          maxParamLength: RELAY_MAX_PATH_PARAM_LENGTH,
+        }),
+      );
+      const response = yield* httpEffect.pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      );
+
+      expect(response.status).toBe(200);
     }).pipe(Effect.scoped),
   );
 });
