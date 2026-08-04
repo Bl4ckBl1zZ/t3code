@@ -3,11 +3,13 @@ import type {
   NativeStackHeaderItem,
   NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { Platform, View } from "react-native";
+import type { MenuAction } from "@react-native-menu/menu";
+import { Platform, Pressable, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
+import { SymbolView } from "./AppSymbol";
+import { ControlPillMenu } from "./ControlPill";
 import { T3Wordmark } from "./T3Wordmark";
-import { withNativeGlassHeaderItem } from "../features/layout/native-glass-header-items";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../lib/mobileBranding";
 import type { MobileWorkspace } from "../lib/mobileWorkspace";
@@ -24,12 +26,15 @@ export type CompactBrandWorkspaceMenu = {
 };
 
 /**
- * Compact brand lockup sized for native navigation bars.
+ * Compact brand lockup sized for native navigation bars. When `workspaceMenu`
+ * is provided the entire lockup becomes the workspace-switcher trigger: any
+ * tap on it opens the T3 Work / T3 Code menu.
  */
 export function CompactBrandTitle(
   props: {
     readonly nativeLeadingItem?: boolean;
     readonly workspace?: MobileWorkspace;
+    readonly workspaceMenu?: CompactBrandWorkspaceMenu;
   } = {},
 ) {
   const iconColor = useThemeColor("--color-icon");
@@ -47,21 +52,12 @@ export function CompactBrandTitle(
           ? IPAD_HOME_TITLE_OFFSET
           : 0;
 
-  const workspaceLabel = props.workspace === "work" ? "Work" : "Code";
+  const menu = props.workspaceMenu;
+  const workspace = menu?.workspace ?? props.workspace;
+  const workspaceLabel = workspace === "work" ? "Work" : "Code";
 
-  return (
-    <View
-      aria-level={1}
-      accessibilityLabel={`T3 ${workspaceLabel}, Threads`}
-      accessible
-      role="heading"
-      style={{
-        alignItems: "center",
-        flexDirection: "row",
-        gap: 6,
-        marginLeft: titleOffset,
-      }}
-    >
+  const lockup = (
+    <>
       <T3Wordmark color={iconColor} height={15} />
       <Text
         style={{
@@ -73,6 +69,9 @@ export function CompactBrandTitle(
       >
         {workspaceLabel}
       </Text>
+      {menu ? (
+        <SymbolView name="chevron.down" size={12} tintColor={mutedColor} type="monochrome" />
+      ) : null}
       <View
         style={{
           backgroundColor: subtleColor,
@@ -93,8 +92,67 @@ export function CompactBrandTitle(
           {stageLabel}
         </Text>
       </View>
+    </>
+  );
+
+  if (menu) {
+    return (
+      <ControlPillMenu
+        actions={workspaceMenuActions(menu.workspace)}
+        onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "workspace:work") menu.onWorkspaceChange("work");
+          if (nativeEvent.event === "workspace:code") menu.onWorkspaceChange("code");
+        }}
+      >
+        <Pressable
+          accessibilityLabel={`Switch workspace. Current workspace: T3 ${workspaceLabel}`}
+          accessibilityRole="button"
+          style={{
+            alignItems: "center",
+            flexDirection: "row",
+            gap: 6,
+            marginLeft: titleOffset,
+          }}
+        >
+          {lockup}
+        </Pressable>
+      </ControlPillMenu>
+    );
+  }
+
+  return (
+    <View
+      aria-level={1}
+      accessibilityLabel={`T3 ${workspaceLabel}, Threads`}
+      accessible
+      role="heading"
+      style={{
+        alignItems: "center",
+        flexDirection: "row",
+        gap: 6,
+        marginLeft: titleOffset,
+      }}
+    >
+      {lockup}
     </View>
   );
+}
+
+function workspaceMenuActions(workspace: MobileWorkspace): MenuAction[] {
+  return [
+    {
+      id: "workspace:work",
+      title: "T3 Work",
+      subtitle: "Create, learn, and explore",
+      state: workspace === "work" ? ("on" as const) : undefined,
+    },
+    {
+      id: "workspace:code",
+      title: "T3 Code",
+      subtitle: "Build, debug, and ship",
+      state: workspace === "code" ? ("on" as const) : undefined,
+    },
+  ];
 }
 
 export function renderCompactBrandTitle() {
@@ -103,51 +161,17 @@ export function renderCompactBrandTitle() {
 
 // The iOS 26 Mail-style bottom toolbar drops every toolbar item that is sent
 // alongside the native `mailSearchToolbar` item, so the Home workspace
-// switcher cannot live there on Liquid Glass. It rides next to the brand
-// lockup in the navigation bar's leading items instead.
-function workspaceSwitcherHeaderItem(menu: CompactBrandWorkspaceMenu): NativeStackHeaderItem {
-  return withNativeGlassHeaderItem(
-    {
-      type: "menu",
-      label: "",
-      accessibilityLabel: `Switch workspace. Current workspace: T3 ${menu.workspace === "work" ? "Work" : "Code"}`,
-      icon: { type: "sfSymbol" as const, name: "chevron.up.chevron.down" as never },
-      sharesBackground: false,
-      variant: "plain",
-      menu: {
-        title: "Workspace",
-        items: [
-          {
-            type: "action" as const,
-            label: "T3 Work",
-            description: "Create, learn, and explore",
-            state: menu.workspace === "work" ? ("on" as const) : undefined,
-            onPress: () => menu.onWorkspaceChange("work"),
-          },
-          {
-            type: "action" as const,
-            label: "T3 Code",
-            description: "Build, debug, and ship",
-            state: menu.workspace === "code" ? ("on" as const) : undefined,
-            onPress: () => menu.onWorkspaceChange("code"),
-          },
-        ],
-      },
-    },
-    { hidesSharedBackground: true },
-  );
-}
-
+// switcher cannot live there on Liquid Glass. The brand lockup itself is the
+// menu trigger in the navigation bar's leading items.
 export function renderCompactBrandHeaderItems(
   workspaceMenu?: CompactBrandWorkspaceMenu,
 ): NativeStackHeaderItem[] {
   return [
     {
-      element: <CompactBrandTitle nativeLeadingItem workspace={workspaceMenu?.workspace} />,
+      element: <CompactBrandTitle nativeLeadingItem workspaceMenu={workspaceMenu} />,
       hidesSharedBackground: true,
       type: "custom",
     },
-    ...(workspaceMenu ? [workspaceSwitcherHeaderItem(workspaceMenu)] : []),
   ];
 }
 
@@ -165,7 +189,7 @@ export function getCompactBrandHeaderOptions(
   }
 
   return {
-    headerTitle: () => <CompactBrandTitle workspace={workspaceMenu?.workspace} />,
+    headerTitle: () => <CompactBrandTitle workspaceMenu={workspaceMenu} />,
     headerTitleStyle: fallbackTitleStyle,
     title: "Threads",
   };

@@ -20,7 +20,7 @@ import {
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withSpring,
+  withTiming,
 } from "react-native-reanimated";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
@@ -42,8 +42,8 @@ const GESTURE_UI_IDLE = { holdActive: false, cancelArmed: false, cancelProgress:
 // identity it was recorded against and is inserted when that composer is active again.
 const transcriptStash = createVoiceTranscriptStash();
 
-/** Spring for the subtle press-down/spring-back scale on the gesture-driven mic buttons. */
-const PRESS_SPRING = { damping: 18, stiffness: 320, reduceMotion: ReduceMotion.System } as const;
+/** Timing for the subtle press-down/release scale on the gesture-driven mic buttons. */
+const PRESS_TIMING = { duration: 120, reduceMotion: ReduceMotion.System } as const;
 const PRESS_SCALE = 0.92;
 
 /**
@@ -278,7 +278,7 @@ export function useVoiceComposer(input: {
         .onTouchesDown((event, manager) => {
           const touch = event.allTouches[0];
           if (!touch) return;
-          if (!reducedMotion) pressScale.value = withSpring(PRESS_SCALE, PRESS_SPRING);
+          if (!reducedMotion) pressScale.value = withTiming(PRESS_SCALE, PRESS_TIMING);
           lastGestureTouchAtRef.current = Date.now();
           dispatchGesture({ type: "press", at: Date.now(), y: touch.absoluteY }, button);
           if (gestureStateRef.current.type === "pressing") {
@@ -297,13 +297,13 @@ export function useVoiceComposer(input: {
         })
         .onTouchesUp((event, manager) => {
           if (event.numberOfTouches > 0) return;
-          pressScale.value = withSpring(1, PRESS_SPRING);
+          pressScale.value = withTiming(1, PRESS_TIMING);
           lastGestureTouchAtRef.current = Date.now();
           dispatchGesture({ type: "release", at: Date.now() }, button);
           manager.end();
         })
         .onTouchesCancelled((_event, manager) => {
-          pressScale.value = withSpring(1, PRESS_SPRING);
+          pressScale.value = withTiming(1, PRESS_TIMING);
           if (gestureStateRef.current.type !== "idle") {
             dispatchGesture({ type: "interrupt" }, button);
           }

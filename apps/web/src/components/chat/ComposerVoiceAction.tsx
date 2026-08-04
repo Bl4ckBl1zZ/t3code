@@ -434,9 +434,8 @@ export function ComposerVoiceAction(props: {
           className={cn(
             // touch-none keeps a touch hold from turning into a page scroll (which would
             // pointercancel the push-to-talk gesture).
-            // Press feel: a quick dip to .92 on press (100ms ease-out) and a 200ms springy
-            // release — the same overshoot family as the capsule morph.
-            "flex size-9 shrink-0 touch-none select-none items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-200 ease-[cubic-bezier(0.34,1.45,0.64,1)] hover:bg-muted hover:text-foreground active:scale-[0.92] active:duration-100 active:ease-out motion-reduce:transition-none motion-reduce:active:scale-100 sm:size-8",
+            // Press feel: a quick dip to .92 on press and a plain ease-out release.
+            "flex size-9 shrink-0 touch-none select-none items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.92] active:duration-100 motion-reduce:transition-none motion-reduce:active:scale-100 sm:size-8",
             requestingPermission && "bg-muted",
           )}
           disabled={props.disabled || requestingPermission}

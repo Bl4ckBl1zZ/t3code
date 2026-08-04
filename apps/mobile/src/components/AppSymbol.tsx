@@ -211,15 +211,12 @@ export function SymbolView(props: SymbolViewProps) {
   );
 }
 
-const symbolSwapEnter = ZoomIn.springify()
-  .damping(18)
-  .stiffness(260)
-  .reduceMotion(ReduceMotion.System);
+const symbolSwapEnter = ZoomIn.duration(140).reduceMotion(ReduceMotion.System);
 const symbolSwapExit = ZoomOut.duration(100).reduceMotion(ReduceMotion.System);
 
 /**
  * SymbolView that morphs when its symbol changes: the old glyph zooms out fast while the new
- * one springs in, instead of snapping between frames. Use for stateful buttons whose icon
+ * one zooms in, instead of snapping between frames. Use for stateful buttons whose icon
  * tracks a mode (mic → stop → send). Finite entering/exiting animations only, no loops.
  */
 export function AnimatedSymbolSwap(props: SymbolViewProps) {
