@@ -22,8 +22,6 @@ import {
   CommandId,
   MAX_SCRIPT_ID_LENGTH,
   T3_PROJECT_FILE_NAME,
-  T3_PROJECT_FILE_SCHEMA_URL_ENV_VAR,
-  t3ProjectFileSchemaUrl,
   type Project,
   type ProjectScript,
   type T3ProjectFile,
@@ -40,7 +38,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
-import { relayUrlConfig } from "../cloud/publicConfig.ts";
+import { resolveProjectFileSchemaUrl } from "./projectFileSchemaUrl.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const SYNC_INTERVAL = Duration.millis(1500);
@@ -136,22 +134,6 @@ function fileScriptFromProjectScript(script: ProjectScript): T3ProjectFileScript
   };
 }
 
-/**
- * URL of the JSON Schema to stamp into files that carry none, or null when
- * this install has no relay to serve one.
- *
- * The relay publishes the document built from its own contracts, so pointing
- * at the relay this install talks to keeps the schema and the fields it
- * describes on the same version. Resolved per write rather than cached: the
- * relay URL is a runtime config a user can change without restarting.
- */
-const schemaUrlForNewFiles = Effect.gen(function* () {
-  const override = process.env[T3_PROJECT_FILE_SCHEMA_URL_ENV_VAR]?.trim();
-  if (override) return override;
-  const relayUrl = yield* Effect.option(relayUrlConfig);
-  return Option.isNone(relayUrl) ? null : t3ProjectFileSchemaUrl(relayUrl.value);
-}).pipe(Effect.orElseSucceed(() => null));
-
 function renderProjectFile(
   existing: T3ProjectFile | null,
   scripts: ReadonlyArray<ProjectScript>,
@@ -206,10 +188,9 @@ const syncLoop = Effect.gen(function* () {
     filePath: string,
     existing: T3ProjectFile | null,
   ) {
-    const schemaUrl = yield* schemaUrlForNewFiles;
     yield* fileSystem.writeFileString(
       filePath,
-      renderProjectFile(existing, project.scripts, schemaUrl),
+      renderProjectFile(existing, project.scripts, resolveProjectFileSchemaUrl()),
     );
     yield* Effect.logInfo("Saved project actions to t3.json.", {
       projectId: project.id,

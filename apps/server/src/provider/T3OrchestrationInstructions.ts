@@ -1,3 +1,7 @@
+import { T3_PROJECT_FILE_NAME } from "@t3tools/contracts";
+
+import { resolveProjectFileSchemaUrl } from "../project/projectFileSchemaUrl.ts";
+
 export const T3_HTML_EMBED_INSTRUCTIONS = `
 ## Interactive HTML embeds in chat
 
@@ -20,6 +24,30 @@ Example:
 \`\`\`
 `;
 
+/**
+ * How to write `t3.json`, for agents asked to set a project up.
+ *
+ * Without this an agent works from whatever it learnt about T3 Code in
+ * training: the upstream field set, and an upstream schema URL that this build
+ * does not serve. The URL is resolved from this install rather than hardcoded,
+ * so the document an agent fetches is the one this build actually validates
+ * against. Points at the URL rather than listing every field inline, so the
+ * instructions cannot drift out of date as the schema grows.
+ */
+export const buildProjectFileInstructions = (schemaUrl: string | null): string => `
+
+## Project configuration (${T3_PROJECT_FILE_NAME})
+
+\`${T3_PROJECT_FILE_NAME}\` at the repository root is T3 Code's checked-in project configuration, shared with everyone who opens the repo. It declares the project icon, the project's dev-server URL (\`previewUrl\`, always listed in the thread's Ports panel), and \`scripts\` the team can run from the app.
+${
+  schemaUrl === null
+    ? ""
+    : `- Start a new file with \`{ "$schema": "${schemaUrl}" }\`, and read that URL for the authoritative field list. It is generated from the running build, so it is the only correct source.
+`
+}- The schema rejects unknown properties: do not invent fields, and do not trust field names you remember from another version of T3 Code.
+- Preserve fields you did not come to change. T3 Code rewrites \`scripts\` whenever the user edits actions in the app, and leaves everything else in place.
+- Edits land without a restart: the file and the app's actions reconcile in both directions within a couple of seconds.`;
+
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 ## T3 Code orchestration
@@ -31,6 +59,7 @@ The \`t3-code\` MCP server provides app-owned orchestration. Treat these concept
 - \`schedule_task\` creates persistent recurring work in the app scheduler. Pass \`schedule\` as a structured object, never as JSON text: \`{"type":"interval","everyMs":3600000}\` for an interval, or \`{"type":"fixed_time","timeOfDay":"09:00","weekdays":[1,2,3,4,5]}\` for a wall-clock schedule. By default runs return to the current thread; set \`bindToCurrentThread=false\` only when the user wants a fresh thread for every run. After scheduling, report the returned cadence and next run time.
 
 Tool names may include an MCP prefix (for example \`mcp__t3-code__delegate_task\`); the semantics are the same. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying mutations.
+${buildProjectFileInstructions(resolveProjectFileSchemaUrl())}
 ${T3_HTML_EMBED_INSTRUCTIONS}`;
 
 /**

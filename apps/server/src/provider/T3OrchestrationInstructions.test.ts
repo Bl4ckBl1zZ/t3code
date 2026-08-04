@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 
+import { resolveProjectFileSchemaUrl } from "../project/projectFileSchemaUrl.ts";
 import {
+  buildProjectFileInstructions,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
   T3_HTML_EMBED_INSTRUCTIONS,
   t3OrchestrationPromptForFirstRun,
@@ -35,6 +37,31 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "expand button to open the embed in a large popup");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "stack multiple independent embeds");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, T3_HTML_EMBED_INSTRUCTIONS);
+  });
+
+  it("teaches t3.json as part of the orchestration instructions", () => {
+    // Without this an agent writes the field set and schema URL it remembers
+    // from training, which belongs to a different build.
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "## Project configuration (t3.json)");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "do not invent fields");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "rewrites `scripts`");
+    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "t3.codes/schema");
+    assert.include(
+      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+      buildProjectFileInstructions(resolveProjectFileSchemaUrl()),
+    );
+  });
+
+  it("points at the schema URL this install serves, and omits it when there is none", () => {
+    const hosted = buildProjectFileInstructions("https://relay.example.test/schema/t3.json");
+    assert.include(hosted, '"$schema": "https://relay.example.test/schema/t3.json"');
+    assert.include(hosted, "the only correct source");
+
+    // A local-only install has no schema to point at, but the field discipline
+    // still applies — that is the part that keeps an agent from guessing.
+    const local = buildProjectFileInstructions(null);
+    assert.notInclude(local, "$schema");
+    assert.include(local, "do not invent fields");
   });
 
   it("injects prompt fallback only for an MCP-enabled first run", () => {
