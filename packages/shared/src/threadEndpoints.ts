@@ -59,6 +59,13 @@ export interface TerminalEndpointInput {
   readonly terminalId: string;
   readonly activeScriptId?: string | null | undefined;
   readonly detectedUrls?: ReadonlyArray<string> | undefined;
+  /**
+   * Whether the terminal still has a foreground process. Announced URLs
+   * outlive the server that printed them — interrupting a dev server kills the
+   * child but not the shell, so the detection is not cleared — which makes this
+   * the only signal that a never-confirmed endpoint has died.
+   */
+  readonly hasRunningSubprocess?: boolean | undefined;
 }
 
 /**
@@ -89,6 +96,8 @@ interface Candidate {
   readonly scriptId: string | null;
   readonly processName: string | null;
   readonly listening: boolean;
+  /** False once the announcing terminal has no foreground process left. */
+  readonly announcerRunning: boolean;
 }
 
 /**
@@ -122,6 +131,7 @@ function absorb(byPort: Map<number, Candidate>, next: Candidate): void {
     scriptId: current.scriptId ?? next.scriptId,
     processName: current.processName ?? next.processName,
     listening: current.listening || next.listening,
+    announcerRunning: current.announcerRunning || next.announcerRunning,
   });
 }
 
@@ -131,6 +141,7 @@ function candidateFromUrl(
   attribution: {
     readonly terminalId: string | null;
     readonly scriptId: string | null;
+    readonly announcerRunning: boolean;
   },
 ): Candidate | null {
   const detected: DetectedTerminalUrl | null = toDetectedUrl(rawUrl);
@@ -145,6 +156,7 @@ function candidateFromUrl(
     scriptId: attribution.scriptId,
     processName: null,
     listening: false,
+    announcerRunning: attribution.announcerRunning,
   };
 }
 
@@ -174,7 +186,11 @@ export function mergeThreadEndpoints(
   // Declared URLs first so they seed the identity; they are not "listening"
   // until a socket or a terminal detection says so.
   for (const declared of input.declaredUrls) {
-    const candidate = candidateFromUrl(declared, "declared", { terminalId: null, scriptId: null });
+    const candidate = candidateFromUrl(declared, "declared", {
+      terminalId: null,
+      scriptId: null,
+      announcerRunning: false,
+    });
     if (candidate !== null) absorb(byPort, candidate);
   }
 
@@ -183,6 +199,7 @@ export function mergeThreadEndpoints(
       const candidate = candidateFromUrl(rawUrl, "stdout", {
         terminalId: terminal.terminalId,
         scriptId: terminal.activeScriptId ?? null,
+        announcerRunning: terminal.hasRunningSubprocess ?? true,
       });
       if (candidate !== null) absorb(byPort, candidate);
     }
@@ -200,6 +217,8 @@ export function mergeThreadEndpoints(
       url: scanned.url,
       source: "scanner",
       hasPath: false,
+      // A live socket is its own proof; it does not need an announcer.
+      announcerRunning: true,
       terminalId,
       scriptId: terminalId === null ? null : (scriptByTerminalId.get(terminalId) ?? null),
       processName: scanned.processName,
@@ -223,6 +242,13 @@ export function mergeThreadEndpoints(
       status = "stale";
     } else if (candidate.source === "declared") {
       // Configuration with nothing behind it yet is not worth a row.
+      continue;
+    } else if (!candidate.announcerRunning) {
+      // Announced but never confirmed listening, and the process that printed
+      // it is gone. Interrupting a dev server kills the child without killing
+      // the shell, so the announcement itself is never retracted — without
+      // this the row would sit on "Starting…" forever wherever the socket scan
+      // cannot confirm it (no `lsof`, or a containerised listener).
       continue;
     } else {
       status = "starting";

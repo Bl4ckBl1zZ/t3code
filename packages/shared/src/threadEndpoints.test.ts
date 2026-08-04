@@ -137,6 +137,58 @@ describe("status", () => {
     ).toEqual([]);
   });
 
+  it("drops a never-confirmed endpoint once its announcing process is gone", () => {
+    // Found on a real PTY: interrupting a dev server kills the child but not
+    // the shell, so `detectedUrls` is never retracted. Without the running
+    // check this row sat on "Starting…" forever wherever the socket scan
+    // cannot confirm it.
+    expect(
+      merge({
+        terminals: [
+          {
+            terminalId: "term-1",
+            detectedUrls: ["http://localhost:3000/"],
+            hasRunningSubprocess: false,
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps a never-confirmed endpoint while its process is still running", () => {
+    // The socket scan cannot see containerised listeners, and degrades badly
+    // without `lsof` — a healthy server must not vanish just because of that.
+    const [endpoint] = merge({
+      terminals: [
+        {
+          terminalId: "term-1",
+          detectedUrls: ["http://localhost:3000/"],
+          hasRunningSubprocess: true,
+        },
+      ],
+    });
+    expect(endpoint?.status).toBe("starting");
+  });
+
+  it("keeps a previously live endpoint in the grace window even once the process exits", () => {
+    // Liveness beats the announcer: a socket-confirmed endpoint follows the
+    // stale path so a restart does not flicker.
+    const previous = new Map<number, PreviousEndpointState>([
+      [3000, { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW - 500 }],
+    ]);
+    const [endpoint] = merge({
+      terminals: [
+        {
+          terminalId: "term-1",
+          detectedUrls: ["http://localhost:3000/"],
+          hasRunningSubprocess: false,
+        },
+      ],
+      previous,
+    });
+    expect(endpoint?.status).toBe("stale");
+  });
+
   it("does not show a declared URL that nothing is serving", () => {
     expect(merge({ declaredUrls: ["http://localhost:9999/"] })).toEqual([]);
   });
