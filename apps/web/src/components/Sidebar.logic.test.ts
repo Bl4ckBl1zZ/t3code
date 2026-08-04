@@ -462,7 +462,7 @@ describe("sidebar thread lineage helpers", () => {
     ).toEqual([hermesThread, customHermesThread]);
   });
 
-  it("keeps Hermes threads on known Code projects in the code workspace", () => {
+  it("keeps Hermes threads on Code projects in the work workspace", () => {
     const environmentId = EnvironmentId.make("environment-partition");
     const hermesInstanceId = ProviderInstanceId.make("hermes-main");
     const providerDriverKindByInstance = new Map([
@@ -485,37 +485,17 @@ describe("sidebar thread lineage helpers", () => {
       providerInstanceId: hermesInstanceId,
       projectId: codeProjectId,
     });
-    const codeProjectKeys = new Set([sidebarProjectKey(environmentId, codeProjectId)]);
-
     expect(
-      isThreadVisibleInSidebarWorkspace(
-        hermesWorkThread,
-        "work",
-        providerDriverKindByInstance,
-        codeProjectKeys,
-      ),
+      isThreadVisibleInSidebarWorkspace(hermesWorkThread, "work", providerDriverKindByInstance),
     ).toBe(true);
-    expect(
-      isThreadVisibleInSidebarWorkspace(
-        hermesCodeThread,
-        "code",
-        providerDriverKindByInstance,
-        codeProjectKeys,
-      ),
-    ).toBe(true);
-    expect(
-      isThreadVisibleInSidebarWorkspace(
-        hermesCodeThread,
-        "work",
-        providerDriverKindByInstance,
-        codeProjectKeys,
-      ),
-    ).toBe(false);
-    // While projects/configs are still loading the set is absent, so Hermes
-    // threads conservatively stay in the work workspace.
+    // Hermes as a coding provider still belongs to work: Hermes threads are
+    // never listed in the code workspace.
     expect(
       isThreadVisibleInSidebarWorkspace(hermesCodeThread, "work", providerDriverKindByInstance),
     ).toBe(true);
+    expect(
+      isThreadVisibleInSidebarWorkspace(hermesCodeThread, "code", providerDriverKindByInstance),
+    ).toBe(false);
   });
 
   it("uses the literal Hermes instance only as a missing-metadata fallback", () => {

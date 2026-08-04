@@ -1,5 +1,13 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
-import { ProjectId, type EnvironmentId, type ServerConfig } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProjectId,
+  type EnvironmentId,
+  type ServerConfig,
+} from "@t3tools/contracts";
+
+/** The driver backing T3 Work conversations. */
+export const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
 
 export const T3_WORK_BACKING_PROJECT_ID = ProjectId.make("project:t3-work");
 export const T3_WORK_BACKING_PROJECT_TITLE = "T3 Work";

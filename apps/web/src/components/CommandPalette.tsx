@@ -135,6 +135,7 @@ import {
 } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import {
+  HERMES_DRIVER_KIND,
   isT3WorkBackingProject,
   T3_WORK_BACKING_PROJECT_ID,
   t3WorkDirectoryForEnvironment,
@@ -1692,10 +1693,13 @@ function OpenCommandPaletteDialog(props: {
       }
 
       const projectId = newProjectId();
-      const targetEnvironmentProviders =
+      // Hermes drives T3 Work, not code: a new Code project must never adopt
+      // it as its default model just because it sorts first.
+      const targetEnvironmentProviders = (
         environments.find((environment) => environment.environmentId === input.environmentId)
           ?.serverConfig?.providers ??
-        (input.environmentId === primaryEnvironmentId ? providers : []);
+        (input.environmentId === primaryEnvironmentId ? providers : [])
+      ).filter((provider) => provider.driver !== HERMES_DRIVER_KIND);
       const createResult = await createProject({
         environmentId: input.environmentId,
         input: {
