@@ -2159,6 +2159,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
   launchThread: "orchestration.launchThread",
+  generateHandoffScript: "orchestration.generateHandoffScript",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -2252,6 +2253,21 @@ export type OrchestrationV2DispatchCommandResult = typeof OrchestrationV2Dispatc
 export const OrchestrationV2GetThreadProjectionInput = Schema.Struct({
   threadId: ThreadId,
 });
+
+export const OrchestrationV2GenerateHandoffScriptInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationV2GenerateHandoffScriptInput =
+  typeof OrchestrationV2GenerateHandoffScriptInput.Type;
+
+export const OrchestrationV2GenerateHandoffScriptResult = Schema.Struct({
+  /** Prompt-ready handoff document for continuing the thread elsewhere. */
+  script: Schema.String,
+  /** True when the summary came from the AI generator rather than the deterministic fallback. */
+  aiGenerated: Schema.Boolean,
+});
+export type OrchestrationV2GenerateHandoffScriptResult =
+  typeof OrchestrationV2GenerateHandoffScriptResult.Type;
 export type OrchestrationV2GetThreadProjectionInput =
   typeof OrchestrationV2GetThreadProjectionInput.Type;
 
@@ -2372,7 +2388,17 @@ export class OrchestrationV2ThreadLaunchError extends Schema.TaggedErrorClass<Or
   },
 ) {}
 
+export class OrchestrationV2GenerateHandoffScriptError extends Schema.TaggedErrorClass<OrchestrationV2GenerateHandoffScriptError>()(
+  "OrchestrationV2GenerateHandoffScriptError",
+  {
+    threadId: ThreadId,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 export const OrchestrationV2RpcError = Schema.Union([
+  OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2GetShellSnapshotError,
@@ -2404,6 +2430,10 @@ export const OrchestrationV2RpcSchemas = {
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
     output: OrchestrationV2ThreadLaunchResult,
+  },
+  generateHandoffScript: {
+    input: OrchestrationV2GenerateHandoffScriptInput,
+    output: OrchestrationV2GenerateHandoffScriptResult,
   },
   subscribeArchivedShell: {
     input: Schema.Struct({}),

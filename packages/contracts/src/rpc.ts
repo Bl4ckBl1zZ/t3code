@@ -77,6 +77,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2DispatchCommandError,
+  OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
@@ -835,6 +836,15 @@ export const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_MET
   error: Schema.Union([OrchestrationV2ThreadLaunchError, EnvironmentAuthorizationError]),
 });
 
+export const WsOrchestrationV2GenerateHandoffScriptRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.generateHandoffScript,
+  {
+    payload: OrchestrationV2RpcSchemas.generateHandoffScript.input,
+    success: OrchestrationV2RpcSchemas.generateHandoffScript.output,
+    error: Schema.Union([OrchestrationV2GenerateHandoffScriptError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsOrchestrationV2SubscribeArchivedShellRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell,
   {
@@ -1085,6 +1095,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
+  WsOrchestrationV2GenerateHandoffScriptRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
