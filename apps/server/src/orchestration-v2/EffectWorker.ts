@@ -295,16 +295,24 @@ export const executorLayer: Layer.Layer<
               ),
             );
           case "attachment.cleanup":
-            return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationEffectExecutionError({
-                    effectId: effect.id,
-                    effectType: effect.request.type,
-                    cause,
-                  }),
-              ),
-            );
+            return resourceCleanup
+              .cleanupAttachments({
+                attachmentIds: effect.request.attachmentIds,
+                threadId: effect.threadId,
+                ...(effect.request.workspaceRoot === undefined
+                  ? {}
+                  : { workspaceRoot: effect.request.workspaceRoot }),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
         }
       },
       handlePermanentFailure: (effect) => {

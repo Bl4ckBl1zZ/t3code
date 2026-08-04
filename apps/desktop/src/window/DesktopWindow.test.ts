@@ -404,6 +404,20 @@ describe("DesktopWindow", () => {
         navigationUrl: "not a url",
       }),
     );
+    // A custom scheme and file:// both serialize their origin as "null", so
+    // comparing serialized origins alone would call this same-origin.
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "t3code://app/",
+        navigationUrl: "file:///Users/someone/Downloads/spec.pdf",
+      }),
+    );
+    assert.isFalse(
+      DesktopWindow.isSameOriginRendererNavigation({
+        applicationUrl: "t3code://app/",
+        navigationUrl: "t3code://other-host/",
+      }),
+    );
   });
 
   it.effect("does not open a development window until the backend is ready", () =>
@@ -992,6 +1006,48 @@ describe("DesktopWindow", () => {
 
         assert.isTrue(prevented);
         assert.deepEqual(openedExternalUrls, ["https://accounts.microsoft.com/oauth"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  // Dropping a file just outside a dropzone makes Electron navigate the window
+  // to file://…, which would replace the whole app with the dropped file. Now
+  // that any file type is attachable, misses are far more likely.
+  it.effect("blocks file:// navigation from a stray file drop", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const openedExternalUrls: unknown[] = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        openedExternalUrls,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const willNavigate = fakeWindow.webContentsListeners.get("will-navigate");
+        if (!willNavigate) {
+          return yield* Effect.die("will-navigate listener was not registered");
+        }
+        let prevented = false;
+        willNavigate(
+          {
+            preventDefault: () => {
+              prevented = true;
+            },
+          },
+          "file:///Users/someone/Downloads/spec.pdf",
+        );
+        yield* Effect.promise(() => Promise.resolve());
+
+        assert.isTrue(prevented);
+        // And it must not be handed to the OS either.
+        assert.deepEqual(openedExternalUrls, []);
       }).pipe(Effect.provide(layer));
     }),
   );

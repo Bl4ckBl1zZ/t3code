@@ -73,6 +73,7 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
+import { MessageAttachmentPlacement } from "./MessageAttachmentPlacement";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
@@ -157,6 +158,9 @@ interface TimelineRowSharedState {
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  /** Opens a materialized upload in the file surface. */
+  onOpenWorkspaceFile: (workspacePath: string) => void;
+  onCopyWorkspacePath: (workspacePath: string) => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onForkFromRun: (input: {
@@ -221,6 +225,8 @@ interface MessagesTimelineProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onOpenWorkspaceFile: (workspacePath: string) => void;
+  onCopyWorkspacePath: (workspacePath: string) => void;
   activeThreadEnvironmentId: EnvironmentId;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
@@ -262,6 +268,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
+  onOpenWorkspaceFile,
+  onCopyWorkspacePath,
   activeThreadEnvironmentId,
   markdownCwd,
   resolvedTheme,
@@ -483,6 +491,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeThreadEnvironmentId,
       onRevertUserMessage,
       onImageExpand,
+      onOpenWorkspaceFile,
+      onCopyWorkspacePath,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -502,6 +512,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeThreadEnvironmentId,
       onRevertUserMessage,
       onImageExpand,
+      onOpenWorkspaceFile,
+      onCopyWorkspacePath,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -1162,6 +1174,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       {attachment.name}
                     </div>
                   )}
+                  <MessageAttachmentPlacement
+                    attachment={attachment}
+                    onOpenWorkspaceFile={ctx.onOpenWorkspaceFile}
+                    onCopyPath={ctx.onCopyWorkspacePath}
+                    className="border-t border-border/60"
+                  />
                 </div>
               ),
             )}

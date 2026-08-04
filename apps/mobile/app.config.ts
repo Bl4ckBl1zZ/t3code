@@ -193,16 +193,20 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       enabled: isIosSharingExtensionEnabled,
       extensionBundleIdentifier: `${iosBundleIdentifier}.sharing`,
       appGroupId: iosAppGroupIdentifier,
+      // Uploads are written into the project for the agent to read, so any
+      // file type is useful now — not just images.
       activationRule: {
         supportsText: true,
         supportsWebUrlWithMaxCount: 1,
         supportsImageWithMaxCount: 8,
+        supportsMovieWithMaxCount: 8,
+        supportsFileWithMaxCount: 8,
       },
     },
     android: {
       enabled: true,
-      singleShareMimeTypes: ["text/plain", "image/*"],
-      multipleShareMimeTypes: ["image/*"],
+      singleShareMimeTypes: ["text/plain", "*/*"],
+      multipleShareMimeTypes: ["*/*"],
     },
   },
 ];

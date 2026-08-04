@@ -1013,11 +1013,17 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   }
 
   for (const attachment of input.attachments) {
+    // Non-images no longer arrive here: they are materialized into the agent's
+    // working directory and named in the prompt instead. What can still reach
+    // this branch is a degraded turn, or an image kind the SDK cannot encode
+    // (SVG, BMP, TIFF). Skipping it costs one attachment; failing would cost
+    // the whole turn, and the file is readable from disk either way.
     if (!isSupportedClaudeImageMimeType(attachment.mimeType)) {
-      return yield* new ProviderAdapterProtocolError({
-        driver: CLAUDE_PROVIDER,
-        detail: `Unsupported Claude image attachment type '${attachment.mimeType}'`,
+      yield* Effect.logWarning("Skipping an attachment Claude cannot encode inline.", {
+        attachmentId: attachment.id,
+        mimeType: attachment.mimeType,
       });
+      continue;
     }
 
     const attachmentPath = resolveAttachmentPath({
@@ -1048,6 +1054,15 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
         media_type: attachment.mimeType,
         data: Buffer.from(bytes).toString("base64"),
       },
+    });
+  }
+
+  // Every attachment was skipped. A block-shaped message with no blocks is not
+  // a valid SDK message, so fall back to the plain text form.
+  if (content.length === 0) {
+    return makeClaudeUserMessage({
+      text: input.text,
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
     });
   }
 

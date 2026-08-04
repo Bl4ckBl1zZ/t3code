@@ -90,7 +90,7 @@ describe("incoming native shares", () => {
     });
 
     expect(result.attachments).toEqual([]);
-    expect(result.warnings).toEqual(["'huge.png' exceeds the 10 MB attachment limit."]);
+    expect(result.warnings).toEqual(["'huge.png' is over the 10 MB limit for an image."]);
     expect(readBase64).not.toHaveBeenCalled();
     expect(removeOwnedFile).toHaveBeenCalledWith(image.value);
     expect(hasIncomingShareContent(result)).toBe(false);
@@ -115,7 +115,7 @@ describe("incoming native shares", () => {
 
     expect(result.attachments).toHaveLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
     expect(result.warnings).toEqual([
-      `Only the first ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} shared images were attached.`,
+      `Only the first ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} shared files were attached.`,
     ]);
     expect(readBase64).toHaveBeenCalledTimes(PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
     expect(removeOwnedFile).toHaveBeenCalledTimes(payloads.length);
@@ -168,6 +168,45 @@ describe("incoming native shares", () => {
     ]);
     expect(removeOwnedFile).toHaveBeenCalledWith("file:///cache/first.png");
     expect(removeOwnedFile).toHaveBeenCalledWith("file:///cache/second.png");
+  });
+
+  // Shares used to be images-only, so sharing a PDF from Safari silently
+  // dropped it. Uploads are now readable from the project, so any file works.
+  it("accepts shared files, video, and audio alongside images", async () => {
+    const payloads: SharePayload[] = [
+      { shareType: "file", value: "file:///shared/spec.pdf", mimeType: "application/pdf" },
+      { shareType: "video", value: "file:///shared/clip.mp4", mimeType: "video/mp4" },
+      { shareType: "audio", value: "file:///shared/note.m4a", mimeType: "audio/mp4" },
+    ];
+
+    const result = await buildIncomingShareDraft({
+      id: "share-files",
+      createdAt: "2026-07-16T08:00:00.000Z",
+      payloads,
+      resolvedPayloads: [],
+      fileReader: { readBase64: async () => "YWJj", removeOwnedFile: async () => undefined },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.attachments.map((attachment) => attachment.type)).toEqual([
+      "pdf",
+      "video",
+      "file",
+    ]);
+    // Audio has no dedicated contract type, so it rides the generic file branch.
+    expect(result.attachments[2]?.mimeType).toBe("audio/mp4");
+  });
+
+  it("names a shared file from its MIME type when the provider gives none", async () => {
+    const result = await buildIncomingShareDraft({
+      id: "share-unnamed",
+      createdAt: "2026-07-16T08:00:00.000Z",
+      payloads: [{ shareType: "file", value: "content://opaque", mimeType: "application/pdf" }],
+      resolvedPayloads: [],
+      fileReader: { readBase64: async () => "YWJj", removeOwnedFile: async () => undefined },
+    });
+
+    expect(result.attachments[0]?.name).toBe("shared-file-1.pdf");
   });
 
   it("keeps imported content when temporary-file cleanup fails", async () => {

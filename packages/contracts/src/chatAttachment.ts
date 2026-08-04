@@ -27,12 +27,45 @@ const ChatAttachmentMimeType = TrimmedNonEmptyString.check(
 const GenericFileMimeType = ChatAttachmentMimeType.check(
   Schema.makeFilter(
     (value: string) =>
-      !/^image\//i.test(value) &&
-      !/^video\//i.test(value) &&
-      !/^application\/pdf$/i.test(value) ||
+      (!/^image\//i.test(value) &&
+        !/^video\//i.test(value) &&
+        !/^application\/pdf$/i.test(value)) ||
       "Images, PDFs, and videos must use their dedicated attachment types.",
   ),
 );
+
+/**
+ * Where an attachment ended up once the turn ran.
+ *
+ * `skipped` is the expected, silent path — a projectless conversation, or a
+ * provider whose agent may not share this filesystem. `failed` means there was
+ * a workspace and the write lost, which is worth telling the user about.
+ * Collapsing the two would put a permanent warning in front of every user who
+ * never had a workspace to begin with.
+ */
+export const ChatAttachmentMaterialization = Schema.Literals(["written", "skipped", "failed"]);
+export type ChatAttachmentMaterialization = typeof ChatAttachmentMaterialization.Type;
+
+/**
+ * Preview annotation screenshots are UI plumbing, not user uploads: they should
+ * not be written into the project. Optional because every already-persisted
+ * attachment predates the field.
+ */
+export const ChatAttachmentRole = Schema.Literals(["upload", "preview-annotation"]);
+export type ChatAttachmentRole = typeof ChatAttachmentRole.Type;
+
+/**
+ * Server-assigned, and every field is optional: `versionSkew.ts` exists because
+ * mixed client and server versions are normal here, and no historical message
+ * carries any of this.
+ */
+const chatAttachmentPlacementFields = {
+  /** Workspace-relative POSIX path, e.g. `.t3code/uploads/a3f19c2b/9f2c1a4b-spec.pdf`. */
+  workspacePath: Schema.optional(TrimmedNonEmptyString),
+  materialization: Schema.optional(ChatAttachmentMaterialization),
+  materializationReason: Schema.optional(TrimmedNonEmptyString),
+  role: Schema.optional(ChatAttachmentRole),
+};
 
 export const ChatAttachmentId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(CHAT_ATTACHMENT_ID_MAX_CHARS),
@@ -46,6 +79,7 @@ export const ChatImageAttachment = Schema.Struct({
   name: ChatAttachmentName,
   mimeType: ChatAttachmentMimeType.check(Schema.isPattern(/^image\//i)),
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
+  ...chatAttachmentPlacementFields,
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
@@ -55,6 +89,7 @@ export const UploadChatImageAttachment = Schema.Struct({
   mimeType: ChatAttachmentMimeType.check(Schema.isPattern(/^image\//i)),
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
   dataUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS)),
+  role: Schema.optional(ChatAttachmentRole),
 });
 export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
 
@@ -70,6 +105,7 @@ const chatFileAttachment = <Type extends "file" | "pdf" | "video">(type: Type) =
           ? ChatAttachmentMimeType.check(Schema.isPattern(/^video\//i))
           : GenericFileMimeType,
     sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+    ...chatAttachmentPlacementFields,
   });
 
 const uploadChatFileAttachment = <Type extends "file" | "pdf" | "video">(type: Type) =>
@@ -84,6 +120,7 @@ const uploadChatFileAttachment = <Type extends "file" | "pdf" | "video">(type: T
           : GenericFileMimeType,
     sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
     dataUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS)),
+    role: Schema.optional(ChatAttachmentRole),
   });
 
 export const ChatFileAttachment = chatFileAttachment("file");

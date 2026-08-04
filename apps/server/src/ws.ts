@@ -171,6 +171,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
     readonly mimeType: string;
     readonly sizeBytes: number;
     readonly dataUrl: string;
+    readonly role?: "upload" | "preview-annotation" | undefined;
   }>;
 }) {
   const config = yield* ServerConfig.ServerConfig;
@@ -211,6 +212,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
+        ...(attachment.role === undefined ? {} : { role: attachment.role }),
       };
       yield* fileSystem
         .writeFile(path.join(config.attachmentsDir, attachmentRelativePath(persisted)), bytes)

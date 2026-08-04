@@ -124,6 +124,7 @@ import {
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
+import { MessageAttachmentCard } from "../../components/MessageAttachmentCard";
 import { useAssetUrl } from "../../state/assets";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
@@ -1169,10 +1170,10 @@ function renderFeedEntry(
             ) : null}
             {attachments.map((attachment) => {
               return (
-                <MessageAttachmentImage
+                <MessageAttachmentCard
                   key={attachment.id}
                   environmentId={props.environmentId}
-                  attachmentId={attachment.id}
+                  attachment={attachment}
                   className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
                   onPressImage={props.onPressImage}
                 />
@@ -1225,10 +1226,10 @@ function renderFeedEntry(
             ) : null}
             {attachments.map((attachment) => {
               return (
-                <MessageAttachmentImage
+                <MessageAttachmentCard
                   key={attachment.id}
                   environmentId={props.environmentId}
-                  attachmentId={attachment.id}
+                  attachment={attachment}
                   className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
                   onPressImage={props.onPressImage}
                 />
@@ -1309,10 +1310,10 @@ function renderFeedEntry(
         ) : null}
         {attachments.map((attachment) => {
           return (
-            <MessageAttachmentImage
+            <MessageAttachmentCard
               key={attachment.id}
               environmentId={props.environmentId}
-              attachmentId={attachment.id}
+              attachment={attachment}
               className="mt-1.5 aspect-[1.3] w-full rounded-[18px] bg-neutral-200 dark:bg-neutral-800"
               onPressImage={props.onPressImage}
             />

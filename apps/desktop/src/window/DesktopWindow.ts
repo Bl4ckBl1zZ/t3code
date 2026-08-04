@@ -159,7 +159,16 @@ export function isSameOriginRendererNavigation(input: {
   readonly navigationUrl: string;
 }): boolean {
   try {
-    return new URL(input.applicationUrl).origin === new URL(input.navigationUrl).origin;
+    const application = new URL(input.applicationUrl);
+    const navigation = new URL(input.navigationUrl);
+    // The packaged renderer loads from a custom scheme (t3code://app/), whose
+    // origin serializes to the string "null" — and so does every file:// URL.
+    // Comparing serialized origins would therefore call a dropped file
+    // same-origin and navigate the window away from the app entirely.
+    if (application.origin === "null" || navigation.origin === "null") {
+      return application.protocol === navigation.protocol && application.host === navigation.host;
+    }
+    return application.origin === navigation.origin;
   } catch {
     return false;
   }

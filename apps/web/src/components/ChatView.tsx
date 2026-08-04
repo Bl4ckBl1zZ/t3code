@@ -5346,6 +5346,7 @@ function ChatViewContent(props: ChatViewProps) {
               mimeType: image.mimeType,
               sizeBytes: image.sizeBytes,
               dataUrl,
+              ...(image.role === undefined ? {} : { role: image.role }),
             };
           case "file":
             return {
@@ -5354,6 +5355,7 @@ function ChatViewContent(props: ChatViewProps) {
               mimeType: image.mimeType,
               sizeBytes: image.sizeBytes,
               dataUrl,
+              ...(image.role === undefined ? {} : { role: image.role }),
             };
           case "pdf":
             return {
@@ -5362,6 +5364,7 @@ function ChatViewContent(props: ChatViewProps) {
               mimeType: image.mimeType,
               sizeBytes: image.sizeBytes,
               dataUrl,
+              ...(image.role === undefined ? {} : { role: image.role }),
             };
           case "video":
             return {
@@ -5370,6 +5373,7 @@ function ChatViewContent(props: ChatViewProps) {
               mimeType: image.mimeType,
               sizeBytes: image.sizeBytes,
               dataUrl,
+              ...(image.role === undefined ? {} : { role: image.role }),
             };
         }
       }),
@@ -6557,6 +6561,8 @@ function ChatViewContent(props: ChatViewProps) {
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
+                onOpenWorkspaceFile={openFileSurface}
+                onCopyWorkspacePath={copyRightPanelFilePath}
                 markdownCwd={gitCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}

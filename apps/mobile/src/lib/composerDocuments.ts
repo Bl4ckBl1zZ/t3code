@@ -1,12 +1,12 @@
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import {
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-} from "@t3tools/contracts";
+  inferExtensionFromMimeType,
+  validateComposerAttachment,
+} from "@t3tools/shared/composerAttachments";
 
 import { estimateBase64ByteSize } from "./base64";
 import {
   documentAttachmentKind,
-  formatAttachmentSizeLimitError,
   type DraftComposerDocumentAttachment,
 } from "./composerAttachmentKinds";
 import { uuidv4 } from "./uuid";
@@ -32,9 +32,7 @@ async function loadFileSystem() {
  * MIME against the contract, so the picker stays permissive rather than
  * maintaining a second allowlist that could drift.
  */
-export async function pickComposerDocuments(input: {
-  readonly existingCount: number;
-}): Promise<{
+export async function pickComposerDocuments(input: { readonly existingCount: number }): Promise<{
   readonly documents: ReadonlyArray<DraftComposerDocumentAttachment>;
   readonly error: string | null;
 }> {
@@ -54,8 +52,7 @@ export async function pickComposerDocuments(input: {
   } catch (error) {
     return {
       documents: [],
-      error:
-        error instanceof Error ? error.message : "File attachments are unavailable right now.",
+      error: error instanceof Error ? error.message : "File attachments are unavailable right now.",
     };
   }
 
@@ -82,18 +79,28 @@ export async function pickComposerDocuments(input: {
     }
 
     const sizeBytes = asset.size ?? estimateBase64ByteSize(base64);
-    if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
-      error = formatAttachmentSizeLimitError(name);
+    const validation = validateComposerAttachment({ name, sizeBytes, mimeType });
+    if (!validation.accepted) {
+      error = validation.message;
       continue;
     }
 
+    // Android content:// URIs routinely hand back a name with no extension and
+    // application/octet-stream. A named file is far more useful to an agent
+    // reading it off disk than an extensionless blob.
+    const extension = inferExtensionFromMimeType(validation.mimeType);
+    const resolvedName =
+      extension !== null && !validation.name.toLowerCase().endsWith(extension)
+        ? `${validation.name}${extension}`
+        : validation.name;
+
     documents.push({
       id: uuidv4(),
-      type: documentAttachmentKind(mimeType),
-      name,
-      mimeType,
+      type: documentAttachmentKind(validation.mimeType, resolvedName),
+      name: resolvedName,
+      mimeType: validation.mimeType,
       sizeBytes,
-      dataUrl: `data:${mimeType};base64,${base64}`,
+      dataUrl: `data:${validation.mimeType};base64,${base64}`,
     });
   }
 
@@ -105,7 +112,6 @@ export async function pickComposerDocuments(input: {
 
 export {
   documentAttachmentKind,
-  formatAttachmentSizeLimitError,
   toUploadChatDocumentAttachments,
   type DraftComposerDocumentAttachment,
 } from "./composerAttachmentKinds";

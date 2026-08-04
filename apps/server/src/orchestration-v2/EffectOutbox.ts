@@ -89,6 +89,11 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),
+    /**
+     * Where the thread's materialized uploads live. Optional so effect rows
+     * persisted before this field existed still decode.
+     */
+    workspaceRoot: Schema.optional(Schema.String),
   }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;

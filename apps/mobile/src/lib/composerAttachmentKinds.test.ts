@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  documentAttachmentKind,
-  formatAttachmentSizeLimitError,
-  toUploadChatDocumentAttachments,
-} from "./composerAttachmentKinds";
+import { documentAttachmentKind, toUploadChatDocumentAttachments } from "./composerAttachmentKinds";
 
 describe("documentAttachmentKind", () => {
   it("splits kinds the way the attachment contract does", () => {
@@ -47,10 +43,15 @@ describe("toUploadChatDocumentAttachments", () => {
   });
 });
 
-describe("formatAttachmentSizeLimitError", () => {
-  it("names the file that was rejected", () => {
-    expect(formatAttachmentSizeLimitError("demo.mp4")).toBe(
-      "'demo.mp4' exceeds the 20 MB attachment limit.",
-    );
+describe("documentAttachmentKind agreement with web", () => {
+  it("never returns image, so an image never enters the document path", () => {
+    // The shared classifier reports "image" for image MIME types; the document
+    // path has no preview URI, so those belong to composerImages instead.
+    expect(documentAttachmentKind("image/png", "shot.png")).toBe("file");
+  });
+
+  it("falls back to the file name when the picker gives no MIME type", () => {
+    // Android content:// URIs do this constantly.
+    expect(documentAttachmentKind("", "itinerary.pdf")).toBe("pdf");
   });
 });

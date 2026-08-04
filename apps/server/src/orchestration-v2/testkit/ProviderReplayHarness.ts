@@ -39,6 +39,8 @@ import { ProviderAdapterRegistryV2 } from "../ProviderAdapterRegistry.ts";
 import { layer as providerEventIngestorLayer } from "../ProviderEventIngestor.ts";
 import { layerWithOptions as providerSessionManagerLayerWithOptions } from "../ProviderSessionManager.ts";
 import { layer as providerSwitchServiceLayer } from "../ProviderSwitchService.ts";
+import { layer as attachmentMaterializationLayer } from "../../attachments/AttachmentMaterialization.ts";
+import { layer as workspacePathsLayer } from "../../workspace/WorkspacePaths.ts";
 import { layer as providerTurnControlServiceLayer } from "../ProviderTurnControlService.ts";
 import { layer as providerTurnStartServiceLayer } from "../ProviderTurnStartService.ts";
 import { layer as runExecutionServiceLayer } from "../RunExecutionService.ts";
@@ -299,9 +301,19 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       ),
     ),
   );
+  const attachmentMaterializationProvided = attachmentMaterializationLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        workspacePathsLayer.pipe(Layer.provide(NodeServices.layer)),
+        serverConfigLayer,
+        NodeServices.layer,
+      ),
+    ),
+  );
   const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        attachmentMaterializationProvided,
         contextHandoffServiceProvided,
         eventSinkProvided,
         idAllocatorLayer,
@@ -313,7 +325,14 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ),
   );
   const providerTurnControlServiceProvided = providerTurnControlServiceLayer.pipe(
-    Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        attachmentMaterializationProvided,
+        storesLayer,
+        providerSessionManagerProvided,
+        runtimeLayer,
+      ),
+    ),
   );
   const runtimeRequestServiceProvided = runtimeRequestServiceLayer.pipe(
     Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),

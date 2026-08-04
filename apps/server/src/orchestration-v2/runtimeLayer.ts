@@ -44,12 +44,17 @@ import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.t
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
+import { layer as attachmentMaterializationLayer } from "../attachments/AttachmentMaterialization.ts";
+import { layer as workspacePathsLayer } from "../workspace/WorkspacePaths.ts";
 
 export const ProjectServiceLayerLive = projectServiceLayer.pipe(
   Layer.provide(Layer.merge(ProjectionProjectRepositoryLive, OrchestrationLayerLive)),
 );
 const runtimePolicyProvided = runtimePolicyLayerFromProjectRepository.pipe(
   Layer.provide(ProjectionProjectRepositoryLive),
+);
+const attachmentMaterializationProvided = attachmentMaterializationLayer.pipe(
+  Layer.provide(workspacePathsLayer),
 );
 
 const eventStoreProvided = eventStoreLayer.pipe(
@@ -114,6 +119,7 @@ const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
 const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      attachmentMaterializationProvided,
       contextHandoffServiceProvided,
       eventSinkProvided,
       idAllocatorLayer,
@@ -126,7 +132,14 @@ const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
 );
 
 const providerTurnControlServiceProvided = providerTurnControlServiceLayer.pipe(
-  Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      attachmentMaterializationProvided,
+      projectionStoreLayer,
+      providerSessionManagerProvided,
+      runtimePolicyProvided,
+    ),
+  ),
 );
 const runtimeRequestServiceProvided = runtimeRequestServiceLayer.pipe(
   Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),

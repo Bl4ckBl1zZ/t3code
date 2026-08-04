@@ -12,8 +12,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { AttachmentMaterialization } from "../attachments/AttachmentMaterialization.ts";
+import { appendUploadedFilesBlock } from "../attachments/uploadPaths.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
+import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -70,12 +73,14 @@ export class ProviderTurnControlServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   never,
-  ProjectionStoreV2 | ProviderSessionManagerV2
+  AttachmentMaterialization | ProjectionStoreV2 | ProviderSessionManagerV2 | RuntimePolicyV2
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
+    const attachmentMaterialization = yield* AttachmentMaterialization;
     const projections = yield* ProjectionStoreV2;
     const sessions = yield* ProviderSessionManagerV2;
+    const runtimePolicy = yield* RuntimePolicyV2;
 
     const load = (input: {
       readonly threadId: ThreadId;
@@ -266,6 +271,19 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
+          // A steering message can carry uploads too, and it reaches the
+          // adapter by a different route than the one in
+          // ProviderTurnStartService, so it has to materialize them itself.
+          const policy = yield* runtimePolicy.resolve({
+            thread: loaded.projection.thread,
+            modelSelection: run.modelSelection,
+          });
+          const uploads = yield* attachmentMaterialization.materialize({
+            threadId: input.threadId,
+            driver: loaded.providerThread.driver,
+            cwd: policy.cwd,
+            attachments: message.attachments,
+          });
           yield* loaded.session.value.steerTurn({
             threadId: input.threadId,
             runId: run.id,
@@ -273,8 +291,8 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             message: {
               messageId: message.id,
-              text: message.text,
-              attachments: message.attachments,
+              text: appendUploadedFilesBlock(message.text, uploads.promptBlock),
+              attachments: uploads.inlineAttachments,
               createdBy: message.createdBy,
               creationSource: message.creationSource,
             },
