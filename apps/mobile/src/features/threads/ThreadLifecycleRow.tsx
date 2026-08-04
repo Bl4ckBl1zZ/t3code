@@ -23,10 +23,9 @@ import { TimelineSystemDivider } from "./TimelineSystemDivider";
 type LifecycleEntry = Extract<ThreadFeedEntry, { type: "lifecycle" }>;
 
 const BADGE_TONE_CLASS = {
-  neutral: "border-neutral-300/60 bg-neutral-500/10 text-foreground-muted dark:border-white/[0.12]",
-  success:
-    "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/25 dark:text-emerald-300",
-  danger: "border-red-500/25 bg-red-500/10 text-red-600 dark:border-red-400/25 dark:text-red-400",
+  neutral: "text-foreground-muted",
+  success: "text-emerald-700 dark:text-emerald-300",
+  danger: "text-red-600 dark:text-red-400",
 } as const;
 
 function RelatedThreadCard(props: {
@@ -68,9 +67,22 @@ function RelatedThreadCard(props: {
           />
         )}
         <View className="min-w-0 flex-1">
-          <Text className="font-t3-medium text-base text-foreground" numberOfLines={1}>
-            {presentation.title}
-          </Text>
+          <View className="flex-row items-center gap-2">
+            <Text
+              className="min-w-0 shrink font-t3-medium text-base text-foreground"
+              numberOfLines={1}
+            >
+              {presentation.title}
+            </Text>
+            <Text
+              className={cn(
+                "font-t3-bold text-2xs tracking-wide",
+                BADGE_TONE_CLASS[presentation.badgeTone],
+              )}
+            >
+              {presentation.badge.toUpperCase()}
+            </Text>
+          </View>
           {presentation.detail ? (
             presentation.orbState === "active" ? (
               <ShimmerText className="mt-0.5 text-sm text-foreground-muted" numberOfLines={2}>
@@ -82,14 +94,6 @@ function RelatedThreadCard(props: {
               </Text>
             )
           ) : null}
-        </View>
-        <View
-          className={cn(
-            "rounded-full border px-2 py-0.5",
-            BADGE_TONE_CLASS[presentation.badgeTone],
-          )}
-        >
-          <Text className="font-t3-medium text-2xs tracking-wide">{presentation.badge}</Text>
         </View>
         {canOpen ? (
           <SymbolView name="chevron.right" size={12} tintColor={iconSubtle} type="monochrome" />

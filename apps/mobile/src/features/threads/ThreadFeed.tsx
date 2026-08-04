@@ -2225,6 +2225,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // mount positions during attach, where UIKit applies the inset.
             key={listMountKey}
             style={{ flex: 1 }}
+            // Tapping the status bar / header area must not yank the chat to
+            // the top — a conversation's resting place is the bottom.
+            scrollsToTop={false}
             // RN 0.81+ drops touches inside the contentInset area
             // (facebook/react-native#54123); the anchored end space after a send
             // is pure inset, so without this the blank region can't be scrolled.
