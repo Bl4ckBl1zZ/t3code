@@ -115,8 +115,8 @@ describe("status", () => {
   });
 
   it("holds a vanished endpoint as stale inside the grace window", () => {
-    const previous = new Map<number, PreviousEndpointState>([
-      [3000, { firstSeenAtMs: NOW - 60_000, lastLiveAtMs: NOW - 1_000 }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["3000", { firstSeenAtMs: NOW - 60_000, lastLiveAtMs: NOW - 1_000 }],
     ]);
     const [endpoint] = merge({
       terminals: [{ terminalId: "term-1", detectedUrls: ["http://localhost:3000/"] }],
@@ -126,8 +126,8 @@ describe("status", () => {
   });
 
   it("drops a vanished endpoint after the grace window", () => {
-    const previous = new Map<number, PreviousEndpointState>([
-      [3000, { firstSeenAtMs: NOW - 60_000, lastLiveAtMs: NOW - ENDPOINT_STALE_GRACE_MS - 1 }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["3000", { firstSeenAtMs: NOW - 60_000, lastLiveAtMs: NOW - ENDPOINT_STALE_GRACE_MS - 1 }],
     ]);
     expect(
       merge({
@@ -173,8 +173,8 @@ describe("status", () => {
   it("keeps a previously live endpoint in the grace window even once the process exits", () => {
     // Liveness beats the announcer: a socket-confirmed endpoint follows the
     // stale path so a restart does not flicker.
-    const previous = new Map<number, PreviousEndpointState>([
-      [3000, { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW - 500 }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["3000", { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW - 500 }],
     ]);
     const [endpoint] = merge({
       terminals: [
@@ -270,8 +270,8 @@ describe("pinned project preview url", () => {
   });
 
   it("sorts above endpoints that were discovered first", () => {
-    const previous = new Map<number, PreviousEndpointState>([
-      [3000, { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["3000", { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW }],
     ]);
     const endpoints = merge({
       pinnedUrls: ["http://localhost:5173/"],
@@ -286,9 +286,53 @@ describe("pinned project preview url", () => {
       merge({ pinnedUrls: ["http://localhost:13773/"], excludedPorts: new Set([13773]) }),
     ).toEqual([]);
   });
+});
 
-  it("ignores a pinned URL that is not a loopback address", () => {
-    expect(merge({ pinnedUrls: ["https://example.com/"] })).toEqual([]);
+describe("pinned remote origins", () => {
+  it("lists a pinned URL that is not a loopback address", () => {
+    // A worktree behind a tunnel, or a shared staging origin: nothing local can
+    // confirm it, but the project still says this is where it lives.
+    const [endpoint] = merge({ pinnedUrls: ["https://wt1.example.org/"] });
+    expect(endpoint?.url).toBe("https://wt1.example.org/");
+    expect(endpoint?.pinned).toBe(true);
+    expect(endpoint?.local).toBe(false);
+    // Idle, not because we checked, but because neither signal can see it.
+    expect(endpoint?.status).toBe("idle");
+  });
+
+  it("normalizes a pinned host written without a scheme", () => {
+    const [endpoint] = merge({ pinnedUrls: ["wt1.example.org"] });
+    expect(endpoint?.url).toBe("https://wt1.example.org/");
+  });
+
+  it("keeps a remote origin separate from the local server on its implied port", () => {
+    // Both land on :443 — one because it is https, one because it is bound
+    // there — and collapsing them would hide whichever lost the tiebreak.
+    const endpoints = merge({
+      pinnedUrls: ["https://wt1.example.org/"],
+      scanned: [scanned(443)],
+    });
+    expect(endpoints.map((endpoint) => endpoint.key)).toEqual(["wt1.example.org:443", "443"]);
+  });
+
+  it("does not apply T3's own port exclusion to a remote origin", () => {
+    // T3 itself served over https holds :443 locally; that says nothing about
+    // someone else's origin that happens to answer on the same port.
+    const [endpoint] = merge({
+      pinnedUrls: ["https://wt1.example.org/"],
+      excludedPorts: new Set([443]),
+    });
+    expect(endpoint?.host).toBe("wt1.example.org");
+  });
+
+  it("still ignores a remote URL that was only announced in output", () => {
+    // The loopback gate is what drops docs links and telemetry notices printed
+    // alongside a dev-server banner; only configuration is exempt from it.
+    expect(
+      merge({
+        terminals: [{ terminalId: "term-1", detectedUrls: ["https://docs.example.org/guide"] }],
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -335,8 +379,8 @@ describe("dedupe and filtering", () => {
 
 describe("ordering", () => {
   it("sorts by first-seen, then port", () => {
-    const previous = new Map<number, PreviousEndpointState>([
-      [9000, { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["9000", { firstSeenAtMs: NOW - 10_000, lastLiveAtMs: NOW }],
     ]);
     const endpoints = merge({
       scanned: [scanned(3000), scanned(9000), scanned(4000)],
@@ -365,24 +409,24 @@ describe("nextEndpointState", () => {
   it("stamps liveness only while an endpoint is live", () => {
     const endpoints = merge({ scanned: [scanned(3000)] });
     const state = nextEndpointState(endpoints, new Map(), NOW);
-    expect(state.get(3000)).toEqual({ firstSeenAtMs: NOW, lastLiveAtMs: NOW });
+    expect(state.get("3000")).toEqual({ firstSeenAtMs: NOW, lastLiveAtMs: NOW });
   });
 
   it("preserves the last live time across a stale tick", () => {
-    const previous = new Map<number, PreviousEndpointState>([
-      [3000, { firstSeenAtMs: NOW - 5_000, lastLiveAtMs: NOW - 1_000 }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["3000", { firstSeenAtMs: NOW - 5_000, lastLiveAtMs: NOW - 1_000 }],
     ]);
     const endpoints = merge({
       terminals: [{ terminalId: "term-1", detectedUrls: ["http://localhost:3000/"] }],
       previous,
     });
     const state = nextEndpointState(endpoints, previous, NOW);
-    expect(state.get(3000)?.lastLiveAtMs).toBe(NOW - 1_000);
+    expect(state.get("3000")?.lastLiveAtMs).toBe(NOW - 1_000);
   });
 
   it("forgets endpoints that dropped out", () => {
-    const previous = new Map<number, PreviousEndpointState>([
-      [3000, { firstSeenAtMs: NOW, lastLiveAtMs: NOW }],
+    const previous = new Map<string, PreviousEndpointState>([
+      ["3000", { firstSeenAtMs: NOW, lastLiveAtMs: NOW }],
     ]);
     expect(nextEndpointState([], previous, NOW).size).toBe(0);
   });

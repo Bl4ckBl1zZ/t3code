@@ -1293,7 +1293,6 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-
   it.effect("preserves the pending-terminalization marker across a reclaim", () =>
     Effect.gen(function* () {
       const outbox = yield* EffectOutboxV2;

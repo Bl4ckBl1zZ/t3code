@@ -18,8 +18,13 @@
  * A third input answers a different question. The project's `t3.json`
  * `previewUrl` is *pinned*: it is not evidence that anything is running, so it
  * is listed from the moment the thread opens and survives the server stopping.
+ * It is also the only input allowed to name a host that is not loopback — a
+ * tunnel or a staging origin — because it is the only one a human wrote down on
+ * purpose. Neither signal that decides liveness can see such a host, so those
+ * rows stay `idle`; they exist to be clicked, not to report a status.
  */
 
+import { isLoopbackHost } from "./preview.ts";
 import type { DetectedTerminalUrl } from "./terminalUrlDetection.ts";
 import { NON_HTTP_DEV_PORTS, toDetectedUrl } from "./terminalUrlDetection.ts";
 
@@ -36,7 +41,11 @@ export type ThreadEndpointStatus =
 export type ThreadEndpointSource = "declared" | "stdout" | "scanner";
 
 export interface ThreadEndpoint {
-  /** Stable identity across ticks. One port is one endpoint. */
+  /**
+   * Stable identity across ticks. One local port is one endpoint, whichever
+   * host form announced it; a remote endpoint is identified by `host:port`,
+   * since there is no local port to collapse it onto.
+   */
   readonly key: string;
   readonly url: string;
   readonly host: string;
@@ -52,6 +61,12 @@ export interface ThreadEndpoint {
    * or not anything is serving it, and sorts above the discovered ones.
    */
   readonly pinned: boolean;
+  /**
+   * True when this endpoint lives on this machine's loopback, which is the only
+   * place either liveness signal can see. False means the status is the absence
+   * of evidence, not evidence of absence — callers presenting one should say so.
+   */
+  readonly local: boolean;
   /** Epoch ms when this endpoint was first observed; drives stable ordering. */
   readonly firstSeenAtMs: number;
 }
@@ -98,8 +113,10 @@ const SOURCE_RANK: Record<ThreadEndpointSource, number> = {
 };
 
 interface Candidate {
+  readonly key: string;
   readonly port: number;
   readonly host: string;
+  readonly local: boolean;
   readonly url: string;
   readonly source: ThreadEndpointSource;
   readonly hasPath: boolean;
@@ -129,14 +146,14 @@ function outranks(next: Candidate, current: Candidate): boolean {
 }
 
 /** Merges a candidate into the map, keeping the best URL and the richest attribution. */
-function absorb(byPort: Map<number, Candidate>, next: Candidate): void {
-  const current = byPort.get(next.port);
+function absorb(byKey: Map<string, Candidate>, next: Candidate): void {
+  const current = byKey.get(next.key);
   if (current === undefined) {
-    byPort.set(next.port, next);
+    byKey.set(next.key, next);
     return;
   }
   const winner = outranks(next, current) ? next : current;
-  byPort.set(next.port, {
+  byKey.set(next.key, {
     ...winner,
     // Attribution and liveness accumulate regardless of which URL won: the
     // socket knows the process, the terminal knows the script.
@@ -152,6 +169,16 @@ function absorb(byPort: Map<number, Candidate>, next: Candidate): void {
   });
 }
 
+/**
+ * Identity of a candidate. Local endpoints key on the port alone so every host
+ * form of one server — `localhost`, `127.0.0.1`, `[::1]`, the bare socket —
+ * collapses into a single row. A remote endpoint has no local port to collapse
+ * onto, so it keys on its address; the colon keeps the two spaces disjoint.
+ */
+function candidateKey(host: string, port: number, local: boolean): string {
+  return local ? String(port) : `${host}:${port}`;
+}
+
 function candidateFromUrl(
   rawUrl: string,
   source: ThreadEndpointSource,
@@ -162,11 +189,17 @@ function candidateFromUrl(
     readonly pinned?: boolean;
   },
 ): Candidate | null {
-  const detected: DetectedTerminalUrl | null = toDetectedUrl(rawUrl);
+  const pinned = attribution.pinned ?? false;
+  // Only a pinned URL may name a remote host: it is configuration, not text
+  // scraped out of a dev server's banner, so there is no noise to filter.
+  const detected: DetectedTerminalUrl | null = toDetectedUrl(rawUrl, { allowAnyHost: pinned });
   if (detected === null) return null;
+  const local = isLoopbackHost(detected.host);
   return {
+    key: candidateKey(detected.host, detected.port, local),
     port: detected.port,
     host: detected.host,
+    local,
     url: detected.url,
     source,
     hasPath: detected.hasPath,
@@ -175,7 +208,7 @@ function candidateFromUrl(
     processName: null,
     listening: false,
     announcerRunning: attribution.announcerRunning,
-    pinned: attribution.pinned ?? false,
+    pinned,
   };
 }
 
@@ -190,13 +223,17 @@ export interface MergeThreadEndpointsInput {
    * `previewUrl` from the project's checked-in `t3.json`. Unlike every other
    * source these are not evidence that a server exists — they are the user
    * saying "this is where this project lives", so they are listed from the
-   * moment the thread opens and stay listed after the server stops.
+   * moment the thread opens and stay listed after the server stops, and they
+   * are the only input that may name a host off this machine.
    */
   readonly pinnedUrls?: ReadonlyArray<string> | undefined;
-  /** Per-port state carried from the previous merge, for ordering and the grace window. */
-  readonly previous: ReadonlyMap<number, PreviousEndpointState>;
+  /**
+   * State carried from the previous merge, for ordering and the grace window,
+   * keyed by {@link ThreadEndpoint.key}.
+   */
+  readonly previous: ReadonlyMap<string, PreviousEndpointState>;
   readonly nowMs: number;
-  /** Ports belonging to T3 itself, which must never be advertised as the thread's. */
+  /** Local ports belonging to T3 itself, which must never be advertised as the thread's. */
   readonly excludedPorts?: ReadonlySet<number> | undefined;
 }
 
@@ -207,7 +244,7 @@ export interface MergeThreadEndpointsInput {
 export function mergeThreadEndpoints(
   input: MergeThreadEndpointsInput,
 ): ReadonlyArray<ThreadEndpoint> {
-  const byPort = new Map<number, Candidate>();
+  const byKey = new Map<string, Candidate>();
 
   // Configured URLs first so they seed the identity; they are not "listening"
   // until a socket or a terminal detection says so.
@@ -218,7 +255,7 @@ export function mergeThreadEndpoints(
       announcerRunning: false,
       pinned: true,
     });
-    if (candidate !== null) absorb(byPort, candidate);
+    if (candidate !== null) absorb(byKey, candidate);
   }
 
   for (const declared of input.declaredUrls) {
@@ -227,7 +264,7 @@ export function mergeThreadEndpoints(
       scriptId: null,
       announcerRunning: false,
     });
-    if (candidate !== null) absorb(byPort, candidate);
+    if (candidate !== null) absorb(byKey, candidate);
   }
 
   for (const terminal of input.terminals) {
@@ -237,7 +274,7 @@ export function mergeThreadEndpoints(
         scriptId: terminal.activeScriptId ?? null,
         announcerRunning: terminal.hasRunningSubprocess ?? true,
       });
-      if (candidate !== null) absorb(byPort, candidate);
+      if (candidate !== null) absorb(byKey, candidate);
     }
   }
 
@@ -247,9 +284,13 @@ export function mergeThreadEndpoints(
   for (const scanned of input.scanned) {
     if (NON_HTTP_DEV_PORTS.has(scanned.port)) continue;
     const terminalId = scanned.terminal?.terminalId ?? null;
-    absorb(byPort, {
+    absorb(byKey, {
+      // The scanner only ever reports sockets on this machine, so a scanned row
+      // is local by construction whatever host form `lsof` printed.
+      key: candidateKey(scanned.host, scanned.port, true),
       port: scanned.port,
       host: scanned.host,
+      local: true,
       url: scanned.url,
       source: "scanner",
       hasPath: false,
@@ -265,11 +306,12 @@ export function mergeThreadEndpoints(
 
   const excluded = input.excludedPorts;
   const endpoints: Array<ThreadEndpoint> = [];
-  for (const candidate of byPort.values()) {
+  for (const candidate of byKey.values()) {
     // Applies to pinned rows too: T3's own port is never this thread's server,
-    // whatever a project file claims.
-    if (excluded?.has(candidate.port) === true) continue;
-    const previous = input.previous.get(candidate.port);
+    // whatever a project file claims. Only locally, though — T3 holding :443
+    // says nothing about a remote origin that happens to serve on the same one.
+    if (candidate.local && excluded?.has(candidate.port) === true) continue;
+    const previous = input.previous.get(candidate.key);
     const firstSeenAtMs = previous?.firstSeenAtMs ?? input.nowMs;
 
     let status: ThreadEndpointStatus;
@@ -304,7 +346,7 @@ export function mergeThreadEndpoints(
     }
 
     endpoints.push({
-      key: String(candidate.port),
+      key: candidate.key,
       url: candidate.url,
       host: candidate.host,
       port: candidate.port,
@@ -314,20 +356,23 @@ export function mergeThreadEndpoints(
       scriptId: candidate.scriptId,
       processName: candidate.processName,
       pinned: candidate.pinned,
+      local: candidate.local,
       firstSeenAtMs,
     });
   }
 
-  // Pinned first, then first-seen, then port: the project's own URL holds the
-  // top row (surfaces above any "+N more" cut), and rows must never reshuffle
-  // under the pointer when a sibling endpoint changes state.
+  // Pinned first, then first-seen, then port, then key: the project's own URL
+  // holds the top row (surfaces above any "+N more" cut), and rows must never
+  // reshuffle under the pointer when a sibling endpoint changes state. The key
+  // breaks the last tie, which two remote origins on :443 would otherwise hit.
   // .sort() on the local array, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods, and this runs on mobile.
   return endpoints.sort(
     (left, right) =>
       Number(right.pinned) - Number(left.pinned) ||
       left.firstSeenAtMs - right.firstSeenAtMs ||
-      left.port - right.port,
+      left.port - right.port ||
+      (left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
   );
 }
 
@@ -337,13 +382,13 @@ export function mergeThreadEndpoints(
  */
 export function nextEndpointState(
   endpoints: ReadonlyArray<ThreadEndpoint>,
-  previous: ReadonlyMap<number, PreviousEndpointState>,
+  previous: ReadonlyMap<string, PreviousEndpointState>,
   nowMs: number,
-): ReadonlyMap<number, PreviousEndpointState> {
-  const next = new Map<number, PreviousEndpointState>();
+): ReadonlyMap<string, PreviousEndpointState> {
+  const next = new Map<string, PreviousEndpointState>();
   for (const endpoint of endpoints) {
-    const prior = previous.get(endpoint.port);
-    next.set(endpoint.port, {
+    const prior = previous.get(endpoint.key);
+    next.set(endpoint.key, {
       firstSeenAtMs: endpoint.firstSeenAtMs,
       lastLiveAtMs: endpoint.status === "live" ? nowMs : (prior?.lastLiveAtMs ?? 0),
     });

@@ -79,7 +79,10 @@ export function createT3WorkBackingProject(options: {
             : "The private T3 Work conversation directory could not be created.",
         ...(options.onRetry === undefined
           ? {}
-          : { actionProps: { children: "Try again", onClick: options.onRetry }, actionVariant: "outline" as const }),
+          : {
+              actionProps: { children: "Try again", onClick: options.onRetry },
+              actionVariant: "outline" as const,
+            }),
       }),
     );
     return "failed";

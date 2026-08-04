@@ -476,7 +476,9 @@ export class HermesGatewayClient {
   private readonly criticalCapabilities: ReadonlyArray<string>;
   private readonly discoverLegacyCapabilities: boolean;
   /** Discovery result keyed by gateway build, so reconnects do not re-probe. */
-  private discoveredCapabilities: { readonly build: string; readonly capabilities: ReadonlyArray<string> } | undefined;
+  private discoveredCapabilities:
+    | { readonly build: string; readonly capabilities: ReadonlyArray<string> }
+    | undefined;
   private readonly logger: ((event: HermesGatewayLogEvent) => void) | undefined;
   private readonly supervisor: HermesGatewaySupervisor | undefined;
 
@@ -1671,7 +1673,8 @@ export class HermesGatewayClient {
     );
     const discovered = new Set<string>();
     results.forEach((result, index) => {
-      if (result.status === "fulfilled") discovered.add(HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capability);
+      if (result.status === "fulfilled")
+        discovered.add(HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capability);
     });
     if (discovered.has("session.lifecycle")) {
       for (const capability of HERMES_GATEWAY_INFERRED_CAPABILITIES) discovered.add(capability);

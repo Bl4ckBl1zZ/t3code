@@ -121,7 +121,7 @@ export const T3ProjectFile = Schema.Struct({
     trimmedNonEmpty(
       {
         description:
-          "The project's dev-server URL (e.g. \"http://localhost:5173\"). Always listed in the thread's Ports section, even before anything is listening, so it is one click away from the moment a thread opens. Must be a loopback address.",
+          "The project's dev-server URL (e.g. \"http://localhost:5173\"). Always listed in the thread's Ports section, even before anything is listening, so it is one click away from the moment a thread opens. Any http(s) URL works, including a tunnel or staging origin; T3 Code can only report whether a loopback address is running, so a remote one is listed without a status.",
       },
       T3_PROJECT_FILE_URL_MAX_LENGTH,
     ),

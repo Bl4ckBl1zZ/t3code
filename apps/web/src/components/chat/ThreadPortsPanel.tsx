@@ -48,6 +48,17 @@ const STATUS_LABEL: Record<ThreadEndpoint["status"], string> = {
   idle: "Not running",
 };
 
+/**
+ * Both liveness signals — listening sockets and terminal output — only ever see
+ * this machine, so "Not running" is a claim we can only make about a local
+ * endpoint. A pinned remote origin (a tunnel, a staging host) is reported for
+ * what it is: configuration, with its liveness simply unknown.
+ */
+function statusLabel(endpoint: ThreadEndpoint): string {
+  if (!endpoint.local) return "Pinned";
+  return STATUS_LABEL[endpoint.status];
+}
+
 /** Rows beyond this collapse; a docker-compose stack can bring up a dozen. */
 const VISIBLE_ENDPOINT_LIMIT = 4;
 
@@ -96,7 +107,7 @@ function endpointDetail(
   const parts = [script?.name, endpoint.processName].filter(
     (part): part is string => typeof part === "string" && part.length > 0,
   );
-  return parts.length > 0 ? parts.join(" · ") : STATUS_LABEL[endpoint.status];
+  return parts.length > 0 ? parts.join(" · ") : statusLabel(endpoint);
 }
 
 /**
@@ -295,7 +306,7 @@ function EndpointRow(props: {
           </span>
         </TooltipTrigger>
         <TooltipPopup side="top">
-          {unreachable ? reachability.reason : `${STATUS_LABEL[endpoint.status]} · ${label}`}
+          {unreachable ? reachability.reason : `${statusLabel(endpoint)} · ${label}`}
         </TooltipPopup>
       </Tooltip>
       <Menu highlightItemOnHover={false}>

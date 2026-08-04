@@ -1534,9 +1534,13 @@ describe("HermesGatewayClient skills", () => {
 
   it("grants non-privileged capabilities a legacy gateway proves it implements", async () => {
     const factory = new FakeSocketFactory();
-    const { client } = await openClient(factory, {
-      discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
-    }, legacyReady);
+    const { client } = await openClient(
+      factory,
+      {
+        discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
+      },
+      legacyReady,
+    );
     const capabilities = client.health.capabilities ?? [];
     // Directly probed.
     expect(capabilities).toContain("commands.catalog");
@@ -1552,9 +1556,13 @@ describe("HermesGatewayClient skills", () => {
 
   it("never synthesizes privileged capabilities for a legacy gateway", async () => {
     const factory = new FakeSocketFactory();
-    const { client } = await openClient(factory, {
-      discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
-    }, legacyReady);
+    const { client } = await openClient(
+      factory,
+      {
+        discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
+      },
+      legacyReady,
+    );
     const capabilities = client.health.capabilities ?? [];
     for (const privileged of [
       "session_mcp",
@@ -1572,7 +1580,11 @@ describe("HermesGatewayClient skills", () => {
   it("withholds capabilities a legacy gateway does not implement", async () => {
     const factory = new FakeSocketFactory();
     // Only session.list answers: the catalog/model/config probes return -32601.
-    const { client } = await openClient(factory, { discoverySupports: ["session.list"] }, legacyReady);
+    const { client } = await openClient(
+      factory,
+      { discoverySupports: ["session.list"] },
+      legacyReady,
+    );
     const capabilities = client.health.capabilities ?? [];
     expect(capabilities).toContain("session.lifecycle");
     expect(capabilities).toContain("turn.prompt");

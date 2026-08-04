@@ -99,8 +99,8 @@ export function useThreadEndpoints(input: {
   }, [environmentHttpBaseUrl]);
 
   const declaredUrls = input.declaredUrls ?? EMPTY_DECLARED;
-  const previousRef = useRef<ReadonlyMap<number, PreviousEndpointState>>(new Map());
-  // Endpoint history is keyed by port, so it must not survive a change of
+  const previousRef = useRef<ReadonlyMap<string, PreviousEndpointState>>(new Map());
+  // Endpoint history is keyed by endpoint, so it must not survive a change of
   // scope: thread B's freshly announced :3000 would otherwise inherit thread
   // A's liveness and appear stale — or be dropped — the moment it showed up.
   const scopeRef = useRef<string | null>(null);
