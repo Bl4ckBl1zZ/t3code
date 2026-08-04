@@ -74,6 +74,9 @@ export function V2LifecycleRow(props: {
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  // "bare" drops the card's own border/background so a run of consecutive cards
+  // can share one bordered container with dividers between them.
+  readonly chrome?: RelatedThreadCardChrome | undefined;
 }) {
   const { item } = props;
   if (item.type === "run_interrupt_request") {
@@ -206,6 +209,7 @@ export function V2LifecycleRow(props: {
         badge="created"
         threadId={item.targetThreadId}
         onOpenThread={props.onOpenThread}
+        chrome={props.chrome}
       />
     );
   }
@@ -231,6 +235,7 @@ export function V2LifecycleRow(props: {
         badgeTone={subagentBadgeTone(item.status)}
         threadId={item.childThreadId}
         onOpenThread={props.onOpenThread}
+        chrome={props.chrome}
       />
     );
   }
@@ -244,6 +249,12 @@ function subagentBadgeTone(status: OrchestrationV2TurnItem["status"]): RelatedTh
 }
 
 type RelatedThreadBadgeTone = "neutral" | "info" | "success" | "danger";
+
+export type RelatedThreadCardChrome = "card" | "bare";
+
+// Shared by both the standalone card and the grouped container so a merged run
+// keeps exactly the border, radius and fill a single card would have had.
+export const RELATED_THREAD_CARD_SURFACE_CLASS = "rounded-xl border border-border/60 bg-card/30";
 
 const RELATED_THREAD_BADGE_TONE_CLASS: Record<RelatedThreadBadgeTone, string> = {
   neutral: "text-muted-foreground",
@@ -263,9 +274,11 @@ function RelatedThreadCard(props: {
   readonly badgeTone?: RelatedThreadBadgeTone;
   readonly threadId: ThreadId | null;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly chrome?: RelatedThreadCardChrome | undefined;
 }) {
   const Icon = props.icon;
   const threadId = props.threadId;
+  const surface = props.chrome === "bare" ? null : RELATED_THREAD_CARD_SURFACE_CLASS;
   const content = (
     <>
       {props.orb !== undefined ? (
@@ -302,7 +315,7 @@ function RelatedThreadCard(props: {
   return threadId === null ? (
     <div
       data-v2-item-type={props.itemType}
-      className="flex min-w-0 items-center gap-2.5 rounded-xl border border-border/60 bg-card/30 px-3 py-2.5"
+      className={cn("flex min-w-0 items-center gap-2.5 px-3 py-2.5", surface)}
     >
       {content}
     </div>
@@ -312,7 +325,10 @@ function RelatedThreadCard(props: {
       data-v2-item-type={props.itemType}
       aria-label={`Open ${props.title}`}
       onClick={() => props.onOpenThread(threadId)}
-      className="flex w-full min-w-0 items-center gap-2.5 rounded-xl border border-border/60 bg-card/30 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+      className={cn(
+        "flex w-full min-w-0 items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/50",
+        surface,
+      )}
     >
       {content}
       <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />

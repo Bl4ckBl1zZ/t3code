@@ -1142,6 +1142,119 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.some((row) => row.kind === "turn-fold")).toBe(false);
   });
 
+  it("merges consecutive subagent cards into one event group", () => {
+    const subagentEvent = (index: number) => ({
+      position: index,
+      visibility: "local" as const,
+      sourceThreadId: "thread-1" as never,
+      sourceItemId: `item-subagent-${index}` as never,
+      item: {
+        id: `item-subagent-${index}`,
+        threadId: "thread-1",
+        runId: "turn-1" as never,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: index,
+        status: "running",
+        title: `Subagent ${index}`,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: {},
+        type: "subagent",
+        subagentId: `subagent-${index}`,
+        childThreadId: null,
+        prompt: "Map the surface",
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "subagent-1",
+          kind: "event",
+          createdAt: "2026-01-01T00:00:01Z",
+          projectedItem: subagentEvent(0) as never,
+        },
+        {
+          id: "subagent-2",
+          kind: "event",
+          createdAt: "2026-01-01T00:00:02Z",
+          projectedItem: subagentEvent(1) as never,
+        },
+        {
+          id: "subagent-3",
+          kind: "event",
+          createdAt: "2026-01-01T00:00:03Z",
+          projectedItem: subagentEvent(2) as never,
+        },
+      ],
+      latestRun: null,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["event-group"]);
+    const group = rows[0];
+    if (group?.kind !== "event-group") throw new Error("expected event-group row");
+    // Anchored to the first card so the id survives later cards joining it.
+    expect(group.id).toBe("event-group:subagent-1");
+    expect(group.createdAt).toBe("2026-01-01T00:00:01Z");
+    expect(group.events.map((event) => event.id)).toEqual([
+      "subagent-1",
+      "subagent-2",
+      "subagent-3",
+    ]);
+  });
+
+  it("leaves a lone subagent card as its own event row", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "subagent-1",
+          kind: "event",
+          createdAt: "2026-01-01T00:00:01Z",
+          projectedItem: {
+            position: 0,
+            visibility: "local" as const,
+            sourceThreadId: "thread-1" as never,
+            sourceItemId: "item-subagent-1" as never,
+            item: {
+              id: "item-subagent-1",
+              threadId: "thread-1",
+              runId: "turn-1" as never,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "running",
+              title: "Subagent 1",
+              startedAt: null,
+              completedAt: null,
+              updatedAt: {},
+              type: "subagent",
+              subagentId: "subagent-1",
+              childThreadId: null,
+              prompt: "Map the surface",
+            },
+          } as never,
+        },
+      ],
+      latestRun: null,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["event"]);
+  });
+
   it("keeps the previous turn folded while a newly sent message awaits its turn", () => {
     // Right after send, isWorking is true but latestRun still points at the
     // previous, settled turn — it must stay folded through that window.

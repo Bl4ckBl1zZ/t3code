@@ -124,7 +124,13 @@ import { isBackgroundProcessItem } from "../../backgroundProcess";
 import { BackgroundProcessCard } from "./BackgroundProcessCard";
 import { V2ItemInspector } from "./V2ItemInspector";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
-import { isV2LifecycleItem, V2LifecycleRow, type HandoffTimelineRun } from "./V2LifecycleRow";
+import {
+  isV2LifecycleItem,
+  RELATED_THREAD_CARD_SURFACE_CLASS,
+  V2LifecycleRow,
+  type HandoffTimelineRun,
+  type RelatedThreadCardChrome,
+} from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import {
@@ -949,6 +955,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         (row.kind === "message" && row.message.role === "assistant" && !row.showAssistantMeta) ||
           row.kind === "work" ||
           row.kind === "event" ||
+          row.kind === "event-group" ||
           row.kind === "attempt-fold"
           ? "pb-2"
           : "pb-4",
@@ -970,6 +977,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
+      {row.kind === "event-group" ? <V2EventGroupTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1731,7 +1739,29 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
   }
 }
 
-function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
+// A run of consecutive related-thread cards (subagents, created threads) shares
+// one bordered card, split by dividers, instead of stacking separate boxes.
+function V2EventGroupTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event-group" }> }) {
+  return (
+    <div
+      className={cn("divide-y divide-border/60 overflow-hidden", RELATED_THREAD_CARD_SURFACE_CLASS)}
+      data-v2-event-group
+      data-v2-event-group-count={row.events.length}
+    >
+      {row.events.map((event) => (
+        <V2EventTimelineRow key={event.id} row={event} chrome="bare" />
+      ))}
+    </div>
+  );
+}
+
+function V2EventTimelineRow({
+  row,
+  chrome,
+}: {
+  row: Extract<TimelineRow, { kind: "event" }>;
+  chrome?: RelatedThreadCardChrome | undefined;
+}) {
   const ctx = use(TimelineRowCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
   if (isV2LifecycleItem(item)) {
@@ -1743,6 +1773,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
+        chrome={chrome}
       />
     );
   }
