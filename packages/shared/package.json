@@ -246,6 +246,10 @@
     "./voiceInput": {
       "types": "./src/voiceInput.ts",
       "import": "./src/voiceInput.ts"
+    },
+    "./endpointReachability": {
+      "types": "./src/endpointReachability.ts",
+      "import": "./src/endpointReachability.ts"
     }
   },
   "scripts": {
