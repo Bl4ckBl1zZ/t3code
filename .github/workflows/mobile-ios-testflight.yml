@@ -1,0 +1,175 @@
+name: iOS TestFlight
+
+# Builds and ships iOS releases without EAS: prebuild -> xcodebuild -> upload.
+# Expo the framework is untouched (every config plugin still runs during
+# prebuild); what is gone is Expo the service. The EAS pipeline already built
+# here rather than in the cloud (`eas build --local`), so its sandbox bought
+# nothing but constraints — see mobile-eas-production.yml, kept as a fallback.
+
+on:
+  push:
+    branches:
+      - main
+      # TEMPORARY: proves the pipeline on a stable CI Xcode before it reaches
+      # main. Branch runs never upload (see SKIP_UPLOAD below). Remove once the
+      # pipeline has produced a green archive.
+      - t3code/139f72d1
+  workflow_dispatch:
+    inputs:
+      build-number:
+        description: "Override the build number instead of asking App Store Connect"
+        required: false
+        type: string
+      skip-upload:
+        description: "Archive and export without uploading to TestFlight"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: true
+
+jobs:
+  build-and-submit:
+    name: Build iOS app and submit to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 120
+    environment:
+      name: production
+    env:
+      APP_VARIANT: production
+      # Keeps expo-updates pointed at the EAS Update channel. EAS Update is a
+      # separate service from EAS Build; dropping the build service does not
+      # disturb OTA updates, and an unset project id disables them outright.
+      T3CODE_EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+      T3CODE_EXPO_OWNER: ${{ vars.EXPO_OWNER }}
+      # Previously injected by the EAS hosted "production" environment. A direct
+      # build has to pass them itself, so the app config resolves the same way.
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      # Deliberately not `https://${{ vars.RELAY_DOMAIN }}`: with the variable
+      # unset that yields a truthy "https://", which passes the config check and
+      # ships a build that cannot reach the relay.
+      T3CODE_RELAY_URL: ${{ vars.RELAY_DOMAIN && format('https://{0}', vars.RELAY_DOMAIN) || '' }}
+      EXPO_PUBLIC_CLERK_GOOGLE_WEB_CLIENT_ID: ${{ vars.CLERK_GOOGLE_WEB_CLIENT_ID }}
+      EXPO_PUBLIC_CLERK_GOOGLE_IOS_CLIENT_ID: ${{ vars.CLERK_GOOGLE_IOS_CLIENT_ID }}
+      EXPO_PUBLIC_CLERK_GOOGLE_IOS_URL_SCHEME: ${{ vars.CLERK_GOOGLE_IOS_URL_SCHEME }}
+      T3CODE_MOBILE_OTLP_TRACES_URL: ${{ vars.MOBILE_OTLP_TRACES_URL }}
+      T3CODE_MOBILE_OTLP_TRACES_DATASET: ${{ vars.MOBILE_OTLP_TRACES_DATASET }}
+      T3CODE_MOBILE_OTLP_TRACES_TOKEN: ${{ secrets.MOBILE_OTLP_TRACES_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Expose pnpm
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Restore CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: cocoapods-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.t3code-ccache/cache
+          # Unique key per commit so every run saves its warmed cache; restore
+          # falls back to the most recent prior run.
+          key: ccache-ios-${{ github.sha }}
+          restore-keys: |
+            ccache-ios-
+
+      - name: Set up ccache
+        # plugins/withIosCcache.cjs activates only when these wrappers exist,
+        # routing Pods compilation through ccache. Unlike the EAS pipeline this
+        # needs no pinned working directory: the build happens in the checkout,
+        # so compile paths are already stable between runs.
+        run: |
+          set -euo pipefail
+          command -v ccache >/dev/null || brew install ccache
+          ccache_bin="$(command -v ccache)"
+          export CCACHE_DIR="$HOME/.t3code-ccache/cache"
+          wrappers="$HOME/.t3code-ccache/bin"
+          mkdir -p "$wrappers" "$CCACHE_DIR"
+          printf '#!/bin/sh\nexport CCACHE_DIR="%s"\nexec "%s" clang "$@"\n' \
+            "$CCACHE_DIR" "$ccache_bin" > "$wrappers/ccache-clang.sh"
+          printf '#!/bin/sh\nexport CCACHE_DIR="%s"\nexec "%s" clang++ "$@"\n' \
+            "$CCACHE_DIR" "$ccache_bin" > "$wrappers/ccache-clang++.sh"
+          chmod +x "$wrappers/ccache-clang.sh" "$wrappers/ccache-clang++.sh"
+          ccache --set-config max_size=3G
+          ccache --set-config inode_cache=true
+          ccache --set-config sloppiness=clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros
+          ccache --zero-stats
+
+      - name: Materialize signing credentials
+        id: credentials
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_MAIN_PROFILE_BASE64: ${{ secrets.APPLE_MAIN_APPSTORE_PROFILE_BASE64 }}
+          APPLE_WIDGETS_PROFILE_BASE64: ${{ secrets.APPLE_WIDGETS_APPSTORE_PROFILE_BASE64 }}
+          APPLE_SHARING_PROFILE_BASE64: ${{ secrets.APPLE_SHARING_APPSTORE_PROFILE_BASE64 }}
+          APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          # Outside the workspace so `expo prebuild --clean` cannot sweep it and
+          # so no key can be committed by accident.
+          credentials="${RUNNER_TEMP}/ios-credentials"
+          mkdir -p "$credentials"
+          chmod 700 "$credentials"
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64" | base64 -d > "$credentials/distribution.p12"
+          printf '%s' "$APPLE_MAIN_PROFILE_BASE64" | base64 -d > "$credentials/main.mobileprovision"
+          printf '%s' "$APPLE_WIDGETS_PROFILE_BASE64" | base64 -d > "$credentials/widgets.mobileprovision"
+          printf '%s' "$APPLE_SHARING_PROFILE_BASE64" | base64 -d > "$credentials/sharing.mobileprovision"
+          printf '%s' "$APPLE_API_KEY_VALUE" > "$credentials/asc-api-key.p8"
+          echo "dir=$credentials" >> "$GITHUB_OUTPUT"
+
+      - name: Build and upload to TestFlight
+        env:
+          APPLE_DISTRIBUTION_P12: ${{ steps.credentials.outputs.dir }}/distribution.p12
+          APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          APPLE_MAIN_PROFILE: ${{ steps.credentials.outputs.dir }}/main.mobileprovision
+          APPLE_WIDGETS_PROFILE: ${{ steps.credentials.outputs.dir }}/widgets.mobileprovision
+          APPLE_SHARING_PROFILE: ${{ steps.credentials.outputs.dir }}/sharing.mobileprovision
+          ASC_API_KEY_PATH: ${{ steps.credentials.outputs.dir }}/asc-api-key.p8
+          ASC_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+          # Committed in eas.json under submit.production.ios.ascAppId; the
+          # variable is here so a fork can point at its own record.
+          ASC_APP_ID: ${{ vars.ASC_APP_ID || '6796384276' }}
+          T3CODE_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
+          # Only main ever reaches TestFlight. Dispatching this against a branch
+          # archives and exports but stops short of uploading, which is what
+          # makes it safe to prove the pipeline out before merging.
+          SKIP_UPLOAD: >-
+            ${{ (inputs.skip-upload || github.ref != 'refs/heads/main') && '1' || '' }}
+        run: ./apps/mobile/scripts/ios-testflight.sh
+
+      - name: Report ccache stats
+        if: always()
+        run: CCACHE_DIR="$HOME/.t3code-ccache/cache" ccache --show-stats || true
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-production-ipa
+          path: apps/mobile/build/export/*.ipa
+          if-no-files-found: warn

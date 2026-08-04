@@ -1453,6 +1453,84 @@ function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput):
   );
 }
 
+function countPatchLines(lines: ReadonlyArray<unknown>): {
+  additions: number;
+  deletions: number;
+} {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of lines) {
+    if (typeof line !== "string") continue;
+    // Hunk lines carry no `+++`/`---` file headers — those live on the patch
+    // object, not in `lines` — so a single-character check is exact here.
+    if (line.startsWith("+")) additions += 1;
+    else if (line.startsWith("-")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function countLines(contents: string): number {
+  if (contents.length === 0) return 0;
+  const lines = contents.split("\n");
+  // A trailing newline terminates the last line rather than starting a new one.
+  return lines.at(-1) === "" ? lines.length - 1 : lines.length;
+}
+
+/**
+ * The `+n -n` a file change reports in the timeline.
+ *
+ * Edit/MultiEdit/NotebookEdit results carry a `structuredPatch`, which is the
+ * same hunk data the Claude Code CLI counts for its own diffstat — so this
+ * agrees with what the user would see there, rather than re-diffing the strings
+ * ourselves and disagreeing at the margins.
+ *
+ * Write is the exception: creating a file produces an empty patch, because
+ * there is no hunk to describe. Its whole `content` is the addition.
+ *
+ * Returns null when the shape is unrecognized. That leaves `additions` and
+ * `deletions` unset, and the row renders without a diffstat exactly as before —
+ * a wrong count is worse than no count.
+ */
+export function claudeFileChangeLineCounts(
+  output: unknown,
+): { readonly additions: number; readonly deletions: number } | null {
+  const value =
+    typeof output === "string"
+      ? ((): unknown => {
+          try {
+            return JSON.parse(output);
+          } catch {
+            return undefined;
+          }
+        })()
+      : output;
+  if (typeof value !== "object" || value === null) return null;
+
+  const structuredPatch = Reflect.get(value, "structuredPatch");
+  if (Array.isArray(structuredPatch)) {
+    if (structuredPatch.length > 0) {
+      let additions = 0;
+      let deletions = 0;
+      for (const hunk of structuredPatch) {
+        if (typeof hunk !== "object" || hunk === null) continue;
+        const lines = Reflect.get(hunk, "lines");
+        if (!Array.isArray(lines)) continue;
+        const counts = countPatchLines(lines);
+        additions += counts.additions;
+        deletions += counts.deletions;
+      }
+      return { additions, deletions };
+    }
+    // An empty patch on a create is a whole new file, not a no-op edit.
+    const contents = Reflect.get(value, "content");
+    if (Reflect.get(value, "type") === "create" && typeof contents === "string") {
+      return { additions: countLines(contents), deletions: 0 };
+    }
+    return { additions: 0, deletions: 0 };
+  }
+  return null;
+}
+
 type ClaudeNativeToolOutput =
   | {
       readonly type: "none";
@@ -2299,6 +2377,8 @@ export function makeClaudeAdapterV2(
           const outputText = claudeNativeToolOutputText(input.output);
           const declaredTimeoutMs =
             itemType === "command_execution" ? claudeCommandTimeoutMs(input.toolInput) : null;
+          const fileChangeLineCounts =
+            itemType === "file_change" ? claudeFileChangeLineCounts(outputValue) : null;
           const turnItem: OrchestrationV2TurnItem =
             itemType === "command_execution"
               ? {
@@ -2318,6 +2398,7 @@ export function makeClaudeAdapterV2(
                     type: "file_change",
                     fileName: fileNameFromClaudeTool(input.toolName, input.toolInput),
                     ...(outputText.length === 0 ? {} : { diffStr: outputText }),
+                    ...fileChangeLineCounts,
                   }
                 : itemType === "web_search"
                   ? {

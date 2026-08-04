@@ -19,6 +19,13 @@ const managedIosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim();
 const managedIosProvisioningProfile = repoEnv.T3CODE_IOS_PROVISIONING_PROFILE?.trim();
 const managedIosWidgetsProvisioningProfile =
   repoEnv.T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE?.trim();
+const managedIosSharingProvisioningProfile =
+  repoEnv.T3CODE_IOS_SHARING_PROVISIONING_PROFILE?.trim();
+// "Apple Development" for a local archive, "Apple Distribution" for App Store
+// releases. Signing an App Store archive with the development identity fails at
+// export with an opaque profile mismatch, so the release pipeline sets this.
+const managedIosSigningIdentity =
+  repoEnv.T3CODE_IOS_SIGNING_IDENTITY?.trim() || "Apple Development";
 const expoProjectId = repoEnv.T3CODE_EXPO_PROJECT_ID?.trim();
 const expoOwner = repoEnv.T3CODE_EXPO_OWNER?.trim();
 const isIosManualSigningEnabled =
@@ -226,6 +233,10 @@ const manualSigningPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
     appleTeamId: managedIosAppleTeamId!,
     appProfileSpecifier: managedIosProvisioningProfile!,
     widgetProfileSpecifier: managedIosWidgetsProvisioningProfile!,
+    identity: managedIosSigningIdentity,
+    ...(managedIosSharingProvisioningProfile
+      ? { sharingProfileSpecifier: managedIosSharingProvisioningProfile }
+      : {}),
   },
 ];
 
@@ -329,6 +340,12 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    // First in the list on purpose: same-type mods run last-registered-first,
+    // so registering earliest makes this run LAST, once expo-sharing and
+    // expo-widgets have created the targets it has to sign. Registered next to
+    // the other iOS plugins instead, it ran before the sharing extension
+    // existed and prebuild failed looking for it.
+    ...(isIosManualSigningEnabled ? [manualSigningPlugin] : []),
     "expo-asset",
     [
       "expo-audio",
@@ -443,7 +460,6 @@ const config: ExpoConfig = {
         },
       },
     ],
-    ...(isIosManualSigningEnabled ? [manualSigningPlugin] : []),
     // Must be listed BEFORE expo-widgets: same-type mods run last-registered-
     // first, so registering earlier makes this plugin's mods run AFTER
     // expo-widgets' — its dangerous mod wipes ios/ExpoWidgetsTarget/ (which

@@ -24,7 +24,7 @@ const TestLayer = Layer.empty.pipe(
 );
 
 const THREAD_ID = "thread:project-abc:01J8Z9QK3M4N5P6R7S8T9V0W1X" as ThreadId;
-const CLAUDE = "claude" as ProviderDriverKind;
+const CLAUDE = "claudeAgent" as ProviderDriverKind;
 const HERMES = "hermes" as ProviderDriverKind;
 
 const PDF: ChatAttachment = {
