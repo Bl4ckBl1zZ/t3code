@@ -19,7 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
@@ -47,8 +47,9 @@ const invocation = {
 };
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
+  protocolVersion: "2025-06-18",
   initializePayload: {
-    protocolVersion: "2025-03-26",
+    protocolVersion: "2025-06-18",
     capabilities: {},
     clientInfo: { name: "mcp-test", version: "1.0.0" },
   },
@@ -152,6 +153,7 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         name: "MCP termination test",
         version: "1.0.0",
         path: "/mcp",
+        protocols: [McpProtocol.v2025_06_18],
       });
       yield* HttpRouter.serve(serverLayer, {
         disableListenLog: true,
@@ -288,8 +290,9 @@ it.effect("registers annotated tools and preserves authenticated request context
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.flip,
         );
-      expect(malformed.isError).toBe(true);
+      expect(malformed._tag).toBe("InvalidParams");
 
       const snapshot = yield* server
         .callTool({ name: "preview_snapshot", arguments: { tabId: alternateTabId } })

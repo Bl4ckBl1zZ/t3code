@@ -1656,7 +1656,7 @@ export default function GitActionsControl({
                     aria-disabled="true"
                     className={cn(
                       "cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
-                      isPanel && THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
+                      isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : "ps-[8.5px]",
                     )}
                     size="xs"
                     variant={isPanel ? "ghost" : "outline"}
@@ -1685,7 +1685,7 @@ export default function GitActionsControl({
             <Button
               variant={isPanel ? "ghost" : "outline"}
               size="xs"
-              className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : undefined}
+              className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : "ps-[8.5px]"}
               disabled={isGitActionRunning || quickAction.disabled}
               onClick={runQuickAction}
             >

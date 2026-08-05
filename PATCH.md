@@ -6,7 +6,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   from `Bl4ckBl1zZ/t3code`. CI applies and deeply verifies a complete ad-hoc signature when Apple
   credentials are absent, then automatically switches to Developer ID signing, hardened runtime,
   notarization, and Gatekeeper validation when the production credentials are configured.
-- Merges `upstream/main` into the fork hourly and triggers a new ARM64 build when upstream changed.
+- Syncs `upstream/main` into the fork through a scheduled T3 Code agent task rather than a
+  `sync-upstream` workflow: the task resolves conflicts on the merits, audits the fork invariants
+  below, and opens a PR. Do not reintroduce `.github/workflows/sync-upstream.yml`.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.
@@ -25,8 +27,12 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `com.t3code.dev.sharing`, and `group.com.bl4ckbl1zz.t3code.dev`, supplied through the fork's iOS
   build variables. Local development signing uses the APNs sandbox; TestFlight exports use
   production APNs entitlements and dedicated App Store profiles for all three targets.
-- Builds and uploads the production iOS app to the fork's App Store Connect/TestFlight app from the
-  self-hosted Apple Silicon runner after every push to `main`. An internal group automatically
-  receives every processed build, and the external group exposes a public TestFlight invitation
-  after Apple's initial Beta App Review. The fork no longer consumes the upstream Expo project's
-  OTA updates; TestFlight distributes signed updates to opted-in testers.
+- Builds and uploads the production iOS app to the fork's App Store Connect/TestFlight app on an
+  Apple Silicon macOS runner, driven by `mobile-ios-testflight.yml` (prebuild -> `xcodebuild`
+  archive -> export -> upload, with no EAS service). It ships on `v*` tags or manual dispatch, not
+  on every push to `main`: an archive takes ~40 minutes and a per-commit release burns runner
+  minutes on versions nobody installs. `mobile-eas-production.yml` stays as an `eas build --local`
+  fallback. An internal group automatically receives every processed build, and the external group
+  exposes a public TestFlight invitation after Apple's initial Beta App Review. The fork does not
+  consume the upstream Expo project's OTA updates; TestFlight distributes signed updates to
+  opted-in testers.

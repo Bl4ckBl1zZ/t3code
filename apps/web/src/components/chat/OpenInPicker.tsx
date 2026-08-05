@@ -254,7 +254,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         aria-label={compact ? "Open file in preferred editor" : primaryLabel}
         size={isPanel ? "sm" : "xs"}
         variant={isPanel ? "ghost" : "outline"}
-        className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : undefined}
+        className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : "ps-[8.5px]"}
         disabled={!preferredEditor || !openInCwd}
         onClick={() => openInEditor(preferredEditor)}
       >
