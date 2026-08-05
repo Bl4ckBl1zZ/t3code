@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Release tooling runs from plain node before an Effect runtime exists.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalFetch:off - Release tooling runs from plain node before an Effect runtime exists.
 /**
  * The parts of the direct-to-TestFlight iOS release that are easier to get right
  * in JavaScript than in bash. Driven by `apps/mobile/scripts/ios-testflight.sh`.
