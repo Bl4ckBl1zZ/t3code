@@ -5065,6 +5065,13 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const handleRollbackCheckpoint = useCallback(
+    (input: { readonly checkpointId: string; readonly scopeId: string }) => {
+      void onRollbackCheckpoint(input);
+    },
+    [onRollbackCheckpoint],
+  );
+
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
       void navigate({
@@ -6592,7 +6599,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
                 onForkFromRun={onForkFromRun}
-                onRollbackCheckpoint={(input) => void onRollbackCheckpoint(input)}
+                onRollbackCheckpoint={handleRollbackCheckpoint}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}

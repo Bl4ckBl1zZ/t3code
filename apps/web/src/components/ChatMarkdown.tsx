@@ -107,6 +107,7 @@ interface ChatMarkdownProps {
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_AVAILABLE_EDITORS: never[] = [];
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -1305,6 +1306,53 @@ interface ChatMarkdownComponentsContext {
   readonly openMarkdownFileInPreview: (path: string) => Promise<AtomCommandResult<void, unknown>>;
 }
 
+// React remounts a subtree whenever an element's component type changes
+// identity. createChatMarkdownComponents returns fresh closures on every call,
+// so handing them to react-markdown directly tears down stateful blocks — most
+// visibly the HtmlEmbedBlock iframe, which reloads and re-measures from its
+// default height — each time ChatMarkdown re-renders. These wrappers keep the
+// component types module-stable and read the current implementation from
+// context; the implementations use no hooks, so calling them as plain
+// functions is safe.
+const ChatMarkdownComponentsImplContext = React.createContext<Components | null>(null);
+
+const CHAT_MARKDOWN_COMPONENT_TAGS = [
+  "p",
+  "li",
+  "input",
+  "a",
+  "code",
+  "img",
+  "video",
+  "table",
+  "details",
+  "pre",
+] as const;
+
+function createStableMarkdownComponent(tag: (typeof CHAT_MARKDOWN_COMPONENT_TAGS)[number]) {
+  function StableMarkdownComponent(props: Record<string, unknown>) {
+    const impl = use(ChatMarkdownComponentsImplContext)?.[tag];
+    if (typeof impl === "function") {
+      return (impl as (componentProps: Record<string, unknown>) => ReactNode)(props);
+    }
+    const {
+      node: _node,
+      children,
+      ...rest
+    } = props as {
+      node?: unknown;
+      children?: ReactNode;
+    };
+    return React.createElement(tag, rest, children);
+  }
+  StableMarkdownComponent.displayName = `ChatMarkdown.${tag}`;
+  return StableMarkdownComponent;
+}
+
+const STABLE_CHAT_MARKDOWN_COMPONENTS = Object.fromEntries(
+  CHAT_MARKDOWN_COMPONENT_TAGS.map((tag) => [tag, createStableMarkdownComponent(tag)]),
+) as unknown as Components;
+
 function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): Components {
   const {
     text,
@@ -1582,7 +1630,7 @@ function ChatMarkdown({
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
-    serverConfig?.availableEditors ?? [],
+    serverConfig?.availableEditors ?? EMPTY_AVAILABLE_EDITORS,
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
@@ -1716,16 +1764,18 @@ function ChatMarkdown({
       )}
       onCopy={handleCopy}
     >
-      <ReactMarkdown
-        remarkPlugins={
-          lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
-        }
-        rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
-        components={markdownComponents}
-        urlTransform={markdownUrlTransform}
-      >
-        {text}
-      </ReactMarkdown>
+      <ChatMarkdownComponentsImplContext.Provider value={markdownComponents}>
+        <ReactMarkdown
+          remarkPlugins={
+            lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
+          }
+          rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
+          components={STABLE_CHAT_MARKDOWN_COMPONENTS}
+          urlTransform={markdownUrlTransform}
+        >
+          {text}
+        </ReactMarkdown>
+      </ChatMarkdownComponentsImplContext.Provider>
     </div>
   );
 }
