@@ -381,6 +381,16 @@ export const EnvironmentActivitySnapshot = Schema.Struct({
   // Threads whose latest run is in a non-terminal status (preparing, queued,
   // starting, running, waiting) — i.e. agent work would be lost on restart.
   activeRunCount: Schema.Number,
+  // Commands that outlived the turn that launched them and are still running.
+  // A separate count because it is exactly the case `activeRunCount` misses:
+  // the turn is settled, so the thread looks idle, while a `run_in_background`
+  // command keeps going and would die with the provider CLI process on restart.
+  //
+  // Optional so a response from a backend that predates the field still decodes.
+  // Absent reads as zero rather than as busy: the alternative strands a desktop
+  // on an old backend with auto-update permanently deferred and nothing on
+  // screen to explain why, and `activeRunCount` still guards the common case.
+  backgroundProcessCount: Schema.optional(Schema.Number),
 });
 export type EnvironmentActivitySnapshot = typeof EnvironmentActivitySnapshot.Type;
 

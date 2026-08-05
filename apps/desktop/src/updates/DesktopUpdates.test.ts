@@ -671,11 +671,14 @@ describe("DesktopUpdates", () => {
     waitForReady: () => Effect.succeed(true),
   };
 
-  const activityResponse = (request: HttpClientRequest.HttpClientRequest, activeRunCount: number) =>
+  const activityResponse = (
+    request: HttpClientRequest.HttpClientRequest,
+    activity: { readonly activeRunCount: number; readonly backgroundProcessCount?: number },
+  ) =>
     Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
-        new Response(JSON.stringify({ activeRunCount }), {
+        new Response(JSON.stringify(activity), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -738,7 +741,7 @@ describe("DesktopUpdates", () => {
     const harness = makeHarness({
       initialSettings: autoUpdateSettings,
       backendInstance: runningBackendInstance,
-      activityHandler: (request) => activityResponse(request, activeRunCount),
+      activityHandler: (request) => activityResponse(request, { activeRunCount }),
     });
 
     return Effect.scoped(
@@ -758,6 +761,66 @@ describe("DesktopUpdates", () => {
 
         activeRunCount = 0;
         yield* TestClock.adjust(Duration.seconds(30));
+
+        assert.isTrue(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("defers the automatic install while a background command is still running", () => {
+    // The case `activeRunCount` alone misses: every turn has settled, so the
+    // thread reads as idle, while a `run_in_background` command keeps going and
+    // would die with the provider CLI process the restart kills.
+    let backgroundProcessCount = 1;
+    const harness = makeHarness({
+      initialSettings: autoUpdateSettings,
+      backendInstance: runningBackendInstance,
+      activityHandler: (request) =>
+        activityResponse(request, { activeRunCount: 0, backgroundProcessCount }),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+
+        const waitingState = yield* updates.getState;
+        assert.equal(waitingState.status, "downloaded");
+        assert.isTrue(waitingState.autoInstallPending);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+
+        backgroundProcessCount = 0;
+        yield* TestClock.adjust(Duration.seconds(30));
+
+        assert.isTrue(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("installs when a backend predating the background count reports idle", () => {
+    // An omitted `backgroundProcessCount` must not read as busy, or a desktop
+    // paired with an older backend would defer forever with nothing on screen
+    // to explain it.
+    const harness = makeHarness({
+      initialSettings: autoUpdateSettings,
+      backendInstance: runningBackendInstance,
+      activityHandler: (request) => activityResponse(request, { activeRunCount: 0 }),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
 
         assert.isTrue(yield* Ref.get(desktopState.quitting));
       }),
@@ -793,7 +856,7 @@ describe("DesktopUpdates", () => {
     const harness = makeHarness({
       initialSettings: autoUpdateSettings,
       backendInstance: runningBackendInstance,
-      activityHandler: (request) => activityResponse(request, 1),
+      activityHandler: (request) => activityResponse(request, { activeRunCount: 1 }),
     });
 
     return Effect.scoped(

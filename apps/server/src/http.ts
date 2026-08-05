@@ -203,11 +203,20 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
           // non-terminal thread runs covers them too. On failure report one
           // active run rather than zero: the consumer (the desktop auto-update
           // idle gate) must never restart the app on an inconclusive answer.
+          //
+          // Background commands are counted separately because a thread running
+          // one is not in an active run at all — the turn settled and left the
+          // command behind. This is the live shell read, so the per-thread count
+          // is the real one rather than the cached zero.
           return yield* threadManagement.getShellSnapshot().pipe(
             Effect.map((snapshot) => ({
               activeRunCount: snapshot.threads.filter((thread) =>
                 ACTIVE_THREAD_STATUSES.has(thread.status),
               ).length,
+              backgroundProcessCount: snapshot.threads.reduce(
+                (total, thread) => total + (thread.backgroundProcessCount ?? 0),
+                0,
+              ),
             })),
             Effect.catch((cause) =>
               Effect.logWarning("Failed to compute environment activity snapshot", { cause }).pipe(
