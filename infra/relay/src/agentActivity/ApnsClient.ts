@@ -90,6 +90,23 @@ function contentState(state: RelayAgentActivityAggregateState) {
   };
 }
 
+// Orders our activities against each other: which one iOS keeps in the Dynamic
+// Island and where it sits in the lock screen stack. A blocked agent outranks a
+// broken one, which outranks work still in flight, which outranks a card that
+// is only reporting an outcome.
+function relevanceScore(state: RelayAgentActivityAggregateState): number {
+  const blocked = state.activities.some(
+    (row) => row.phase === "waiting_for_approval" || row.phase === "waiting_for_input",
+  );
+  if (blocked) {
+    return 100;
+  }
+  if (state.activities.some((row) => row.phase === "failed")) {
+    return 75;
+  }
+  return state.activeCount > 0 ? 50 : 25;
+}
+
 interface LiveActivityRequestBase {
   readonly token: string;
   readonly nowEpochSeconds: number;
@@ -165,6 +182,7 @@ function makeLiveActivityRequest(input: MakeLiveActivityRequestInput): ApnsLiveA
           : {}),
         ...(input.event === "update" && input.alert ? liveActivityAlertPayload(input.alert) : {}),
         "content-state": contentState(state),
+        "relevance-score": relevanceScore(state),
         "stale-date": timestamp + STALE_AFTER_SECONDS,
       },
     },

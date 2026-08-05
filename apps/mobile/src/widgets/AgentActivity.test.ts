@@ -10,6 +10,7 @@ vi.mock("@expo/ui/swift-ui", () => ({
 }));
 
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+  activityBackgroundTint: (value: unknown) => ({ activityBackgroundTint: value }),
   font: (value: unknown) => value,
   foregroundStyle: (value: unknown) => value,
   frame: (value: unknown) => value,
@@ -76,9 +77,11 @@ describe("AgentActivity widget layout", () => {
       },
       environment as never,
     );
-    const banner = JSON.stringify(layout.banner);
-    expect(banner).toContain("#7dd3fc"); // sky-300: running
-    expect(banner).toContain("#fcd34d"); // amber-300: waiting_for_approval
+    // The banner escalates to the blocked row alone, so the per-phase palette
+    // is asserted on the expanded island, which keeps the full row list.
+    const expanded = JSON.stringify(layout.expandedBottom);
+    expect(expanded).toContain("#7dd3fc"); // sky-300: running
+    expect(expanded).toContain("#fcd34d"); // amber-300: waiting_for_approval
   });
 
   it("switches to the web sidebar's light palette when the scheme is light", () => {
@@ -95,14 +98,14 @@ describe("AgentActivity widget layout", () => {
       },
       lightEnvironment as never,
     );
-    const banner = JSON.stringify(layout.banner);
-    expect(banner).toContain("#0284c7"); // sky-600: running
-    expect(banner).toContain("#d97706"); // amber-600: waiting_for_approval
-    expect(banner).not.toContain("#7dd3fc");
-    expect(banner).not.toContain("#fcd34d");
+    const expanded = JSON.stringify(layout.expandedBottom);
+    expect(expanded).toContain("#0284c7"); // sky-600: running
+    expect(expanded).toContain("#d97706"); // amber-600: waiting_for_approval
+    expect(expanded).not.toContain("#7dd3fc");
+    expect(expanded).not.toContain("#fcd34d");
   });
 
-  it("orders rows attention-first in the banner", () => {
+  it("orders rows attention-first in the expanded island", () => {
     const layout = AgentActivity(
       {
         ...props,
@@ -119,26 +122,81 @@ describe("AgentActivity widget layout", () => {
       },
       environment as never,
     );
-    const banner = JSON.stringify(layout.banner);
-    expect(banner.indexOf("Blocked thread")).toBeGreaterThan(-1);
-    expect(banner.indexOf("Blocked thread")).toBeLessThan(banner.indexOf("Working thread"));
+    const expanded = JSON.stringify(layout.expandedBottom);
+    expect(expanded.indexOf("Blocked thread")).toBeGreaterThan(-1);
+    expect(expanded.indexOf("Blocked thread")).toBeLessThan(expanded.indexOf("Working thread"));
   });
 
-  it("summarizes the attention count in the banner header", () => {
+  it("summarizes the attention count in the banner header when nothing is blocked", () => {
     const layout = AgentActivity(
       {
         ...props,
         activeCount: 3,
-        activities: [
-          makeRow({}),
-          makeRow({ threadId: "thread-2", phase: "waiting_for_input", status: "Input" }),
-        ],
+        activities: [makeRow({}), makeRow({ threadId: "thread-2" })],
       },
       environment as never,
     );
     const banner = JSON.stringify(layout.banner);
     expect(banner).toContain("3 active agents");
-    expect(banner).toContain("1 needs attention");
+  });
+
+  it("escalates the banner to a single hero row when an agent is blocked", () => {
+    const layout = AgentActivity(
+      {
+        ...props,
+        activeCount: 3,
+        activities: [
+          makeRow({ threadTitle: "Working thread" }),
+          makeRow({ threadId: "thread-3", threadTitle: "Second working thread" }),
+          makeRow({
+            threadId: "thread-2",
+            threadTitle: "Blocked thread",
+            phase: "waiting_for_approval",
+            status: "Approval",
+          }),
+        ],
+      },
+      environment as never,
+    );
+    const banner = JSON.stringify(layout.banner);
+    expect(banner).toContain("Waiting on you");
+    expect(banner).toContain("Blocked thread");
+    // The rest of the fleet is demoted to a count rather than listed.
+    expect(banner).not.toContain("Working thread");
+    expect(banner).toContain("+2 other agents running");
+    // A live-updating relative date replaces the frozen timestamp.
+    expect(banner).toContain('"dateStyle":"relative"');
+    // The whole card carries the phase tint, not just the status text.
+    expect(banner).toContain('"activityBackgroundTint":"#40f59e0b"');
+  });
+
+  it("keeps the row list and tints the card when work failed", () => {
+    const layout = AgentActivity(
+      {
+        ...props,
+        activeCount: 1,
+        activities: [
+          makeRow({}),
+          makeRow({ threadId: "thread-2", phase: "failed", status: "Failed" }),
+        ],
+      },
+      environment as never,
+    );
+    const banner = JSON.stringify(layout.banner);
+    expect(banner).not.toContain("Waiting on you");
+    expect(banner).toContain('"activityBackgroundTint":"#40ef4444"');
+  });
+
+  it("drops the background tint under reduced luminance", () => {
+    const layout = AgentActivity(
+      {
+        ...props,
+        activeCount: 1,
+        activities: [makeRow({ phase: "waiting_for_approval", status: "Approval" })],
+      },
+      { colorScheme: "dark", isLuminanceReduced: true } as never,
+    );
+    expect(JSON.stringify(layout.banner)).not.toContain("activityBackgroundTint");
   });
 
   it("uses the attention tint for the compact presentations when a row needs input", () => {
@@ -154,8 +212,70 @@ describe("AgentActivity widget layout", () => {
       environment as never,
     );
     expect(JSON.stringify(layout.compactLeading)).toContain("#a5b4fc"); // indigo-300
-    expect(JSON.stringify(layout.compactTrailing)).toContain("Input");
+    // Glyph, not a word: the compact slot cannot grow in landscape from iOS 27.
+    expect(JSON.stringify(layout.compactTrailing)).toContain("questionmark.circle.fill");
+    expect(JSON.stringify(layout.compactTrailing)).not.toContain("Input");
     expect(JSON.stringify(layout.minimal)).toContain("#a5b4fc");
+  });
+
+  it("counts blocked agents in the compact trailing slot only when several are waiting", () => {
+    const one = AgentActivity(
+      {
+        ...props,
+        activeCount: 2,
+        activities: [
+          makeRow({}),
+          makeRow({ threadId: "thread-2", phase: "waiting_for_approval", status: "Approval" }),
+        ],
+      },
+      environment as never,
+    );
+    expect(JSON.stringify(one.compactTrailing)).not.toContain('"2"');
+
+    const many = AgentActivity(
+      {
+        ...props,
+        activeCount: 2,
+        activities: [
+          makeRow({ phase: "waiting_for_approval", status: "Approval" }),
+          makeRow({ threadId: "thread-2", phase: "waiting_for_input", status: "Input" }),
+        ],
+      },
+      environment as never,
+    );
+    expect(JSON.stringify(many.compactTrailing)).toContain('"2"');
+  });
+
+  it("deep links the watch and CarPlay card", () => {
+    const layout = AgentActivity({ ...props, activities: [makeRow({})] }, environment as never);
+    expect(JSON.stringify(layout.bannerSmall)).toContain(
+      '"widgetURL":"t3code://threads/env-1/thread-1"',
+    );
+  });
+
+  it("reduces the watch card to a glyph and a count when the system asks for less detail", () => {
+    const layout = AgentActivity(
+      {
+        ...props,
+        activeCount: 2,
+        activities: [
+          makeRow({}),
+          makeRow({ threadId: "thread-2", phase: "waiting_for_approval", status: "Approval" }),
+        ],
+      },
+      { ...environment, levelOfDetail: "simplified" } as never,
+    );
+    const small = JSON.stringify(layout.bannerSmall);
+    expect(small).toContain("exclamationmark.circle.fill");
+    expect(small).not.toContain("Thread");
+    expect(small).not.toContain("Project");
+  });
+
+  it("scales the watch card with Dynamic Type instead of fixed point sizes", () => {
+    const layout = AgentActivity({ ...props, activities: [makeRow({})] }, environment as never);
+    const small = JSON.stringify(layout.bannerSmall);
+    expect(small).toContain('"textStyle":"headline"');
+    expect(small).toContain('"dateStyle":"relative"');
   });
 
   it("deep links the banner to the row that needs attention", () => {

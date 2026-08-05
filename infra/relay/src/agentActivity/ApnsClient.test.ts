@@ -99,6 +99,36 @@ describe("ApnsClient", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("ranks blocked work above running work with the relevance score", () =>
+    Effect.gen(function* () {
+      const apns = yield* ApnsClient.ApnsClient;
+      const scoreFor = (aggregate: RelayAgentActivityAggregateState) => {
+        const request = apns.makeLiveActivityRequest({
+          event: "update",
+          token: "token",
+          state: aggregate,
+          nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+          nowIso: DateTime.formatIso(now),
+        });
+        return (request.payload as { aps: { "relevance-score": number } }).aps["relevance-score"];
+      };
+      const withPhase = (
+        phase: RelayAgentActivityAggregateState["activities"][number]["phase"],
+        activeCount: number,
+      ): RelayAgentActivityAggregateState => ({
+        ...state,
+        activeCount,
+        activities: [{ ...state.activities[0]!, phase }],
+      });
+
+      expect(scoreFor(withPhase("waiting_for_approval", 1))).toBe(100);
+      expect(scoreFor(withPhase("waiting_for_input", 1))).toBe(100);
+      expect(scoreFor(withPhase("failed", 0))).toBe(75);
+      expect(scoreFor(withPhase("running", 1))).toBe(50);
+      expect(scoreFor(withPhase("completed", 0))).toBe(25);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("builds a high-priority alerting update payload when an alert is attached", () =>
     Effect.gen(function* () {
       const apns = yield* ApnsClient.ApnsClient;
