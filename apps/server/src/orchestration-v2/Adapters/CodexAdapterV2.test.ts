@@ -1788,6 +1788,27 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           assert.lengthOf(harness.continuationRequests, 0);
           const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
 
+          // The command is relabelled as background work the moment the turn
+          // settles, not when it finishes 30 seconds later: the wait is exactly
+          // the window in which the thread otherwise reads as done with nothing
+          // pending. `processId` is the only handle Codex exposes, so it is
+          // what the row carries as its task id.
+          const backgroundFlip = harness.events.find(
+            (event, index) =>
+              index > terminalIndex &&
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.background === true,
+          );
+          assert.isDefined(backgroundFlip);
+          if (backgroundFlip?.type === "turn_item.updated") {
+            assert.equal(backgroundFlip.turnItem.status, "running");
+            if (backgroundFlip.turnItem.type === "command_execution") {
+              assert.equal(backgroundFlip.turnItem.taskId, "4242");
+              assert.equal(backgroundFlip.turnItem.input, BG_COMMAND);
+            }
+          }
+
           yield* TestClock.adjust("30 seconds");
           yield* awaitUntil(
             () => harness.continuationRequests.length === 1,
@@ -1811,7 +1832,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 event.turnItem.type === "command_execution" &&
                 event.turnItem.status === "completed" &&
                 event.turnItem.output === "CODEX_BG_WAKE_DONE\n" &&
-                event.turnItem.exitCode === 0,
+                event.turnItem.exitCode === 0 &&
+                // Still labelled background on the way out: the row records
+                // what happened, and a terminal state is not a reason to
+                // rewrite it into an ordinary in-turn command.
+                event.turnItem.background === true,
             );
           yield* awaitUntil(
             () => lateCommandUpdateIndex() > terminalIndex,

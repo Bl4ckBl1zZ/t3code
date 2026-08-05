@@ -28,6 +28,7 @@ import { useKnownTerminalSessions } from "../../state/terminalSessions";
 import { useProjectScriptRunStates } from "../../state/projectScriptRuns";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadBackgroundTasksPanel } from "./ThreadBackgroundTasksPanel";
 import { ThreadPortsPanel } from "./ThreadPortsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -267,6 +268,16 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             scripts={props.activeProjectScripts}
             pinnedPreviewUrl={pinnedPreviewUrl}
             openPreview={props.openPreview}
+          />
+        ) : null}
+
+        {/* Sits with Ports rather than lower down: both answer "what is this
+            thread running right now", and both disappear when the answer is
+            nothing. */}
+        {!props.draftId ? (
+          <ThreadBackgroundTasksPanel
+            environmentId={props.environmentId}
+            threadId={props.threadId}
           />
         ) : null}
 

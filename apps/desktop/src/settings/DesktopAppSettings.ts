@@ -34,7 +34,8 @@ export interface DesktopSettings {
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   // When true, updates download as soon as they are detected and install
-  // automatically once no agent activity is running on any local backend.
+  // automatically once no agent run and no background command is live on any
+  // local backend.
   readonly autoUpdateEnabled: boolean;
   // Was a "local" | "wsl" swap mode in an earlier iteration of the WSL
   // integration. We now run Windows and WSL backends side by side, so the

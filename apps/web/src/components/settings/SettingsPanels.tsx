@@ -550,8 +550,8 @@ function AboutVersionSection() {
           title="Automatic updates"
           description={
             updateState?.autoInstallPending
-              ? "Update downloaded — the app will restart automatically once no agents are running."
-              : "Download updates automatically and restart to install once no agent activity is running."
+              ? "Update downloaded — the app will restart automatically once no agents or background commands are running."
+              : "Download updates automatically and restart to install once no agents or background commands are running."
           }
           control={
             <Switch

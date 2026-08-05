@@ -549,10 +549,18 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.withSpan("desktop.updates.installDownloadedUpdate"));
 
-  // Ask one local backend whether any agent run is active. Every
-  // inconclusive answer (backend has no resolved config, probe times out,
-  // request fails, body doesn't parse) counts as "busy": the automatic
-  // restart must only happen when we positively know nothing is running.
+  // Ask one local backend whether any agent run is active, or any background
+  // command is still going. Every inconclusive answer (backend has no resolved
+  // config, probe times out, request fails, body doesn't parse) counts as
+  // "busy": the automatic restart must only happen when we positively know
+  // nothing is running.
+  //
+  // Background work needs saying separately because it is the case that looks
+  // idle from the outside: the turn that launched a `run_in_background` command
+  // is long settled, so no run is active, while the command itself is still
+  // going and dies with the provider CLI process the restart kills.
+  // `pendingBackgroundWork` is the adapters' own answer to the same question,
+  // and covers what no turn item records.
   const backendHasAgentActivity = Effect.fn("desktop.updates.backendHasAgentActivity")(function* (
     instance: DesktopBackendPool.DesktopBackendInstance,
   ) {
@@ -569,7 +577,12 @@ export const make = Effect.gen(function* () {
     return yield* httpClient.get(activityUrl.toString()).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap(HttpClientResponse.schemaBodyJson(EnvironmentActivitySnapshot)),
-      Effect.map((activity) => activity.activeRunCount > 0),
+      Effect.map(
+        (activity) =>
+          activity.activeRunCount > 0 ||
+          (activity.backgroundProcessCount ?? 0) > 0 ||
+          activity.pendingBackgroundWork === true,
+      ),
       Effect.timeoutOption(BACKEND_ACTIVITY_PROBE_TIMEOUT),
       Effect.map(Option.getOrElse(() => true)),
       Effect.orElseSucceed(() => true),
@@ -604,14 +617,14 @@ export const make = Effect.gen(function* () {
           break;
         }
         if (!(yield* hasAnyAgentActivity)) {
-          yield* logUpdaterInfo("no agent activity detected; installing downloaded update", {
+          yield* logUpdaterInfo("no agent or background activity detected; installing update", {
             version: state.downloadedVersion,
           });
           yield* installDownloadedUpdate;
           break;
         }
         if (!state.autoInstallPending) {
-          yield* logUpdaterInfo("agent activity detected; deferring update install until idle", {
+          yield* logUpdaterInfo("activity detected; deferring update install until idle", {
             version: state.downloadedVersion,
           });
         }
