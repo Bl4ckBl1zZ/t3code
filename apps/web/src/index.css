@@ -1847,70 +1847,63 @@ label:has(> select#reasoning-effort) select {
   pointer-events: none;
 }
 
-/* Agent orb: a per-agent colored sphere with softly drifting "smoke". The hue
-   is set via --agent-orb-h (a deterministic hash of the agent id), so one
-   agent keeps one color across the timeline, messages, and panels. */
+/* Agent orb: a per-agent iridescent sphere. Both the texture and the fallback
+   hue come from a deterministic hash of the agent id (--agent-orb-h), so one
+   agent keeps one face across the timeline, messages, and panels. The gradient
+   below the image is what shows while the webp loads. */
 .agent-orb {
-  background: hsl(var(--agent-orb-h, 255) 85% 60%);
-}
-.agent-orb::before,
-.agent-orb::after {
-  content: "";
-  position: absolute;
-  inset: -45%;
-  border-radius: 9999px;
-  filter: blur(4px);
-}
-.agent-orb::before {
   background: radial-gradient(
-    circle at 30% 35%,
+    circle at 32% 32%,
     hsl(calc(var(--agent-orb-h, 255) + 45) 95% 78%),
-    transparent 62%
+    hsl(var(--agent-orb-h, 255) 85% 60%) 70%
   );
-  animation: agent-orb-drift-a 4.2s ease-in-out infinite;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
 }
-.agent-orb::after {
-  background: radial-gradient(circle at 68% 72%, #fff, transparent 52%);
-  opacity: 0.9;
-  animation: agent-orb-drift-b 5.4s ease-in-out infinite;
+.agent-orb-texture {
+  position: absolute;
+  inset: -18%;
+  width: 136%;
+  height: 136%;
+  max-width: none;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
 }
-/* Work stopped: freeze the smoke and mute the color. */
-.agent-orb[data-agent-orb-state="idle"]::before,
-.agent-orb[data-agent-orb-state="idle"]::after,
-.agent-orb[data-agent-orb-state="done"]::before,
-.agent-orb[data-agent-orb-state="done"]::after,
-.agent-orb[data-agent-orb-state="failed"]::before,
-.agent-orb[data-agent-orb-state="failed"]::after {
-  animation: none;
+/* Only in-flight work animates: a settled panel can hold dozens of orbs, and
+   compositing them all is a measurable GPU cost for no information. */
+.agent-orb[data-agent-orb-state="active"] .agent-orb-texture {
+  will-change: transform;
+  animation: agent-orb-drift 6.4s ease-in-out infinite alternate;
 }
+.agent-orb[data-agent-orb-texture="1"] .agent-orb-texture,
+.agent-orb[data-agent-orb-texture="4"] .agent-orb-texture,
+.agent-orb[data-agent-orb-texture="7"] .agent-orb-texture {
+  animation-duration: 5.2s;
+}
+.agent-orb[data-agent-orb-texture="2"] .agent-orb-texture,
+.agent-orb[data-agent-orb-texture="5"] .agent-orb-texture,
+.agent-orb[data-agent-orb-texture="8"] .agent-orb-texture {
+  animation-duration: 7.6s;
+}
+/* Work stopped: mute the color. Failed keeps a red cast so the orb reads as a
+   failure on its own, without the status dot. */
 .agent-orb[data-agent-orb-state="done"] {
-  filter: saturate(0.45) brightness(0.9);
+  filter: saturate(0.4) brightness(0.92);
 }
 .agent-orb[data-agent-orb-state="failed"] {
-  filter: saturate(0.85);
+  filter: grayscale(0.85) sepia(0.7) saturate(2.6) hue-rotate(-24deg);
 }
 @media (prefers-reduced-motion: reduce) {
-  .agent-orb::before,
-  .agent-orb::after {
+  .agent-orb .agent-orb-texture {
     animation: none;
   }
 }
-@keyframes agent-orb-drift-a {
-  0%,
+@keyframes agent-orb-drift {
+  0% {
+    transform: translate(-4%, -3%) scale(1.02) rotate(0deg);
+  }
   100% {
-    transform: translate(-8%, -6%) rotate(0deg);
-  }
-  50% {
-    transform: translate(10%, 14%) rotate(55deg);
-  }
-}
-@keyframes agent-orb-drift-b {
-  0%,
-  100% {
-    transform: translate(8%, 10%);
-  }
-  50% {
-    transform: translate(-14%, -12%);
+    transform: translate(4%, 5%) scale(1.06) rotate(9deg);
   }
 }
 
