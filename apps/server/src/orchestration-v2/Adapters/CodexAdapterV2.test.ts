@@ -1714,7 +1714,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             item: backgroundCommandItem("inProgress"),
             threadId: BG_NATIVE_THREAD,
             turnId: BG_NATIVE_TURN,
-            startedAtMs: 1782622440500,
+            startedAtMs: 1782622446500,
           },
         },
       },
@@ -1806,6 +1806,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             if (backgroundFlip.turnItem.type === "command_execution") {
               assert.equal(backgroundFlip.turnItem.taskId, "4242");
               assert.equal(backgroundFlip.turnItem.input, BG_COMMAND);
+              // The command's own start, 6.5s after the turn's. A background row
+              // is read as a running clock, so billing it for the time the model
+              // spent deciding to run it is the one number it must not get wrong.
+              assert.equal(
+                DateTime.toEpochMillis(backgroundFlip.turnItem.startedAt ?? DateTime.makeUnsafe(0)),
+                1782622446500,
+              );
             }
           }
 

@@ -253,6 +253,13 @@ function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
     : DateTime.makeUnsafe(seconds * 1000);
 }
 
+/** Item lifecycle timestamps arrive in milliseconds, unlike turn timestamps. */
+function codexTimestampMs(milliseconds: number | null | undefined): DateTime.Utc | null {
+  return typeof milliseconds === "number" && Number.isFinite(milliseconds)
+    ? DateTime.makeUnsafe(milliseconds)
+    : null;
+}
+
 function codexUserMessageText(
   content: ReadonlyArray<CodexSchema.V2ItemCompletedNotification__UserInput>,
 ): string {
@@ -1538,6 +1545,28 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const runningCommandItemsByTurn = yield* Ref.make(
           new Map<string, Map<string, TrackedRunningCommandItem>>(),
         );
+        /**
+         * When each command actually started, which is not when its turn did —
+         * the model can deliberate for many seconds first, and on a background
+         * row the elapsed clock is the whole point of the row.
+         *
+         * Kept here rather than on the tracked running item because
+         * `item/completed` carries only `completedAtMs`, so the final row has to
+         * read a start that was recorded a turn boundary ago, after the running
+         * entry is gone.
+         */
+        const commandStartedAtByItemId = yield* Ref.make(new Map<string, DateTime.Utc>());
+        /**
+         * The command's own start, falling back to its turn's when the CLI never
+         * told us one. A turn-start fallback overstates a command's age, which is
+         * still better than inventing `now` and resetting the clock on every
+         * re-emit of a long-running row.
+         */
+        const resolveCommandStartedAt = (context: ActiveCodexTurnContext, nativeItemId: string) =>
+          Effect.map(
+            Ref.get(commandStartedAtByItemId),
+            (starts) => starts.get(nativeItemId) ?? context.startedAt,
+          );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
         // Keep the run event stream open until descendant provider state is
@@ -1673,6 +1702,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeItemId: input.nativeItemId,
             });
             const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
+            const startedAt = yield* resolveCommandStartedAt(input.context, input.nativeItemId);
             const turnItem: OrchestrationV2TurnItem = {
               id: turnItemId,
               threadId: input.context.projectionThreadId,
@@ -1685,7 +1715,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ordinal,
               status: "running",
               title: null,
-              startedAt: input.context.startedAt,
+              startedAt,
               completedAt: null,
               updatedAt: input.lastOutputAt,
               type: "command_execution",
@@ -1756,6 +1786,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 nativeItemId: tracked.id,
               });
               const ordinal = yield* resolveItemOrdinal(context, tracked.id);
+              const startedAt = yield* resolveCommandStartedAt(context, tracked.id);
               const node: OrchestrationV2ExecutionNode = {
                 id: nodeId,
                 threadId: context.projectionThreadId,
@@ -1770,7 +1801,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 nativeItemRef: codexNativeItemRef(tracked.id),
                 runtimeRequestId: null,
                 checkpointScopeId: null,
-                startedAt: context.startedAt,
+                startedAt,
                 completedAt,
               };
               const turnItem: OrchestrationV2TurnItem = {
@@ -1785,7 +1816,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 ordinal,
                 status,
                 title: null,
-                startedAt: context.startedAt,
+                startedAt,
                 completedAt,
                 updatedAt: completedAt,
                 type: "command_execution",
@@ -1849,6 +1880,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 nativeItemId: tracked.id,
               });
               const ordinal = yield* resolveItemOrdinal(context, tracked.id);
+              const startedAt = yield* resolveCommandStartedAt(context, tracked.id);
               const turnItem: OrchestrationV2TurnItem = {
                 id: turnItemId,
                 threadId: context.projectionThreadId,
@@ -1861,7 +1893,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 ordinal,
                 status: "running",
                 title: null,
-                startedAt: context.startedAt,
+                startedAt,
                 completedAt: null,
                 updatedAt,
                 type: "command_execution",
@@ -2710,6 +2742,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         ) =>
           Effect.gen(function* () {
             const updatedAt = yield* DateTime.now;
+            const startedAt = yield* resolveCommandStartedAt(context, item.id);
             const status = codexItemStatus(item.status);
             const completedAt = status.completed ? updatedAt : null;
             const nodeId = idAllocator.derive.nodeFromProviderItem({
@@ -2735,7 +2768,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeItemRef: codexNativeItemRef(item.id),
               runtimeRequestId: null,
               checkpointScopeId: null,
-              startedAt: context.startedAt,
+              startedAt,
               completedAt,
             };
             const turnItem: OrchestrationV2TurnItem = {
@@ -2750,7 +2783,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ordinal,
               status: status.turnItem,
               title: null,
-              startedAt: context.startedAt,
+              startedAt,
               completedAt,
               updatedAt,
               type: "command_execution",
@@ -3550,6 +3583,14 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
 
             if (payload.item.type === "commandExecution") {
+              // The only event that states when the command itself began; every
+              // later projection of this row reads it back from here.
+              const startedAtMs = codexTimestampMs(payload.startedAtMs);
+              if (startedAtMs !== null) {
+                yield* Ref.update(commandStartedAtByItemId, (current) =>
+                  new Map(current).set(payload.item.id, startedAtMs),
+                );
+              }
               if (!codexItemStatus(payload.item.status).completed) {
                 yield* trackRunningCommandItem(payload.turnId, {
                   id: payload.item.id,
@@ -3651,6 +3692,15 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 type: "turn_item.updated",
                 driver: CODEX_PROVIDER,
                 turnItem: artifacts.turnItem,
+              });
+              // The row is terminal, so nothing will ask for its start again.
+              yield* Ref.update(commandStartedAtByItemId, (current) => {
+                if (!current.has(payload.item.id)) {
+                  return current;
+                }
+                const updated = new Map(current);
+                updated.delete(payload.item.id);
+                return updated;
               });
               if (settled) {
                 if (context.subagent === null && continuationRequests !== undefined) {

@@ -70,7 +70,9 @@ import {
   BACKGROUND_TAIL_LIVE_BYTES,
   backgroundTaskIdFromWatchedPath,
   parseBackgroundLaunchAck,
+  parseBackgroundLaunchResult,
   parseMonitorAck,
+  parseMonitorResult,
 } from "./backgroundCommand.ts";
 import { readBackgroundOutputTail } from "./backgroundTail.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
@@ -1589,6 +1591,48 @@ function claudeNativeToolOutputText(output: ClaudeNativeToolOutput): string {
   return typeof value === "string" ? value : value === undefined ? "" : jsonStringifyForTool(value);
 }
 
+function claudeToolResultOutputText(value: ClaudeToolResultOutput): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((part) =>
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string"
+          ? [part.text]
+          : [],
+      )
+      .join("\n");
+  }
+  return jsonStringifyForTool(value);
+}
+
+/**
+ * The sentence the CLI wrote for a human, which is a different thing from the
+ * tool's result value.
+ *
+ * When a `tool_use_result` is present the adapter prefers it everywhere else,
+ * and rightly so — but that means `claudeNativeToolOutputText` returns
+ * `{"stdout":"","backgroundTaskId":"…"}` rather than "Command running in
+ * background with ID: …". Anything matching on the CLI's prose has to read the
+ * content block instead, or it matches nothing at all.
+ */
+function claudeNativeToolAckText(output: ClaudeNativeToolOutput): string {
+  if (output.type === "structured_tool_use_result" && output.fallbackValue !== undefined) {
+    return claudeToolResultOutputText(output.fallbackValue);
+  }
+  const value = claudeNativeToolOutputValue(output);
+  // A content block arrives as `[{type: "text", text: "…"}]`, and JSON around a
+  // sentence is not a sentence — a pattern anchored on punctuation would go
+  // looking for it in the escaping.
+  return value === undefined ? "" : claudeToolResultOutputText(value as ClaudeToolResultOutput);
+}
+
 function claudeSubagentResultText(output: ClaudeNativeToolOutput): string {
   const value = claudeNativeToolOutputValue(output);
   const content = Array.isArray(value)
@@ -2724,12 +2768,20 @@ export function makeClaudeAdapterV2(
           if (input.toolCall.classification.itemType !== "command_execution") {
             return false;
           }
-          const text = claudeNativeToolOutputText(input.output);
-          if (text.length === 0) {
-            return false;
-          }
-          const launch = parseBackgroundLaunchAck(text);
-          const monitor = launch === null ? parseMonitorAck(text) : null;
+          // Two independent halves of the same acknowledgement, because either
+          // one alone is a single point of failure: the prose is the only place
+          // the output file is named, and the structured field is the only half
+          // that survives a rewording of the prose.
+          const text = claudeNativeToolAckText(input.output);
+          const structured = claudeNativeToolOutputValue(input.output);
+          const launch = parseBackgroundLaunchAck(text) ?? parseBackgroundLaunchResult(structured);
+          const monitor =
+            launch !== null
+              ? null
+              : (parseMonitorAck(text) ??
+                (input.toolCall.toolName.toLowerCase() === "monitor"
+                  ? parseMonitorResult(structured)
+                  : null));
           if (launch === null && monitor === null) {
             return false;
           }
