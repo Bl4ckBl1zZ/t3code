@@ -139,7 +139,7 @@ import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
 import { isScheduledTaskMessageId } from "./scheduledTaskMessageBadge";
-import { ThreadLifecycleRow } from "./ThreadLifecycleRow";
+import { RELATED_THREAD_CARD_SURFACE_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -1082,6 +1082,10 @@ function renderFeedEntry(
     return <ThreadLifecycleRow entry={entry} environmentId={props.environmentId} />;
   }
 
+  if (entry.type === "lifecycle-group") {
+    return <LifecycleGroup entries={entry.entries} environmentId={props.environmentId} />;
+  }
+
   if (entry.type === "run-fold") {
     return (
       <Pressable
@@ -1365,6 +1369,25 @@ function renderFeedEntry(
       onToggleRow={(rowId) => props.onToggleWorkRow(rowId, entry.id)}
       workspaceRoot={props.workspaceRoot}
     />
+  );
+}
+
+// Agents fanned out side by side read as one list, not as a stack of separate
+// boxes: a run of adjacent related-thread cards shares a single card surface,
+// with a hairline between each agent.
+function LifecycleGroup(props: {
+  readonly entries: ReadonlyArray<Extract<ThreadFeedEntry, { type: "lifecycle" }>>;
+  readonly environmentId: EnvironmentId;
+}) {
+  return (
+    <View className={RELATED_THREAD_CARD_SURFACE_CLASS}>
+      {props.entries.map((entry, index) => (
+        <View key={entry.id}>
+          {index > 0 ? <View className="h-px bg-border" /> : null}
+          <ThreadLifecycleRow chrome="bare" entry={entry} environmentId={props.environmentId} />
+        </View>
+      ))}
+    </View>
   );
 }
 

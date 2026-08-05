@@ -31,6 +31,7 @@ import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
+import { ThreadDetailsSheet } from "./features/threads/details/ThreadDetailsSheet";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
@@ -304,6 +305,7 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "NewTaskSheet",
   "SettingsLegal",
   "SettingsSheet",
+  "ThreadDetails",
   "ThreadReviewComment",
 ]);
 
@@ -474,6 +476,17 @@ export const RootStack = createNativeStackNavigator({
       screen: ThreadFileScreen,
       linking: `${THREAD_LINKING_PREFIX}/files/:path*`,
       options: SOLID_HEADER_OPTIONS,
+    }),
+    ThreadDetails: createNativeStackScreen({
+      screen: ThreadDetailsSheet,
+      linking: `${THREAD_LINKING_PREFIX}/details`,
+      options: {
+        presentation: "formSheet",
+        // Taller than the git sheet at rest: the details sheet stacks several
+        // sections, and the first detent should show more than the first one.
+        sheetAllowedDetents: [0.65, 0.95],
+        sheetGrabberVisible: true,
+      },
     }),
     GitOverview: createNativeStackScreen({
       screen: GitOverviewSheet,

@@ -7,6 +7,10 @@
       "types": "./src/Array.ts",
       "import": "./src/Array.ts"
     },
+    "./backgroundProcess": {
+      "types": "./src/backgroundProcess.ts",
+      "import": "./src/backgroundProcess.ts"
+    },
     "./orchestrationV2Window": {
       "types": "./src/orchestrationV2Window.ts",
       "import": "./src/orchestrationV2Window.ts"

@@ -120,7 +120,7 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
-import { isBackgroundProcessItem } from "../../backgroundProcess";
+import { isBackgroundProcessItem } from "@t3tools/shared/backgroundProcess";
 import { BackgroundProcessCard } from "./BackgroundProcessCard";
 import { V2ItemInspector } from "./V2ItemInspector";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
