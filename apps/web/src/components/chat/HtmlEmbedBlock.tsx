@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { LRUCache } from "../../lib/lruCache";
 
 export const HTML_EMBED_FENCE_LANGUAGE = "t3-html";
 
@@ -57,6 +58,11 @@ function useSettledValue<T>(value: T, delayMs: number): T {
 function clampInlineHeight(height: number): number {
   return Math.min(INLINE_MAX_HEIGHT, Math.max(INLINE_MIN_HEIGHT, Math.ceil(height)));
 }
+
+// A remount (virtualized row scrolling back in, error-boundary reset) rebuilds
+// the iframe from scratch; seeding the last measured height keeps the block
+// from collapsing to the default and re-expanding once the reporter runs.
+const inlineHeightCache = new LRUCache<number>(64, 1 << 20);
 
 function EmbedFrame({
   srcDoc,
@@ -188,14 +194,21 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
 }) {
   const settledCode = useSettledValue(code, SETTLE_DELAY_MS);
   const srcDoc = useMemo(() => buildHtmlEmbedDocument(settledCode, theme), [settledCode, theme]);
-  const [inlineHeight, setInlineHeight] = useState(INLINE_DEFAULT_HEIGHT);
+  const [inlineHeight, setInlineHeight] = useState(
+    () => inlineHeightCache.get(code) ?? INLINE_DEFAULT_HEIGHT,
+  );
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleHeight = useCallback((height: number) => {
-    setInlineHeight(clampInlineHeight(height));
-  }, []);
+  const handleHeight = useCallback(
+    (height: number) => {
+      const clamped = clampInlineHeight(height);
+      inlineHeightCache.set(code, clamped, code.length * 2 + 16);
+      setInlineHeight(clamped);
+    },
+    [code],
+  );
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) return;

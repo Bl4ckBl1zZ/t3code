@@ -22,7 +22,7 @@ import {
   MoreHorizontalIcon,
   UnplugIcon,
 } from "lucide-react";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useState } from "react";
 
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 
@@ -84,44 +84,6 @@ function relationshipOrbState(status: string | null): AgentOrbState {
   return "idle";
 }
 
-// Completed subagents linger for a grace window (so a just-finished agent can
-// still be caught), then collapse into the "Done" group. Failed agents never
-// auto-archive. Rows already completed when the panel first renders skip the
-// grace window — they'd otherwise resurrect long-settled work on every open.
-const RELATIONSHIP_ARCHIVE_GRACE_MS = 60_000;
-
-function useCompletedRelationshipDecay(
-  completedIds: ReadonlyArray<ThreadId>,
-): ReadonlySet<ThreadId> {
-  const expiryRef = useRef<Map<ThreadId, number> | null>(null);
-  const isFirstObservation = expiryRef.current === null;
-  const expiries = (expiryRef.current ??= new Map());
-  const [, forceRender] = useReducer((count: number) => count + 1, 0);
-  const now = Date.now();
-  for (const id of completedIds) {
-    if (!expiries.has(id)) {
-      expiries.set(id, isFirstObservation ? now : now + RELATIONSHIP_ARCHIVE_GRACE_MS);
-    }
-  }
-  const completedSet = new Set(completedIds);
-  for (const id of [...expiries.keys()]) {
-    if (!completedSet.has(id)) expiries.delete(id);
-  }
-  const archived = new Set<ThreadId>();
-  let nextExpiry = Infinity;
-  for (const id of completedIds) {
-    const expiry = expiries.get(id) ?? now;
-    if (expiry <= now) archived.add(id);
-    else nextExpiry = Math.min(nextExpiry, expiry);
-  }
-  useEffect(() => {
-    if (!Number.isFinite(nextExpiry)) return;
-    const timer = setTimeout(forceRender, Math.max(0, nextExpiry - Date.now()) + 25);
-    return () => clearTimeout(timer);
-  }, [nextExpiry]);
-  return archived;
-}
-
 function relationshipThreadTitle(input: {
   readonly title: string;
   readonly isSubagent: boolean;
@@ -172,23 +134,25 @@ export function ThreadRelationshipsPanel(props: {
   );
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
-  const completedSubagentIds = relationshipRows
-    .filter(
-      ({ edge }) =>
-        edge.kind === "subagent" &&
-        edge.sourceThreadId === props.threadId &&
-        edge.status === "completed",
-    )
-    .map((row) => row.threadId);
-  const archivedIds = useCompletedRelationshipDecay(completedSubagentIds);
-  const [showArchived, setShowArchived] = useState(false);
+  const [subagentsExpanded, setSubagentsExpanded] = useState(false);
+  const [showDone, setShowDone] = useState(false);
 
   if (relationshipRows.length === 0) {
     return null;
   }
 
-  const visibleRows = relationshipRows.filter((row) => !archivedIds.has(row.threadId));
-  const archivedRows = relationshipRows.filter((row) => archivedIds.has(row.threadId));
+  const isSubagentChildRow = ({ edge }: (typeof relationshipRows)[number]) =>
+    edge.kind === "subagent" && edge.sourceThreadId === props.threadId;
+  const lineageRows = relationshipRows.filter((row) => !isSubagentChildRow(row));
+  const subagentRows = relationshipRows.filter(isSubagentChildRow);
+  const doneSubagentRows = subagentRows.filter((row) => row.edge.status === "completed");
+  const failedSubagentRows = subagentRows.filter(
+    (row) => row.edge.status === "failed" || row.edge.status === "error",
+  );
+  const workingSubagentRows = subagentRows.filter(
+    (row) => !doneSubagentRows.includes(row) && !failedSubagentRows.includes(row),
+  );
+  const activeSubagentRows = [...workingSubagentRows, ...failedSubagentRows];
 
   const openThread = (threadId: ThreadId) => {
     void navigate({
@@ -238,7 +202,7 @@ export function ThreadRelationshipsPanel(props: {
           id="thread-details-lineage-heading"
           className="text-[11px] font-medium text-muted-foreground"
         >
-          Lineage
+          {lineageRows.length > 0 ? "Lineage" : "Subagents"}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
           {canDetach ? (
@@ -388,33 +352,115 @@ export function ThreadRelationshipsPanel(props: {
             </li>
           );
         };
+        const summaryOrbRows = [...activeSubagentRows, ...doneSubagentRows].slice(0, 4);
+        const workingCount = workingSubagentRows.length;
+        const failedCount = failedSubagentRows.length;
+        const doneCount = doneSubagentRows.length;
+        const primaryLabel =
+          workingCount > 0 || failedCount === 0
+            ? `${workingCount} working`
+            : `${failedCount} failed`;
+        const showDoneInSummary = doneCount > 0 && (workingCount > 0 || failedCount > 0);
+        const summaryOnlyDone = workingCount === 0 && failedCount === 0;
         return (
           <>
-            {visibleRows.length > 0 ? (
-              <ul className="m-0 list-none p-0">{visibleRows.map(renderRelationshipRow)}</ul>
+            {lineageRows.length > 0 ? (
+              <ul className="m-0 list-none p-0">{lineageRows.map(renderRelationshipRow)}</ul>
             ) : null}
-            {archivedRows.length > 0 ? (
-              <div className="mt-0.5">
+            {subagentRows.length > 0 ? (
+              <div className={lineageRows.length > 0 ? "mt-1" : undefined}>
+                {lineageRows.length > 0 ? (
+                  <h4 className="mb-0.5 px-2 text-[11px] font-medium text-muted-foreground">
+                    Subagents
+                  </h4>
+                ) : null}
                 <button
                   type="button"
-                  aria-expanded={showArchived}
-                  data-thread-relationships-archived-toggle
-                  onClick={() => setShowArchived((value) => !value)}
-                  className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                  aria-expanded={subagentsExpanded}
+                  data-thread-relationships-subagents-toggle
+                  onClick={() => setSubagentsExpanded((value) => !value)}
+                  className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-muted/50"
                 >
-                  <span className="grid size-4 shrink-0 place-items-center">
-                    <CheckIcon className="size-3.5" />
+                  <span className="flex shrink-0 items-center -space-x-1">
+                    {summaryOrbRows.map(({ threadId, edge }) => (
+                      <AgentOrb
+                        key={threadId}
+                        seed={threadId}
+                        size={16}
+                        state={relationshipOrbState(edge.status)}
+                        className="ring-1 ring-card"
+                      />
+                    ))}
                   </span>
-                  <span className="min-w-0 flex-1 truncate">Done · {archivedRows.length}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] leading-4">
+                    <span
+                      className={cn(
+                        summaryOnlyDone && doneCount > 0
+                          ? "text-muted-foreground"
+                          : "font-medium text-foreground/85",
+                      )}
+                    >
+                      {summaryOnlyDone && doneCount > 0 ? `${doneCount} done` : primaryLabel}
+                    </span>
+                    {workingCount > 0 && failedCount > 0 ? (
+                      <span className="text-destructive"> · {failedCount} failed</span>
+                    ) : null}
+                  </span>
+                  {showDoneInSummary ? (
+                    <span className="shrink-0 text-[12px] text-muted-foreground">
+                      {doneCount} done
+                    </span>
+                  ) : null}
                   <ChevronDownIcon
                     className={cn(
-                      "size-3 shrink-0 transition-transform",
-                      showArchived && "rotate-180",
+                      "size-3 shrink-0 text-muted-foreground transition-transform",
+                      subagentsExpanded && "rotate-180",
                     )}
                   />
                 </button>
-                {showArchived ? (
-                  <ul className="m-0 list-none p-0">{archivedRows.map(renderRelationshipRow)}</ul>
+                {subagentsExpanded ? (
+                  <>
+                    {activeSubagentRows.length > 0 ? (
+                      <ul className="m-0 list-none p-0">
+                        {activeSubagentRows.map(renderRelationshipRow)}
+                      </ul>
+                    ) : null}
+                    {doneSubagentRows.length > 0 ? (
+                      <div className="mt-0.5">
+                        {summaryOnlyDone ? (
+                          <ul className="m-0 list-none p-0">
+                            {doneSubagentRows.map(renderRelationshipRow)}
+                          </ul>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              aria-expanded={showDone}
+                              data-thread-relationships-archived-toggle
+                              onClick={() => setShowDone((value) => !value)}
+                              className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                            >
+                              <span className="grid size-4 shrink-0 place-items-center">
+                                <CheckIcon className="size-3.5" />
+                              </span>
+                              <span className="min-w-0 flex-1 truncate">Done · {doneCount}</span>
+                              <ChevronDownIcon
+                                className={cn(
+                                  "size-3 shrink-0 transition-transform",
+                                  showDone && "rotate-180",
+                                )}
+                              />
+                            </button>
+                            {showDone ? (
+                              <ul className="m-0 list-none p-0">
+                                {doneSubagentRows.map(renderRelationshipRow)}
+                              </ul>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             ) : null}

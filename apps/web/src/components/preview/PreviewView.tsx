@@ -641,6 +641,9 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         pickDisabledReason={
           isUnreachable ? "Page didn't load — pick unavailable until the page renders" : undefined
         }
+        onToggleDeviceToolbar={tabId ? handleToggleDeviceToolbar : undefined}
+        deviceToolbarActive={viewport._tag !== "fill"}
+        deviceToolbarDisabled={isUnreachable}
         trailingActions={
           previewBridge ? (
             <PreviewMoreMenu

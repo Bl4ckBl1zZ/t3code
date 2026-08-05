@@ -488,11 +488,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [timelineViewportElement, rows.length]);
 
+  const threadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
+
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       timestampFormat,
       routeThreadKey,
-      threadRef: parseScopedThreadKey(routeThreadKey),
+      threadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
@@ -514,6 +516,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timestampFormat,
       routeThreadKey,
+      threadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
