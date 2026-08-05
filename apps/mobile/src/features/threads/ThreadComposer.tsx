@@ -950,7 +950,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                           ? "Stop recording and transcribe"
                           : "Dictate message"
                       }
-                      accessibilityHint="Hold to record, slide up to cancel"
+                      accessibilityHint="Hold to record, release to send, slide up and release to cancel"
                       disabled={voiceBusy && voice.state.type !== "recording"}
                       onPress={() =>
                         voice.comboActivate({ canSend: false, onSend: () => undefined })

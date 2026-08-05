@@ -293,7 +293,7 @@ export function ComposerVoiceAction(props: {
           ? gesture.holding
             ? gesture.armed
               ? "Recording, release to cancel"
-              : "Recording, slide up to cancel"
+              : "Recording, release to send"
             : "Voice recording controls"
           : transcribing
             ? "Voice transcription in progress"
@@ -335,12 +335,13 @@ export function ComposerVoiceAction(props: {
           </span>
           {gesture.holding ? (
             // Finger/mouse is still down during push-to-talk, so the row's buttons are
-            // unreachable; show the slide-to-cancel affordance instead.
+            // unreachable; name what releasing right now does instead. Sliding up only arms the
+            // discard — the release is what decides — so the armed copy is the same shape.
             <span
               className="whitespace-nowrap px-1.5 text-xs text-muted-foreground animate-voice-row-in motion-reduce:animate-none"
               aria-live="polite"
             >
-              {gesture.armed ? "Release to cancel" : "↑ slide to cancel"}
+              {gesture.armed ? "Release to cancel" : "Release to send · ↑ slide to cancel"}
             </span>
           ) : (
             <>
