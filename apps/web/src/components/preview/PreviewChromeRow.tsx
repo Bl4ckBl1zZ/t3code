@@ -6,6 +6,7 @@ import {
   MousePointerClick,
   PictureInPicture2,
   RotateCw,
+  TabletSmartphone,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -55,6 +56,14 @@ interface Props {
   /** Optional reason string surfaced in the disabled tooltip. */
   pickDisabledReason?: string | undefined;
   /**
+   * When provided, renders a device-toolbar toggle button in the trailing
+   * action cluster. Pressed while the viewport is constrained to a device
+   * size or freeform dimensions.
+   */
+  onToggleDeviceToolbar?: (() => void) | undefined;
+  deviceToolbarActive?: boolean | undefined;
+  deviceToolbarDisabled?: boolean | undefined;
+  /**
    * Trailing slot rendered after the URL input. Used by the preview view
    * to mount the three-dot menu (hard reload, devtools, zoom, clear data).
    */
@@ -88,6 +97,9 @@ export function PreviewChromeRow({
   pickActive,
   pickDisabled,
   pickDisabledReason,
+  onToggleDeviceToolbar,
+  deviceToolbarActive,
+  deviceToolbarDisabled,
   trailingActions,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -302,6 +314,28 @@ export function PreviewChromeRow({
             </TooltipTrigger>
             <TooltipPopup>
               {pictureInPicture ? "Close floating preview" : "Float preview over chat"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {onToggleDeviceToolbar ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={deviceToolbarActive ? "secondary" : "ghost"}
+                  size="icon-xs"
+                  onClick={onToggleDeviceToolbar}
+                  aria-label={deviceToolbarActive ? "Hide device toolbar" : "Show device toolbar"}
+                  aria-pressed={deviceToolbarActive ? "true" : "false"}
+                  type="button"
+                  disabled={deviceToolbarDisabled}
+                />
+              }
+            >
+              <TabletSmartphone className={cn(deviceToolbarActive && "text-primary")} />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {deviceToolbarActive ? "Hide device toolbar" : "Show device toolbar"}
             </TooltipPopup>
           </Tooltip>
         ) : null}
