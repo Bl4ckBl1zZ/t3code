@@ -128,6 +128,12 @@ export type ThreadFeedEntry =
       readonly messages: ReadonlyArray<ThreadFeedMessage>;
     }
   | {
+      readonly type: "lifecycle-group";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly entries: ReadonlyArray<Extract<RawThreadFeedEntry, { type: "lifecycle" }>>;
+    }
+  | {
       readonly type: "work-toggle";
       readonly id: string;
       readonly createdAt: string;
@@ -519,6 +525,54 @@ export function mergeAgentUpdateRuns(entries: ThreadFeedEntry[]): ThreadFeedEntr
   return result;
 }
 
+type LifecycleFeedEntry = Extract<ThreadFeedEntry, { readonly type: "lifecycle" }>;
+
+// The lifecycle items ThreadLifecycleRow renders as a bordered "related thread"
+// card — see RelatedThreadCard. Dividers and interrupt lines are not cards and
+// never join a group.
+const RELATED_THREAD_CARD_ITEM_TYPES = new Set(["subagent", "thread_created"]);
+
+function isRelatedThreadCardEntry(entry: ThreadFeedEntry): entry is LifecycleFeedEntry {
+  return entry.type === "lifecycle" && RELATED_THREAD_CARD_ITEM_TYPES.has(entry.row.item.type);
+}
+
+// Consecutive related-thread cards (a fan-out of subagents, say) are identically
+// shaped boxes stacked with a gap between them. They read as one list, so a run
+// collapses into a single card whose entries are separated by dividers. Singles
+// keep their ordinary standalone card.
+export function mergeRelatedThreadCardRuns(entries: ThreadFeedEntry[]): ThreadFeedEntry[] {
+  const result: ThreadFeedEntry[] = [];
+  let index = 0;
+  while (index < entries.length) {
+    const entry = entries[index]!;
+    if (!isRelatedThreadCardEntry(entry)) {
+      result.push(entry);
+      index += 1;
+      continue;
+    }
+    const run: LifecycleFeedEntry[] = [entry];
+    while (index + run.length < entries.length) {
+      const candidate = entries[index + run.length]!;
+      if (!isRelatedThreadCardEntry(candidate)) break;
+      run.push(candidate);
+    }
+    if (run.length < 2) {
+      result.push(entry);
+    } else {
+      result.push({
+        type: "lifecycle-group",
+        // Anchored to the first card so the group id stays stable as later
+        // cards join it.
+        id: `lifecycle-group:${entry.id}`,
+        createdAt: entry.createdAt,
+        entries: run,
+      });
+    }
+    index += run.length;
+  }
+  return result;
+}
+
 function computeElapsedMs(startIso: string, endIso: string): number | null {
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
@@ -858,5 +912,5 @@ export function buildThreadFeed(
       activity,
     });
   }
-  return mergeAgentUpdateRuns(groupAdjacentActivities(entries));
+  return mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(groupAdjacentActivities(entries)));
 }

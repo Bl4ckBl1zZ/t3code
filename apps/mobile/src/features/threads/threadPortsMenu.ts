@@ -1,4 +1,5 @@
 import type { ProjectScript } from "@t3tools/contracts";
+import type { SFSymbol } from "expo-symbols";
 
 import type { MobileThreadEndpoint } from "../../state/use-thread-endpoints";
 
@@ -32,7 +33,7 @@ export function portsMenuAccessibilityLabel(
 }
 
 /** SF Symbol per endpoint state, so the list reads without relying on colour. */
-export function portEndpointIcon(endpoint: MobileThreadEndpoint): string {
+export function portEndpointIcon(endpoint: MobileThreadEndpoint): SFSymbol {
   if (endpoint.reachability.kind === "unreachable") return "exclamationmark.triangle";
   if (endpoint.status === "starting") return "clock";
   if (endpoint.status === "stale") return "moon.zzz";

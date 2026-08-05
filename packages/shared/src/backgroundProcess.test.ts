@@ -19,10 +19,10 @@ import {
   formatBackgroundSinceOutput,
   liveBackgroundProcesses,
   resolveBackgroundProcessView,
-} from "./backgroundProcess";
+} from "./backgroundProcess.ts";
 
 const START = DateTime.makeUnsafe("2026-08-04T12:00:00.000Z");
-const NOW_MS = new Date("2026-08-04T12:01:12.000Z").getTime();
+const NOW_MS = DateTime.toEpochMillis(DateTime.makeUnsafe("2026-08-04T12:01:12.000Z"));
 
 function at(iso: string): DateTime.Utc {
   return DateTime.makeUnsafe(iso);

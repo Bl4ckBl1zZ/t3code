@@ -28,10 +28,20 @@ const BADGE_TONE_CLASS = {
   danger: "text-red-600 dark:text-red-400",
 } as const;
 
+export type RelatedThreadCardChrome = "card" | "bare";
+
+/**
+ * Shared by the standalone card and the grouped container so a merged run keeps
+ * exactly the radius and fill a single card would have had.
+ */
+export const RELATED_THREAD_CARD_SURFACE_CLASS =
+  "mb-4 overflow-hidden rounded-[16px] border-continuous bg-card";
+
 function RelatedThreadCard(props: {
   readonly presentation: Extract<LifecyclePresentation, { kind: "related-thread" }>;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
+  readonly chrome: RelatedThreadCardChrome;
 }) {
   const navigation = useNavigation();
   const iconSubtle = useThemeColor("--color-icon-subtle");
@@ -39,7 +49,7 @@ function RelatedThreadCard(props: {
   const canOpen = props.threadId !== null;
 
   return (
-    <View className="mb-4 overflow-hidden rounded-[16px] border-continuous bg-card">
+    <View className={props.chrome === "bare" ? undefined : RELATED_THREAD_CARD_SURFACE_CLASS}>
       <Pressable
         accessibilityLabel={
           canOpen ? `Open ${presentation.title}` : `${presentation.title} details`
@@ -83,13 +93,15 @@ function RelatedThreadCard(props: {
               {presentation.badge.toUpperCase()}
             </Text>
           </View>
+          {/* Strictly one line: a fan-out of agents is scanned, not read, and a
+              card that grows a second line for one agent breaks the column. */}
           {presentation.detail ? (
             presentation.orbState === "active" ? (
-              <ShimmerText className="mt-0.5 text-sm text-foreground-muted" numberOfLines={2}>
+              <ShimmerText className="mt-0.5 text-sm text-foreground-muted" numberOfLines={1}>
                 {presentation.detail}
               </ShimmerText>
             ) : (
-              <Text className="mt-0.5 text-sm text-foreground-muted" numberOfLines={2}>
+              <Text className="mt-0.5 text-sm text-foreground-muted" numberOfLines={1}>
                 {presentation.detail}
               </Text>
             )
@@ -112,6 +124,8 @@ function RelatedThreadCard(props: {
 export function ThreadLifecycleRow(props: {
   readonly entry: LifecycleEntry;
   readonly environmentId: EnvironmentId;
+  /** `bare` drops the card surface so a merged group can supply its own. */
+  readonly chrome?: RelatedThreadCardChrome;
 }) {
   const navigation = useNavigation();
   const row = props.entry.row;
@@ -183,6 +197,7 @@ export function ThreadLifecycleRow(props: {
       : presentation.threadId;
   return (
     <RelatedThreadCard
+      chrome={props.chrome ?? "card"}
       environmentId={props.environmentId}
       presentation={presentation}
       threadId={threadId}

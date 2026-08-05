@@ -7,7 +7,7 @@ import {
   liveBackgroundProcesses,
   resolveBackgroundProcessView,
   type LiveBackgroundProcess,
-} from "../../backgroundProcess";
+} from "@t3tools/shared/backgroundProcess";
 import { cn } from "../../lib/utils";
 import { useThreadVisibleTurnItems } from "../../state/entities";
 import { LiveDuration } from "./BackgroundProcessCard";

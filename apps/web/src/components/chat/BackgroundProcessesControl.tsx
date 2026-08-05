@@ -5,7 +5,7 @@ import {
   formatBackgroundElapsed,
   liveBackgroundProcessesFromTimeline,
   resolveBackgroundProcessView,
-} from "../../backgroundProcess";
+} from "@t3tools/shared/backgroundProcess";
 import type { TimelineEntry } from "../../session-logic";
 import { cn } from "../../lib/utils";
 import { BackgroundProcessCard, LiveDuration } from "./BackgroundProcessCard";

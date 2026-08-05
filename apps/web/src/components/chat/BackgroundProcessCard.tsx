@@ -8,7 +8,7 @@ import {
   formatBackgroundSinceOutput,
   resolveBackgroundProcessView,
   type BackgroundProcessView,
-} from "../../backgroundProcess";
+} from "@t3tools/shared/backgroundProcess";
 import { cn } from "../../lib/utils";
 
 /**

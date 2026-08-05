@@ -1,5 +1,8 @@
 import {
   MessageId,
+  NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -83,6 +86,28 @@ function agentUserMessage(
     inputIntent: "turn_start" as const,
     text,
     attachments: [],
+  };
+}
+
+function subagent(
+  id: string,
+  ordinal: number,
+  updatedAt = "2026-06-20T00:00:02.000Z",
+  status: "running" | "completed" = "running",
+) {
+  return {
+    ...base(`item-${id}`, updatedAt, ordinal),
+    status,
+    title: `Subagent ${id}`,
+    type: "subagent" as const,
+    subagentId: NodeId.make(`node-${id}`),
+    origin: "app_owned" as const,
+    driver: ProviderDriverKind.make("claude"),
+    providerInstanceId: ProviderInstanceId.make("instance-1"),
+    childThreadId: ThreadId.make(`child-${id}`),
+    prompt: `Do ${id}`,
+    progress: `Running ${id}`,
+    result: null,
   };
 }
 
@@ -210,6 +235,46 @@ describe("buildThreadFeed", () => {
 
     expect(feed.map((entry) => entry.type)).toEqual(["message", "message", "message"]);
     expect(feed.map((entry) => entry.id)).toEqual(["wake-1", "message-user-mid", "wake-2"]);
+  });
+
+  it("collapses adjacent subagent cards into one lifecycle group", () => {
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(subagent("a", 1), 1),
+      projected(subagent("b", 2, "2026-06-20T00:00:03.000Z"), 2),
+      projected(subagent("c", 3, "2026-06-20T00:00:04.000Z"), 3),
+      projected(assistantMessage("2026-06-20T00:00:05.000Z"), 4),
+    ]);
+
+    expect(feed.map((entry) => entry.type)).toEqual(["message", "lifecycle-group", "message"]);
+    const group = feed[1];
+    if (group?.type !== "lifecycle-group") throw new Error("expected lifecycle-group entry");
+    // Anchored to the first card so the group stays stable as agents join it.
+    expect(group.id).toBe("lifecycle-group:lifecycle:thread-1:item-a");
+    expect(group.entries.map((entry) => entry.row.sourceItemId)).toEqual([
+      "item-a",
+      "item-b",
+      "item-c",
+    ]);
+  });
+
+  it("keeps a lone subagent card as an ordinary lifecycle entry", () => {
+    const feed = buildThreadFeed([
+      projected(subagent("solo", 0), 0),
+      projected(assistantMessage("2026-06-20T00:00:03.000Z"), 1),
+    ]);
+
+    expect(feed.map((entry) => entry.type)).toEqual(["lifecycle", "message"]);
+  });
+
+  it("breaks a subagent run on an interleaved non-card entry", () => {
+    const feed = buildThreadFeed([
+      projected(subagent("a", 0), 0),
+      projected(assistantMessage("2026-06-20T00:00:03.000Z"), 1),
+      projected(subagent("b", 2, "2026-06-20T00:00:04.000Z"), 2),
+    ]);
+
+    expect(feed.map((entry) => entry.type)).toEqual(["lifecycle", "message", "lifecycle"]);
   });
 
   it("retains inherited and synthetic rows with their original projected identity", () => {
