@@ -32,6 +32,9 @@ import {
   type TerminalMenuSession,
 } from "../terminal/terminalMenu";
 
+/** Stable identity so the memo below does not re-key the endpoint merge. */
+const EMPTY_PINNED_URLS: ReadonlyArray<string> = Object.freeze([]);
+
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
@@ -107,6 +110,8 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly canOpenTerminal: boolean;
   readonly canOpenFiles: boolean;
   readonly projectScripts: ReadonlyArray<ProjectScript>;
+  /** `previewUrl` from the project's checked-in `t3.json`, if it declares one. */
+  readonly pinnedPreviewUrl?: string | null | undefined;
   /** Ids of single-run project scripts with an active (pending or running) run. */
   readonly activeProjectScriptIds: ReadonlyArray<string>;
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
@@ -444,6 +449,13 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           .map((script) => script.previewUrl)
           .filter((url): url is string => typeof url === "string" && url.trim().length > 0),
       [props.projectScripts],
+    ),
+    pinnedUrls: useMemo(
+      () =>
+        typeof props.pinnedPreviewUrl === "string" && props.pinnedPreviewUrl.trim().length > 0
+          ? [props.pinnedPreviewUrl]
+          : EMPTY_PINNED_URLS,
+      [props.pinnedPreviewUrl],
     ),
   });
 

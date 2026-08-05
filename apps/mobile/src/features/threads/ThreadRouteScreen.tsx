@@ -75,6 +75,7 @@ import { useSelectedThreadGitActions } from "../../state/use-selected-thread-git
 import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-state";
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
+import { useT3ProjectFilePreviewUrl } from "../../state/use-t3-project-file";
 import { useStartHermesConversation } from "./use-start-hermes-conversation";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { threadEnvironment } from "../../state/threads";
@@ -225,6 +226,10 @@ function ThreadRouteContent(
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
   const threadId = firstRouteParam(params.threadId);
+  // The project's own address, pinned into the Ports menu whether or not
+  // anything is serving it — read from the worktree so a thread on a branch
+  // that changes `t3.json` sees its own value.
+  const pinnedPreviewUrl = useT3ProjectFilePreviewUrl(environmentId, selectedThreadCwd);
   const routeThreadIdentity =
     environmentIdRaw !== null && threadId !== null ? `${environmentIdRaw}:${threadId}` : null;
   const [inspectorSelection, setInspectorSelection] = useState<ThreadInspectorSelection | null>(
@@ -704,6 +709,7 @@ function ThreadRouteContent(
     canOpenTerminal: Boolean(selectedThreadProject?.workspaceRoot),
     canOpenFiles: Boolean(selectedThreadProject?.workspaceRoot),
     projectScripts: selectedThreadProject?.scripts ?? [],
+    pinnedPreviewUrl,
     activeProjectScriptIds,
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,

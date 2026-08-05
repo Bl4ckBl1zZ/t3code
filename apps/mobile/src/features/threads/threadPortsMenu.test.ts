@@ -58,6 +58,71 @@ describe("portEndpointLabel", () => {
   });
 });
 
+/** The project's `t3.json` `previewUrl`, pointing at a remote origin. */
+const pinnedRemote = (overrides: Partial<MobileThreadEndpoint> = {}): MobileThreadEndpoint =>
+  endpoint({
+    key: "wt1.8u9yhy8fewf.org:443",
+    url: "https://wt1.8u9yhy8fewf.org/",
+    host: "wt1.8u9yhy8fewf.org",
+    port: 443,
+    status: "idle",
+    source: "declared",
+    terminalId: null,
+    pinned: true,
+    local: false,
+    reachability: { kind: "reachable", url: "https://wt1.8u9yhy8fewf.org/", via: "direct" },
+    displayAddress: "wt1.8u9yhy8fewf.org",
+    ...overrides,
+  });
+
+describe("pinned remote origins", () => {
+  it("names the row by host, since no script or process announced it", () => {
+    // "Port 443" would say nothing about which host the row opens.
+    expect(portEndpointLabel(pinnedRemote(), [])).toBe("wt1.8u9yhy8fewf.org");
+  });
+
+  it("still prefers a script name when a run adopts the pinned URL", () => {
+    expect(portEndpointLabel(pinnedRemote({ scriptId: "dev" }), [script()])).toBe("Dev");
+  });
+
+  it("reports configuration rather than claiming the remote is not running", () => {
+    // Neither liveness signal can see a remote host, so "not running" would be
+    // an assertion the app has no evidence for.
+    const subtitle = portEndpointSubtitle(pinnedRemote());
+    expect(subtitle).toBe("Pinned");
+    expect(subtitle).not.toContain("not running");
+  });
+
+  it("still says not running for a pinned local port, which is observable", () => {
+    expect(
+      portEndpointSubtitle(
+        pinnedRemote({
+          host: "localhost",
+          port: 3000,
+          local: true,
+          displayAddress: "192.168.1.24:3000",
+        }),
+      ),
+    ).toBe("192.168.1.24:3000 · not running");
+  });
+
+  it("labels the address once something serves the pinned URL", () => {
+    expect(portEndpointSubtitle(pinnedRemote({ status: "live" }))).toBe(
+      "Pinned · wt1.8u9yhy8fewf.org",
+    );
+  });
+
+  it("keeps the pin while idle instead of the sleeping icon", () => {
+    expect(portEndpointIcon(pinnedRemote())).toBe("pin.fill");
+    expect(portEndpointIcon(pinnedRemote({ status: "live" }))).toBe("pin.fill");
+  });
+
+  it("is openable, and does not tint the toolbar as if something were serving", () => {
+    expect(openableEndpoints([pinnedRemote()])).toHaveLength(1);
+    expect(portsMenuTintColor([pinnedRemote()])).toBeUndefined();
+  });
+});
+
 describe("portEndpointSubtitle", () => {
   it("shows the resolved address, never the announced one", () => {
     // localhost would name the phone, not the machine running the server.

@@ -35,8 +35,12 @@ export function portsMenuAccessibilityLabel(
 export function portEndpointIcon(endpoint: MobileThreadEndpoint): string {
   if (endpoint.reachability.kind === "unreachable") return "exclamationmark.triangle";
   if (endpoint.status === "starting") return "clock";
-  if (endpoint.status === "stale" || endpoint.status === "idle") return "moon.zzz";
-  return "globe";
+  if (endpoint.status === "stale") return "moon.zzz";
+  // Pinned rows keep the pin while idle: nothing is expected to be serving a
+  // configured address, so the sleeping icon every other idle row gets would
+  // read as a fault rather than as the project's standing address.
+  if (endpoint.pinned) return "pin.fill";
+  return endpoint.status === "idle" ? "moon.zzz" : "globe";
 }
 
 /**
@@ -52,6 +56,10 @@ export function portEndpointLabel(
   if (endpoint.processName && endpoint.processName.trim().length > 0) {
     return endpoint.processName;
   }
+  // A pinned remote origin is named by its host, never by its port: nothing
+  // announced it, so there is no script or process to name it after, and
+  // "Port 443" says nothing about which host the row would open.
+  if (endpoint.pinned && !endpoint.local) return endpoint.host;
   return `Port ${endpoint.port}`;
 }
 
@@ -64,7 +72,11 @@ export function portEndpointSubtitle(endpoint: MobileThreadEndpoint): string {
   if (endpoint.status === "starting") return "Starting…";
   const address = endpoint.displayAddress ?? `port ${endpoint.port}`;
   if (endpoint.status === "stale") return `${address} · no longer responding`;
-  return endpoint.status === "idle" ? `${address} · not running` : address;
+  if (endpoint.status !== "idle") return endpoint.pinned ? `Pinned · ${address}` : address;
+  // Both liveness signals only ever see the machine running the environment, so
+  // "not running" is a claim only a local endpoint earns. A pinned remote origin
+  // — a tunnel, a staging host — is reported as what it is: configuration.
+  return endpoint.local ? `${address} · not running` : "Pinned";
 }
 
 /** Endpoints that can be opened right now, in menu order. */
