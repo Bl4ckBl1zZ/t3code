@@ -203,6 +203,16 @@ export function isTerminalPasteShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+export function isTerminalSelectAllShortcut(
+  event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
+  platform = navigator.platform,
+) {
+  if (event.key.toLowerCase() !== "a") return false;
+  // Ctrl+A alone stays with the shell (readline beginning-of-line), so the
+  // non-mac binding takes Shift like copy and paste do.
+  return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
+}
+
 export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
   return (
     event.inputType === "" ||
@@ -647,6 +657,20 @@ export class GhosttyTerminalSurface {
     };
   }
 
+  selectAll(): void {
+    const range = this.core.selectAll();
+    if (range === null) return;
+    this.selectionMode = "cell";
+    this.selectionBase = null;
+    this.selectionEnd = null;
+    this.selectionAnchorScreen = range.start;
+    this.selectionEndScreen = range.end;
+    this.options.onSelectionChange();
+    // Selection highlights span rows Ghostty may not mark dirty for this change.
+    this.forceFullRender = true;
+    this.requestRender();
+  }
+
   clearSelection(): void {
     this.core.clearSelection();
     this.selectionEnd = null;
@@ -720,6 +744,12 @@ export class GhosttyTerminalSurface {
       this.options.onCopy(this.getSelection());
       return;
     }
+    if (isTerminalSelectAllShortcut(event)) {
+      event.preventDefault();
+      this.suppressedKeyCodes.add(event.code);
+      this.selectAll();
+      return;
+    }
     if (isTerminalPasteShortcut(event)) {
       this.suppressedKeyCodes.add(event.code);
       const clipboard = navigator.clipboard;
@@ -750,6 +780,18 @@ export class GhosttyTerminalSurface {
     }
     const data = this.core.encodeKey(event);
     if (data.length === 0) return;
+    // Legacy encoding has no Super, so Ghostty falls back to the event text and
+    // an unhandled Cmd chord would type its bare letter into the shell (Cmd+S
+    // writing "s"). Real terminals never send that, while a Kitty-mode session
+    // encodes the chord properly and still receives it. Leaving the default
+    // action intact keeps the app and native menu shortcuts working.
+    if (event.metaKey && data === event.key) {
+      this.suppressedKeyCodes.add(event.code);
+      return;
+    }
+    // Typing dismisses the highlight, as in Ghostty: a key that reaches the PTY
+    // (including Ctrl+C) leaves output the stale selection no longer describes.
+    if (this.selectionAnchorScreen !== null) this.clearSelection();
     this.suppressedKeyCodes.delete(event.code);
     event.preventDefault();
     event.stopPropagation();

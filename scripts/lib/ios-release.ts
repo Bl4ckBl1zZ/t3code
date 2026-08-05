@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Release tooling runs from plain node before an Effect runtime exists.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - Release tooling runs from plain node before an Effect runtime exists.
 /**
  * Pure helpers for the direct-to-TestFlight iOS pipeline.
  *
@@ -73,14 +73,19 @@ export function parseProvisioningProfile(profile: Buffer): ProvisioningProfile {
   const expiration = new RegExp("<key>ExpirationDate</key>\\s*<date>([\\s\\S]*?)</date>", "u").exec(
     plist,
   )?.[1];
-  const expiresAt = expiration === undefined ? undefined : new Date(expiration);
+  const parsedExpiry = expiration === undefined ? undefined : new Date(expiration);
   return {
     name,
     uuid,
     teamId,
     bundleIdentifier: applicationIdentifier.slice(prefix.length),
     appGroupIdentifier: plistFirstArrayString(plist, "com.apple.security.application-groups"),
-    ...(expiresAt !== undefined && !Number.isNaN(expiresAt.getTime()) ? { expiresAt } : {}),
+    // An unparseable date reads as "no expiry known" rather than a NaN Date the
+    // expiry check would silently skip.
+    expiresAt:
+      parsedExpiry !== undefined && !Number.isNaN(parsedExpiry.getTime())
+        ? parsedExpiry
+        : undefined,
   };
 }
 
@@ -252,8 +257,15 @@ export interface AscBuildsResponse {
   readonly data?: ReadonlyArray<{ readonly attributes?: { readonly version?: string } }>;
 }
 
-export function buildVersionsFromAscResponse(response: AscBuildsResponse): ReadonlyArray<string> {
-  return (response.data ?? []).flatMap((entry) =>
-    typeof entry.attributes?.version === "string" ? [entry.attributes.version] : [],
+/**
+ * Takes `unknown` because the only caller passes a parsed HTTP body: a page
+ * that does not look like ASC's is an empty page, not a crash, and the caller
+ * fails loudly on an empty result instead.
+ */
+export function buildVersionsFromAscResponse(response: unknown): ReadonlyArray<string> {
+  const data = (response as AscBuildsResponse | null | undefined)?.data;
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((entry) =>
+    typeof entry?.attributes?.version === "string" ? [entry.attributes.version] : [],
   );
 }

@@ -11,6 +11,7 @@ import {
   isTerminalCopyShortcut,
   isTerminalLinkPointerGesture,
   isTerminalPasteShortcut,
+  isTerminalSelectAllShortcut,
   shouldReportTerminalMouse,
   terminalScrollbarGeometry,
   terminalScrollbarOffsetAtPointer,
@@ -186,6 +187,34 @@ describe("isTerminalPasteShortcut", () => {
     expect(isTerminalPasteShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64")).toBe(
       true,
     );
+  });
+});
+
+describe("isTerminalSelectAllShortcut", () => {
+  const event = (overrides: Partial<Parameters<typeof isTerminalSelectAllShortcut>[0]> = {}) => ({
+    ctrlKey: false,
+    key: "a",
+    metaKey: false,
+    shiftKey: false,
+    ...overrides,
+  });
+
+  it("uses Cmd+A on macOS", () => {
+    expect(isTerminalSelectAllShortcut(event({ metaKey: true }), "MacIntel")).toBe(true);
+    expect(isTerminalSelectAllShortcut(event(), "MacIntel")).toBe(false);
+  });
+
+  it("keeps Ctrl+A available for beginning-of-line", () => {
+    expect(isTerminalSelectAllShortcut(event({ ctrlKey: true }), "MacIntel")).toBe(false);
+    expect(isTerminalSelectAllShortcut(event({ ctrlKey: true }), "Linux x86_64")).toBe(false);
+    expect(
+      isTerminalSelectAllShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64"),
+    ).toBe(true);
+  });
+
+  it("uses the produced character instead of the physical key position", () => {
+    expect(isTerminalSelectAllShortcut(event({ key: "A", metaKey: true }), "MacIntel")).toBe(true);
+    expect(isTerminalSelectAllShortcut(event({ key: "s", metaKey: true }), "MacIntel")).toBe(false);
   });
 });
 
