@@ -304,10 +304,11 @@ const cancelTargetExit = ZoomOut.duration(120).reduceMotion(ReduceMotion.System)
 
 /**
  * Floating slide-to-cancel target above the combo button, visible only while a push-to-talk
- * hold is in progress. useVoiceComposer quantizes cancel progress to 5% steps to bound JS-side
- * re-renders; a spring chases each step so the target reads as continuous growth. Arming keeps
- * the instant danger color swap but pops the scale (overshoot, then settle) so the flip lands
- * with weight. Render it as a sibling of the button inside a relatively positioned wrapper
+ * hold is in progress. It is a release target, not a tripwire: reaching it arms the discard, and
+ * sliding back off disarms. useVoiceComposer quantizes cancel progress to 5% steps to bound
+ * JS-side re-renders; a spring chases each step so the target reads as continuous growth. Arming
+ * keeps the instant danger color swap but pops the scale (overshoot, then settle) so the flip
+ * lands with weight. Render it as a sibling of the button inside a relatively positioned wrapper
  * that isn't clipped by an overflow-hidden ancestor.
  */
 export function VoiceCancelTarget(props: {
@@ -402,7 +403,7 @@ export function VoiceRecordingBar(props: {
   readonly subscribeLevel: (listener: (level: number) => void) => () => void;
   readonly onCancel: () => void;
   readonly onCleanupChange: (cleanup: boolean) => void;
-  /** A push-to-talk finger is down: swap the cancel pill for the slide-up hint. */
+  /** A push-to-talk finger is down: swap the cancel pill for the release hint. */
   readonly holdActive?: boolean;
   /** Slide-up cancel is armed: dim the bar so release clearly discards. */
   readonly cancelArmed?: boolean;
@@ -452,8 +453,10 @@ export function VoiceRecordingBar(props: {
               composer mic morphs into the stop control while recording, so a second stop pill
               here reads as a duplicate. */}
           {holdActive ? (
+            // Both labels name what releasing right now does, because release is the only thing
+            // that decides: wandering into the cancel zone arms the target, it doesn't discard.
             <Text className="text-xs text-foreground-muted" accessibilityLiveRegion="polite">
-              {cancelArmed ? "Release to cancel" : "Slide up to cancel"}
+              {cancelArmed ? "Release to cancel" : "Release to send"}
             </Text>
           ) : (
             <ControlPill

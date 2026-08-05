@@ -136,8 +136,9 @@ export function useVoiceComposer(input: {
 
   // Combined send/record button gesture, driven by the shared press/move/release machine.
   // Tap: send when the draft has content, start hands-free recording when it's empty, stop when
-  // recording. Hold (300ms): push-to-talk — releasing stops + transcribes, sliding up 72pt
-  // cancels, releasing under 700ms discards the graze. If the finger lifts before the async
+  // recording. Hold (300ms): push-to-talk — the finger can wander anywhere and release still
+  // confirms; only a swipe up past the cancel distance that is *still* past it on release
+  // discards, plus a graze released under tooShortMs. If the finger lifts before the async
   // start reaches "recording" (permission prompt, preflight), the release is remembered and the
   // recording stops as soon as startup completes.
   const voiceStateRef = useRef(voice.state);
@@ -230,13 +231,11 @@ export function useVoiceComposer(input: {
           }
           case "cancel_recording": {
             stopOnRecordingRef.current = false;
-            if (!holdOwnsSessionRef.current && effect.reason !== "swipe") {
+            if (effect.reason === "too_short" && !holdOwnsSessionRef.current) {
               // The hold grabbed a session it didn't start (hands-free recording already
-              // running): a short release means "stop", and a system-cancelled gesture must
-              // not kill the recording. Only a deliberate slide-up cancels it.
-              if (effect.reason === "too_short" && voiceStateRef.current.type === "recording") {
-                toggle();
-              }
+              // running): a graze-length release means "stop", never "throw away what was
+              // already being recorded". Only a slide-up held through the release discards.
+              if (voiceStateRef.current.type === "recording") toggle();
               break;
             }
             if (effect.reason === "too_short") {
@@ -302,6 +301,9 @@ export function useVoiceComposer(input: {
           dispatchGesture({ type: "release", at: Date.now() }, button);
           manager.end();
         })
+        // A cancelled touch sequence is the platform's decision, not the user's: the machine
+        // turns it into a stop-and-transcribe so a stolen touch keeps the dictation instead of
+        // silently discarding it.
         .onTouchesCancelled((_event, manager) => {
           pressScale.value = withTiming(1, PRESS_TIMING);
           if (gestureStateRef.current.type !== "idle") {

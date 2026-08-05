@@ -97,20 +97,44 @@ describe("voiceGestureTransition", () => {
     expect(voiceGestureCancelProgress(state)).toBe(0);
   });
 
-  it("cancels on interrupt from both pressing and holding", () => {
+  it("keeps the recording when the platform interrupts a hold", () => {
     const pressing = run([{ type: "press", at: 0, y: 500 }, { type: "interrupt" }]);
     expect(pressing.state).toEqual(VOICE_GESTURE_IDLE);
-    expect(pressing.effects).toEqual([{ type: "cancel_recording", reason: "interrupted" }]);
+    expect(pressing.effects).toEqual([]);
 
     const holding = run([
       { type: "press", at: 0, y: 500 },
       { type: "hold_elapsed" },
       { type: "interrupt" },
     ]);
-    expect(holding.effects).toEqual([
-      { type: "hold_classified" },
-      { type: "cancel_recording", reason: "interrupted" },
+    expect(holding.state).toEqual(VOICE_GESTURE_IDLE);
+    expect(holding.effects).toEqual([{ type: "hold_classified" }, { type: "stop_and_transcribe" }]);
+  });
+
+  it("keeps the recording when an armed hold is interrupted before release", () => {
+    const { effects } = run([
+      { type: "press", at: 0, y: 500 },
+      { type: "hold_elapsed" },
+      { type: "move", y: 500 - VOICE_GESTURE_DEFAULTS.cancelDistance },
+      { type: "interrupt" },
     ]);
+    expect(effects).toEqual([
+      { type: "hold_classified" },
+      { type: "cancel_armed_changed", armed: true },
+      { type: "stop_and_transcribe" },
+    ]);
+  });
+
+  it("transcribes a hold that wandered anywhere but the cancel zone", () => {
+    const { effects } = run([
+      { type: "press", at: 0, y: 500 },
+      { type: "hold_elapsed" },
+      { type: "move", y: 900 }, // down
+      { type: "move", y: 500 - (VOICE_GESTURE_DEFAULTS.cancelDistance - 1) }, // just short of arming
+      { type: "move", y: 620 },
+      { type: "release", at: 4_000 },
+    ]);
+    expect(effects).toEqual([{ type: "hold_classified" }, { type: "stop_and_transcribe" }]);
   });
 
   it("ignores stray events outside their states", () => {

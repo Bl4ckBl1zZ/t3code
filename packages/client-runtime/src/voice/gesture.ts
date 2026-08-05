@@ -19,11 +19,16 @@ export type VoiceGestureConfig = {
   readonly cancelHysteresis: number;
 };
 
+// A hold is a "keep still, keep talking" gesture: the hand drifts while dictating, so the cancel
+// zone sits far enough away (~2cm of upward travel) that only a deliberate swipe reaches it, and
+// the hysteresis band is wide enough that easing back off it disarms rather than leaving the
+// release primed to discard. tooShortMs only exists to drop grazes that barely clear
+// holdClassifyMs; past it, every release confirms.
 export const VOICE_GESTURE_DEFAULTS: VoiceGestureConfig = {
   holdClassifyMs: 300,
-  tooShortMs: 700,
-  cancelDistance: 72,
-  cancelHysteresis: 16,
+  tooShortMs: 500,
+  cancelDistance: 128,
+  cancelHysteresis: 48,
 };
 
 export type VoiceGestureState =
@@ -51,9 +56,13 @@ export type VoiceGestureEffect =
   /** The press is now a push-to-talk hold; start capture if it wasn't started eagerly. */
   | { readonly type: "hold_classified" }
   | { readonly type: "stop_and_transcribe" }
+  /**
+   * Discarding is deliberate-only: a swipe-up held through the release, or a graze too short to
+   * have captured anything. Nothing the platform does to the touch stream discards audio.
+   */
   | {
       readonly type: "cancel_recording";
-      readonly reason: "swipe" | "too_short" | "interrupted";
+      readonly reason: "swipe" | "too_short";
     }
   /** Crossing (or leaving) the slide-up cancel zone; drive the HUD + a haptic tick. */
   | { readonly type: "cancel_armed_changed"; readonly armed: boolean };
@@ -119,11 +128,15 @@ export function voiceGestureTransition(
       return { state, effects: [] };
     }
     case "interrupt": {
-      if (state.type === "idle") return { state, effects: [] };
-      return {
-        state: VOICE_GESTURE_IDLE,
-        effects: [{ type: "cancel_recording", reason: "interrupted" }],
-      };
+      // The platform lost the touch (an ancestor recognizer claimed it, the OS cancelled the
+      // sequence). The finger never asked for anything, so this keeps whatever was captured
+      // instead of discarding it — including while cancel is armed, because arming alone is not
+      // the cancel decision; releasing on the target is. A hold that never reached recording
+      // just ends.
+      if (state.type === "holding") {
+        return { state: VOICE_GESTURE_IDLE, effects: [{ type: "stop_and_transcribe" }] };
+      }
+      return { state: VOICE_GESTURE_IDLE, effects: [] };
     }
   }
 }
