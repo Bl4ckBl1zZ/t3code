@@ -673,7 +673,11 @@ describe("DesktopUpdates", () => {
 
   const activityResponse = (
     request: HttpClientRequest.HttpClientRequest,
-    activity: { readonly activeRunCount: number; readonly backgroundProcessCount?: number },
+    activity: {
+      readonly activeRunCount: number;
+      readonly backgroundProcessCount?: number;
+      readonly pendingBackgroundWork?: boolean;
+    },
   ) =>
     Effect.succeed(
       HttpClientResponse.fromWeb(
@@ -795,6 +799,43 @@ describe("DesktopUpdates", () => {
         assert.isFalse(yield* Ref.get(desktopState.quitting));
 
         backgroundProcessCount = 0;
+        yield* TestClock.adjust(Duration.seconds(30));
+
+        assert.isTrue(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("defers the automatic install while an adapter holds pending work", () => {
+    // Work only the provider adapter knows about — a Codex subagent it will
+    // resume later, an ACP wake buffer — records no live turn item, so the two
+    // counts read zero while a restart would still destroy it.
+    let pendingBackgroundWork = true;
+    const harness = makeHarness({
+      initialSettings: autoUpdateSettings,
+      backendInstance: runningBackendInstance,
+      activityHandler: (request) =>
+        activityResponse(request, {
+          activeRunCount: 0,
+          backgroundProcessCount: 0,
+          pendingBackgroundWork,
+        }),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+
+        assert.isTrue((yield* updates.getState).autoInstallPending);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+
+        pendingBackgroundWork = false;
         yield* TestClock.adjust(Duration.seconds(30));
 
         assert.isTrue(yield* Ref.get(desktopState.quitting));

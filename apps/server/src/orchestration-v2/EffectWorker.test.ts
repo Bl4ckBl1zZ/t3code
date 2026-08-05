@@ -115,6 +115,7 @@ function makeExecutorLayer(input: {
       ProviderSessionManagerV2,
       ProviderSessionManagerV2.of({
         shutdown: Effect.void,
+        hasPendingBackgroundWork: Effect.succeed(false),
         open: () => Effect.die("unused open"),
         get: () => Effect.succeed(Option.none()),
         close: () => Effect.void,

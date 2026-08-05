@@ -133,6 +133,17 @@ export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error
 
 export interface ProviderSessionManagerV2Shape {
   readonly shutdown: Effect.Effect<void>;
+  /**
+   * Whether any live session reports work held outside an active turn — the
+   * same signal that pins a session against idle release, asked across all of
+   * them at once.
+   *
+   * Exists for callers deciding whether this process can be restarted safely.
+   * A probe that fails answers `true` here, the opposite of the idle-release
+   * path: there a broken probe must not pin a session forever, while here an
+   * unknown answer must never be read as permission to kill running work.
+   */
+  readonly hasPendingBackgroundWork: Effect.Effect<boolean>;
   readonly open: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
@@ -1396,8 +1407,24 @@ export const layerWithOptions = (
       });
       yield* Effect.addFinalizer(() => shutdown);
 
+      const hasPendingBackgroundWork: Effect.Effect<boolean> = Effect.gen(function* () {
+        const current = yield* Ref.get(sessions);
+        for (const entry of current.values()) {
+          const probe = entry.runtime.hasPendingBackgroundWork;
+          if (probe === undefined) {
+            continue;
+          }
+          const pending = yield* probe.pipe(Effect.catchCause(() => Effect.succeed(true)));
+          if (pending) {
+            return true;
+          }
+        }
+        return false;
+      });
+
       return ProviderSessionManagerV2.of({
         shutdown,
+        hasPendingBackgroundWork,
         open: (input) =>
           sessionOpen.withLock(
             input.providerSessionId,

@@ -858,6 +858,46 @@ interface TrackedRunningCommandItem {
   readonly outputTruncated?: boolean;
   /** Throttle mark for streamed output, in epoch ms. */
   readonly outputEmittedAtMs?: number;
+  /**
+   * The output clients have actually been sent, which trails `aggregatedOutput`
+   * by up to one throttle window. Held so a row can be re-emitted for a reason
+   * other than new output without either flushing the throttle early or
+   * blanking the tail the client is already showing.
+   */
+  readonly emittedOutput?: string;
+  /**
+   * The turn that launched this command has settled and it is still running.
+   * Only knowable at turn/completed, so it is written onto the tracked item
+   * there and re-applied to every projection of the item afterwards — each
+   * emit replaces the row wholesale, and dropping the flag would take the
+   * command back out of the client's background listings mid-run.
+   */
+  readonly background?: boolean;
+}
+
+/**
+ * Liveness fields for a command that outlived the turn which launched it.
+ *
+ * Codex hands over a stream without a handle, so there is no task id to stop
+ * the command with; `processId` is the nearest identity it exposes, and it is
+ * what the `thread/backgroundTerminals/*` RPCs address. Emits nothing at all
+ * for a command still inside its turn: `background` is the flag every client
+ * keys off, and setting it early would list an ordinary tool call as work the
+ * thread is waiting on.
+ */
+function codexBackgroundLivenessFields(input: {
+  readonly background?: boolean;
+  readonly processId?: string;
+}): { readonly background?: true; readonly taskId?: string } {
+  if (input.background !== true) {
+    return {};
+  }
+  return {
+    background: true,
+    ...(input.processId === undefined || input.processId.length === 0
+      ? {}
+      : { taskId: input.processId }),
+  };
 }
 
 type CodexRootTerminalEvent = Extract<ProviderAdapterV2Event, { readonly type: "turn.terminal" }>;
@@ -1620,6 +1660,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           readonly output: string;
           readonly truncated: boolean;
           readonly lastOutputAt: DateTime.Utc;
+          readonly background?: boolean;
+          readonly processId?: string;
         }) =>
           Effect.gen(function* () {
             const nodeId = idAllocator.derive.nodeFromProviderItem({
@@ -1651,6 +1693,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               output: input.output,
               lastOutputAt: input.lastOutputAt,
               ...(input.truncated ? { outputTruncated: true } : {}),
+              ...codexBackgroundLivenessFields(input),
             };
             yield* emitProviderEvent({
               type: "turn_item.updated",
@@ -1753,12 +1796,84 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 // What we hold may be only the tail of a chatty command; saying so
                 // matters most here, where there is no completion to correct it.
                 ...(tracked.outputTruncated === true ? { outputTruncated: true } : {}),
+                // Kept on the terminal row too: a command that ran in the
+                // background is still what happened, and dropping the flag on
+                // the way out would rewrite the history of the wait.
+                ...codexBackgroundLivenessFields(tracked),
               };
               yield* emitProviderEvent({
                 type: "node.updated",
                 driver: CODEX_PROVIDER,
                 node,
               });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem,
+              });
+            }
+          });
+
+        /**
+         * The turn has settled and these commands are still running, so relabel
+         * their rows as background work now rather than at completion.
+         *
+         * The wait is the whole reason the flag exists: between here and the
+         * command's exit the thread looks finished, and without this the client
+         * has nothing telling it something is still going. Deliberately not
+         * routed through `emitRunningCommandOutput` — a command that has printed
+         * nothing yet must not be given an empty output and a fresh
+         * `lastOutputAt`, which would render as "output 0s ago" over silence.
+         */
+        const markRunningCommandItemsBackground = (
+          context: ActiveCodexTurnContext,
+          nativeTurnId: string,
+        ) =>
+          Effect.gen(function* () {
+            const items = (yield* Ref.get(runningCommandItemsByTurn)).get(nativeTurnId);
+            if (items === undefined || items.size === 0) {
+              return;
+            }
+            const updatedAt = yield* DateTime.now;
+            for (const tracked of items.values()) {
+              if (tracked.background === true) {
+                continue;
+              }
+              yield* trackRunningCommandItem(nativeTurnId, { ...tracked, background: true });
+              const nodeId = idAllocator.derive.nodeFromProviderItem({
+                driver: CODEX_PROVIDER,
+                nativeItemId: tracked.id,
+              });
+              const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+                driver: CODEX_PROVIDER,
+                nativeItemId: tracked.id,
+              });
+              const ordinal = yield* resolveItemOrdinal(context, tracked.id);
+              const turnItem: OrchestrationV2TurnItem = {
+                id: turnItemId,
+                threadId: context.projectionThreadId,
+                runId: context.projectionRunId,
+                nodeId,
+                providerThreadId: context.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef: codexNativeItemRef(tracked.id),
+                parentItemId: null,
+                ordinal,
+                status: "running",
+                title: null,
+                startedAt: context.startedAt,
+                completedAt: null,
+                updatedAt,
+                type: "command_execution",
+                input: tracked.command,
+                // The already-broadcast tail, not the accumulated one: this
+                // emit exists to relabel the row, and flushing buffered output
+                // through it would defeat the delta throttle at exactly the
+                // moment a chatty command is most likely to be mid-burst.
+                ...(tracked.emittedOutput === undefined ? {} : { output: tracked.emittedOutput }),
+                ...(tracked.outputTruncated === true ? { outputTruncated: true } : {}),
+                ...codexBackgroundLivenessFields({ ...tracked, background: true }),
+              };
               yield* emitProviderEvent({
                 type: "turn_item.updated",
                 driver: CODEX_PROVIDER,
@@ -2590,6 +2705,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             | CodexSchema.V2ItemCompletedNotification__ThreadItem,
             { type: "commandExecution" }
           >,
+          /** True when this event arrived after its turn settled. */
+          background = false,
         ) =>
           Effect.gen(function* () {
             const updatedAt = yield* DateTime.now;
@@ -2644,6 +2761,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ...(item.exitCode === null || item.exitCode === undefined
                 ? {}
                 : { exitCode: item.exitCode }),
+              ...codexBackgroundLivenessFields({
+                background,
+                ...(typeof item.processId === "string" ? { processId: item.processId } : {}),
+              }),
             };
             return { node, turnItem };
           });
@@ -3208,7 +3329,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ...(capped.truncated || tracked.outputTruncated === true
                 ? { outputTruncated: true }
                 : {}),
-              ...(shouldEmit ? { outputEmittedAtMs: nowMs } : {}),
+              ...(shouldEmit ? { outputEmittedAtMs: nowMs, emittedOutput: capped.output } : {}),
             });
             if (!shouldEmit) {
               return;
@@ -3220,6 +3341,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               output: capped.output,
               truncated: capped.truncated || tracked.outputTruncated === true,
               lastOutputAt: now,
+              ...(tracked.background === true ? { background: true } : {}),
+              ...(tracked.processId === undefined ? {} : { processId: tracked.processId }),
             });
           }).pipe(Effect.orDie),
         );
@@ -3431,10 +3554,15 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 yield* trackRunningCommandItem(payload.turnId, {
                   id: payload.item.id,
                   command: payload.item.command,
+                  // Broadcast by the artifacts emit just below, so it counts as
+                  // already sent for any later re-emit of this row.
                   ...(payload.item.aggregatedOutput === null ||
                   payload.item.aggregatedOutput === undefined
                     ? {}
-                    : { aggregatedOutput: payload.item.aggregatedOutput }),
+                    : {
+                        aggregatedOutput: payload.item.aggregatedOutput,
+                        emittedOutput: payload.item.aggregatedOutput,
+                      }),
                   ...(typeof payload.item.processId === "string"
                     ? { processId: payload.item.processId }
                     : {}),
@@ -3507,7 +3635,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
             if (payload.item.type === "commandExecution") {
               const turnDrained = yield* clearRunningCommandItem(payload.turnId, payload.item.id);
-              const artifacts = yield* buildCommandExecutionArtifacts(context, payload.item);
+              // `settled` means this completion arrived after its turn ended,
+              // which is precisely what made the command a background one.
+              const artifacts = yield* buildCommandExecutionArtifacts(
+                context,
+                payload.item,
+                settled,
+              );
               yield* emitProviderEvent({
                 type: "node.updated",
                 driver: CODEX_PROVIDER,
@@ -4362,6 +4496,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   updated.set(input.nativeTurnId, input.context);
                   return updated;
                 });
+                yield* markRunningCommandItemsBackground(input.context, input.nativeTurnId);
               }
               yield* Ref.update(activeTurns, (current) => {
                 const updated = new Map(current);

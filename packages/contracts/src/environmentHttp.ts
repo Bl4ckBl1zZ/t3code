@@ -391,6 +391,12 @@ export const EnvironmentActivitySnapshot = Schema.Struct({
   // on an old backend with auto-update permanently deferred and nothing on
   // screen to explain why, and `activeRunCount` still guards the common case.
   backgroundProcessCount: Schema.optional(Schema.Number),
+  // Whether any live provider session is holding work outside an active turn.
+  // Same tolerance and default as the count above, and deliberately a separate
+  // yes/no: it comes from the adapters rather than the projection, so it covers
+  // what no turn item records — a Codex subagent the CLI will resume later, an
+  // ACP wake buffer that has not drained.
+  pendingBackgroundWork: Schema.optional(Schema.Boolean),
 });
 export type EnvironmentActivitySnapshot = typeof EnvironmentActivitySnapshot.Type;
 

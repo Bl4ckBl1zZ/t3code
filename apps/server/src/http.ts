@@ -39,6 +39,7 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
@@ -187,6 +188,7 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     return handlers
       .handle(
         "descriptor",
@@ -208,8 +210,18 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
           // one is not in an active run at all — the turn settled and left the
           // command behind. This is the live shell read, so the per-thread count
           // is the real one rather than the cached zero.
-          return yield* threadManagement.getShellSnapshot().pipe(
-            Effect.map((snapshot) => ({
+          //
+          // `pendingBackgroundWork` asks the live provider sessions the same
+          // question the projection answers, and catches what the projection
+          // cannot: work only the adapter knows about, such as a Codex subagent
+          // it will resume later. Reported alongside the count rather than
+          // folded into it — it is a yes/no from a different source, and
+          // inventing a number for it would misreport both.
+          return yield* Effect.all({
+            snapshot: threadManagement.getShellSnapshot(),
+            pendingBackgroundWork: providerSessions.hasPendingBackgroundWork,
+          }).pipe(
+            Effect.map(({ snapshot, pendingBackgroundWork }) => ({
               activeRunCount: snapshot.threads.filter((thread) =>
                 ACTIVE_THREAD_STATUSES.has(thread.status),
               ).length,
@@ -217,10 +229,11 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
                 (total, thread) => total + (thread.backgroundProcessCount ?? 0),
                 0,
               ),
+              pendingBackgroundWork,
             })),
             Effect.catch((cause) =>
               Effect.logWarning("Failed to compute environment activity snapshot", { cause }).pipe(
-                Effect.as({ activeRunCount: 1 }),
+                Effect.as({ activeRunCount: 1, pendingBackgroundWork: true }),
               ),
             ),
           );

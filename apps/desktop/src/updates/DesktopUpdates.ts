@@ -555,10 +555,12 @@ export const make = Effect.gen(function* () {
   // "busy": the automatic restart must only happen when we positively know
   // nothing is running.
   //
-  // Background commands need saying separately because they are the case that
-  // looks idle from the outside: the turn that launched a `run_in_background`
-  // command is long settled, so no run is active, while the command itself is
-  // still going and dies with the provider CLI process the restart kills.
+  // Background work needs saying separately because it is the case that looks
+  // idle from the outside: the turn that launched a `run_in_background` command
+  // is long settled, so no run is active, while the command itself is still
+  // going and dies with the provider CLI process the restart kills.
+  // `pendingBackgroundWork` is the adapters' own answer to the same question,
+  // and covers what no turn item records.
   const backendHasAgentActivity = Effect.fn("desktop.updates.backendHasAgentActivity")(function* (
     instance: DesktopBackendPool.DesktopBackendInstance,
   ) {
@@ -576,7 +578,10 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap(HttpClientResponse.schemaBodyJson(EnvironmentActivitySnapshot)),
       Effect.map(
-        (activity) => activity.activeRunCount > 0 || (activity.backgroundProcessCount ?? 0) > 0,
+        (activity) =>
+          activity.activeRunCount > 0 ||
+          (activity.backgroundProcessCount ?? 0) > 0 ||
+          activity.pendingBackgroundWork === true,
       ),
       Effect.timeoutOption(BACKEND_ACTIVITY_PROBE_TIMEOUT),
       Effect.map(Option.getOrElse(() => true)),

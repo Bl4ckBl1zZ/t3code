@@ -227,6 +227,7 @@ function makeTestLayer(input: {
       ProviderSessionManagerV2,
       ProviderSessionManagerV2.of({
         shutdown: Effect.void,
+        hasPendingBackgroundWork: Effect.succeed(false),
         open: () => Effect.die("unused open"),
         get: () => Effect.die("unused get"),
         close: () => Effect.void,
@@ -506,6 +507,7 @@ function makeStartTestLayer(input: {
           ProviderSessionManagerV2,
           ProviderSessionManagerV2.of({
             shutdown: Effect.void,
+            hasPendingBackgroundWork: Effect.succeed(false),
             open: () => Effect.succeed(sessionRuntime),
             get: () => Effect.die("unused get"),
             close: () => Effect.void,
