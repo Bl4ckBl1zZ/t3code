@@ -6,17 +6,23 @@ name: iOS TestFlight
 # here rather than in the cloud (`eas build --local`), so its sandbox bought
 # nothing but constraints — see mobile-eas-production.yml, kept as a fallback.
 
-# Deliberately NOT triggered by pushes to main. A release archive takes ~40
-# minutes, and with a push trigger plus cancel-in-progress every merge killed the
-# build before it finished — four consecutive runs were cancelled that way, and
-# none reached TestFlight. A merge is also not a release: shipping a build per
-# commit burns macOS runner minutes for versions nobody installs.
+# Every merge to main ships: main is the TestFlight branch, and the build always
+# tracks the newest commit on it. Tags are matched too, under both conventions
+# used here, so a deliberate release can also be cut by hand:
 #
-# Ship on demand, or by tagging a release.
+#   git tag fork-v0.2.0 && git push origin fork-v0.2.0
+#
+# A tag has to be pushed by a human or a PAT to take effect. The fork-v* tags
+# fork-macos-release.yml publishes on every merge are created with the default
+# GITHUB_TOKEN, and GitHub does not start workflow runs from events that token
+# creates, so they never double-trigger the push-to-main build below.
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+      - "fork-v*"
   workflow_dispatch:
     inputs:
       build-number:
@@ -34,10 +40,18 @@ permissions:
 
 concurrency:
   group: ios-testflight
-  # Queue rather than cancel: a release build that is 30 minutes into an archive
-  # is worth more than the one behind it, and cancelling mid-upload is the one
-  # way to burn a build number without producing a build.
-  cancel-in-progress: false
+  # Newest merge wins: a merge landing mid-archive cancels the run in flight and
+  # restarts from the newer commit, so TestFlight only ever receives head of main
+  # rather than a build that was already stale when it finished.
+  #
+  # The cost is real and was hit before: an archive takes ~40 minutes, so on a day
+  # with merges closer together than that, every run is cancelled and nothing
+  # reaches TestFlight. If that recurs, ship from a tag or a manual dispatch —
+  # both still work, and the concurrency group is shared so they cancel too.
+  #
+  # The build number is re-resolved from App Store Connect at the start of every
+  # run (scripts/ios-release.ts identity), so a cancelled run does not strand one.
+  cancel-in-progress: true
 
 jobs:
   build-and-submit:
