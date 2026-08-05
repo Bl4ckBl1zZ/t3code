@@ -4,7 +4,7 @@ import {
   changedFileName,
   selectChangedFilePreview,
   summarizeChangedFileScopes,
-} from "./changedFilesPreview";
+} from "./changedFilesPreview.js";
 
 describe("changedFilesPreview", () => {
   it("summarizes the most prominent top-level scopes", () => {
