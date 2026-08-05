@@ -61,6 +61,12 @@ export function useThreadEndpoints(input: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: ThreadId | null;
   readonly declaredUrls?: ReadonlyArray<string> | undefined;
+  /**
+   * `previewUrl` from the project's checked-in `t3.json`. Unlike every other
+   * endpoint, a pinned row is listed whether or not anything is serving it, and
+   * it is the only one allowed to name a remote host.
+   */
+  readonly pinnedUrls?: ReadonlyArray<string> | undefined;
 }): ReadonlyArray<MobileThreadEndpoint> {
   const metadata = useEnvironmentQuery(
     input.environmentId === null
@@ -99,6 +105,7 @@ export function useThreadEndpoints(input: {
   }, [environmentHttpBaseUrl]);
 
   const declaredUrls = input.declaredUrls ?? EMPTY_DECLARED;
+  const pinnedUrls = input.pinnedUrls ?? EMPTY_DECLARED;
   const previousRef = useRef<ReadonlyMap<string, PreviousEndpointState>>(new Map());
   // Endpoint history is keyed by endpoint, so it must not survive a change of
   // scope: thread B's freshly announced :3000 would otherwise inherit thread
@@ -137,6 +144,7 @@ export function useThreadEndpoints(input: {
       scanned: relevant,
       terminals,
       declaredUrls,
+      pinnedUrls,
       previous: previousRef.current,
       nowMs: Date.now(),
       excludedPorts,
@@ -155,6 +163,7 @@ export function useThreadEndpoints(input: {
     excludedPorts,
     input.environmentId,
     input.threadId,
+    pinnedUrls,
     scanned,
     terminals,
     tick,
