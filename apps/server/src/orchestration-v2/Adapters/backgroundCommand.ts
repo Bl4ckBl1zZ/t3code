@@ -74,6 +74,48 @@ export function parseMonitorAck(text: string): MonitorAck | null {
   };
 }
 
+function structuredField(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+function structuredString(value: unknown, key: string): string | null {
+  const field = structuredField(value, key);
+  return typeof field === "string" && field.length > 0 ? field : null;
+}
+
+/**
+ * The same launch, stated structurally. `tool_use_result` carries
+ * `backgroundTaskId` alongside the sentence, and a field beats a sentence: the
+ * prose is free to be reworded between CLI releases, and the adapter reads
+ * whichever half survives.
+ *
+ * Shape, verified against claude-code 2.1.222:
+ *   {"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"bwmpqof1v"}
+ */
+export function parseBackgroundLaunchResult(value: unknown): BackgroundLaunchAck | null {
+  const taskId = structuredString(value, "backgroundTaskId");
+  // The output file is named only in the prose, so a structured-only launch
+  // gets no tail — honest, and still a live row rather than a vanished one.
+  return taskId === null ? null : { taskId, outputPath: null };
+}
+
+/**
+ * `Monitor`'s structured half: `{taskId, timeoutMs, persistent}`. Keyed on the
+ * tool name by the caller, since `taskId` alone is too generic a field to claim
+ * a monitor from.
+ */
+export function parseMonitorResult(value: unknown): MonitorAck | null {
+  const taskId = structuredString(value, "taskId");
+  if (taskId === null) {
+    return null;
+  }
+  const timeoutMs = structuredField(value, "timeoutMs");
+  return {
+    taskId,
+    timeoutMs: typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : null,
+  };
+}
+
 /**
  * A monitor is a `local_bash` task like any other, so the only link back to
  * what it is watching is the target's output file inside its own command —

@@ -6467,6 +6467,7 @@ function ChatViewContent(props: ChatViewProps) {
     environmentConnection: activeEnvironment?.connection ?? null,
     threadId: activeThread.id,
     ...(draftId ? { draftId } : {}),
+    isServerThread,
     isProjectlessConversation: isHermesConversation,
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject?.scripts,

@@ -5,7 +5,9 @@ import {
   backgroundTaskIdFromWatchedPath,
   capBackgroundOutput,
   parseBackgroundLaunchAck,
+  parseBackgroundLaunchResult,
   parseMonitorAck,
+  parseMonitorResult,
   stripTerminalControlSequences,
 } from "./backgroundCommand.ts";
 
@@ -53,6 +55,57 @@ describe("parseMonitorAck", () => {
       taskId: "zzz",
       timeoutMs: null,
     });
+  });
+});
+
+// Verbatim `tool_use_result` values captured from claude-code 2.1.222. The CLI
+// sends these alongside the prose above, and the adapter prefers them for the
+// item's output — so the structured half has to be readable on its own.
+describe("parseBackgroundLaunchResult", () => {
+  it("reads the handle out of a backgrounded Bash result", () => {
+    assert.deepStrictEqual(
+      parseBackgroundLaunchResult({
+        stdout: "",
+        stderr: "",
+        interrupted: false,
+        isImage: false,
+        noOutputExpected: false,
+        backgroundTaskId: "bwmpqof1v",
+      }),
+      { taskId: "bwmpqof1v", outputPath: null },
+    );
+  });
+
+  it("ignores a foreground Bash result", () => {
+    assert.strictEqual(
+      parseBackgroundLaunchResult({ stdout: "tick-1", stderr: "", interrupted: false }),
+      null,
+    );
+  });
+
+  it("ignores values that are not result objects", () => {
+    assert.strictEqual(parseBackgroundLaunchResult(null), null);
+    assert.strictEqual(parseBackgroundLaunchResult("backgroundTaskId"), null);
+  });
+});
+
+describe("parseMonitorResult", () => {
+  it("reads the monitor handle and deadline", () => {
+    assert.deepStrictEqual(
+      parseMonitorResult({ taskId: "b3cfcu392", timeoutMs: 30_000, persistent: false }),
+      { taskId: "b3cfcu392", timeoutMs: 30_000 },
+    );
+  });
+
+  it("tolerates a persistent monitor with no deadline", () => {
+    assert.deepStrictEqual(parseMonitorResult({ taskId: "b3cfcu392", persistent: true }), {
+      taskId: "b3cfcu392",
+      timeoutMs: null,
+    });
+  });
+
+  it("ignores a result with no handle", () => {
+    assert.strictEqual(parseMonitorResult({ timeoutMs: 30_000 }), null);
   });
 });
 

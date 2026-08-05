@@ -45,6 +45,13 @@ export interface ThreadDetailsPanelProps {
   environmentConnection: EnvironmentConnectionPresentation | null;
   threadId: ThreadId;
   draftId?: DraftId;
+  /**
+   * Whether a real thread backs this route. Not the inverse of `draftId`: a
+   * draft that has been sent keeps its draft id and its `/draft/…` route for the
+   * rest of the session while a live thread runs underneath it, so sections that
+   * report what the thread is *doing* have to key off this instead.
+   */
+  isServerThread: boolean;
   isProjectlessConversation: boolean;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
@@ -274,7 +281,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         {/* Sits with Ports rather than lower down: both answer "what is this
             thread running right now", and both disappear when the answer is
             nothing. */}
-        {!props.draftId ? (
+        {props.isServerThread ? (
           <ThreadBackgroundTasksPanel
             environmentId={props.environmentId}
             threadId={props.threadId}

@@ -3017,6 +3017,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     uuid: "00000000-0000-4000-8000-000000000601",
     session_id: WAKE_NATIVE_SESSION,
   });
+  // Both halves, as the CLI actually sends them: the handle appears in the prose
+  // *and* in `tool_use_result`. The adapter prefers the structured value for the
+  // item's output, so a fixture carrying only the prose let a regression through
+  // that made every background command in the app terminalize on its own ACK.
   const backgroundLaunchAck = claudeSdkFrame({
     type: "user",
     message: {
@@ -3033,6 +3037,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ],
         },
       ],
+    },
+    tool_use_result: {
+      stdout: "",
+      stderr: "",
+      interrupted: false,
+      isImage: false,
+      noOutputExpected: false,
+      backgroundTaskId: BG_TASK_ID,
     },
     parent_tool_use_id: null,
     uuid: "00000000-0000-4000-8000-000000000602",

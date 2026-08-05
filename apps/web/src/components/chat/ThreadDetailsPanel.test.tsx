@@ -1,4 +1,6 @@
 import type { EnvironmentId, T3ProjectFileScript, ThreadId } from "@t3tools/contracts";
+
+import type { DraftId } from "../../composerDraftStore";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -6,6 +8,7 @@ const testState = vi.hoisted(() => ({
   useT3ProjectFileScripts: vi.fn(),
   useT3ProjectFilePreviewUrl: vi.fn(),
   projectScriptsControl: vi.fn(),
+  backgroundTasksPanel: vi.fn(),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
@@ -30,10 +33,47 @@ vi.mock("./ThreadRelationshipsControl", () => ({
   ThreadRelationshipsPanel: () => null,
 }));
 vi.mock("./ThreadBackgroundTasksPanel", () => ({
-  ThreadBackgroundTasksPanel: () => null,
+  ThreadBackgroundTasksPanel: (props: unknown) => {
+    testState.backgroundTasksPanel(props);
+    return null;
+  },
 }));
 
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetailsPanel";
+
+function baseProps(): ThreadDetailsPanelProps {
+  return {
+    mode: "popover",
+    environmentId: "environment:thread-details" as EnvironmentId,
+    environmentConnection: null,
+    threadId: "thread:thread-details" as ThreadId,
+    activeProjectName: undefined,
+    activeProjectScripts: [],
+    preferredScriptId: null,
+    keybindings: [],
+    availableEditors: [],
+    showOpenInPicker: false,
+    gitCwd: "/tmp/thread-details-project",
+    isGitRepo: false,
+    isServerThread: true,
+    isProjectlessConversation: false,
+    envLocked: false,
+    availableEnvironments: [],
+    onEnvironmentChange: vi.fn(),
+    onEnvModeChange: vi.fn(),
+    startFromOrigin: false,
+    onStartFromOriginChange: vi.fn(),
+    onComposerFocusRequest: vi.fn(),
+    onReconnectEnvironment: vi.fn(),
+    onOpenConnectionSettings: vi.fn(),
+    versionMismatch: null,
+    onDismissVersionMismatch: vi.fn(),
+    onRunProjectScript: vi.fn(),
+    onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+    onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+    onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+  };
+}
 
 describe("ThreadDetailsPanel", () => {
   beforeEach(() => {
@@ -41,11 +81,11 @@ describe("ThreadDetailsPanel", () => {
     testState.useT3ProjectFilePreviewUrl.mockReset();
     testState.useT3ProjectFilePreviewUrl.mockReturnValue(null);
     testState.projectScriptsControl.mockReset();
+    testState.backgroundTasksPanel.mockReset();
   });
 
   it("passes checked-in t3.json scripts to the project scripts control", () => {
-    const environmentId = "environment:thread-details" as EnvironmentId;
-    const gitCwd = "/tmp/thread-details-project";
+    const props = baseProps();
     const fileScripts = [
       {
         name: "Check project",
@@ -55,40 +95,12 @@ describe("ThreadDetailsPanel", () => {
     ] satisfies ReadonlyArray<T3ProjectFileScript>;
     testState.useT3ProjectFileScripts.mockReturnValue(fileScripts);
 
-    const props: ThreadDetailsPanelProps = {
-      mode: "popover",
-      environmentId,
-      environmentConnection: null,
-      threadId: "thread:thread-details" as ThreadId,
-      activeProjectName: undefined,
-      activeProjectScripts: [],
-      preferredScriptId: null,
-      keybindings: [],
-      availableEditors: [],
-      showOpenInPicker: false,
-      gitCwd,
-      isGitRepo: false,
-      isProjectlessConversation: false,
-      envLocked: false,
-      availableEnvironments: [],
-      onEnvironmentChange: vi.fn(),
-      onEnvModeChange: vi.fn(),
-      startFromOrigin: false,
-      onStartFromOriginChange: vi.fn(),
-      onComposerFocusRequest: vi.fn(),
-      onReconnectEnvironment: vi.fn(),
-      onOpenConnectionSettings: vi.fn(),
-      versionMismatch: null,
-      onDismissVersionMismatch: vi.fn(),
-      onRunProjectScript: vi.fn(),
-      onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
-      onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
-      onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
-    };
-
     renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
 
-    expect(testState.useT3ProjectFileScripts).toHaveBeenCalledWith(environmentId, gitCwd);
+    expect(testState.useT3ProjectFileScripts).toHaveBeenCalledWith(
+      props.environmentId,
+      props.gitCwd,
+    );
     expect(testState.projectScriptsControl).toHaveBeenCalledWith(
       expect.objectContaining({
         displayMode: "panel",
@@ -96,5 +108,34 @@ describe("ThreadDetailsPanel", () => {
         fileScripts,
       }),
     );
+  });
+
+  // A sent draft keeps its draft id and its `/draft/…` route while a live thread
+  // runs underneath, so gating this section on the draft id hid every background
+  // command a thread started on its very first turn.
+  it("shows background tasks for a sent draft that now has a server thread", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...baseProps()}
+        draftId={"draft:thread-details" as DraftId}
+        isServerThread
+      />,
+    );
+
+    expect(testState.backgroundTasksPanel).toHaveBeenCalled();
+  });
+
+  it("hides background tasks for a draft with no thread behind it", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...baseProps()}
+        draftId={"draft:thread-details" as DraftId}
+        isServerThread={false}
+      />,
+    );
+
+    expect(testState.backgroundTasksPanel).not.toHaveBeenCalled();
   });
 });
