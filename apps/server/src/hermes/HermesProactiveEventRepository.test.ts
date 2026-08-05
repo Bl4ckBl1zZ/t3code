@@ -18,7 +18,7 @@ const T0 = "2026-07-25T12:00:00.000Z";
 const T1 = "2026-07-25T12:01:00.000Z";
 const T2 = "2026-07-25T12:02:00.000Z";
 const T3 = "2026-07-25T12:03:00.000Z";
-const decodeUnknownJsonString = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
+const decodeUnknownJsonString = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 function testLayer(databaseLayer: Layer.Layer<SqlClient.SqlClient, SqlError>) {
   return repositoryLayer.pipe(Layer.provideMerge(databaseLayer));

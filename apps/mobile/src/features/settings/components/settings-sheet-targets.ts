@@ -3,6 +3,7 @@ export type SettingsSheetTarget =
   | "SettingsArchive"
   | "SettingsAutomations"
   | "SettingsAppearance"
+  | "SettingsProjectGrouping"
   | "SettingsClientStorage"
   | "SettingsIntegrations"
   | "SettingsOpenRouter"

@@ -95,6 +95,10 @@ export interface VisitThreadInput extends ThreadCommandInput {
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
 
+export type PinThreadInput = ThreadCommandInput;
+
+export type UnpinThreadInput = ThreadCommandInput;
+
 export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly title?: string;
   readonly modelSelection?: ModelSelection;
@@ -428,6 +432,28 @@ export const unsnoozeThread = Effect.fn("EnvironmentCommands.unsnoozeThread")(fu
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     reason: input.reason,
+  });
+});
+
+export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (
+  input: PinThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.metadata.update",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    pinned: true,
+  });
+});
+
+export const unpinThread = Effect.fn("EnvironmentCommands.unpinThread")(function* (
+  input: UnpinThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.metadata.update",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    pinned: false,
   });
 });
 

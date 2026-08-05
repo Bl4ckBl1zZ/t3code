@@ -772,8 +772,9 @@ export function BranchToolbarBranchSelector({
               )}
             />
             <span
+              data-composer-label
               className={cn(
-                "min-w-0 max-w-[240px] truncate",
+                "min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0",
                 displayMode === "panel" && "max-w-none flex-1 text-left",
               )}
             >
