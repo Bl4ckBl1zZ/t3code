@@ -25,10 +25,12 @@ import {
 import { useState } from "react";
 
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
+import { resolveThreadModelBadge } from "./threadModelBadge";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useThreadProjection, useThreadShells } from "../../state/entities";
+import { useProviderEntryByInstanceId } from "../../state/providerEntries";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
@@ -111,6 +113,7 @@ export function ThreadRelationshipsPanel(props: {
     ...(archivedShells ?? []),
   ];
   const graph = deriveThreadRelationshipGraph({ threads: shells, projection });
+  const providerEntryByInstanceId = useProviderEntryByInstanceId();
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
@@ -244,6 +247,11 @@ export function ThreadRelationshipsPanel(props: {
             title: node?.thread?.title ?? threadId,
             isSubagent,
           });
+          const modelSelection = node?.thread?.modelSelection ?? null;
+          const modelBadge = resolveThreadModelBadge({
+            modelSelection,
+            providerEntry: providerEntryByInstanceId.get(modelSelection?.instanceId ?? "") ?? null,
+          });
           const relationshipContent = (
             <>
               <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
@@ -267,6 +275,21 @@ export function ThreadRelationshipsPanel(props: {
                   {threadTitle}
                 </span>
               </span>
+              {modelBadge ? (
+                <span
+                  className="flex min-w-0 shrink items-center gap-1 text-[11px] leading-4"
+                  data-thread-relationship-model
+                >
+                  <span className="truncate rounded bg-muted/70 px-1 py-px font-medium text-muted-foreground">
+                    {modelBadge.model}
+                  </span>
+                  {modelBadge.reasoning ? (
+                    <span className="shrink-0 text-muted-foreground/70">
+                      {modelBadge.reasoning}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
               <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
             </>
           );

@@ -4,11 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   shells: [] as ReadonlyArray<{ environmentId: string; source: unknown }>,
+  providerEntries: new Map<string, unknown>(),
 }));
 
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => null,
   useThreadShells: () => testState.shells,
+}));
+vi.mock("../../state/providerEntries", () => ({
+  useProviderEntryByInstanceId: () => testState.providerEntries,
 }));
 vi.mock("../../lib/archivedThreadsState", () => ({
   useArchivedThreadSnapshots: () => ({ snapshots: [] }),
@@ -25,7 +29,11 @@ import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 const ENVIRONMENT_ID = "environment:relationships" as EnvironmentId;
 const CURRENT_THREAD_ID = "thread:current" as ThreadId;
 
-function subagentShell(input: { readonly id: string; readonly status: string }): {
+function subagentShell(input: {
+  readonly id: string;
+  readonly status: string;
+  readonly modelSelection?: unknown;
+}): {
   environmentId: string;
   source: unknown;
 } {
@@ -35,6 +43,7 @@ function subagentShell(input: { readonly id: string; readonly status: string }):
     status: input.status,
     lineage: { parentThreadId: CURRENT_THREAD_ID, relationshipToParent: "subagent" },
     forkedFrom: null,
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
   } as unknown as OrchestrationV2ThreadShell;
   return { environmentId: ENVIRONMENT_ID, source };
 }
@@ -48,6 +57,7 @@ function renderPanel(): string {
 describe("ThreadRelationshipsPanel", () => {
   beforeEach(() => {
     testState.shells = [];
+    testState.providerEntries = new Map();
   });
 
   it("collapses subagents into a summary row with working and done counts", () => {
@@ -87,6 +97,66 @@ describe("ThreadRelationshipsPanel", () => {
     const markup = renderPanel();
     expect(markup).toContain("1 working");
     expect(markup).toContain("1 failed");
+  });
+
+  it("labels a relationship row with its model and reasoning tier", () => {
+    testState.providerEntries = new Map([
+      [
+        "codex",
+        {
+          instanceId: "codex",
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6-Sol",
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "reasoningEffort",
+                    label: "Reasoning",
+                    type: "select",
+                    options: [
+                      { id: "low", label: "Low" },
+                      { id: "high", label: "High", isDefault: true },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    ]);
+    // Lineage rows render eagerly, so they are the readable proof here; the
+    // subagent rows behind the accordion share one row renderer.
+    const currentSource = {
+      id: CURRENT_THREAD_ID,
+      title: "Current thread",
+      status: "running",
+      lineage: { parentThreadId: "thread:parent" as ThreadId, relationshipToParent: "fork" },
+      forkedFrom: null,
+    } as unknown as OrchestrationV2ThreadShell;
+    const parentSource = {
+      id: "thread:parent" as ThreadId,
+      title: "Parent thread",
+      status: "running",
+      lineage: { parentThreadId: null, relationshipToParent: null },
+      forkedFrom: null,
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "low" }],
+      },
+    } as unknown as OrchestrationV2ThreadShell;
+    testState.shells = [
+      { environmentId: ENVIRONMENT_ID, source: currentSource },
+      { environmentId: ENVIRONMENT_ID, source: parentSource },
+    ];
+    const markup = renderPanel();
+    expect(markup).toContain("GPT-5.6-Sol");
+    expect(markup).toContain("Low");
+    expect(markup).toContain("data-thread-relationship-model");
   });
 
   it("keeps the parent lineage row visible outside the subagents accordion", () => {
