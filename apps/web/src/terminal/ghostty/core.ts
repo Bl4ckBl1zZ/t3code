@@ -611,17 +611,27 @@ export class GhosttyTerminalCore {
     }
   }
 
-  selectAll(): void {
+  /**
+   * Selects the whole scrollback. Only screen coordinates are reported: a
+   * select-all normally starts above the viewport, where viewport coordinates
+   * do not exist.
+   */
+  selectAll(): GhosttySelectionRange["screen"] | null {
     this.ensureActive();
     const layout = this.runtime.layout("GhosttySelection");
     const selection = this.runtime.alloc(layout.size);
     this.runtime.setField(selection, "GhosttySelection", "size", layout.size);
+    let range: GhosttySelectionRange["screen"] | null = null;
     if (
       this.runtime.call("ghostty_terminal_select_all", this.terminal, selection) === GHOSTTY_SUCCESS
     ) {
+      const start = this.pointFromGridRef(selection + layout.fields.start!.offset, 2);
+      const end = this.pointFromGridRef(selection + layout.fields.end!.offset, 2);
+      if (start && end) range = { start, end };
       this.runtime.call("ghostty_terminal_set", this.terminal, 21, selection);
     }
     this.runtime.free(selection, layout.size);
+    return range;
   }
 
   selectWord(col: number, row: number): GhosttySelectionRange | null {
