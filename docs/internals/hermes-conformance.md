@@ -107,6 +107,33 @@ Known pinned-protocol blockers are recorded rather than papered over:
 - There is no per-session MCP registration/revocation, writer fencing, or durable global cron
   event cursor.
 
+## Requests the gateway cannot take an answer to
+
+Pushing `approval.request` and `clarify.request` is not the same capability as accepting a response
+to them. `approval.respond` needs `events.approvals` and `clarify.respond` needs
+`events.clarification`, and both are Tier 2 — a non-advertising gateway never earns them from a
+probe (see `HermesGatewayClient`). A gateway can therefore park a run on a decision it has no method
+to receive, which is the shape a legacy gateway actually has.
+
+The adapter reads that pair off the negotiated inventory per connection and projects it onto the
+session's capabilities, so `supportsCommandApproval` and `supportsStructuredQuestions` describe the
+gateway in front of it rather than the protocol at its best. When the response method is missing:
+
+- The request is still projected, so the command or question stays on the record.
+- It is marked `not_resumable` with the missing capability named, settled immediately, and the turn
+  fails with the same reason instead of waiting on an answer that could never be delivered.
+- The run is interrupted on the gateway, because Hermes holds it open until someone responds.
+
+The same reasoning governs teardown. A Hermes session outlives the T3 process driving it, so
+releasing a session — including on server shutdown, which closes provider sessions before
+reconciling the projection — interrupts any run still parked on a request. Without that the gateway
+would sit blocked on a prompt whose only reader has exited, since the request identity was live-only
+and no restart can re-adopt it.
+
+Answering is refused when more than one approval is outstanding on a session. `approval.respond`
+names a session, not a request, so with two in flight there is no way to say which one a decision
+belongs to.
+
 ## Proactive delivery boundary
 
 Hermes runs work that T3 never prompted: cron jobs, and prompts sent to the same session by another
@@ -127,6 +154,12 @@ Delivery is therefore live-only, and bounded by two pinned-protocol facts:
 - Cron rows are not required to name the session a job runs in. When they do, T3 keeps exactly
   that thread subscribed; when they do not, it falls back to the most recently used threads on the
   profile, capped, and says so in the proactive status.
+
+Buffered events are trimmed once a continuation that never attaches grows past its limit, which
+costs transcript detail. `approval.request` and `clarify.request` are exempt: dropping one opens the
+continuation turn with nothing to answer while the gateway stays parked on it. With proactive mode
+off, an external run carrying a request is logged and left alone — it belongs to whoever started it,
+so T3 neither answers it nor stops it on their behalf.
 
 Because T3 retires idle provider sessions, being connected is not automatic. `HermesProactiveService`
 re-establishes residency on an interval for instances with proactive mode enabled, and the adapter

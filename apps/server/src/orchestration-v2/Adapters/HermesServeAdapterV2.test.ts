@@ -56,6 +56,7 @@ import type { ProviderAdapterV2TurnInput } from "../ProviderAdapter.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import {
   diagnoseHermesMcpIntegration,
+  HERMES_EXTERNAL_EVENT_BUFFER_LIMIT,
   HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL,
   HermesImportedSessionUnavailableError,
   HermesProviderCapabilitiesV2,
@@ -90,6 +91,12 @@ const compatibility: HermesGatewayCompatibility = {
   inventory: ["mutation.stable_ids"],
   reason: "test",
 };
+
+/** The pinned gateway does not advertise these; only a richer one negotiates them. */
+const answering = (...capabilities: ReadonlyArray<string>): HermesGatewayCompatibility => ({
+  ...compatibility,
+  capabilities: [...compatibility.capabilities, ...capabilities],
+});
 
 class FakeHermesGatewayClient implements HermesGatewayClientLike {
   compatibility: HermesGatewayCompatibility | undefined = compatibility;
@@ -322,10 +329,16 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     return { attached: true };
   }
 
+  readonly approvalResponses: Array<{
+    readonly session_id: string;
+    readonly choice: "once" | "session" | "deny";
+  }> = [];
+
   async respondToApproval(
-    _params: { readonly session_id: string; readonly choice: "once" | "session" | "deny" },
+    params: { readonly session_id: string; readonly choice: "once" | "session" | "deny" },
     _options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
   ) {
+    this.approvalResponses.push(params);
     return { resolved: true };
   }
 
@@ -2978,6 +2991,193 @@ describe("HermesServeAdapterV2", () => {
   );
 });
 
+describe("HermesServeAdapterV2 runtime requests", () => {
+  it.effect("fails a turn parked on an approval this gateway cannot answer", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.interruptEmitsTerminal = false;
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "rm -rf /tmp/x" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const events = [...projected];
+        const requests = events.flatMap((event) =>
+          event.type === "runtime_request.updated" ? [event.runtimeRequest] : [],
+        );
+
+        // Recorded so the user can see what was asked, then closed out rather
+        // than left waiting on a decision the gateway has no method to receive.
+        const opened = requests.at(0);
+        assert.equal(opened?.status, "pending");
+        assert.equal(opened?.responseCapability.type, "not_resumable");
+        assert.include(
+          opened?.responseCapability.type === "not_resumable"
+            ? opened.responseCapability.reason
+            : "",
+          "events.approvals",
+        );
+        assert.equal(requests.at(-1)?.status, "cancelled");
+
+        const approvalItem = events.findLast(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        );
+        assert.equal(
+          approvalItem?.type === "turn_item.updated" &&
+            approvalItem.turnItem.type === "approval_request"
+            ? approvalItem.turnItem.prompt
+            : null,
+          "rm -rf /tmp/x",
+        );
+
+        // The gateway holds the run open until someone answers, so walking away
+        // without stopping it would strand the session.
+        assert.lengthOf(fake.interrupts, 1);
+
+        const terminal = events.findLast((event) => event.type === "turn.terminal");
+        assert.equal(terminal?.type === "turn.terminal" ? terminal.status : null, "failed");
+        assert.include(
+          terminal?.type === "turn.terminal" ? (terminal.failure?.message ?? "") : "",
+          "events.approvals",
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("does not advertise approvals a gateway cannot accept a response to", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const unanswering = new FakeHermesGatewayClient();
+        const unansweringRuntime = yield* makeRuntime(unanswering);
+        assert.isFalse(
+          unansweringRuntime.providerSession.capabilities.approvals.supportsCommandApproval,
+        );
+        assert.isFalse(
+          unansweringRuntime.providerSession.capabilities.planning.supportsStructuredQuestions,
+        );
+
+        const capable = new FakeHermesGatewayClient();
+        capable.compatibility = answering("events.approvals", "events.clarification");
+        const capableRuntime = yield* makeRuntime(capable);
+        assert.isTrue(
+          capableRuntime.providerSession.capabilities.approvals.supportsCommandApproval,
+        );
+        assert.isTrue(
+          capableRuntime.providerSession.capabilities.planning.supportsStructuredQuestions,
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("keeps an approval live and answerable when the gateway negotiated it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "ls" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "runtime_request.updated"),
+          Stream.runCollect,
+        );
+        const request = [...projected].flatMap((event) =>
+          event.type === "runtime_request.updated" ? [event.runtimeRequest] : [],
+        )[0];
+        assert.equal(request?.status, "pending");
+        assert.equal(request?.responseCapability.type, "live");
+        assert.lengthOf(fake.interrupts, 0);
+
+        yield* runtime.respondToRuntimeRequest({
+          requestId: request!.id,
+          decision: "accept",
+        });
+        assert.deepEqual(fake.approvalResponses, [{ session_id: "live-create-1", choice: "once" }]);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("refuses to answer while several approvals are outstanding on one session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "first" }));
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "second" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "runtime_request.updated"),
+          Stream.take(2),
+          Stream.runCollect,
+        );
+        const requests = [...projected].flatMap((event) =>
+          event.type === "runtime_request.updated" ? [event.runtimeRequest] : [],
+        );
+        assert.lengthOf(requests, 2);
+
+        // approval.respond names a session, not a request, so answering one of
+        // two would resolve whichever the gateway happens to consider current.
+        const exit = yield* Effect.exit(
+          runtime.respondToRuntimeRequest({ requestId: requests[0]!.id, decision: "accept" }),
+        );
+        assert.equal(exit._tag, "Failure");
+        assert.lengthOf(fake.approvalResponses, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("stops a run parked on an approval when the session is released", () =>
+    Effect.gen(function* () {
+      const fake = new FakeHermesGatewayClient();
+      fake.compatibility = answering("events.approvals");
+      fake.interruptEmitsTerminal = false;
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(fake);
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(turnInput(providerThread));
+          yield* Effect.promise(() => fake.emit("approval.request", { command: "deploy" }));
+          assert.lengthOf(fake.interrupts, 0);
+        }),
+      );
+
+      assert.lengthOf(fake.interrupts, 1);
+      assert.equal(fake.closeCount, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
 describe("HermesServeAdapterV2 proactive runs", () => {
   const recordContinuations = () => {
     const offers: Array<ProviderContinuationRequest> = [];
@@ -3239,6 +3439,82 @@ describe("HermesServeAdapterV2 proactive runs", () => {
         );
         yield* runtime.startTurn(continuationTurnInput(providerThread));
         assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("buffers an external approval past the transcript trimming limit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        // Trimming the tail of a long external run is deliberate for content.
+        for (let index = 0; index <= HERMES_EXTERNAL_EVENT_BUFFER_LIMIT; index += 1) {
+          yield* Effect.promise(() => fake.emit("message.delta", { text: "." }));
+        }
+        // The request is the exception: dropped, the continuation turn opens
+        // with nothing to answer and the gateway stays parked on it forever.
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "cron deploy" }));
+
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+        const projected = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+        );
+        const item = [...projected][0];
+        assert.equal(
+          item?.type === "turn_item.updated" && item.turnItem.type === "approval_request"
+            ? item.turnItem.prompt
+            : null,
+          "cron deploy",
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("ignores an external approval while proactive mode is switched off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          false,
+        );
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "cron deploy" }));
+
+        // The run belongs to whoever started it, so T3 neither answers it nor
+        // stops it on their behalf.
+        assert.equal(continuations.offers.length, 0);
+        assert.lengthOf(fake.interrupts, 0);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
