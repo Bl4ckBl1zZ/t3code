@@ -25,6 +25,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -201,6 +202,75 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         assert.equal(received.value.event.id, nextEvent.id);
         afterSequence = received.value.sequence;
       }
+    }),
+  );
+
+  it.effect("keeps a failing write from failing the writes committed alongside it", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const duplicatedEventId = "event:foundation-write-isolation:duplicate";
+      const existingThreadId = ThreadId.make("thread:foundation-write-isolation:existing");
+      const firstThreadId = ThreadId.make("thread:foundation-write-isolation:first");
+      const secondThreadId = ThreadId.make("thread:foundation-write-isolation:second");
+      const rejectedThreadId = ThreadId.make("thread:foundation-write-isolation:rejected");
+
+      yield* eventSink.write({
+        events: [
+          threadCreatedEvent({
+            id: duplicatedEventId,
+            thread: makeThread(existingThreadId, now),
+            now,
+          }),
+        ],
+      });
+
+      // Issued together so they queue up for a single group-committed batch.
+      // The middle write reuses an already-stored event id and so violates the
+      // event store's uniqueness constraint; a batch that simply rolled back
+      // wholesale would take its blameless neighbours down with it.
+      const outcomes = yield* Effect.all(
+        [
+          eventSink.write({
+            events: [
+              threadCreatedEvent({
+                id: "event:foundation-write-isolation:first",
+                thread: makeThread(firstThreadId, now),
+                now,
+              }),
+            ],
+          }),
+          eventSink.write({
+            events: [
+              threadCreatedEvent({
+                id: duplicatedEventId,
+                thread: makeThread(rejectedThreadId, now),
+                now,
+              }),
+            ],
+          }),
+          eventSink.write({
+            events: [
+              threadCreatedEvent({
+                id: "event:foundation-write-isolation:second",
+                thread: makeThread(secondThreadId, now),
+                now,
+              }),
+            ],
+          }),
+        ].map(Effect.exit),
+        { concurrency: "unbounded" },
+      );
+
+      assert.isTrue(Exit.isSuccess(outcomes[0]!));
+      assert.isTrue(Exit.isFailure(outcomes[1]!));
+      assert.isTrue(Exit.isSuccess(outcomes[2]!));
+
+      const first = yield* projectionStore.getThreadProjection(firstThreadId);
+      const second = yield* projectionStore.getThreadProjection(secondThreadId);
+      assert.equal(first.thread.id, firstThreadId);
+      assert.equal(second.thread.id, secondThreadId);
     }),
   );
 

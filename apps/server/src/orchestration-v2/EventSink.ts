@@ -7,12 +7,16 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -76,6 +80,17 @@ export type EventSinkV2Error = typeof EventSinkV2Error.Type;
  * SERVICE DEFINITION
  */
 export interface EventSinkV2Shape {
+  /**
+   * Append events and apply them to the projection.
+   *
+   * Writes are group-committed on a background fiber, so the transaction runs
+   * on a different fiber than the caller: do NOT call this from inside a
+   * `sql.withTransaction` block. The caller would hold the transaction while
+   * waiting for a second one to commit on the sink's fiber, which the
+   * synchronous SQLite driver cannot service concurrently. Use
+   * {@link EventSinkV2Shape.commitCommand} when the write has to participate
+   * in surrounding transactional work.
+   */
   readonly write: (input: {
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -188,15 +203,15 @@ const baseLayer: Layer.Layer<
       );
     };
 
-    const applyStoredEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
+    const applyProjectionEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
+      Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
+        concurrency: 1,
+      });
+
+    const recordProjectionSequence = (sequence: number) =>
       Effect.gen(function* () {
-        yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
-          concurrency: 1,
-        });
-        const sequence = storedEvents.at(-1)?.sequence;
-        if (sequence !== undefined) {
-          const now = DateTime.formatIso(yield* DateTime.now);
-          yield* sql`
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* sql`
             INSERT INTO orchestration_v2_projection_metadata (
               projection_name,
               schema_version,
@@ -215,36 +230,168 @@ const baseLayer: Layer.Layer<
               last_sequence = excluded.last_sequence,
               updated_at = excluded.updated_at
           `;
+      });
+
+    const applyStoredEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
+      Effect.gen(function* () {
+        yield* applyProjectionEvents(storedEvents);
+        const sequence = storedEvents.at(-1)?.sequence;
+        if (sequence !== undefined) {
+          yield* recordProjectionSequence(sequence);
         }
       });
 
-    const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
-      input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
-    ) {
+    type WriteInput = Parameters<EventSinkV2Shape["writeWithEffects"]>[0];
+    interface PendingWrite {
+      readonly input: WriteInput;
+      readonly deferred: Deferred.Deferred<
+        ReadonlyArray<OrchestrationV2StoredEvent>,
+        EventSinkWriteError
+      >;
+    }
+
+    const pendingWrites = yield* Queue.unbounded<PendingWrite>();
+
+    const writeError = (input: WriteInput, cause: unknown) =>
+      new EventSinkWriteError({
+        eventCount: input.events.length,
+        ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+        cause,
+      });
+
+    /**
+     * Commit a batch of queued writes in one transaction.
+     *
+     * Each write keeps its own `append` call so per-request command ids and
+     * stored-event slices stay intact; only the surrounding transaction (and
+     * therefore the WAL write) is shared. The projection metadata row is
+     * written once per batch because only the highest sequence is meaningful
+     * and every write would otherwise rewrite the same row.
+     */
+    const runBatchTransaction = (batch: ReadonlyArray<PendingWrite>) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          const committed: Array<ReadonlyArray<OrchestrationV2StoredEvent>> = [];
+          for (const pending of batch) {
+            const normalized = yield* normalizeEvents(pending.input.events);
+            const stored = yield* eventStore.append({
+              ...(pending.input.commandId === undefined
+                ? {}
+                : { commandId: pending.input.commandId }),
+              events: normalized,
+            });
+            yield* applyProjectionEvents(stored);
+            yield* effectOutbox.enqueue(pending.input.effects);
+            committed.push(stored);
+          }
+          const sequence = committed.at(-1)?.at(-1)?.sequence;
+          if (sequence !== undefined) {
+            yield* recordProjectionSequence(sequence);
+          }
+          return committed;
+        }),
+      );
+
+    const settleCommittedBatch = (
+      batch: ReadonlyArray<PendingWrite>,
+      committed: ReadonlyArray<ReadonlyArray<OrchestrationV2StoredEvent>>,
+    ) =>
+      Effect.gen(function* () {
+        const effectCount = batch.reduce(
+          (total, pending) => total + pending.input.effects.length,
+          0,
+        );
+        if (effectCount > 0) {
+          yield* effectOutbox.notifyAvailable(effectCount);
+        }
+        // Publish only after the transaction commits so a subscriber never
+        // observes an event that a rolled-back batch never durably stored.
+        for (const [index, pending] of batch.entries()) {
+          const stored = committed[index] ?? [];
+          yield* eventStore.publishCommitted(stored);
+          yield* PubSub.publishAll(liveEvents, stored);
+          yield* Deferred.succeed(pending.deferred, stored);
+        }
+      });
+
+    // Settling an already-settled deferred is a no-op, so this is safe to call
+    // over a batch that partially succeeded.
+    const failPendingWrites = (batch: ReadonlyArray<PendingWrite>, cause: unknown) =>
+      Effect.forEach(
+        batch,
+        (pending) => Deferred.fail(pending.deferred, writeError(pending.input, cause)),
+        { discard: true },
+      );
+
+    const flushWriteBatch: (batch: ReadonlyArray<PendingWrite>) => Effect.Effect<void> = Effect.fn(
+      "orchestrationV2.EventSink.flushWriteBatch",
+    )(function* (batch: ReadonlyArray<PendingWrite>) {
+      yield* Effect.annotateCurrentSpan({
+        "orchestration_v2.batch_size": batch.length,
+        "orchestration_v2.event_count": batch.reduce(
+          (total, pending) => total + pending.input.events.length,
+          0,
+        ),
+      });
+
+      const outcome = yield* Effect.exit(runBatchTransaction(batch));
+      if (Exit.isSuccess(outcome)) {
+        yield* settleCommittedBatch(batch, outcome.value);
+        return;
+      }
+      if (batch.length === 1) {
+        yield* failPendingWrites(batch, Cause.squash(outcome.cause));
+        return;
+      }
+      // A batch commits atomically, so one bad write — a duplicate event id,
+      // say — would otherwise fail unrelated writes that merely happened to be
+      // queued alongside it. Failures are rare, so re-commit the batch one
+      // write at a time: only the write that actually fails reports an error,
+      // which is the isolation callers had before group commit.
+      yield* Effect.forEach(batch, (pending) => flushWriteBatch([pending]), {
+        discard: true,
+        concurrency: 1,
+      });
+    });
+
+    // Group commit. Provider ingestion writes once per streamed event, and a
+    // transaction per event (each forcing its own WAL write) dominated the
+    // cost of a running turn. `takeAll` blocks until the queue is non-empty
+    // and then drains it, so batching tracks the arrival rate on its own: an
+    // idle server commits a lone write immediately, while writes that arrive
+    // during an in-flight transaction fold into the next one. No delay to
+    // tune, and no added latency when nothing else is pending.
+    yield* Queue.takeAll(pendingWrites).pipe(
+      Effect.flatMap((batch) =>
+        // Nothing may escape this loop: a dead flush fiber would leave every
+        // future write parked on a deferred that can never resolve, wedging
+        // the whole write path. Settle the batch and keep going.
+        flushWriteBatch(batch).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("orchestration-v2.event-sink.flush-failed", {
+              batchSize: batch.length,
+              cause,
+            }).pipe(Effect.andThen(failPendingWrites(batch, Cause.squash(cause)))),
+          ),
+        ),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    );
+
+    const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (input: WriteInput) {
       yield* Effect.annotateCurrentSpan({
         "orchestration_v2.command_id": input.commandId ?? null,
         "orchestration_v2.event_count": input.events.length,
         "orchestration_v2.thread_id": input.events[0]?.threadId ?? null,
       });
 
-      const storedEvents = yield* sql.withTransaction(
-        Effect.gen(function* () {
-          const normalized = yield* normalizeEvents(input.events);
-          const committed = yield* eventStore.append({
-            ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-            events: normalized,
-          });
-          yield* applyStoredEvents(committed);
-          yield* effectOutbox.enqueue(input.effects);
-          return committed;
-        }),
-      );
-      if (input.effects.length > 0) {
-        yield* effectOutbox.notifyAvailable(input.effects.length);
-      }
-      yield* eventStore.publishCommitted(storedEvents);
-      yield* PubSub.publishAll(liveEvents, storedEvents);
-      return storedEvents;
+      const deferred = yield* Deferred.make<
+        ReadonlyArray<OrchestrationV2StoredEvent>,
+        EventSinkWriteError
+      >();
+      yield* Queue.offer(pendingWrites, { input, deferred });
+      return yield* Deferred.await(deferred);
     });
 
     const writeIfRunCurrentEffect = Effect.fn("orchestrationV2.EventSink.writeIfRunCurrent")(
@@ -464,28 +611,11 @@ const baseLayer: Layer.Layer<
       );
 
     return EventSinkV2.of({
-      write: (input) =>
-        writeEffect({ ...input, effects: [] }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new EventSinkWriteError({
-                eventCount: input.events.length,
-                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-                cause,
-              }),
-          ),
-        ),
-      writeWithEffects: (input) =>
-        writeEffect(input).pipe(
-          Effect.mapError(
-            (cause) =>
-              new EventSinkWriteError({
-                eventCount: input.events.length,
-                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-                cause,
-              }),
-          ),
-        ),
+      // `writeEffect` already fails with `EventSinkWriteError`: the batch that
+      // committed the write owns the error mapping so each queued caller gets
+      // its own event count and command id back.
+      write: (input) => writeEffect({ ...input, effects: [] }),
+      writeWithEffects: (input) => writeEffect(input),
       writeIfRunCurrent: (input) =>
         writeIfRunCurrentEffect(input).pipe(
           Effect.mapError(
