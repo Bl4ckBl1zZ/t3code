@@ -1,4 +1,8 @@
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+
 import type {
+  OrchestrationV2ExecutionNode,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
   OrchestrationV2TurnItem,
@@ -137,4 +141,71 @@ export function formatOrchestrationV2RollbackDetail(input: {
     );
   }
   return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/**
+ * Local calendar day of an ISO timestamp, or null when it doesn't parse.
+ * Local rather than UTC: a message sent at 23:30 belongs to the day the reader
+ * remembers sending it, not the day UTC happened to be on.
+ */
+export function orchestrationV2TimelineDayKey(isoDate: string): string | null {
+  const instant = DateTime.make(isoDate);
+  if (Option.isNone(instant)) return null;
+  return DateTime.formatIsoDate(DateTime.setZone(instant.value, DateTime.zoneMakeLocal()));
+}
+
+/**
+ * "Today" / "Yesterday" for the days a reader still holds in their head, and a
+ * dated label beyond that. The year only appears once it isn't the current one.
+ * `nowMs` is explicit so callers stay testable and this stays pure.
+ */
+export function formatOrchestrationV2TimelineDayLabel(isoDate: string, nowMs: number): string {
+  const instant = DateTime.make(isoDate);
+  if (Option.isNone(instant)) return "Earlier";
+  const zone = DateTime.zoneMakeLocal();
+  const zoned = DateTime.setZone(instant.value, zone);
+  const dayKey = DateTime.formatIsoDate(zoned);
+  const now = DateTime.setZone(DateTime.makeUnsafe(nowMs), zone);
+  if (dayKey === DateTime.formatIsoDate(now)) return "Today";
+  if (dayKey === DateTime.formatIsoDate(DateTime.subtract(now, { days: 1 }))) return "Yesterday";
+  const sameYear = DateTime.toParts(zoned).year === DateTime.toParts(now).year;
+  return DateTime.formatLocal(zoned, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
+type TimelineAttemptSource = Pick<
+  OrchestrationV2RunAttempt,
+  "id" | "runId" | "attemptOrdinal" | "rootNodeId" | "status"
+>;
+type TimelineNodeSource = Pick<OrchestrationV2ExecutionNode, "id" | "rootNodeId" | "parentNodeId">;
+
+/**
+ * The run attempt an item belongs to, walked up the execution-node chain: an
+ * item hangs off a tool-call node, while the attempt is keyed by the root node
+ * of the turn. Undefined when the nodes aren't locally available yet.
+ */
+export function resolveOrchestrationV2ItemAttempt<Attempt extends TimelineAttemptSource>(input: {
+  readonly item: Pick<OrchestrationV2TurnItem, "runId" | "nodeId">;
+  readonly attemptByRootNodeId: ReadonlyMap<string, Attempt>;
+  readonly nodeById: ReadonlyMap<string, TimelineNodeSource>;
+}): Attempt | undefined {
+  const { item } = input;
+  if (item.nodeId === null || item.runId === null) return undefined;
+  let nodeId: string | null = item.nodeId;
+  const visited = new Set<string>();
+  while (nodeId !== null && !visited.has(nodeId)) {
+    visited.add(nodeId);
+    const directAttempt = input.attemptByRootNodeId.get(nodeId);
+    if (directAttempt?.runId === item.runId) return directAttempt;
+    const node = input.nodeById.get(nodeId);
+    if (node === undefined) return undefined;
+    const rootAttempt = input.attemptByRootNodeId.get(node.rootNodeId);
+    if (rootAttempt?.runId === item.runId) return rootAttempt;
+    nodeId = node.parentNodeId;
+  }
+  return undefined;
 }

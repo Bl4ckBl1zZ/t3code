@@ -12,6 +12,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestrationV2Timeline";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
@@ -576,22 +577,8 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
   const nodeById = new Map((input.nodes ?? []).map((node) => [node.id, node] as const));
   const planById = new Map((input.plans ?? []).map((plan) => [plan.id, plan] as const));
 
-  const resolveAttempt = (item: OrchestrationV2TurnItem): TimelineAttempt | undefined => {
-    if (item.nodeId === null || item.runId === null) return undefined;
-    let nodeId: OrchestrationV2ExecutionNode["id"] | null = item.nodeId;
-    const visited = new Set<OrchestrationV2ExecutionNode["id"]>();
-    while (nodeId !== null && !visited.has(nodeId)) {
-      visited.add(nodeId);
-      const directAttempt = attemptByRootNodeId.get(nodeId);
-      if (directAttempt?.runId === item.runId) return directAttempt;
-      const node = nodeById.get(nodeId);
-      if (node === undefined) return undefined;
-      const rootAttempt = attemptByRootNodeId.get(node.rootNodeId);
-      if (rootAttempt?.runId === item.runId) return rootAttempt;
-      nodeId = node.parentNodeId;
-    }
-    return undefined;
-  };
+  const resolveAttempt = (item: OrchestrationV2TurnItem): TimelineAttempt | undefined =>
+    resolveOrchestrationV2ItemAttempt({ item, attemptByRootNodeId, nodeById });
 
   for (const row of input.visibleTurnItems) {
     const { item } = row;

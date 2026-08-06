@@ -13,10 +13,13 @@ import type {
   MessageId,
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
+  OrchestrationV2ExecutionNode,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2RunAttempt,
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItem,
   OrchestrationV2UserMessageInputIntent,
+  RunAttemptId,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -24,7 +27,11 @@ import { orchestrationV2TurnItemStatusIsTerminal } from "@t3tools/contracts";
 import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
-import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
+import {
+  formatOrchestrationV2RollbackDetail,
+  orchestrationV2TimelineDayKey,
+  resolveOrchestrationV2ItemAttempt,
+} from "@t3tools/shared/orchestrationV2Timeline";
 import * as DateTime from "effect/DateTime";
 
 import { isV2LifecycleTimelineItem } from "./threadLifecycle";
@@ -85,7 +92,12 @@ export interface ThreadFeedMessage {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
 }
 
-type RawThreadFeedEntry =
+export type ThreadFeedAttempt = Pick<
+  OrchestrationV2RunAttempt,
+  "id" | "runId" | "attemptOrdinal" | "rootNodeId" | "status"
+>;
+
+type RawThreadFeedEntryVariant =
   | {
       readonly type: "message";
       readonly id: string;
@@ -107,9 +119,20 @@ type RawThreadFeedEntry =
       readonly row: OrchestrationV2ProjectedTurnItem;
     };
 
-export type ThreadFeedEntry =
-  | Extract<RawThreadFeedEntry, { type: "message" }>
-  | Extract<RawThreadFeedEntry, { type: "lifecycle" }>
+interface ThreadFeedAttemptMetadata {
+  /** Resolved from the item's execution node, when the nodes are local. */
+  readonly attempt?: ThreadFeedAttempt;
+}
+
+// Distributive so that narrowing on `type` still picks a single member; a plain
+// `Union & Metadata` intersection would collapse into one unnarrowable type.
+type WithAttemptMetadata<T> = T extends unknown ? T & ThreadFeedAttemptMetadata : never;
+
+type RawThreadFeedEntry = WithAttemptMetadata<RawThreadFeedEntryVariant>;
+
+type ThreadFeedEntryVariant =
+  | Extract<RawThreadFeedEntryVariant, { type: "message" }>
+  | Extract<RawThreadFeedEntryVariant, { type: "lifecycle" }>
   | {
       readonly type: "working";
       readonly id: string;
@@ -132,7 +155,7 @@ export type ThreadFeedEntry =
       readonly type: "lifecycle-group";
       readonly id: string;
       readonly createdAt: string;
-      readonly entries: ReadonlyArray<Extract<RawThreadFeedEntry, { type: "lifecycle" }>>;
+      readonly entries: ReadonlyArray<Extract<RawThreadFeedEntryVariant, { type: "lifecycle" }>>;
     }
   | {
       readonly type: "work-toggle";
@@ -153,7 +176,28 @@ export type ThreadFeedEntry =
       readonly runId: RunId;
       readonly label: string;
       readonly expanded: boolean;
+    }
+  | {
+      readonly type: "attempt-fold";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId;
+      readonly attemptId: RunAttemptId;
+      readonly label: string;
+      readonly expanded: boolean;
+    }
+  | {
+      readonly type: "chat-cleared";
+      readonly id: string;
+      readonly createdAt: string;
+    }
+  | {
+      readonly type: "day-divider";
+      readonly id: string;
+      readonly createdAt: string;
     };
+
+export type ThreadFeedEntry = WithAttemptMetadata<ThreadFeedEntryVariant>;
 
 export interface ThreadFeedLatestRun {
   readonly runId: RunId;
@@ -452,6 +496,7 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
   // long tool runs). The array is only mutated while it is the trailing group.
   let openGroupActivities: ThreadFeedActivity[] | null = null;
   let openGroupRunId: string | null = null;
+  let openGroupAttemptId: string | null = null;
   let openGroupHasProminent = false;
 
   for (const entry of entries) {
@@ -465,6 +510,10 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
     if (
       openGroupActivities !== null &&
       openGroupRunId === entry.runId &&
+      // A group is the unit that folds, so it must not straddle attempts:
+      // merging a superseded attempt's work into the live one would make the
+      // fold either hide too much or nothing at all.
+      openGroupAttemptId === (entry.attempt?.id ?? null) &&
       !entry.activity.prominent &&
       !openGroupHasProminent
     ) {
@@ -474,6 +523,7 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
 
     openGroupActivities = [entry.activity];
     openGroupRunId = entry.runId;
+    openGroupAttemptId = entry.attempt?.id ?? null;
     openGroupHasProminent = entry.activity.prominent === true;
     grouped.push({
       type: "activity-group",
@@ -481,6 +531,7 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
       createdAt: entry.createdAt,
       runId: entry.runId,
       activities: openGroupActivities,
+      ...(entry.attempt === undefined ? {} : { attempt: entry.attempt }),
     });
   }
   return grouped;
@@ -711,25 +762,127 @@ function deriveThreadFeedRunFolds(
   return foldsByAnchorId;
 }
 
+/**
+ * Superseded attempts collapse behind one boundary row, keyed by the first
+ * entry each attempt contributed. Ports the web timeline's rule: user messages
+ * stay put, everything the discarded attempt produced folds away.
+ */
+function deriveThreadFeedAttemptFolds(
+  entries: ReadonlyArray<ThreadFeedEntry>,
+): ReadonlyMap<string, SupersededAttemptFold> {
+  const entriesByAttemptId = new Map<RunAttemptId, ThreadFeedEntry[]>();
+  for (const entry of entries) {
+    if (
+      entry.attempt?.status !== "superseded" ||
+      (entry.type === "message" && entry.message.role === "user")
+    ) {
+      continue;
+    }
+    const bucket = entriesByAttemptId.get(entry.attempt.id) ?? [];
+    bucket.push(entry);
+    entriesByAttemptId.set(entry.attempt.id, bucket);
+  }
+
+  const foldsByAnchorId = new Map<string, SupersededAttemptFold>();
+  for (const bucket of entriesByAttemptId.values()) {
+    const firstEntry = bucket[0];
+    const attempt = firstEntry?.attempt;
+    if (firstEntry === undefined || attempt === undefined) continue;
+    foldsByAnchorId.set(firstEntry.id, {
+      runId: attempt.runId,
+      attemptId: attempt.id,
+      createdAt: firstEntry.createdAt,
+      hiddenEntryIds: new Set(bucket.map((entry) => entry.id)),
+    });
+  }
+  return foldsByAnchorId;
+}
+
+interface SupersededAttemptFold {
+  readonly runId: RunId;
+  readonly attemptId: RunAttemptId;
+  readonly createdAt: string;
+  readonly hiddenEntryIds: ReadonlySet<string>;
+}
+
+/**
+ * A boundary between calendar days, so a thread picked up over a week doesn't
+ * read as one sitting. Only between days: the first day carries no divider,
+ * because there is nothing above it to separate from.
+ */
+function insertThreadFeedDayDividers(entries: ThreadFeedEntry[]): ThreadFeedEntry[] {
+  const result: ThreadFeedEntry[] = [];
+  let previousDayKey: string | null = null;
+  for (const entry of entries) {
+    const dayKey = orchestrationV2TimelineDayKey(entry.createdAt);
+    if (dayKey !== null) {
+      if (previousDayKey !== null && dayKey !== previousDayKey) {
+        result.push({
+          type: "day-divider",
+          id: `day-divider:${dayKey}`,
+          createdAt: entry.createdAt,
+        });
+      }
+      previousDayKey = dayKey;
+    }
+    result.push(entry);
+  }
+  return result;
+}
+
 export function deriveThreadFeedPresentation(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
   expandedRunIds: ReadonlySet<RunId>,
   expandedWorkGroupIds: ReadonlySet<string> = new Set(),
   activeWorkStartedAt: string | null = null,
+  options?: {
+    /** Hermes "clear chat" marker: entries at or before it are dropped. */
+    readonly timelineClearedAt?: string | null;
+    readonly expandedAttemptIds?: ReadonlySet<RunAttemptId>;
+  },
 ): ThreadFeedEntry[] {
-  const sourceFeed = feed.filter(
+  const expandedAttemptIds = options?.expandedAttemptIds ?? new Set<RunAttemptId>();
+  const clearedAt = options?.timelineClearedAt ?? null;
+  const clearedAtMs = clearedAt === null ? Number.NaN : Date.parse(clearedAt);
+  const chatWasCleared = Number.isFinite(clearedAtMs);
+  // Kept as its own narrowing filter: the inferred type predicate is what lets
+  // appendPresentedFeedEntry take the reduced union. Mixing in the cleared-at
+  // test below would defeat that inference.
+  const presentableFeed = feed.filter(
     (entry) =>
-      entry.type !== "run-fold" && entry.type !== "work-toggle" && entry.type !== "working",
+      entry.type !== "run-fold" &&
+      entry.type !== "work-toggle" &&
+      entry.type !== "working" &&
+      entry.type !== "day-divider" &&
+      entry.type !== "chat-cleared" &&
+      entry.type !== "attempt-fold",
   );
+  const sourceFeed = chatWasCleared
+    ? presentableFeed.filter((entry) => Date.parse(entry.createdAt) > clearedAtMs)
+    : presentableFeed;
   const foldsByAnchorId = deriveThreadFeedRunFolds(sourceFeed, latestRun);
+  const attemptFoldsByAnchorId = deriveThreadFeedAttemptFolds(sourceFeed);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
     if (!expandedRunIds.has(fold.runId)) {
       for (const entryId of fold.hiddenEntryIds) collapsedEntryIds.add(entryId);
     }
   }
+  const collapsedAttemptEntryIds = new Set<string>();
+  for (const fold of attemptFoldsByAnchorId.values()) {
+    if (!expandedAttemptIds.has(fold.attemptId)) {
+      for (const entryId of fold.hiddenEntryIds) collapsedAttemptEntryIds.add(entryId);
+    }
+  }
   const result: ThreadFeedEntry[] = [];
+  if (chatWasCleared && clearedAt !== null) {
+    result.push({
+      type: "chat-cleared",
+      id: `chat-cleared:${clearedAt}`,
+      createdAt: clearedAt,
+    });
+  }
   for (const entry of sourceFeed) {
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
@@ -742,7 +895,20 @@ export function deriveThreadFeedPresentation(
         expanded: expandedRunIds.has(fold.runId),
       });
     }
-    if (!collapsedEntryIds.has(entry.id)) {
+    if (collapsedEntryIds.has(entry.id)) continue;
+    const attemptFold = attemptFoldsByAnchorId.get(entry.id);
+    if (attemptFold) {
+      result.push({
+        type: "attempt-fold",
+        id: `attempt-fold:${attemptFold.attemptId}`,
+        createdAt: attemptFold.createdAt,
+        runId: attemptFold.runId,
+        attemptId: attemptFold.attemptId,
+        label: "Superseded attempt",
+        expanded: expandedAttemptIds.has(attemptFold.attemptId),
+      });
+    }
+    if (!collapsedAttemptEntryIds.has(entry.id)) {
       appendPresentedFeedEntry(result, entry, expandedWorkGroupIds);
     }
   }
@@ -753,7 +919,7 @@ export function deriveThreadFeedPresentation(
       createdAt: activeWorkStartedAt,
     });
   }
-  return result;
+  return insertThreadFeedDayDividers(result);
 }
 
 export function activityFileDiffStats(
@@ -784,7 +950,18 @@ export function sumActivityFileDiffStats(activities: ReadonlyArray<ThreadFeedAct
 
 function appendPresentedFeedEntry(
   result: ThreadFeedEntry[],
-  entry: Exclude<ThreadFeedEntry, { readonly type: "run-fold" | "work-toggle" | "working" }>,
+  entry: Exclude<
+    ThreadFeedEntry,
+    {
+      readonly type:
+        | "run-fold"
+        | "work-toggle"
+        | "working"
+        | "attempt-fold"
+        | "chat-cleared"
+        | "day-divider";
+    }
+  >,
   expandedWorkGroupIds: ReadonlySet<string>,
 ): void {
   if (entry.type !== "activity-group") {
@@ -865,10 +1042,32 @@ export function buildPendingUserInputAnswers(
  */
 export function buildThreadFeed(
   visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  /**
+   * Run attempts and execution nodes from the thread projection. Optional
+   * because most callers don't need attempt identity; without them the feed is
+   * identical minus superseded-attempt folding.
+   */
+  attemptContext?: {
+    readonly attempts?: ReadonlyArray<OrchestrationV2RunAttempt>;
+    readonly nodes?: ReadonlyArray<OrchestrationV2ExecutionNode>;
+  },
 ): ThreadFeedEntry[] {
+  const attemptByRootNodeId = new Map(
+    (attemptContext?.attempts ?? []).map(
+      (attempt) => [String(attempt.rootNodeId), attempt] as const,
+    ),
+  );
+  const nodeById = new Map(
+    (attemptContext?.nodes ?? []).map((node) => [String(node.id), node] as const),
+  );
   const entries: RawThreadFeedEntry[] = [];
   for (const row of visibleTurnItems) {
     const item = row.item;
+    const attempt =
+      attemptByRootNodeId.size === 0
+        ? undefined
+        : resolveOrchestrationV2ItemAttempt({ item, attemptByRootNodeId, nodeById });
+    const attemptMetadata = attempt === undefined ? {} : { attempt };
     const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
     if (item.type === "user_message" || item.type === "assistant_message") {
       const updatedAt = DateTime.formatIso(item.updatedAt);
@@ -896,6 +1095,7 @@ export function buildThreadFeed(
           updatedAt,
           projectedItem: row,
         },
+        ...attemptMetadata,
       });
       continue;
     }
@@ -906,6 +1106,7 @@ export function buildThreadFeed(
         createdAt,
         runId: item.runId,
         row,
+        ...attemptMetadata,
       });
       continue;
     }
@@ -916,6 +1117,7 @@ export function buildThreadFeed(
       createdAt,
       runId: item.runId,
       activity,
+      ...attemptMetadata,
     });
   }
   return mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(groupAdjacentActivities(entries)));

@@ -506,3 +506,82 @@ describe("buildThreadFeed", () => {
     expect(activity?.getCopyText().split("\n")[0]).toBe("Read a T3 thread");
   });
 });
+
+describe("thread feed system dividers", () => {
+  it("hides entries at or before the clear marker and says so", () => {
+    const feed = buildThreadFeed([
+      projected(userMessage("2026-06-20T00:00:01.000Z"), 0),
+      projected(
+        { ...assistantMessage("2026-06-20T00:00:09.000Z"), id: TurnItemId.make("item-after") },
+        1,
+      ),
+    ]);
+
+    const presented = deriveThreadFeedPresentation(feed, null, new Set(), new Set(), null, {
+      timelineClearedAt: "2026-06-20T00:00:05.000Z",
+    });
+
+    expect(presented.map((entry) => entry.type)).toEqual(["chat-cleared", "message"]);
+    expect(presented[0]).toMatchObject({ id: "chat-cleared:2026-06-20T00:00:05.000Z" });
+  });
+
+  it("separates calendar days and leaves the first day unmarked", () => {
+    // Local-anchored so the two entries land on different calendar days in any
+    // timezone; day keys are local, not UTC.
+    const localIso = (day: number) => new Date(2026, 5, day, 9, 0, 0).toISOString();
+    const feed = buildThreadFeed([
+      projected(userMessage(localIso(20)), 0),
+      projected({ ...assistantMessage(localIso(22)), id: TurnItemId.make("item-later") }, 1),
+    ]);
+
+    const presented = deriveThreadFeedPresentation(feed, null, new Set());
+    const dividers = presented.filter((entry) => entry.type === "day-divider");
+
+    expect(dividers.length).toBe(1);
+    expect(presented.indexOf(dividers[0]!)).toBe(1);
+  });
+
+  it("folds a superseded attempt behind one boundary row", () => {
+    const rootNodeId = NodeId.make("node-root");
+    const attempts = [
+      {
+        id: "attempt-1",
+        runId,
+        attemptOrdinal: 1,
+        rootNodeId,
+        status: "superseded" as const,
+      },
+    ];
+    const nodes = [{ id: rootNodeId, rootNodeId, parentNodeId: null }];
+    const feed = buildThreadFeed(
+      [
+        projected(userMessage(), 0),
+        projected({ ...command(), nodeId: rootNodeId }, 1),
+        projected(assistantMessage(), 2),
+      ],
+      { attempts: attempts as never, nodes: nodes as never },
+    );
+
+    // Unsettled run: turn folding is off, so the attempt fold is what collapses
+    // the abandoned work rather than being pre-empted by the run fold.
+    const latestRun = {
+      runId,
+      status: "running" as const,
+      startedAt: "2026-06-20T00:00:01.000Z",
+      completedAt: null,
+    };
+
+    const collapsed = deriveThreadFeedPresentation(feed, latestRun, new Set());
+    expect(collapsed.map((entry) => entry.type)).toEqual(["message", "attempt-fold", "message"]);
+
+    const expanded = deriveThreadFeedPresentation(feed, latestRun, new Set(), new Set(), null, {
+      expandedAttemptIds: new Set(["attempt-1" as never]),
+    });
+    expect(expanded.map((entry) => entry.type)).toEqual([
+      "message",
+      "attempt-fold",
+      "activity-group",
+      "message",
+    ]);
+  });
+});

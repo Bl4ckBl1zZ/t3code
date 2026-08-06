@@ -10,6 +10,7 @@ import {
   type EnvironmentId,
   type MessageId,
   type OrchestrationV2ProjectedTurnItem,
+  type RunAttemptId,
   type RunId,
 } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
@@ -140,6 +141,8 @@ import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
 import { isScheduledTaskMessageId } from "./scheduledTaskMessageBadge";
 import { RELATED_THREAD_CARD_SURFACE_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
+import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -191,6 +194,8 @@ export interface ThreadFeedProps {
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
+  /** Hermes "clear chat" marker; entries at or before it are hidden. */
+  readonly timelineClearedAt?: string | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -1060,6 +1065,7 @@ function renderFeedEntry(
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string, anchorKey?: string) => void;
     readonly onToggleTurnFold: (runId: RunId) => void;
+    readonly onToggleAttemptFold: (attemptId: RunAttemptId) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -1105,6 +1111,30 @@ function renderFeedEntry(
           type="monochrome"
         />
       </Pressable>
+    );
+  }
+
+  if (entry.type === "chat-cleared") {
+    return <TimelineSystemDivider label="Chat cleared" symbol="eraser" />;
+  }
+
+  if (entry.type === "day-divider") {
+    return (
+      <TimelineSystemDivider
+        label={formatOrchestrationV2TimelineDayLabel(entry.createdAt, Date.now())}
+      />
+    );
+  }
+
+  if (entry.type === "attempt-fold") {
+    return (
+      <TimelineSystemDivider
+        label={entry.label}
+        detail="Partial output retained"
+        symbol={entry.expanded ? "chevron.down" : "chevron.right"}
+        actionLabel={entry.expanded ? "Collapse superseded attempt" : "Expand superseded attempt"}
+        onAction={() => props.onToggleAttemptFold(entry.attemptId)}
+      />
     );
   }
 
@@ -1792,13 +1822,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly expandedTurnIds: ReadonlySet<RunId>;
+    readonly expandedAttemptIds: ReadonlySet<RunAttemptId>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
+    expandedAttemptIds: new Set(),
   });
-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds, expandedAttemptIds } =
+    interactionState;
   const [expandedImage, setExpandedImage] = useState<{
     uri: string;
     headers?: Record<string, string>;
@@ -1967,8 +2000,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             .map(([groupId]) => groupId),
         ),
         props.activeWorkStartedAt,
+        { timelineClearedAt: props.timelineClearedAt ?? null, expandedAttemptIds },
       ),
-    [expandedTurnIds, expandedWorkGroups, props.activeWorkStartedAt, props.feed, props.latestRun],
+    [
+      expandedAttemptIds,
+      expandedTurnIds,
+      expandedWorkGroups,
+      props.activeWorkStartedAt,
+      props.feed,
+      props.latestRun,
+      props.timelineClearedAt,
+    ],
   );
 
   // The empty↔filled key below remounts the list, which resets its imperative
@@ -2125,6 +2167,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
+  const onToggleAttemptFold = useCallback(
+    (attemptId: RunAttemptId) => {
+      suspendEndScrollMaintenanceForDisclosure(`attempt-fold:${attemptId}`);
+      setInteractionState((current) => {
+        const next = new Set(current.expandedAttemptIds);
+        if (next.has(attemptId)) {
+          next.delete(attemptId);
+        } else {
+          next.add(attemptId);
+        }
+        return { ...current, expandedAttemptIds: next };
+      });
+    },
+    [suspendEndScrollMaintenanceForDisclosure],
+  );
+
   const onToggleTurnFold = useCallback(
     (runId: RunId) => {
       suspendEndScrollMaintenanceForDisclosure(`run-fold:${runId}`);
@@ -2204,6 +2262,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         onToggleWorkGroup,
         onToggleWorkRow,
         onToggleTurnFold,
+        onToggleAttemptFold,
         onPressImage,
         onMarkdownLinkPress,
         iconSubtleColor,
@@ -2232,6 +2291,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onMarkdownLinkPress,
       onPressImage,
       onToggleTurnFold,
+      onToggleAttemptFold,
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
