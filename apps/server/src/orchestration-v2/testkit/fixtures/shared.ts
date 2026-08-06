@@ -63,6 +63,10 @@ export const TURN_INTERRUPT_RECOVERY_PROMPT =
   "Respond with exactly: interrupt recovery fixture complete";
 export const MESSAGE_STEERING_STEER_PROMPT =
   "Actually, respond with exactly: steering fixture observed";
+export const MESSAGE_STEERING_MID_TOOL_INITIAL_PROMPT =
+  "Run this exact local command: `node -e \"console.log('steering fixture tool started'); setTimeout(() => {}, 30000)\"`. Do not answer until it completes, then respond exactly: steering mid tool should not finish naturally.";
+export const MESSAGE_STEERING_MID_TOOL_STEER_PROMPT =
+  "Actually, stop waiting on that command and respond with exactly: steering mid tool observed";
 export const THREAD_ROLLBACK_FIRST_PROMPT =
   "Respond with exactly: rollback fixture first turn complete";
 export const THREAD_ROLLBACK_SECOND_PROMPT =
@@ -168,6 +172,7 @@ export type OrchestratorFixtureInputStep =
       readonly text: string;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
       readonly targetRunIndex: number;
+      readonly waitForTurnItemType?: OrchestrationV2TurnItem["type"];
     }
   | {
       readonly type: "restart";
@@ -552,6 +557,14 @@ export function materializeFixtureInput(input: {
             threadId: ids.threadId,
             runId: runIdFor(step.targetRunIndex),
           });
+          if (step.waitForTurnItemType !== undefined) {
+            steps.push({
+              type: "await_run_turn_item",
+              threadId: ids.threadId,
+              runId: runIdFor(step.targetRunIndex),
+              itemType: step.waitForTurnItemType,
+            });
+          }
           pushDispatch(
             dispatchMessageCommand({
               commandId: yield* idAllocator.allocate.command({

@@ -295,7 +295,10 @@ function isClaudeSdkReplayMessage(frame: unknown): frame is SDKMessage {
     type === "user" ||
     type === "result" ||
     type === "system" ||
-    type === "rate_limit_event"
+    type === "rate_limit_event" ||
+    // The adapter always opens queries with includePartialMessages, so every
+    // fresh recording carries stream_event frames that replay has to accept.
+    type === "stream_event"
   );
 }
 
@@ -1274,6 +1277,7 @@ async function recordClaudeActiveSteeringQuery(input: {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly enablePermissionCallback?: boolean;
   readonly permissionDecision?: ProviderApprovalDecision;
+  readonly steerAfter?: "prompt_offer" | "tool_use";
 }): Promise<void> {
   if (input.prompts.length < 2) {
     throw new Error("Claude active steering replay recording requires at least two prompts.");
@@ -1363,6 +1367,17 @@ async function recordClaudeActiveSteeringQuery(input: {
   const iterator = queryRuntime[Symbol.asyncIterator]();
   try {
     offerPrompt(0);
+    // Steering while the model is still streaming text and steering while a
+    // tool is executing abort at different points inside the SDK, so the
+    // recorder has to be able to hold the steer back until a tool is running.
+    if (input.steerAfter === "tool_use") {
+      await recordMessagesUntilFirstToolUse({
+        iterator,
+        entries: input.entries,
+        scenario: input.scenario,
+      });
+      await Effect.runPromise(Effect.sleep(Duration.millis(250)));
+    }
     offerSteeringPrompts();
     const completed = await recordMessagesUntilTurnResults({
       iterator,
@@ -2205,6 +2220,7 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
   readonly enablePermissionCallback?: boolean;
   readonly permissionDecision?: ProviderApprovalDecision;
   readonly interruptAfter?: "prompt_offer" | "tool_use";
+  readonly steerAfter?: "prompt_offer" | "tool_use";
 }): Promise<ClaudeAgentSdkReplayTranscript> {
   if (input.prompts.length === 0) {
     throw new Error(
@@ -2261,6 +2277,7 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
       ...(input.permissionDecision === undefined
         ? {}
         : { permissionDecision: input.permissionDecision }),
+      ...(input.steerAfter === undefined ? {} : { steerAfter: input.steerAfter }),
     });
   } else if (queryMode === "restart") {
     await recordClaudeRestartingQueries({

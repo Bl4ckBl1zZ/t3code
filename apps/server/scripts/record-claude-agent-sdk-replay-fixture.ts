@@ -18,6 +18,8 @@ import { makeCheckpointWorkspace } from "../src/orchestration-v2/testkit/ReplayF
 import { CLAUDE_MODEL_SELECTION } from "../src/orchestration-v2/testkit/fixtures/shared.ts";
 import {
   MESSAGE_STEERING_INITIAL_PROMPT,
+  MESSAGE_STEERING_MID_TOOL_INITIAL_PROMPT,
+  MESSAGE_STEERING_MID_TOOL_STEER_PROMPT,
   MULTI_TURN_FIRST_PROMPT,
   MESSAGE_STEERING_STEER_PROMPT,
   READ_ONLY_NEVER_POLICY,
@@ -94,6 +96,13 @@ const CLAUDE_RECORDINGS = {
     defaultTranscriptFile: "fixtures/message_steering/claude_transcript.ndjson",
     queryMode: "active_steering",
     enableTools: true,
+  },
+  message_steering_mid_tool: {
+    prompts: [MESSAGE_STEERING_MID_TOOL_INITIAL_PROMPT, MESSAGE_STEERING_MID_TOOL_STEER_PROMPT],
+    defaultTranscriptFile: "fixtures/message_steering_mid_tool/claude_transcript.ndjson",
+    queryMode: "active_steering",
+    enableTools: true,
+    steerAfter: "tool_use",
   },
   turn_interrupt_mid_tool: {
     prompts: [TURN_INTERRUPT_MID_TOOL_PROMPT],
@@ -419,6 +428,7 @@ try {
       : { allowDangerouslySkipPermissions: queryPolicy.allowDangerouslySkipPermissions }),
     ...(queryPolicy.installPermissionCallback ? { enablePermissionCallback: true } : {}),
     ...("interruptAfter" in recording ? { interruptAfter: recording.interruptAfter } : {}),
+    ...("steerAfter" in recording ? { steerAfter: recording.steerAfter } : {}),
   });
   await runFileSystem(
     Effect.gen(function* () {

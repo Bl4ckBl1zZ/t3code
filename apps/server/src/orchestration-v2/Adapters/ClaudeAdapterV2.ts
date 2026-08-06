@@ -1926,7 +1926,9 @@ function terminalStatusFromResult(
     return message.is_error ? "failed" : "completed";
   }
   const errorText = message.errors.join("\n").toLowerCase();
-  if (errorText.includes("interrupt")) {
+  // An abort is always client-initiated ("Error: Request was aborted."), so it
+  // reads as an interrupt rather than a provider failure.
+  if (errorText.includes("interrupt") || errorText.includes("abort")) {
     return "interrupted";
   }
   if (errorText.includes("cancel")) {
@@ -1935,8 +1937,15 @@ function terminalStatusFromResult(
   return "failed";
 }
 
+// Steering a live query makes the SDK abort the in-flight request and emit an
+// interim result before it resumes the same turn with the steered message. The
+// abort reason depends on where the turn was: "aborted_streaming" while the
+// model was producing text, "aborted_tools" while a tool was executing. Both
+// are followed by the real terminal result, so neither may terminalize the turn.
 function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
-  return message.terminal_reason === "aborted_streaming";
+  return (
+    message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"
+  );
 }
 
 function isClaudeProviderContinuationTurn(input: ProviderAdapterV2TurnInput): boolean {
@@ -4092,14 +4101,28 @@ export function makeClaudeAdapterV2(
             const completedAt = yield* DateTime.now;
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
-            if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
-              return;
-            }
             yield* Ref.update(steeredTurns, (current) => {
               const next = new Set(current);
               next.delete(context.providerTurnId);
               return next;
             });
+            if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
+              // The steer was picked up: the SDK is unwinding the in-flight
+              // request and will resume this same turn with the steered text.
+              return;
+            }
+            if (!interrupted && wasSteered) {
+              // The turn terminalized without the SDK ever aborting for the
+              // steer, so the steered message may never have been applied.
+              yield* Effect.logWarning("orchestration-v2.claude-steering-abort-not-observed", {
+                providerTurnId: context.providerTurnId,
+                terminal_reason: message.terminal_reason,
+                subtype: message.subtype,
+                stop_reason: message.stop_reason,
+                uuid: message.uuid,
+                session_id: message.session_id,
+              });
+            }
             const resultFailure = interrupted ? null : providerFailureFromResult(message);
             yield* finalizeActiveTurn({
               context,
