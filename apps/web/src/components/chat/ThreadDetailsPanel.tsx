@@ -141,6 +141,23 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       : {}),
   };
 
+  // A projectless conversation has no workspace, so its delegations are the
+  // panel's entire content. Name the section even while it is empty, otherwise
+  // opening the panel on a fresh Hermes chat shows a blank card.
+  const delegatedTasksEmptyState = (
+    <section className="px-3.5 py-3" aria-labelledby="thread-details-delegation-heading">
+      <h3
+        id="thread-details-delegation-heading"
+        className="text-[11px] font-medium text-muted-foreground"
+      >
+        Delegated tasks
+      </h3>
+      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+        Coding tasks Hermes delegates through T3 Code will appear here.
+      </p>
+    </section>
+  );
+
   const card = (
     <div
       className={cn(
@@ -253,18 +270,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               ) : null}
             </div>
           </section>
-        ) : props.draftId ? (
-          <section className="px-3.5 py-3" aria-labelledby="thread-details-delegation-heading">
-            <h3
-              id="thread-details-delegation-heading"
-              className="text-[11px] font-medium text-muted-foreground"
-            >
-              Delegated tasks
-            </h3>
-            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-              Coding tasks Hermes delegates through T3 Code will appear here.
-            </p>
-          </section>
         ) : null}
 
         {!props.isProjectlessConversation && !props.draftId && props.openPreview ? (
@@ -322,8 +327,19 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           <ThreadAutomationsPanel environmentId={props.environmentId} threadId={props.threadId} />
         ) : null}
 
-        {!props.draftId ? (
-          <ThreadRelationshipsPanel environmentId={props.environmentId} threadId={props.threadId} />
+        {/* Keyed off `isServerThread`, not `draftId`: a sent draft keeps its
+            draft route for the rest of the session, and a Hermes chat started
+            there delegates real work that has to show up. */}
+        {props.isServerThread ? (
+          <ThreadRelationshipsPanel
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            {...(props.isProjectlessConversation
+              ? { emptyFallback: delegatedTasksEmptyState }
+              : {})}
+          />
+        ) : props.isProjectlessConversation ? (
+          delegatedTasksEmptyState
         ) : null}
       </div>
     </div>
