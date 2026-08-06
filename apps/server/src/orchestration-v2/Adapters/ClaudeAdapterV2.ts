@@ -1556,6 +1556,20 @@ const NO_CLAUDE_NATIVE_TOOL_OUTPUT = { type: "none" } satisfies ClaudeNativeTool
  */
 const BACKGROUND_TAIL_INTERVAL = "1500 millis" as const;
 
+/**
+ * How long a continuation turn waits for the CLI's wake turn to say anything.
+ *
+ * A continuation is offered as soon as a tracked background task reports its
+ * outcome, so the wake turn streams live rather than landing in one lump. But
+ * the CLI does not wake for every outcome — a command it killed reports
+ * `stopped` and stays silent — and a wake it does start can fail before its
+ * first frame. Either way the buffer holds no result, and a turn that waits on
+ * one waits forever: the run never settles and the thread sits idle until a
+ * human sends the next message. The CLI opens a real wake turn within ~100ms of
+ * the notification, so silence this long means no wake is coming.
+ */
+const SILENT_CONTINUATION_TIMEOUT = "60 seconds" as const;
+
 function claudeNativeToolOutputFromToolResult(
   toolResult: ClaudeToolResultContentBlock,
 ): ClaudeNativeToolOutput {
@@ -2090,6 +2104,8 @@ interface ActiveClaudeTurnContext {
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly providerTurnOrdinal: number;
   readonly startedAt: DateTime.Utc;
+  /** Frames handled under this turn; the silent-continuation watchdog's liveness signal. */
+  framesHandled: number;
   readonly assistant: {
     fallbackText: string;
     fallbackNativeItemId: string;
@@ -3827,6 +3843,10 @@ export function makeClaudeAdapterV2(
             yield* bufferWakeMessage({ nativeThreadId: liveQuery.nativeThreadId, message });
             return;
           }
+          // Counted before any early return below: the watchdog only asks
+          // whether the CLI said anything at all under this turn, not whether
+          // the frame produced projection output.
+          context.framesHandled += 1;
 
           if (message.type === "assistant") {
             context.nativeMessageCursor = message.uuid;
@@ -4337,6 +4357,32 @@ export function makeClaudeAdapterV2(
           return context;
         });
 
+        /**
+         * Settle a continuation turn the CLI never woke for.
+         *
+         * Single-shot on purpose. It guards only the attach window: once the
+         * wake turn emits anything, its own result settles the turn, and a
+         * stream that dies is finalized by the query-exit path. Re-arming would
+         * instead read a long tool call inside a live wake turn — minutes of
+         * silence by design — as a dead turn.
+         */
+        const armSilentContinuationWatchdog = (context: ActiveClaudeTurnContext) =>
+          Effect.gen(function* () {
+            const armedAt = context.framesHandled;
+            yield* Effect.sleep(SILENT_CONTINUATION_TIMEOUT);
+            const current = yield* Ref.get(activeTurn);
+            if (current !== context || context.framesHandled !== armedAt) {
+              return;
+            }
+            yield* Effect.logInfo("orchestration-v2.claude-silent-continuation-settled", {
+              providerSessionId: input.providerSessionId,
+              providerThreadId: context.input.providerThread.id,
+              providerTurnId: context.providerTurnId,
+            });
+            const completedAt = yield* DateTime.now;
+            yield* finalizeActiveTurn({ context, status: "completed", completedAt });
+          }).pipe(Effect.forkIn(sessionScope), Effect.asVoid);
+
         const startTurn = Effect.fn("ClaudeAdapterV2.startTurn")(
           function* (turnInput: ProviderAdapterV2TurnInput) {
             const startedAt = yield* DateTime.now;
@@ -4362,6 +4408,11 @@ export function makeClaudeAdapterV2(
               });
               return updated;
             });
+            // Continuation turns attach to the wake output the CLI already
+            // produced instead of prompting it again: drain the buffered wake
+            // messages into this turn and let any still-streaming messages
+            // follow live. The continuation prompt text never reaches the CLI.
+            const isContinuationTurn = isClaudeProviderContinuationTurn(turnInput);
             const context: ActiveClaudeTurnContext = {
               input: turnInput,
               nativeTurnId,
@@ -4369,6 +4420,7 @@ export function makeClaudeAdapterV2(
               providerTurnId,
               providerTurnOrdinal,
               startedAt,
+              framesHandled: 0,
               assistant: {
                 fallbackText: "",
                 fallbackNativeItemId: `assistant:${turnInput.runId}`,
@@ -4380,11 +4432,6 @@ export function makeClaudeAdapterV2(
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
             };
-            // Continuation turns attach to the wake output the CLI already
-            // produced instead of prompting it again: drain the buffered wake
-            // messages into this turn and let any still-streaming messages
-            // follow live. The continuation prompt text never reaches the CLI.
-            const isContinuationTurn = isClaudeProviderContinuationTurn(turnInput);
             const userMessage = isContinuationTurn
               ? null
               : yield* makeClaudeUserMessageWithAttachments({
@@ -4449,6 +4496,7 @@ export function makeClaudeAdapterV2(
             if (lastResult !== undefined) {
               yield* handleSdkMessage({ query: querySession.query, message: lastResult });
             }
+            yield* armSilentContinuationWatchdog(context);
           },
           (effect, turnInput) =>
             effect.pipe(

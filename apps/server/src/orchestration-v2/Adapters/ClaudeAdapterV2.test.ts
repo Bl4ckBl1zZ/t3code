@@ -26,6 +26,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -35,6 +36,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/unstable/ai";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
@@ -1627,6 +1629,135 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("settles a continuation the CLI never woke for", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-silent-a"),
+            text: "Wait for CI in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+
+        // The CLI killed the background command: it reports the outcome and
+        // then stays silent, with no wake turn and so no result to settle on.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_notification",
+            task_id: WAKE_TASK_ID,
+            status: "stopped",
+            output_file: "/tmp/task-wake-build.log",
+            summary: "Background command was stopped.",
+            uuid: "00000000-0000-4000-8000-000000000301",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* awaitUntil(() => harness.continuationRequests.length === 1, "continuation request");
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-silent-b"),
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        assert.lengthOf(harness.terminalEvents(), 1);
+
+        yield* TestClock.adjust(Duration.seconds(61));
+        yield* awaitUntil(() => harness.terminalEvents().length === 2, "continuation terminal");
+        assert.equal(harness.terminalEvents()[1]?.status, "completed");
+        // The run settles on its own; nothing was sent to the CLI to do it.
+        assert.lengthOf(harness.offeredMessages, 1);
+      }).pipe(
+        Effect.provide(Layer.mergeAll(idAllocatorLayer, NodeServices.layer, TestClock.layer())),
+      ),
+    ),
+  );
+
+  it.effect("leaves a live wake turn alone past the silent-continuation window", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-live-a"),
+            text: "Run the build in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+        yield* Queue.offer(harness.sdkMessages, wakeNotification);
+        yield* awaitUntil(() => harness.continuationRequests.length === 1, "continuation request");
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-live-b"),
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+
+        // The CLI's wake turn speaks, then works quietly for longer than the
+        // window — a long tool call inside a wake turn looks exactly like this.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAssistantTextFrame({
+            uuid: "00000000-0000-4000-8000-000000000302",
+            text: "Checking the build output.",
+          }),
+        );
+        yield* awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "message.updated" &&
+                event.message.text === "Checking the build output.",
+            ),
+          "wake assistant text",
+        );
+        yield* TestClock.adjust(Duration.seconds(300));
+        assert.lengthOf(harness.terminalEvents(), 1);
+
+        yield* Queue.offer(harness.sdkMessages, wakeResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 2, "continuation terminal");
+        assert.equal(harness.terminalEvents()[1]?.status, "completed");
+      }).pipe(
+        Effect.provide(Layer.mergeAll(idAllocatorLayer, NodeServices.layer, TestClock.layer())),
+      ),
     ),
   );
 
