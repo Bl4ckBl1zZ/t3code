@@ -2430,6 +2430,49 @@ describe("HermesServeAdapterV2", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("prompts again after the owner lease lapsed while the thread sat idle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const input = turnInput(providerThread);
+        yield* runtime.startTurn(input);
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "first response", status: "complete" }),
+        );
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          UPDATE hermes_session_bindings
+          SET lease_expires_at = '2000-01-01T00:00:00.000Z'
+          WHERE thread_id = ${String(threadId)}
+        `;
+
+        yield* runtime.startTurn({
+          ...input,
+          runId: RunId.make("run:hermes-lapsed-lease:2"),
+          runOrdinal: 2,
+          providerTurnOrdinal: 2,
+          attemptId: RunAttemptId.make("attempt:hermes-lapsed-lease:2"),
+        });
+
+        const bindings = yield* sql<{ readonly lease_expires_at: string }>`
+          SELECT lease_expires_at
+          FROM hermes_session_bindings
+          WHERE thread_id = ${String(threadId)}
+        `;
+        assert.equal(fake.prompts.length, 2);
+        assert.isTrue(
+          (bindings[0]?.lease_expires_at ?? "") > DateTime.formatIso(DateTime.nowUnsafe()),
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("waits for the terminal event when interrupting", () =>
     Effect.scoped(
       Effect.gen(function* () {

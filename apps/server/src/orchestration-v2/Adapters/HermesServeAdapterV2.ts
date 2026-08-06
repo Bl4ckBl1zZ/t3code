@@ -1432,10 +1432,25 @@ export function makeHermesServeAdapterV2(
           expiresAt,
         });
         if (!renewed) {
-          return yield* new ProviderAdapterProtocolError({
-            driver: HERMES_PROVIDER,
-            detail: "Hermes owner lease is no longer held",
+          // A thread that sat idle past the lease window still belongs to this
+          // owner, and renewal cannot revive a lapsed lease. Retake it under the
+          // same generation fence so the lapse costs one prompt at most instead
+          // of stranding every later prompt on the thread. A competing owner has
+          // already bumped the generation, so this stays none for them.
+          const reacquired = yield* options.repository.acquireOwnerLease({
+            bindingId: state.binding.bindingId,
+            ownerKey: state.lease.ownerKey,
+            expectedGeneration: state.lease.generation,
+            now,
+            expiresAt,
           });
+          if (Option.isNone(reacquired)) {
+            return yield* new ProviderAdapterProtocolError({
+              driver: HERMES_PROVIDER,
+              detail: "Hermes owner lease is no longer held",
+            });
+          }
+          state.lease = reacquired.value;
         }
         const result = yield* options.repository.prepareMutationIntent({
           ...input,
