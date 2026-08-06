@@ -377,6 +377,26 @@ describe("buildThreadFeed", () => {
     ]);
   });
 
+  it("drops the run fold entirely when activity is always expanded", () => {
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command(), 1),
+      projected(assistantMessage(), 2),
+    ]);
+    const latestRun = {
+      runId,
+      status: "completed" as const,
+      startedAt: "2026-06-20T00:00:01.000Z",
+      completedAt: "2026-06-20T00:00:03.000Z",
+    };
+
+    const presented = deriveThreadFeedPresentation(feed, latestRun, new Set(), new Set(), null, {
+      alwaysExpandActivity: true,
+    });
+
+    expect(presented.map((entry) => entry.type)).toEqual(["message", "activity-group", "message"]);
+  });
+
   it("keeps an active run expanded and marks failed tools as failures", () => {
     const failedCommand: OrchestrationV2TurnItem = {
       ...command(),

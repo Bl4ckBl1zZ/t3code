@@ -532,6 +532,13 @@ export function deriveMessagesTimelineRows(input: {
   latestRun?: TimelineLatestRun | null;
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
+  /**
+   * Suppresses turn folding entirely: every commentary and tool entry of a
+   * settled turn stays in the transcript, the way a provider CLI leaves its
+   * scrollback alone. Superseded attempts still fold — those entries were
+   * replaced, not merely finished.
+   */
+  alwaysExpandActivity?: boolean;
   isWorking: boolean;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
@@ -558,12 +565,14 @@ export function deriveMessagesTimelineRows(input: {
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(timelineEntries);
-  const foldsByAnchorEntryId = deriveTurnFolds({
-    timelineEntries,
-    terminalAssistantMessageIds,
-    latestRun: input.latestRun ?? null,
-    unsettledRunId,
-  });
+  const foldsByAnchorEntryId = input.alwaysExpandActivity
+    ? new Map<string, TurnFold>()
+    : deriveTurnFolds({
+        timelineEntries,
+        terminalAssistantMessageIds,
+        latestRun: input.latestRun ?? null,
+        unsettledRunId,
+      });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
     if (!input.expandedRunIds?.has(fold.runId)) {

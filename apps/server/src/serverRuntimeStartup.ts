@@ -35,6 +35,7 @@ import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { hermesProactiveDefaultMigration } from "./hermes/HermesProactiveDefaultMigration.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -444,6 +445,32 @@ export const make = (options?: StartupOptions) =>
               operation: error.operation,
               providerInstanceId: error.providerInstanceId,
               environmentVariable: error.environmentVariable,
+              cause: error.cause,
+            }),
+          ),
+        ),
+      );
+
+      // Runs against settled settings, and only ever writes on the first boot
+      // after proactive mode became the default: an instance stored under the
+      // old default carries an explicit `false` the schema cannot reach.
+      yield* runStartupPhase(
+        "settings.hermes-proactive-default",
+        Effect.gen(function* () {
+          const settings = yield* serverSettings.getSettings;
+          const migration = hermesProactiveDefaultMigration(settings);
+          if (migration === null) return;
+          yield* serverSettings.updateSettings(migration.patch);
+          if (migration.rewrittenInstanceIds.length > 0) {
+            yield* Effect.logInfo("Enabled Hermes proactive mode on existing instances", {
+              providerInstanceIds: migration.rewrittenInstanceIds,
+            });
+          }
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to apply the Hermes proactive default", {
+              path: error.settingsPath,
+              operation: error.operation,
               cause: error.cause,
             }),
           ),

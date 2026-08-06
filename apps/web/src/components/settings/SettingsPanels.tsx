@@ -675,6 +675,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar
         ? ["Auto-open task panel"]
         : []),
+      ...(settings.alwaysExpandActivity !== DEFAULT_UNIFIED_SETTINGS.alwaysExpandActivity
+        ? ["Activity detail"]
+        : []),
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
@@ -705,6 +708,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       isTextGenerationModelDirty,
       isBackgroundActivityDirty,
       settings.autoOpenPlanSidebar,
+      settings.alwaysExpandActivity,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
@@ -751,6 +755,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
+      alwaysExpandActivity: DEFAULT_UNIFIED_SETTINGS.alwaysExpandActivity,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
@@ -1833,6 +1838,32 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableAssistantStreaming: Boolean(checked) })
               }
               aria-label="Stream assistant messages"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("activity-detail")}
+          description="Keep every tool call and reasoning step in the transcript instead of folding a finished turn behind “Worked for …”."
+          resetAction={
+            settings.alwaysExpandActivity !== DEFAULT_UNIFIED_SETTINGS.alwaysExpandActivity ? (
+              <SettingResetButton
+                label="activity detail"
+                onClick={() =>
+                  updateSettings({
+                    alwaysExpandActivity: DEFAULT_UNIFIED_SETTINGS.alwaysExpandActivity,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.alwaysExpandActivity}
+              onCheckedChange={(checked) =>
+                updateSettings({ alwaysExpandActivity: Boolean(checked) })
+              }
+              aria-label="Keep all turn activity expanded"
             />
           }
         />

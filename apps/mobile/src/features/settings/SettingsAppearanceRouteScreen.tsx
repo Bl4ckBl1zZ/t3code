@@ -7,6 +7,7 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { CodeAppearanceSection } from "./appearance/sections/CodeAppearanceSection";
 import { TerminalAppearanceSection } from "./appearance/sections/TerminalAppearanceSection";
 import { TextAppearanceSection } from "./appearance/sections/TextAppearanceSection";
+import { ThreadAppearanceSection } from "./appearance/sections/ThreadAppearanceSection";
 
 export function SettingsAppearanceRouteScreen() {
   const navigation = useNavigation();
@@ -30,6 +31,7 @@ export function SettingsAppearanceRouteScreen() {
         }}
       >
         <TextAppearanceSection />
+        <ThreadAppearanceSection />
         <TerminalAppearanceSection />
         <CodeAppearanceSection />
       </ScrollView>

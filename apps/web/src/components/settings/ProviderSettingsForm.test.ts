@@ -94,7 +94,7 @@ describe("ProviderSettingsForm helpers", () => {
         importEnabled: false,
         mcpEnabled: true,
         attachmentsEnabled: true,
-        proactiveEnabled: false,
+        proactiveEnabled: true,
         voiceEnabled: false,
       },
     });

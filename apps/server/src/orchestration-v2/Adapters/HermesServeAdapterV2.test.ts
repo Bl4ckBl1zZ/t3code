@@ -881,6 +881,55 @@ describe("HermesServeAdapterV2", () => {
     ),
   );
 
+  it.effect("rehydrates tool activity from history a T3 turn never streamed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        // A run T3 never drove — a cron job, another client, or work Hermes
+        // kept doing after a turn settled. Its only record is history.
+        fake.history = {
+          count: 3,
+          messages: [
+            { role: "user", text: "send the batch" },
+            {
+              role: "assistant",
+              text: "",
+              tool_calls: [
+                {
+                  id: "call-1",
+                  function: { name: "terminal", arguments: JSON.stringify({ command: "send" }) },
+                },
+              ],
+            },
+            { role: "tool", tool_call_id: "call-1", text: "delivered" },
+          ],
+        };
+
+        const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+        const commands = (snapshot.turnItems ?? []).filter(
+          (item) => item.type === "command_execution",
+        );
+        assert.equal(commands.length, 1);
+        assert.deepEqual(
+          commands.map((item) => (item.type === "command_execution" ? item.input : null)),
+          ["send"],
+        );
+        // The tool-result row is represented by the activity, so it must not
+        // also appear as a transcript message.
+        assert.deepEqual(
+          snapshot.messages.map((message) => message.text),
+          ["send the batch"],
+        );
+      }).pipe(Effect.provide(TestLayer)),
+    ),
+  );
+
   it.effect("fails a fork with a typed error when session.branch.latest is not advertised", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -3387,7 +3436,7 @@ describe("HermesServeAdapterV2 proactive runs", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("stays passive while proactive mode is switched off", () =>
+  it.effect("still captures an external run while proactive mode is switched off", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fake = new FakeHermesGatewayClient();
@@ -3405,8 +3454,11 @@ describe("HermesServeAdapterV2 proactive runs", () => {
 
         yield* Effect.promise(() => fake.emit("message.delta", { text: "cron report" }));
 
-        assert.equal(continuations.offers.length, 0);
-        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        // The switch governs residency and answering, not whether work T3 is
+        // already watching is allowed to reach the transcript: nothing can
+        // replay these events later.
+        assert.equal(continuations.offers.length, 1);
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
@@ -3633,7 +3685,7 @@ describe("HermesServeAdapterV2 proactive runs", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("ignores an external approval while proactive mode is switched off", () =>
+  it.effect("surfaces an external approval without answering it when proactive is off", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fake = new FakeHermesGatewayClient();
@@ -3648,14 +3700,69 @@ describe("HermesServeAdapterV2 proactive runs", () => {
           continuations.sink,
           false,
         );
-        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
 
         yield* Effect.promise(() => fake.emit("approval.request", { command: "cron deploy" }));
 
-        // The run belongs to whoever started it, so T3 neither answers it nor
-        // stops it on their behalf.
-        assert.equal(continuations.offers.length, 0);
+        // A parked request is the one state that strands the gateway forever,
+        // so it is always put on the record. Answering it is what stays
+        // gated: the run belongs to whoever started it.
+        assert.equal(continuations.offers.length, 1);
+
+        // The continuation replays the buffered request as it opens, so the
+        // collector has to be listening before the turn starts.
+        const collector = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "runtime_request.updated"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+        const projected = [...(yield* Fiber.join(collector))];
+        const requests = projected.flatMap((event) =>
+          event.type === "runtime_request.updated" ? [event.runtimeRequest] : [],
+        );
+
+        // Full access answers Hermes approvals itself on a turn T3 submitted.
+        // This one it only shows.
+        assert.lengthOf(requests, 1);
+        assert.lengthOf(fake.approvalResponses, 0);
         assert.lengthOf(fake.interrupts, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("answers an external approval itself once proactive mode is on", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "cron deploy" }));
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "deployed" }));
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+
+        // Proactive mode is the opt-in to act for this gateway's own runs, so
+        // the thread's permission mode now applies to them too.
+        assert.deepEqual(fake.approvalResponses, [{ session_id: "live-create-1", choice: "once" }]);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
