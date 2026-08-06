@@ -381,8 +381,16 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       buildModelOptions(
         selectedEnvironmentServerConfig,
         draftModelSelection ?? projectDefaultModelSelection,
+        // A T3 Work draft dispatches to Hermes and nothing else; a project
+        // draft never dispatches to it.
+        draftScope === "work" ? "hermes-only" : "exclude-hermes",
       ),
-    [selectedEnvironmentServerConfig, draftModelSelection, projectDefaultModelSelection],
+    [
+      selectedEnvironmentServerConfig,
+      draftModelSelection,
+      draftScope,
+      projectDefaultModelSelection,
+    ],
   );
 
   const selectedModel =

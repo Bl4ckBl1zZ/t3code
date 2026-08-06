@@ -208,20 +208,16 @@ import {
   ListTodoIcon,
   LoaderCircleIcon,
   PencilRulerIcon,
-  type LucideIcon,
-  LockIcon,
-  LockOpenIcon,
-  PenLineIcon,
   PlusIcon,
   PaperclipIcon,
   SquarePenIcon,
-  SparklesIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderDisplayName, getProviderInteractionModeToggle } from "../../providerModels";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  filterProviderInstanceEntriesForScope,
   NO_PROVIDER_MODEL_SELECTION,
   resolveProviderDriverKindForInstanceSelection,
   resolveProviderCatalogAvailability,
@@ -230,7 +226,6 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
-import { HERMES_DRIVER_KIND } from "../../t3WorkProject";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
@@ -240,6 +235,7 @@ import type {
   PendingUserInput,
 } from "../../session-logic";
 import { resolveComposerDispatchMode, type ComposerDispatchMode } from "./composerDispatch";
+import { resolveRuntimeModePicker } from "./composerRuntimeModes";
 import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
@@ -254,33 +250,6 @@ import { isAttachmentLimitReached } from "./ComposerAttachmentChips.logic";
 import { partitionDroppedDataTransfer, resolvePastePolicy } from "./composerAttachmentIntake.logic";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
-const runtimeModeConfig: Record<
-  RuntimeMode,
-  { label: string; description: string; icon: LucideIcon }
-> = {
-  "approval-required": {
-    label: "Supervised",
-    description: "Ask before commands and file changes.",
-    icon: LockIcon,
-  },
-  "auto-accept-edits": {
-    label: "Auto-accept edits",
-    description: "Auto-approve edits, ask before other actions.",
-    icon: PenLineIcon,
-  },
-  auto: {
-    label: "Auto",
-    description: "An AI reviewer approves routine actions; risky ones still ask.",
-    icon: SparklesIcon,
-  },
-  "full-access": {
-    label: "Full access",
-    description: "Allow commands and edits without prompts.",
-    icon: LockOpenIcon,
-  },
-};
-
-const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -323,8 +292,8 @@ function isInsideComposerFloatingLayer(element: Element): boolean {
 
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
+  runtimeModePicker: ReturnType<typeof resolveRuntimeModePicker>;
   interactionMode: ProviderInteractionMode;
-  runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
@@ -332,7 +301,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onTogglePlanSidebar: () => void;
 }) {
-  const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
+  const runtimeModeOption = props.runtimeModePicker.selected;
   const RuntimeModeIcon = runtimeModeOption.icon;
   const interactionModeTooltip =
     props.interactionMode === "plan"
@@ -381,7 +350,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
       <Tooltip>
         <Select
-          value={props.runtimeMode}
+          value={runtimeModeOption.mode}
           onValueChange={(value) => props.onRuntimeModeChange(value!)}
         >
           <TooltipTrigger
@@ -391,8 +360,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             <SelectValue>{runtimeModeOption.label}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
-            {runtimeModeOptions.map((mode) => {
-              const option = runtimeModeConfig[mode];
+            {props.runtimeModePicker.options.map((option) => {
+              const mode = option.mode;
               const OptionIcon = option.icon;
               return (
                 <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
@@ -573,11 +542,12 @@ export interface ChatComposerProps {
   isLocalDraftThread: boolean;
   isProjectlessConversation: boolean;
   /**
-   * Whether the Hermes driver may appear in the model picker. Hermes is the
-   * T3 Work assistant, so it is offered only on the T3 Work composer (and on
-   * threads already running it), never as a coding provider.
+   * Which side of the picker this composer is on. Hermes is the T3 Work
+   * assistant and the only thing T3 Work runs on, and it is not a coding
+   * provider — so a T3 Work picker lists Hermes and nothing else, and every
+   * other picker lists everything else.
    */
-  allowHermesProvider: boolean;
+  hermesProviderScope: "only" | "hidden";
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
@@ -699,7 +669,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     isProjectlessConversation,
-    allowHermesProvider,
+    hermesProviderScope,
     forceExpandedOnMobile,
     projectSelectionRequired,
     phase,
@@ -815,15 +785,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Instance-aware projection of the wire provider list. One entry per
   // configured instance (default built-in + any custom `providerInstances.*`),
   // sorted default-first per driver kind for a stable picker order.
-  // Hermes is dropped here rather than in the picker so every consumer of the
-  // list agrees: the picker rows, the model options map, and the selection
-  // fallbacks that decide what a Code thread dispatches to.
+  // The Hermes/Code split is applied here rather than in the picker so every
+  // consumer of the list agrees: the picker rows, the model options map, and
+  // the selection fallbacks that decide what a thread dispatches to. T3 Work
+  // keeps only Hermes; everywhere else drops it.
   const providerInstanceEntries = useMemo<ReadonlyArray<ProviderInstanceEntry>>(
     () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
-      ).filter((entry) => allowHermesProvider || entry.driverKind !== HERMES_DRIVER_KIND),
-    [allowHermesProvider, providerStatuses, settings],
+      filterProviderInstanceEntriesForScope(
+        sortProviderInstanceEntries(
+          applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+        ),
+        hermesProviderScope,
+      ),
+    [hermesProviderScope, providerStatuses, settings],
   );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
@@ -1003,6 +977,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         getProviderInteractionModeToggle(providerStatuses, selectedProvider),
     }),
     [isProjectlessConversation, providerStatuses, selectedProvider],
+  );
+  const runtimeModePicker = useMemo(
+    () => resolveRuntimeModePicker(selectedProvider, runtimeMode),
+    [runtimeMode, selectedProvider],
   );
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
@@ -3500,7 +3478,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     interactionMode={interactionMode}
                     planSidebarLabel={planSidebarLabel}
                     planSidebarOpen={planSidebarOpen}
-                    runtimeMode={runtimeMode}
+                    runtimeModePicker={runtimeModePicker}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
@@ -3518,7 +3496,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     <ComposerFooterModeControls
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       interactionMode={interactionMode}
-                      runtimeMode={runtimeMode}
+                      runtimeModePicker={runtimeModePicker}
                       showPlanToggle={showPlanSidebarToggle}
                       planSidebarLabel={planSidebarLabel}
                       planSidebarOpen={planSidebarOpen}

@@ -60,6 +60,8 @@ import {
   type DraftComposerAttachment,
 } from "../../lib/composerImages";
 import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { buildProviderDriverMap, isHermesThread } from "../../lib/mobileWorkspace";
+import { runtimeModeMenu } from "../../lib/runtimeModeMenu";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -353,6 +355,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  // A T3 Work thread offers Hermes models only; a Code thread never offers
+  // them. Which side this thread is on comes from the thread, not the picker.
+  const isHermesConversation = useMemo(
+    () =>
+      isHermesThread(
+        props.selectedThread,
+        buildProviderDriverMap(
+          props.serverConfig ? new Map([[props.environmentId, props.serverConfig]]) : new Map(),
+        ),
+      ),
+    [props.environmentId, props.serverConfig, props.selectedThread],
+  );
 
   // ── Trigger detection ────────────────────────────────────
   const [composerSelection, setComposerSelection] = useState(() => ({
@@ -644,8 +658,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   // ── Model menu ───────────────────────────────────────────
   const modelOptions = useMemo(
-    () => buildModelOptions(props.serverConfig, currentModelSelection),
-    [props.serverConfig, currentModelSelection],
+    () =>
+      buildModelOptions(
+        props.serverConfig,
+        currentModelSelection,
+        isHermesConversation ? "hermes-only" : "exclude-hermes",
+      ),
+    [props.serverConfig, currentModelSelection, isHermesConversation],
   );
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const currentModelOption =
@@ -672,33 +691,26 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
 
   // ── Options menu ─────────────────────────────────────────
+  const runtimeMenu = useMemo(
+    () =>
+      runtimeModeMenu({
+        isHermes: isHermesConversation,
+        runtimeMode: currentRuntimeMode,
+      }),
+    [currentRuntimeMode, isHermesConversation],
+  );
   const optionsMenuActions = useMemo(
     () => [
       ...buildProviderOptionMenuActions(providerOptionDescriptors),
       {
         id: "options-runtime",
         title: "Runtime",
-        subtitle:
-          currentRuntimeMode === "approval-required"
-            ? "Approve actions"
-            : currentRuntimeMode === "auto-accept-edits"
-              ? "Auto-accept edits"
-              : currentRuntimeMode === "auto"
-                ? "Auto"
-                : "Full access",
-        subactions: [
-          { id: "options:runtime:approval-required", title: "Approve actions" },
-          { id: "options:runtime:auto-accept-edits", title: "Auto-accept edits" },
-          { id: "options:runtime:auto", title: "Auto" },
-          { id: "options:runtime:full-access", title: "Full access" },
-        ].map((option) => {
-          const value = option.id.replace("options:runtime:", "");
-          return {
-            id: option.id,
-            title: option.title,
-            state: currentRuntimeMode === value ? ("on" as const) : undefined,
-          };
-        }),
+        subtitle: runtimeMenu.selected.title,
+        subactions: runtimeMenu.options.map((option) => ({
+          id: `options:runtime:${option.mode}`,
+          title: option.title,
+          state: runtimeMenu.selected.mode === option.mode ? ("on" as const) : undefined,
+        })),
       },
       {
         id: "options-interaction",
@@ -717,7 +729,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         }),
       },
     ],
-    [currentInteractionMode, currentRuntimeMode, providerOptionDescriptors],
+    [currentInteractionMode, providerOptionDescriptors, runtimeMenu],
   );
 
   // ── Menu handlers ────────────────────────────────────────
