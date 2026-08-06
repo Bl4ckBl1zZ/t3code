@@ -3897,6 +3897,53 @@ export function makeClaudeAdapterV2(
             return;
           }
 
+          // The CLI compacts its own transcript mid-turn once the context fills
+          // up, and on an explicit /compact. Either way the model loses detail
+          // it had a moment ago, so the timeline says where that happened.
+          if (message.type === "system" && message.subtype === "compact_boundary") {
+            const occurredAt = yield* DateTime.now;
+            const nativeItemId = `compaction:${message.uuid}`;
+            const itemOrdinal = yield* resolveItemOrdinal(context, nativeItemId);
+            const metadata = message.compact_metadata;
+            const beforeTokenCount = Math.max(0, Math.trunc(metadata.pre_tokens));
+            const afterTokenCount =
+              metadata.post_tokens === undefined
+                ? undefined
+                : Math.max(0, Math.trunc(metadata.post_tokens));
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CLAUDE_PROVIDER,
+              turnItem: {
+                id: idAllocator.derive.turnItemFromProviderItem({
+                  driver: CLAUDE_PROVIDER,
+                  nativeItemId,
+                }),
+                threadId: context.input.threadId,
+                runId: context.input.runId,
+                nodeId: context.input.rootNodeId,
+                providerThreadId: context.input.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef: {
+                  driver: CLAUDE_PROVIDER,
+                  nativeId: nativeItemId,
+                  strength: "strong",
+                },
+                parentItemId: null,
+                ordinal: itemOrdinal,
+                status: "completed",
+                title: "Chat compacted",
+                startedAt: occurredAt,
+                completedAt: occurredAt,
+                updatedAt: occurredAt,
+                type: "compaction",
+                driver: CLAUDE_PROVIDER,
+                beforeTokenCount,
+                ...(afterTokenCount === undefined ? {} : { afterTokenCount }),
+              },
+            });
+            return;
+          }
+
           if (message.type === "system" && message.subtype === "task_started") {
             if (isClaudeNonSubagentTask(message)) {
               context.ignoredTaskIds.add(message.task_id);

@@ -170,6 +170,11 @@ export type MessagesTimelineRow =
       createdAt: string;
     }
   | {
+      kind: "day-divider";
+      id: string;
+      createdAt: string;
+    }
+  | {
       kind: "work";
       id: string;
       createdAt: string;
@@ -702,7 +707,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  const mergedRows = mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(nextRows));
+  const mergedRows = insertDayDividers(mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(nextRows)));
 
   if (input.isWorking) {
     mergedRows.push({
@@ -713,6 +718,37 @@ export function deriveMessagesTimelineRows(input: {
   }
 
   return mergedRows;
+}
+
+/** Local calendar day of an ISO timestamp, or null when it doesn't parse. */
+export function timelineDayKey(isoDate: string): string | null {
+  const parsed = new Date(isoDate);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const month = `${parsed.getMonth() + 1}`.padStart(2, "0");
+  const day = `${parsed.getDate()}`.padStart(2, "0");
+  return `${parsed.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * A boundary between calendar days, so a thread picked up over a week doesn't
+ * read as one sitting. Only between days: the first day carries no divider,
+ * because there is nothing above it to separate from.
+ */
+function insertDayDividers(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
+  const result: MessagesTimelineRow[] = [];
+  let previousDayKey: string | null = null;
+  for (const row of rows) {
+    const createdAt = row.createdAt;
+    const dayKey = createdAt === null ? null : timelineDayKey(createdAt);
+    if (dayKey !== null && createdAt !== null) {
+      if (previousDayKey !== null && dayKey !== previousDayKey) {
+        result.push({ kind: "day-divider", id: `day-divider:${dayKey}`, createdAt });
+      }
+      previousDayKey = dayKey;
+    }
+    result.push(row);
+  }
+  return result;
 }
 
 type AgentUpdateMessageRow = Extract<MessagesTimelineRow, { kind: "message" }>;
@@ -831,6 +867,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "chat-cleared":
+    case "day-divider":
     case "working":
       return a.createdAt === (b as typeof a).createdAt;
 

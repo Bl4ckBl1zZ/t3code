@@ -973,6 +973,17 @@ export const OrchestrationV2TurnItem = Schema.Union([
     scopeId: CheckpointScopeId,
     files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   }),
+  // Rolling back drops whole runs out of the visible projection, so this is the
+  // only trace left that the discarded work ever happened. Deliberately carries
+  // no runId: run-scoped items are filtered out with the runs they belong to.
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    type: Schema.Literal("checkpoint_rollback"),
+    checkpointId: CheckpointId,
+    scopeId: CheckpointScopeId,
+    restoredFileCount: NonNegativeInt,
+    rolledBackRunCount: NonNegativeInt,
+  }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("run_interrupt_request"),
@@ -1714,6 +1725,14 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     checkpointId: CheckpointId,
     scopeId: CheckpointScopeId,
     files: Schema.Array(OrchestrationV2CheckpointFileSummary),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    type: Schema.Literal("checkpoint_rollback"),
+    checkpointId: CheckpointId,
+    scopeId: CheckpointScopeId,
+    restoredFileCount: NonNegativeInt,
+    rolledBackRunCount: NonNegativeInt,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,

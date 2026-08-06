@@ -24,6 +24,7 @@ import { orchestrationV2TurnItemStatusIsTerminal } from "@t3tools/contracts";
 import { presentProviderError } from "@t3tools/client-runtime/errors";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
 import * as DateTime from "effect/DateTime";
 
 import { isV2LifecycleTimelineItem } from "./threadLifecycle";
@@ -248,6 +249,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "proposed_plan":
     case "todo_list":
       return "check";
+    case "checkpoint_rollback":
     case "compaction":
     case "handoff":
     case "fork":
@@ -293,6 +295,8 @@ function itemSummary(
       return "Input requested";
     case "checkpoint":
       return "Checkpoint captured";
+    case "checkpoint_rollback":
+      return "Rolled back";
     case "run_interrupt_request":
       return "Interrupt requested";
     case "run_interrupt_result":
@@ -300,7 +304,7 @@ function itemSummary(
     case "error":
       return "Provider error";
     case "compaction":
-      return "Context compacted";
+      return "Chat compacted";
     case "handoff":
       return "Context handed off";
     case "fork":
@@ -366,6 +370,8 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
       // Provider failures arrive wrapped in adapter names, run ids and
       // provider-thread ids. Present the operational next step instead.
       return presentProviderError(item.failure.message);
+    case "checkpoint_rollback":
+      return formatOrchestrationV2RollbackDetail(item);
     case "compaction":
     case "handoff":
       return item.summary ?? null;

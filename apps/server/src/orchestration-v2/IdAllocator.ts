@@ -176,6 +176,10 @@ export interface IdAllocatorV2DeriveShape {
   }) => TurnItemId;
   readonly approvalNode: (input: { readonly requestId: RuntimeRequestId }) => NodeId;
   readonly approvalTurnItem: (input: { readonly requestId: RuntimeRequestId }) => TurnItemId;
+  /** Derived from the target so re-rolling back to it updates one row. */
+  readonly checkpointRollbackTurnItem: (input: {
+    readonly checkpointId: CheckpointId;
+  }) => TurnItemId;
 }
 
 export interface IdAllocatorV2Shape {
@@ -402,6 +406,8 @@ export const layer: Layer.Layer<IdAllocatorV2> = Layer.succeed(
       approvalNode: (input) => NodeId.make(joinId("node", "runtime-request", input.requestId)),
       approvalTurnItem: (input) =>
         TurnItemId.make(joinId("turn-item", "runtime-request", input.requestId)),
+      checkpointRollbackTurnItem: (input) =>
+        TurnItemId.make(joinId("turn-item", "checkpoint-rollback", input.checkpointId)),
     },
   }),
 );

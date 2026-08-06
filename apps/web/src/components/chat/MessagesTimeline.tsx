@@ -56,6 +56,7 @@ import {
   ChevronUpIcon,
   CircleAlertIcon,
   DownloadIcon,
+  EraserIcon,
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
@@ -100,6 +101,7 @@ import {
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
+  timelineDayKey,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -970,6 +972,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
       {row.kind === "chat-cleared" ? <ChatClearedTimelineRow /> : null}
+      {row.kind === "day-divider" ? <DayDividerTimelineRow row={row} /> : null}
       {row.kind === "work" ? <WorkGroupSection groupedEntries={row.groupedEntries} /> : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
       {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
@@ -987,13 +990,32 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 });
 
 function ChatClearedTimelineRow() {
-  return (
-    <div className="flex items-center gap-3 py-2 text-xs text-muted-foreground/70">
-      <div className="h-px flex-1 bg-border/60" />
-      <span>Chat cleared</span>
-      <div className="h-px flex-1 bg-border/60" />
-    </div>
-  );
+  return <TimelineSystemDivider label="Chat cleared" icon={EraserIcon} />;
+}
+
+function DayDividerTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "day-divider" }> }) {
+  return <TimelineSystemDivider label={formatTimelineDayLabel(row.createdAt)} />;
+}
+
+/**
+ * "Today" / "Yesterday" for the days a reader still holds in their head, and a
+ * dated label beyond that. The year only appears once it isn't the current one.
+ */
+function formatTimelineDayLabel(isoDate: string, nowMs: number = Date.now()): string {
+  const parsed = new Date(isoDate);
+  if (Number.isNaN(parsed.getTime())) return "Earlier";
+  const dayKey = timelineDayKey(isoDate);
+  const now = new Date(nowMs);
+  if (dayKey === timelineDayKey(now.toISOString())) return "Today";
+  const yesterday = new Date(nowMs);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (dayKey === timelineDayKey(yesterday.toISOString())) return "Yesterday";
+  return parsed.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(parsed.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
 // A run of consecutive agent-authored prompts (delegated-task wakes) collapses
@@ -1355,18 +1377,18 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
   const Icon = row.expanded ? ChevronDownIcon : ChevronRightIcon;
 
   return (
-    <button
-      type="button"
-      aria-expanded={row.expanded}
-      data-scroll-anchor-ignore
-      data-superseded-attempt-id={row.attemptId}
-      onClick={() => ctx.onToggleAttemptFold(row.attemptId)}
-      className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-    >
-      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="text-xs font-medium text-foreground/80">{row.label}</span>
-      <span className="text-[11px] text-muted-foreground">Partial output retained</span>
-    </button>
+    <TimelineSystemDivider
+      label={row.label}
+      detail="Partial output retained"
+      icon={Icon}
+      expanded={row.expanded}
+      actionLabel={row.expanded ? "Collapse superseded attempt" : "Expand superseded attempt"}
+      onAction={() => ctx.onToggleAttemptFold(row.attemptId)}
+      dataAttributes={{
+        "data-scroll-anchor-ignore": "true",
+        "data-superseded-attempt-id": row.attemptId,
+      }}
+    />
   );
 }
 
@@ -1703,7 +1725,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
           ? null
           : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
       return {
-        label: "Context compacted",
+        label: "Chat compacted",
         detail: item.summary ?? tokenSummary,
         tone: item.status === "failed" ? "danger" : "muted",
         icon: MinusIcon,
@@ -1771,8 +1793,6 @@ function V2EventTimelineRow({
     return (
       <V2LifecycleRow
         item={item}
-        createdAt={row.createdAt}
-        timestampFormat={ctx.timestampFormat}
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}

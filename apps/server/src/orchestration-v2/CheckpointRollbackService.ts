@@ -238,6 +238,38 @@ export const layer: Layer.Layer<
           }),
         );
       }
+      // Runless on purpose: run-scoped items disappear along with the runs
+      // being discarded, and this row has to outlive them. The ordinal lands
+      // past every surviving item and ahead of the next run's first item.
+      events.push(
+        yield* makeEvent({
+          type: "turn-item.updated",
+          threadId: input.threadId,
+          providerInstanceId: providerThread.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            id: ids.derive.checkpointRollbackTurnItem({ checkpointId: checkpoint.id }),
+            threadId: input.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: providerThread.id,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: (targetOrdinal + 1) * 100,
+            status: "completed",
+            title: "Rolled back",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "checkpoint_rollback",
+            checkpointId: checkpoint.id,
+            scopeId: scope.id,
+            restoredFileCount: checkpoint.files?.length ?? 0,
+            rolledBackRunCount: runsToRollback.length,
+          },
+        }),
+      );
       for (const run of runsToRollback) {
         const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
         events.push(

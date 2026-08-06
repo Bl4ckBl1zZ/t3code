@@ -570,6 +570,8 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
       return item.prompt ?? item.requestKind;
     case "checkpoint":
       return jsonText(item.files);
+    case "checkpoint_rollback":
+      return `Rolled back ${item.rolledBackRunCount} run(s) to checkpoint ${item.checkpointId}, restoring ${item.restoredFileCount} file(s).`;
     case "run_interrupt_request":
     case "run_interrupt_result":
       return item.message;

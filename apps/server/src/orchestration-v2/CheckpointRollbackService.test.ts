@@ -329,3 +329,95 @@ it.effect("wraps underlying failures with an unexpected-failure reason and cause
     assert.strictEqual(error.cause, projectionError);
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect("leaves a runless rollback marker so the discarded work stays visible", () => {
+  const threadId = ThreadId.make("thread:rollback-marker");
+  const providerThreadId = ProviderThreadId.make("provider-thread:rollback-marker");
+  const providerSessionId = ProviderSessionId.make("provider-session:rollback-marker");
+  const checkpointId = CheckpointId.make("checkpoint:rollback-marker");
+  const scopeId = CheckpointScopeId.make("checkpoint-scope:rollback-marker");
+  const providerInstanceId = ProviderInstanceId.make("provider_rollback_marker");
+  const providerThread = {
+    id: providerThreadId,
+    providerSessionId,
+    providerInstanceId,
+    driver: "claudeAgent",
+  };
+  const projection = {
+    thread: {
+      activeProviderThreadId: providerThreadId,
+      modelSelection: { instanceId: providerInstanceId, model: "test-model" },
+    },
+    providerThreads: [providerThread],
+    providerSessions: [],
+    providerTurns: [],
+    attempts: [],
+    nodes: [],
+    runs: [
+      { id: "run-1", ordinal: 1, status: "completed", providerInstanceId, rootNodeId: null },
+      { id: "run-2", ordinal: 2, status: "completed", providerInstanceId, rootNodeId: null },
+    ],
+    checkpoints: [
+      {
+        id: checkpointId,
+        scopeId,
+        status: "ready",
+        appRunOrdinal: 0,
+        runId: null,
+        nodeId: "node-1",
+        files: [{ path: "a.ts" }, { path: "b.ts" }, { path: "c.ts" }],
+      },
+    ],
+    checkpointScopes: [{ id: scopeId }],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const written: Array<{ readonly events: ReadonlyArray<{ readonly type: string }> }> = [];
+  const testLayer = checkpointRollbackServiceLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(CheckpointServiceV2)({
+          restore: () => Effect.void,
+          deleteStaleRefs: () => Effect.void,
+        }),
+        Layer.mock(EventSinkV2)({
+          write: ((input: { readonly events: ReadonlyArray<{ readonly type: string }> }) => {
+            written.push(input);
+            return Effect.void;
+          }) as never,
+        }),
+        idAllocatorLayer,
+        Layer.mock(ProjectionStoreV2)({
+          getThreadProjection: () => Effect.succeed(projection),
+        }),
+        Layer.mock(ProviderSessionManagerV2)({
+          open: (() =>
+            Effect.succeed({ rollbackThread: () => Effect.succeed({ providerThread }) })) as never,
+        }),
+        Layer.mock(RuntimePolicyV2)({ resolve: (() => Effect.succeed({})) as never }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* CheckpointRollbackServiceV2;
+    yield* service.execute({ threadId, providerThreadId, checkpointId, scopeId });
+
+    const events = written.flatMap((batch) => batch.events);
+    const markers = events.filter((event) => event.type === "turn-item.updated");
+    assert.equal(markers.length, 1);
+    const marker = markers[0] as unknown as {
+      readonly payload: Record<string, unknown>;
+    };
+    assert.deepInclude(marker.payload, {
+      type: "checkpoint_rollback",
+      threadId,
+      // Runless on purpose: run-scoped items vanish with the runs they belong to.
+      runId: null,
+      checkpointId,
+      scopeId,
+      restoredFileCount: 3,
+      rolledBackRunCount: 2,
+      // Past every surviving item, ahead of the next run's first item.
+      ordinal: 100,
+    });
+  }).pipe(Effect.provide(testLayer));
+});

@@ -116,10 +116,9 @@ function RelatedThreadCard(props: {
 }
 
 /**
- * First-class timeline row for a V2 lifecycle item: interrupt lines,
- * system dividers (interrupt result, compaction, handoff, fork), and
- * related-thread cards (thread created, subagent). Mobile counterpart to the
- * web timeline's V2LifecycleRow.
+ * First-class timeline row for a V2 lifecycle item: system dividers (interrupt
+ * request/result, compaction, handoff, fork) and related-thread cards (thread
+ * created, subagent). Mobile counterpart to the web timeline's V2LifecycleRow.
  */
 export function ThreadLifecycleRow(props: {
   readonly entry: LifecycleEntry;
@@ -151,17 +150,6 @@ export function ThreadLifecycleRow(props: {
 
   const presentation = resolveLifecyclePresentation(row.item, runs);
   if (presentation === null) return null;
-
-  if (presentation.kind === "interrupt-request") {
-    return (
-      <View className="mb-3 flex-row items-center justify-end gap-1.5 px-1">
-        <SymbolView name="stop.fill" size={9} tintColor="#ef4444" type="monochrome" />
-        <Text className="font-t3-medium text-xs text-red-600 dark:text-red-400" numberOfLines={1}>
-          Interrupt requested · {presentation.message}
-        </Text>
-      </View>
-    );
-  }
 
   if (presentation.kind === "divider") {
     const openThreadId = presentation.openThreadId;

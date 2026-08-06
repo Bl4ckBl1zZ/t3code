@@ -1393,6 +1393,53 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("projects a compact boundary as a compaction item carrying token counts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-compaction"),
+            text: "Keep going.",
+            attachments: [],
+          }),
+        );
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "compact_boundary",
+            compact_metadata: {
+              trigger: "auto",
+              pre_tokens: 184_320,
+              post_tokens: 32_104,
+            },
+            uuid: "00000000-0000-4000-8000-000000000301",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+
+        const compactionItems = () =>
+          harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "compaction"
+              ? [event.turnItem]
+              : [],
+          );
+        yield* awaitUntil(() => compactionItems().length === 1, "Claude compaction item");
+        const compaction = compactionItems()[0];
+        assert.equal(compaction?.status, "completed");
+        assert.equal(compaction?.title, "Chat compacted");
+        assert.equal(compaction?.beforeTokenCount, 184_320);
+        assert.equal(compaction?.afterTokenCount, 32_104);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("carries exhausted retry progress into the terminal provider error", () =>
     Effect.scoped(
       Effect.gen(function* () {
