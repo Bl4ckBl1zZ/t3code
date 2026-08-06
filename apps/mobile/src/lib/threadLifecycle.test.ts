@@ -42,13 +42,18 @@ describe("isV2LifecycleTimelineItem", () => {
 });
 
 describe("resolveLifecyclePresentation", () => {
-  it("renders interrupt request as an inline line", () => {
+  it("renders interrupt request as a danger divider, matching its result", () => {
     expect(
       resolveLifecyclePresentation(
         item({ type: "run_interrupt_request", message: "user requested stop" }),
         [],
       ),
-    ).toEqual({ kind: "interrupt-request", message: "user requested stop" });
+    ).toMatchObject({
+      kind: "divider",
+      label: "Interrupt requested",
+      detail: "user requested stop",
+      tone: "danger",
+    });
   });
 
   it("renders interrupt result as a danger divider", () => {
@@ -229,5 +234,31 @@ describe("resolveLifecyclePresentation", () => {
 
   it("returns null for non-lifecycle items", () => {
     expect(resolveLifecyclePresentation(item({ type: "checkpoint", files: [] }), [])).toBeNull();
+  });
+});
+
+describe("checkpoint rollback presentation", () => {
+  it("renders as a neutral divider counting turns and restored files", () => {
+    expect(
+      resolveLifecyclePresentation(
+        item({
+          type: "checkpoint_rollback",
+          checkpointId: "checkpoint-1",
+          scopeId: "scope-1",
+          restoredFileCount: 3,
+          rolledBackRunCount: 2,
+        }),
+        [],
+      ),
+    ).toMatchObject({
+      kind: "divider",
+      label: "Rolled back",
+      detail: "2 turns · 3 files restored",
+      tone: "neutral",
+    });
+  });
+
+  it("is treated as a first-class lifecycle row, not work-log activity", () => {
+    expect(isV2LifecycleTimelineItem(item({ type: "checkpoint_rollback" }))).toBe(true);
   });
 });

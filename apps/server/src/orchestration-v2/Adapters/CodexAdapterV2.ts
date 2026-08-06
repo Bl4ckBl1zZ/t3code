@@ -3814,6 +3814,40 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               return;
             }
 
+            // Codex reports the boundary and nothing else — no token counts —
+            // so the row is the marker alone. Same divider as Claude's.
+            if (payload.item.type === "contextCompaction") {
+              const occurredAt = yield* DateTime.now;
+              const nativeItemId = payload.item.id;
+              const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: {
+                  id: idAllocator.derive.turnItemFromProviderItem({
+                    driver: CODEX_PROVIDER,
+                    nativeItemId,
+                  }),
+                  threadId: context.projectionThreadId,
+                  runId: context.projectionRunId,
+                  nodeId: context.rootNodeId,
+                  providerThreadId: context.providerThread.id,
+                  providerTurnId: context.providerTurnId,
+                  nativeItemRef: codexNativeItemRef(nativeItemId),
+                  parentItemId: null,
+                  ordinal,
+                  status: "completed",
+                  title: "Chat compacted",
+                  startedAt: occurredAt,
+                  completedAt: occurredAt,
+                  updatedAt: occurredAt,
+                  type: "compaction",
+                  driver: CODEX_PROVIDER,
+                },
+              });
+              return;
+            }
+
             if (payload.item.type === "plan") {
               const deltas = yield* Ref.get(planDeltas);
               const markdown =

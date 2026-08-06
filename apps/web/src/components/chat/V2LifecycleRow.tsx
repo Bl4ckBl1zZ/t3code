@@ -6,7 +6,6 @@ import type {
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   ArrowRightIcon,
   ExternalLinkIcon,
@@ -15,12 +14,15 @@ import {
   MessageSquareIcon,
   MinusIcon,
   type LucideIcon,
+  SquareIcon,
+  Undo2Icon,
   XIcon,
   ZapIcon,
 } from "lucide-react";
 
+import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
+
 import { getProviderInstanceEntry } from "../../providerInstances";
-import { formatShortTimestamp } from "../../timestampFormat";
 import { cn } from "../../lib/utils";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
@@ -29,6 +31,7 @@ import { TimelineSystemDivider } from "./TimelineSystemDivider";
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "run_interrupt_request",
   "run_interrupt_result",
+  "checkpoint_rollback",
   "compaction",
   "handoff",
   "fork",
@@ -69,8 +72,6 @@ export type HandoffTimelineRun = Pick<
 
 export function V2LifecycleRow(props: {
   readonly item: OrchestrationV2TurnItem;
-  readonly createdAt: string;
-  readonly timestampFormat: TimestampFormat;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly onOpenThread: (threadId: ThreadId) => void;
@@ -81,21 +82,13 @@ export function V2LifecycleRow(props: {
   const { item } = props;
   if (item.type === "run_interrupt_request") {
     return (
-      <div className="flex justify-end px-1 py-1" data-v2-item-type={item.type}>
-        <div className="flex max-w-[80%] items-center gap-2 text-xs text-destructive">
-          <span aria-hidden="true" className="font-mono">
-            ■
-          </span>
-          <span className="font-medium">Interrupt requested</span>
-          <span aria-hidden="true" className="opacity-50">
-            ·
-          </span>
-          <span className="font-medium">{item.message}</span>
-          <span className="text-[10px] text-muted-foreground">
-            {formatShortTimestamp(props.createdAt, props.timestampFormat)}
-          </span>
-        </div>
-      </div>
+      <TimelineSystemDivider
+        label="Interrupt requested"
+        detail={item.message}
+        tone="danger"
+        icon={SquareIcon}
+        dataAttributes={{ "data-v2-item-type": item.type }}
+      />
     );
   }
   if (item.type === "run_interrupt_result") {
@@ -105,6 +98,17 @@ export function V2LifecycleRow(props: {
         detail={item.message}
         tone="danger"
         icon={XIcon}
+        dataAttributes={{ "data-v2-item-type": item.type }}
+      />
+    );
+  }
+  if (item.type === "checkpoint_rollback") {
+    return (
+      <TimelineSystemDivider
+        label="Rolled back"
+        detail={formatOrchestrationV2RollbackDetail(item)}
+        icon={Undo2Icon}
+        dataAttributes={{ "data-v2-item-type": item.type }}
       />
     );
   }
@@ -115,9 +119,10 @@ export function V2LifecycleRow(props: {
         : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
     return (
       <TimelineSystemDivider
-        label="Context compacted"
+        label="Chat compacted"
         detail={item.summary ?? tokenDetail}
         icon={MinusIcon}
+        dataAttributes={{ "data-v2-item-type": item.type }}
       />
     );
   }
@@ -159,6 +164,7 @@ export function V2LifecycleRow(props: {
         icon={preparing ? LoaderCircleIcon : ZapIcon}
         busy={preparing}
         tone={item.status === "failed" ? "danger" : "neutral"}
+        dataAttributes={{ "data-v2-item-type": item.type }}
         detail={
           <span className="inline-flex min-w-0 items-center gap-1.5">
             {fromEndpoints.map((endpoint, index) => (
@@ -196,6 +202,7 @@ export function V2LifecycleRow(props: {
         icon={GitForkIcon}
         actionLabel={item.source.type === "run" ? "Open source conversation" : "Open fork"}
         onAction={() => props.onOpenThread(relatedThreadId)}
+        dataAttributes={{ "data-v2-item-type": item.type }}
       />
     );
   }

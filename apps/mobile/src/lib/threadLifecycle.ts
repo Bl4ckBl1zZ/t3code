@@ -1,4 +1,5 @@
 import type { OrchestrationV2TurnItem, ThreadId } from "@t3tools/contracts";
+import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
 
 /**
  * Turn items that render as first-class timeline rows (dividers or related-
@@ -8,6 +9,7 @@ import type { OrchestrationV2TurnItem, ThreadId } from "@t3tools/contracts";
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "run_interrupt_request",
   "run_interrupt_result",
+  "checkpoint_rollback",
   "compaction",
   "handoff",
   "fork",
@@ -46,15 +48,17 @@ export interface LifecycleTimelineRun {
 
 export type LifecyclePresentation =
   | {
-      readonly kind: "interrupt-request";
-      readonly message: string;
-    }
-  | {
       readonly kind: "divider";
       readonly label: string;
       readonly detail: string | null;
       readonly tone: "neutral" | "danger";
-      readonly symbol: "xmark" | "minus" | "bolt" | "arrow.triangle.branch";
+      readonly symbol:
+        | "xmark"
+        | "minus"
+        | "bolt"
+        | "arrow.triangle.branch"
+        | "stop.fill"
+        | "arrow.uturn.backward";
       /** Stacked puts the detail on its own line under the label (handoffs). */
       readonly layout: "inline" | "stacked";
       /** In-flight system work (e.g. handoff summary being generated). */
@@ -113,9 +117,8 @@ function subagentBadgeTone(
 
 /**
  * Pure presentation for a lifecycle turn item. Ports the web V2LifecycleRow
- * semantics: interrupt requests are inline destructive lines, interrupt
- * results/compactions/handoffs/forks are dividers, thread creation and
- * subagents are related-thread cards.
+ * semantics: interrupt requests/results, compactions, handoffs and forks are
+ * dividers, thread creation and subagents are related-thread cards.
  */
 export function resolveLifecyclePresentation(
   item: OrchestrationV2TurnItem,
@@ -123,7 +126,17 @@ export function resolveLifecyclePresentation(
 ): LifecyclePresentation | null {
   switch (item.type) {
     case "run_interrupt_request":
-      return { kind: "interrupt-request", message: item.message };
+      return {
+        kind: "divider",
+        label: "Interrupt requested",
+        detail: item.message ?? null,
+        tone: "danger",
+        symbol: "stop.fill",
+        layout: "inline",
+        busy: false,
+        actionLabel: null,
+        openThreadId: null,
+      };
     case "run_interrupt_result":
       return {
         kind: "divider",
@@ -136,6 +149,18 @@ export function resolveLifecyclePresentation(
         actionLabel: null,
         openThreadId: null,
       };
+    case "checkpoint_rollback":
+      return {
+        kind: "divider",
+        label: "Rolled back",
+        detail: formatOrchestrationV2RollbackDetail(item),
+        tone: "neutral",
+        symbol: "arrow.uturn.backward",
+        layout: "inline",
+        busy: false,
+        actionLabel: null,
+        openThreadId: null,
+      };
     case "compaction": {
       const tokenDetail =
         item.beforeTokenCount === undefined && item.afterTokenCount === undefined
@@ -143,7 +168,7 @@ export function resolveLifecyclePresentation(
           : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
       return {
         kind: "divider",
-        label: "Context compacted",
+        label: "Chat compacted",
         detail: item.summary ?? tokenDetail,
         tone: "neutral",
         symbol: "minus",

@@ -118,3 +118,23 @@ export function isOrchestrationV2TurnItemVisible(input: {
     items: input.items,
   });
 }
+
+/**
+ * Detail line for a checkpoint rollback marker: "2 turns · 7 files restored",
+ * dropping either half when it is zero and returning null when both are.
+ */
+export function formatOrchestrationV2RollbackDetail(input: {
+  readonly rolledBackRunCount: number;
+  readonly restoredFileCount: number;
+}): string | null {
+  const parts: string[] = [];
+  if (input.rolledBackRunCount > 0) {
+    parts.push(`${input.rolledBackRunCount} ${input.rolledBackRunCount === 1 ? "turn" : "turns"}`);
+  }
+  if (input.restoredFileCount > 0) {
+    parts.push(
+      `${input.restoredFileCount} ${input.restoredFileCount === 1 ? "file" : "files"} restored`,
+    );
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
+}

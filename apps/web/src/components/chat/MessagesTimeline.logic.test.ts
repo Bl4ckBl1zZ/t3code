@@ -1830,3 +1830,47 @@ describe("collapseWorkEntriesKeepingLiveBackground", () => {
     expect(collapseWorkEntriesKeepingLiveBackground(entries, 1).map((e) => e.id)).toEqual(["c"]);
   });
 });
+
+describe("day dividers", () => {
+  const messageEntry = (id: string, createdAt: string) => ({
+    id,
+    kind: "message" as const,
+    createdAt,
+    message: {
+      id: id as never,
+      role: "user" as const,
+      text: id,
+      createdAt,
+      updatedAt: createdAt,
+      streaming: false,
+    },
+  });
+  const derive = (entries: ReadonlyArray<ReturnType<typeof messageEntry>>) =>
+    deriveMessagesTimelineRows({
+      timelineEntries: entries as never,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+  it("separates calendar days and leaves the first day unmarked", () => {
+    const rows = derive([
+      messageEntry("a", "2026-03-17T09:00:00"),
+      messageEntry("b", "2026-03-17T18:00:00"),
+      messageEntry("c", "2026-03-19T08:00:00"),
+    ]);
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message", "day-divider", "message"]);
+    expect(rows[2]).toMatchObject({ id: "day-divider:2026-03-19" });
+  });
+
+  it("adds nothing when every row falls on one day", () => {
+    const rows = derive([
+      messageEntry("a", "2026-03-17T00:05:00"),
+      messageEntry("b", "2026-03-17T23:55:00"),
+    ]);
+
+    expect(rows.some((row) => row.kind === "day-divider")).toBe(false);
+  });
+});

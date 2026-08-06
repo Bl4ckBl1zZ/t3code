@@ -879,6 +879,53 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Structured details");
   });
 
+  it("renders a checkpoint rollback as a divider counting what it discarded", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "rollback",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "rollback",
+              item: {
+                id: "rollback",
+                threadId: "thread-1",
+                runId: null,
+                nodeId: null,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 300,
+                status: "completed",
+                title: "Rolled back",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "checkpoint_rollback",
+                checkpointId: "checkpoint-1",
+                scopeId: "scope-1",
+                restoredFileCount: 7,
+                rolledBackRunCount: 1,
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-v2-item-type="checkpoint_rollback"');
+    expect(markup).toContain("Rolled back");
+    expect(markup).toContain("1 turn · 7 files restored");
+  });
+
   it("renders context handoffs as from → to model endpoints instead of the summary", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const providerStatuses = [
