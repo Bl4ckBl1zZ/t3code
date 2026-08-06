@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -77,6 +78,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
+import * as HermesProactive from "./hermes/HermesProactiveService.ts";
 import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as HermesSessionImport from "./hermes/HermesSessionImportService.ts";
 import {
@@ -442,6 +444,15 @@ const makeWsRpcLayer = (
       const hermesCron = yield* HermesCron.HermesCron;
       const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
+      const hermesProactive = yield* HermesProactive.make();
+      // Hermes only streams a cron run to clients that are connected when it
+      // fires, so residency is re-established on an interval for as long as
+      // the server runs.
+      yield* hermesProactive.sweep().pipe(
+        Effect.catchCause((cause) => Effect.logWarning("hermes.proactive.sweep-failed", { cause })),
+        Effect.repeat(Schedule.spaced(HermesProactive.SWEEP_INTERVAL)),
+        Effect.forkScoped,
+      );
       const projectService = yield* ProjectService.ProjectService;
       const textGeneration = yield* TextGeneration.TextGeneration;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
@@ -1335,6 +1346,10 @@ const makeWsRpcLayer = (
         [WS_METHODS.hermesCronMutate]: (input) =>
           observeRpcEffect(WS_METHODS.hermesCronMutate, hermesCron.mutate(input), {
             "rpc.aggregate": "hermesCron",
+          }),
+        [WS_METHODS.hermesProactiveStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.hermesProactiveStatus, hermesProactive.report(), {
+            "rpc.aggregate": "hermesProactive",
           }),
         [WS_METHODS.hermesSkillsList]: (_input) =>
           observeRpcEffect(WS_METHODS.hermesSkillsList, hermesSkills.list(), {

@@ -642,6 +642,12 @@ export const HermesGatewayCronJob = Schema.Struct({
   runs: Schema.optional(Schema.Array(Schema.Unknown)),
   executions: Schema.optional(Schema.Array(Schema.Unknown)),
   history: Schema.optional(Schema.Array(Schema.Unknown)),
+  // Session targeting is optional in the pinned protocol. When a gateway does
+  // name the session a job runs in, proactive residency can keep exactly that
+  // thread subscribed instead of falling back to recency.
+  session_id: Schema.optional(Schema.String),
+  session_key: Schema.optional(Schema.String),
+  stored_session_id: Schema.optional(Schema.String),
 });
 export type HermesGatewayCronJob = typeof HermesGatewayCronJob.Type;
 

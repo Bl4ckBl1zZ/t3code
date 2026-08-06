@@ -190,6 +190,7 @@ import {
   HermesCronMutationInput,
   HermesCronMutationResponse,
 } from "./hermesGateway.ts";
+import { HermesProactiveStatusInput, HermesProactiveStatusResult } from "./hermesProactive.ts";
 import {
   HermesSkillsError,
   HermesSkillsInspectInput,
@@ -310,6 +311,7 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   hermesCronList: "hermesCron.list",
   hermesCronMutate: "hermesCron.mutate",
+  hermesProactiveStatus: "hermesProactive.status",
   hermesSkillsList: "hermesSkills.list",
   hermesSkillsSearch: "hermesSkills.search",
   hermesSkillsInspect: "hermesSkills.inspect",
@@ -962,6 +964,12 @@ export const WsHermesCronMutateRpc = Rpc.make(WS_METHODS.hermesCronMutate, {
   error: Schema.Union([HermesCronError, EnvironmentAuthorizationError]),
 });
 
+export const WsHermesProactiveStatusRpc = Rpc.make(WS_METHODS.hermesProactiveStatus, {
+  payload: HermesProactiveStatusInput,
+  success: HermesProactiveStatusResult,
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsHermesSkillsListRpc = Rpc.make(WS_METHODS.hermesSkillsList, {
   payload: HermesSkillsListInput,
   success: HermesSkillsListResult,
@@ -1039,6 +1047,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetBackgroundPolicyRpc,
   WsHermesCronListRpc,
   WsHermesCronMutateRpc,
+  WsHermesProactiveStatusRpc,
   WsHermesSkillsListRpc,
   WsHermesSkillsSearchRpc,
   WsHermesSkillsInspectRpc,

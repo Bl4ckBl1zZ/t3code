@@ -30,6 +30,10 @@ import {
   HermesSessionBindingRepository,
   layer as HermesSessionBindingRepositoryLayer,
 } from "./hermes/HermesSessionBindingRepository.ts";
+import {
+  HermesProactiveEventRepository,
+  layer as HermesProactiveEventRepositoryLayer,
+} from "./hermes/HermesProactiveEventRepository.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
 import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -237,10 +241,11 @@ const PlatformServicesLive = Layer.unwrap(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
-const HermesPersistenceLayerLive = HermesSessionBindingRepositoryLayer.pipe(
-  Layer.provideMerge(PersistenceLayerLive),
-) satisfies Layer.Layer<
-  HermesSessionBindingRepository | SqlClient.SqlClient,
+const HermesPersistenceLayerLive = Layer.mergeAll(
+  HermesSessionBindingRepositoryLayer,
+  HermesProactiveEventRepositoryLayer,
+).pipe(Layer.provideMerge(PersistenceLayerLive)) satisfies Layer.Layer<
+  HermesSessionBindingRepository | HermesProactiveEventRepository | SqlClient.SqlClient,
   unknown,
   ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path
 >;
