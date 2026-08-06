@@ -763,7 +763,7 @@ export const HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL = "Hermes ran this session 
  * external session from growing the buffer without bound; the turn still shows
  * everything up to the limit.
  */
-const HERMES_EXTERNAL_EVENT_BUFFER_LIMIT = 5000;
+export const HERMES_EXTERNAL_EVENT_BUFFER_LIMIT = 5000;
 
 /**
  * Event families that carry transcript content. Everything else (title,
@@ -786,6 +786,31 @@ const HERMES_EXTERNAL_CONTENT_EVENT_TYPES = new Set([
   "approval.request",
   "clarify.request",
 ]);
+
+/**
+ * The two events that park a Hermes run on an answer from T3. They are the only
+ * events whose loss strands the gateway rather than the transcript, so they are
+ * exempt from buffer trimming and worth logging when nothing can carry them.
+ */
+const HERMES_RUNTIME_REQUEST_EVENT_TYPES = new Set(["approval.request", "clarify.request"]);
+
+/**
+ * Answering a Hermes approval or clarification is a Tier 2 capability the
+ * gateway has to advertise. Pushing the request events is not the same as
+ * accepting a response to them: a gateway that never negotiated these still
+ * emits `approval.request`, and `approval.respond` then has no method to reach.
+ */
+export const HERMES_RUNTIME_REQUEST_RESPONSE_CAPABILITIES = {
+  approval: "events.approvals",
+  clarification: "events.clarification",
+} as const;
+
+export function hermesUnanswerableRuntimeRequestReason(kind: "approval" | "clarification"): string {
+  const capability = HERMES_RUNTIME_REQUEST_RESPONSE_CAPABILITIES[kind];
+  const asked = kind === "approval" ? "a command approval" : "an answer";
+  const answer = kind === "approval" ? "a decision" : "an answer";
+  return `Hermes asked for ${asked}, but this gateway does not advertise "${capability}", so T3 has no way to send ${answer} back to it. The turn was stopped instead of waiting on a response that could never be delivered.`;
+}
 
 const gatewayEffect = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({
@@ -1157,6 +1182,25 @@ export function makeHermesServeAdapterV2(
       );
       const mcpDiagnostic = diagnoseHermesMcpIntegration(compatibility);
       const mcpAvailable = options.settings.mcpEnabled && mcpDiagnostic.status === "ready";
+      // Derived per connection rather than declared: the same adapter talks to
+      // gateways that accept approval responses and to ones that only push the
+      // requests, and only the negotiated inventory tells the two apart.
+      const canRespondToRuntimeRequest = {
+        approval: compatibility.capabilities.includes(
+          HERMES_RUNTIME_REQUEST_RESPONSE_CAPABILITIES.approval,
+        ),
+        clarification: compatibility.capabilities.includes(
+          HERMES_RUNTIME_REQUEST_RESPONSE_CAPABILITIES.clarification,
+        ),
+      } as const;
+      if (!canRespondToRuntimeRequest.approval || !canRespondToRuntimeRequest.clarification) {
+        yield* Effect.logWarning("hermes.runtime-request-responses-unavailable", {
+          providerSessionId: input.providerSessionId,
+          providerInstanceId: options.instanceId,
+          canRespondToApprovals: canRespondToRuntimeRequest.approval,
+          canRespondToClarifications: canRespondToRuntimeRequest.clarification,
+        });
+      }
       if (options.settings.mcpEnabled && !mcpAvailable) {
         yield* Effect.logWarning("hermes.mcp-integration-blocked", {
           providerSessionId: input.providerSessionId,
@@ -1211,6 +1255,14 @@ export function makeHermesServeAdapterV2(
         tools: {
           ...HermesProviderCapabilitiesV2.tools,
           supportsMcpTools: mcpAvailable,
+        },
+        approvals: {
+          ...HermesProviderCapabilitiesV2.approvals,
+          supportsCommandApproval: canRespondToRuntimeRequest.approval,
+        },
+        planning: {
+          ...HermesProviderCapabilitiesV2.planning,
+          supportsStructuredQuestions: canRespondToRuntimeRequest.clarification,
         },
       };
       let providerSession: OrchestrationV2ProviderSession = {
@@ -1459,6 +1511,35 @@ export function makeHermesServeAdapterV2(
             ).pipe(Effect.ignore),
           ),
         );
+
+      /**
+       * Stops a gateway run T3 is walking away from. Hermes parks a run on an
+       * unanswered approval or clarification indefinitely, so abandoning our
+       * side of one without this leaves the session blocked on a decision that
+       * nobody is left to make. Best effort by design: this runs while a turn is
+       * being torn down or the session released, and a gateway that already
+       * moved on is exactly the outcome we wanted.
+       */
+      const unblockGatewayRun = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        operationId: string,
+      ) {
+        yield* gatewayEffect(() =>
+          client.interruptSession(
+            { session_id: state.liveSessionId },
+            mutationOptions(operationId),
+          ),
+        ).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("orchestration-v2.hermes-unblock-run-failed", {
+              providerThreadId: state.providerThread.id,
+              liveSessionId: state.liveSessionId,
+              cause,
+            }),
+          ),
+          Effect.ignore,
+        );
+      });
 
       const resolveItemOrdinal = (active: ActiveHermesTurn, identity: string): number => {
         const existing = active.itemOrdinals.get(identity);
@@ -1887,6 +1968,7 @@ export function makeHermesServeAdapterV2(
         });
         const now = yield* DateTime.now;
         const nodeId = options.idAllocator.derive.approvalNode({ requestId });
+        const answerable = canRespondToRuntimeRequest[kind];
         const request: OrchestrationV2RuntimeRequest = {
           id: requestId,
           nodeId,
@@ -1895,10 +1977,15 @@ export function makeHermesServeAdapterV2(
             nativeRequestId === undefined ? null : providerRef(nativeRequestId, "strong"),
           kind: kind === "approval" ? "command" : "user_input",
           status: "pending",
-          responseCapability: {
-            type: "live",
-            providerSessionId: input.providerSessionId,
-          },
+          responseCapability: answerable
+            ? {
+                type: "live",
+                providerSessionId: input.providerSessionId,
+              }
+            : {
+                type: "not_resumable",
+                reason: hermesUnanswerableRuntimeRequestReason(kind),
+              },
           createdAt: now,
           resolvedAt: null,
         };
@@ -1961,6 +2048,24 @@ export function makeHermesServeAdapterV2(
           driver: HERMES_PROVIDER,
           turnItem: runtimeRequestTurnItem(pending, "waiting", null, now),
         });
+        // The request is on the record either way, so the user can see what was
+        // asked. What changes is whether T3 can carry an answer: without the
+        // capability, parking the run here would wait forever, so settle it and
+        // fail the turn with the reason instead of showing a live prompt whose
+        // buttons cannot work.
+        if (!answerable) {
+          yield* Effect.logWarning("orchestration-v2.hermes-runtime-request-unanswerable", {
+            providerSessionId: input.providerSessionId,
+            providerThreadId: state.providerThread.id,
+            requestId,
+            kind,
+            missingCapability: HERMES_RUNTIME_REQUEST_RESPONSE_CAPABILITIES[kind],
+          });
+          yield* settleRuntimeRequest(pending, "cancelled");
+          yield* unblockGatewayRun(state, `hermes:unanswerable:${requestId}`);
+          yield* finalizeTurn(state, "failed", hermesUnanswerableRuntimeRequestReason(kind));
+          return;
+        }
         yield* updateSession("waiting", null);
       });
 
@@ -2339,17 +2444,38 @@ export function makeHermesServeAdapterV2(
         state: HermesThreadState,
         event: HermesGatewayOrderedEvent,
       ) {
+        const eventType = event.frame.params.type;
+        const isRuntimeRequest = HERMES_RUNTIME_REQUEST_EVENT_TYPES.has(eventType);
         // Opening a turn nobody asked for is opt-in per instance: without the
         // switch, an external run only moves session status as it did before.
-        if (!options.settings.proactiveEnabled) return;
-        const eventType = event.frame.params.type;
+        if (!options.settings.proactiveEnabled) {
+          // The run belongs to whoever started it — a cron job or another client
+          // on the same session — so T3 will not answer for them. Say so once:
+          // an operator watching a stalled Hermes session otherwise has nothing
+          // in the log tying it to a request T3 deliberately let pass.
+          if (isRuntimeRequest) {
+            yield* Effect.logWarning("orchestration-v2.hermes-external-runtime-request-ignored", {
+              providerThreadId: state.providerThread.id,
+              liveSessionId: state.liveSessionId,
+              eventType,
+            });
+          }
+          return;
+        }
         const isContent = HERMES_EXTERNAL_CONTENT_EVENT_TYPES.has(eventType);
         const isTerminalSignal =
           eventType === "status.update" || eventType === "session.status" || eventType === "error";
         if (!isContent && !(isTerminalSignal && state.externalEvents.length > 0)) return;
         if (state.ownershipLost) return;
         if (event.runId !== undefined && event.runId === state.settledRunId) return;
-        if (state.externalEvents.length >= HERMES_EXTERNAL_EVENT_BUFFER_LIMIT) {
+        // Trimming the tail costs transcript detail, which is why the limit is
+        // safe for content. It is not safe for a request: drop that one and the
+        // continuation turn opens with no prompt to answer while the gateway
+        // stays parked on it, so requests are buffered past the limit.
+        if (
+          state.externalEvents.length >= HERMES_EXTERNAL_EVENT_BUFFER_LIMIT &&
+          !isRuntimeRequest
+        ) {
           if (state.externalEvents.length === HERMES_EXTERNAL_EVENT_BUFFER_LIMIT) {
             state.externalEvents.push(event);
             yield* Effect.logWarning("orchestration-v2.hermes-external-buffer-full", {
@@ -3408,6 +3534,22 @@ export function makeHermesServeAdapterV2(
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           unsubscribe();
+          // A Hermes session outlives the T3 process that was driving it. T3
+          // cancels its own pending requests when the server restarts, but the
+          // gateway keeps the run parked on the decision until someone answers
+          // it, and after a restart nobody can: the request identity was live
+          // only. Stop those runs on the way out so the session comes back idle
+          // instead of blocked on a prompt with no reader.
+          const blockedSessions = new Map<string, PendingHermesRuntimeRequest>();
+          for (const pending of pendingRuntimeRequests.values()) {
+            if (!blockedSessions.has(pending.state.liveSessionId)) {
+              blockedSessions.set(pending.state.liveSessionId, pending);
+            }
+          }
+          for (const pending of blockedSessions.values()) {
+            yield* unblockGatewayRun(pending.state, `hermes:release:${pending.request.id}`);
+          }
+          pendingRuntimeRequests.clear();
           for (const [liveSessionId, credentialIdentity] of mcpCredentialByLiveSession) {
             const operationId = `hermes:mcp:revoke:${stableDigest(
               options.instanceId,
@@ -4027,11 +4169,30 @@ export function makeHermesServeAdapterV2(
               });
             }
             const operationId = `hermes:runtime-response:${requestInput.requestId}`;
+            if (!canRespondToRuntimeRequest[pending.kind]) {
+              return yield* new ProviderAdapterProtocolError({
+                driver: HERMES_PROVIDER,
+                detail: hermesUnanswerableRuntimeRequestReason(pending.kind),
+              });
+            }
             if (pending.kind === "approval") {
               if (requestInput.decision === undefined) {
                 return yield* new ProviderAdapterProtocolError({
                   driver: HERMES_PROVIDER,
                   detail: `Hermes approval ${requestInput.requestId} requires a decision.`,
+                });
+              }
+              // `approval.respond` names a session, not a request: the pinned
+              // protocol carries no approval request id. With one outstanding
+              // approval that is unambiguous, with two it is a coin flip, so
+              // refuse rather than resolve the wrong command.
+              const outstanding = [...pendingRuntimeRequests.values()].filter(
+                (candidate) => candidate.kind === "approval" && candidate.state === pending.state,
+              );
+              if (outstanding.length > 1) {
+                return yield* new ProviderAdapterProtocolError({
+                  driver: HERMES_PROVIDER,
+                  detail: `Hermes has ${outstanding.length} approvals outstanding on this session and approval.respond carries no request id, so T3 cannot target ${requestInput.requestId}. Interrupt the run instead.`,
                 });
               }
               const result = yield* gatewayEffect(() =>
