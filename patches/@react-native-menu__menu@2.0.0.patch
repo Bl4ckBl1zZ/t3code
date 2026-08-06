@@ -44,3 +44,35 @@ index 5c4e0da4292b15d3a27b5ea1555f11452a470815..ea19f2eec02dd78fbc78cc455c91b4e7
      }
  
      public override func reactSetFrame(_ frame: CGRect) {
+diff --git a/ios/Shared/RCTAlertAction.swift b/ios/Shared/RCTAlertAction.swift
+index 98341313af9d4c92043a5cdf6f4e121e6fbfd53f..5d4860608210c37cbfd5b8dd61faea7f88a9d3d1 100644
+--- a/ios/Shared/RCTAlertAction.swift
++++ b/ios/Shared/RCTAlertAction.swift
+@@ -31,7 +31,8 @@ class RCTAlertAction {
+         if let image = details["image"] as? NSString {
+             if #available(iOS 13.0, *) {
+                 self.image = UIImage(systemName: image as String)
+-                if let imageColor = details["imageColor"] {
++                // Same transparent-by-default `imageColor` trap as RCTMenuAction.
++                if let imageColor = details["imageColor"] as? NSNumber, imageColor.uint32Value != 0 {
+                     self.image = self.image?.withTintColor(RCTConvert.uiColor(imageColor), renderingMode: .alwaysOriginal)
+                 }
+             } else {
+diff --git a/ios/Shared/RCTMenuItem.swift b/ios/Shared/RCTMenuItem.swift
+index bb6bb2b7ad56135089f267587c974b166760539d..290fe3f0543cca4c9e463eecbca280c94ad87d0f 100644
+--- a/ios/Shared/RCTMenuItem.swift
++++ b/ios/Shared/RCTMenuItem.swift
+@@ -32,7 +32,12 @@ class RCTMenuAction {
+             if self.image === nil {
+                 self.image = UIImage(named: image as String)
+             }
+-            if let imageColor = details["imageColor"] {
++            // Fabric always sends `imageColor` — codegen defaults the Int32 to
++            // 0 when JS omits it — and 0 converts to a fully transparent color,
++            // which tints every SF Symbol invisible while it still reserves its
++            // layout width. Only tint for an actual color, so an untinted image
++            // keeps UIMenu's own label/destructive/disabled styling.
++            if let imageColor = details["imageColor"] as? NSNumber, imageColor.uint32Value != 0 {
+                 self.image = self.image?.withTintColor(RCTConvert.uiColor(imageColor), renderingMode: .alwaysOriginal)
+             }
+         }
