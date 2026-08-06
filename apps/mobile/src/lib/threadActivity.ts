@@ -840,6 +840,12 @@ export function deriveThreadFeedPresentation(
     /** Hermes "clear chat" marker: entries at or before it are dropped. */
     readonly timelineClearedAt?: string | null;
     readonly expandedAttemptIds?: ReadonlySet<RunAttemptId>;
+    /**
+     * Keeps a settled turn's activity in the feed and every work group open,
+     * the way a provider CLI leaves its scrollback alone. Superseded attempts
+     * still fold: those entries were replaced, not merely finished.
+     */
+    readonly alwaysExpandActivity?: boolean;
   },
 ): ThreadFeedEntry[] {
   const expandedAttemptIds = options?.expandedAttemptIds ?? new Set<RunAttemptId>();
@@ -861,7 +867,10 @@ export function deriveThreadFeedPresentation(
   const sourceFeed = chatWasCleared
     ? presentableFeed.filter((entry) => Date.parse(entry.createdAt) > clearedAtMs)
     : presentableFeed;
-  const foldsByAnchorId = deriveThreadFeedRunFolds(sourceFeed, latestRun);
+  const alwaysExpandActivity = options?.alwaysExpandActivity === true;
+  const foldsByAnchorId = alwaysExpandActivity
+    ? new Map<string, ThreadFeedRunFold>()
+    : deriveThreadFeedRunFolds(sourceFeed, latestRun);
   const attemptFoldsByAnchorId = deriveThreadFeedAttemptFolds(sourceFeed);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
@@ -909,7 +918,7 @@ export function deriveThreadFeedPresentation(
       });
     }
     if (!collapsedAttemptEntryIds.has(entry.id)) {
-      appendPresentedFeedEntry(result, entry, expandedWorkGroupIds);
+      appendPresentedFeedEntry(result, entry, expandedWorkGroupIds, alwaysExpandActivity);
     }
   }
   if (activeWorkStartedAt !== null) {
@@ -963,6 +972,7 @@ function appendPresentedFeedEntry(
     }
   >,
   expandedWorkGroupIds: ReadonlySet<string>,
+  alwaysExpandActivity = false,
 ): void {
   if (entry.type !== "activity-group") {
     result.push(entry);
@@ -984,7 +994,7 @@ function appendPresentedFeedEntry(
   }
 
   const groupId = entry.id;
-  const expanded = expandedWorkGroupIds.has(groupId);
+  const expanded = alwaysExpandActivity || expandedWorkGroupIds.has(groupId);
   const hiddenCount = activities.length - MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleActivities = expanded ? activities : activities.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES);
   const hiddenStats = sumActivityFileDiffStats(

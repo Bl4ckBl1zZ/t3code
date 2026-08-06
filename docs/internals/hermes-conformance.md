@@ -147,15 +147,28 @@ was not applied; both fall back to asking rather than leaving the run parked on 
 
 ## Proactive delivery boundary
 
-Hermes runs work that T3 never prompted: cron jobs, and prompts sent to the same session by another
-Hermes client. Those runs stream on the gateway socket like any other, so when the instance's
-**Proactive mode** switch is on the adapter buffers their events and asks the orchestrator for a
+Hermes runs work that T3 never prompted: cron jobs, prompts sent to the same session by another
+Hermes client, and anything the model keeps doing after a turn settles. Those runs stream on the
+gateway socket like any other, so the adapter buffers their events and asks the orchestrator for a
 continuation turn (the same
 `ProviderContinuationRequests` path Claude uses for background-task wakes). The run is projected
 into the T3 thread as a normal turn, with no prompt submitted and no durable mutation intent to
 settle — nobody has to send a message for the conversation to move.
 
-Delivery is therefore live-only, and bounded by two pinned-protocol facts:
+Capture is not gated on the **Proactive mode** switch. These events arrive on a socket T3 is
+already reading, and the pinned protocol has no durable event cursor, so an event dropped here can
+never be read back — silence would be the one unrecoverable outcome. The switch governs what T3
+_spends_ on an external run instead:
+
+- **Residency.** `HermesProactiveService` only keeps sessions subscribed for instances with the
+  switch on. With it off, T3 witnesses an external run when it happens to be connected — typically
+  because the thread is open — and otherwise picks the work up from `session.history` the next time
+  the thread is opened.
+- **Answering.** A request raised by a run T3 never submitted is always projected, but the thread's
+  permission mode is applied to it only when the switch is on. With it off, an external
+  `approval.request` is shown and left for a human: the run belongs to whoever started it.
+
+Live delivery is bounded by two pinned-protocol facts:
 
 - There is no durable global cron event cursor, so a run that happens while T3 is not connected
   cannot be replayed afterwards. `hermes_proactive_sources` records that state per gateway
@@ -168,15 +181,17 @@ Delivery is therefore live-only, and bounded by two pinned-protocol facts:
 
 Buffered events are trimmed once a continuation that never attaches grows past its limit, which
 costs transcript detail. `approval.request` and `clarify.request` are exempt: dropping one opens the
-continuation turn with nothing to answer while the gateway stays parked on it. With proactive mode
-off, an external run carrying a request is logged and left alone — it belongs to whoever started it,
-so T3 neither answers it nor stops it on their behalf.
+continuation turn with nothing to answer while the gateway stays parked on it.
 
 Because T3 retires idle provider sessions, being connected is not automatic. `HermesProactiveService`
 re-establishes residency on an interval for instances with proactive mode enabled, and the adapter
 reports an in-flight external run as pending background work so idle release cannot drop the
-subscription mid-wake. Runs on a gateway that T3 has never opened, or that occur while the server is
-stopped, are missed by design rather than silently.
+subscription mid-wake. A run that streams while T3 is not connected is missed live — but it is not
+lost: `session.history` is read back on the next thread open, and activity rehydration covers the
+whole transcript rather than only an imported prefix, so the tool calls and reasoning of a run T3
+never witnessed still land in the thread. Ids cannot tell a rehydrated call from the live one T3
+already streamed (history has no run column), so the orchestrator matches them on content when it
+merges a snapshot.
 
 ## H5 import boundary
 

@@ -2030,6 +2030,11 @@ export function makeHermesServeAdapterV2(
           kind === "approval" &&
           answerable &&
           hermesAutoApprovesCommands(active.input.runtimePolicy) &&
+          // A request raised by a run T3 never submitted belongs to whoever
+          // started it — a cron job, or another client on the session. T3
+          // shows it either way, but only answers for the gateway when the
+          // instance has opted into acting on its behalf.
+          (!active.external || options.settings.proactiveEnabled) &&
           // `approval.respond` names a session, not a request, so an answer can
           // only be aimed while this is the session's sole outstanding
           // approval. With another one already parked on the user, approving
@@ -2525,22 +2530,14 @@ export function makeHermesServeAdapterV2(
       ) {
         const eventType = event.frame.params.type;
         const isRuntimeRequest = HERMES_RUNTIME_REQUEST_EVENT_TYPES.has(eventType);
-        // Opening a turn nobody asked for is opt-in per instance: without the
-        // switch, an external run only moves session status as it did before.
-        if (!options.settings.proactiveEnabled) {
-          // The run belongs to whoever started it — a cron job or another client
-          // on the same session — so T3 will not answer for them. Say so once:
-          // an operator watching a stalled Hermes session otherwise has nothing
-          // in the log tying it to a request T3 deliberately let pass.
-          if (isRuntimeRequest) {
-            yield* Effect.logWarning("orchestration-v2.hermes-external-runtime-request-ignored", {
-              providerThreadId: state.providerThread.id,
-              liveSessionId: state.liveSessionId,
-              eventType,
-            });
-          }
-          return;
-        }
+        // Capture is not gated on the proactive switch. These events are
+        // already in hand on a socket T3 is already reading, and dropping them
+        // is the one outcome with no recovery: the pinned protocol has no
+        // durable event cursor, so what is discarded here can never be read
+        // back. The switch governs what T3 *spends* on an external run —
+        // keeping sessions subscribed when nobody is looking, and answering
+        // requests on behalf of whoever started it — not whether the work is
+        // allowed to reach the transcript at all.
         const isContent = HERMES_EXTERNAL_CONTENT_EVENT_TYPES.has(eventType);
         const isTerminalSignal =
           eventType === "status.update" || eventType === "session.status" || eventType === "error";
@@ -3197,8 +3194,18 @@ export function makeHermesServeAdapterV2(
                   now: DateTime.formatIso(yield* DateTime.now),
                 })))
           : 0;
-        const inherited = history.messages.slice(0, inheritedCount);
-        const hydration = hydrateImportedHermesActivities(inherited);
+        // Activity rehydration runs over the whole history, not just the
+        // inherited prefix: `session.history` is the only record of a run T3
+        // did not drive (a cron job, another client, or anything Hermes kept
+        // doing after a turn settled while T3 was disconnected), and reading
+        // it back is how the native client shows that work too. Transcript
+        // normalization stays fenced to the inherited prefix — post-boundary
+        // rows are native T3 messages that were never transport-framed.
+        //
+        // Live-streamed items carry a run identity history has no column for,
+        // so a call T3 already projected rehydrates under a different id. The
+        // orchestrator settles that on content when it merges the snapshot.
+        const hydration = hydrateImportedHermesActivities(history.messages);
         // Rehydrated tool outputs come from raw history rows, so they may
         // still carry Hermes' MEDIA: output protocol. Resolve it to durable
         // attachment markers the same way visible transcript rows do.
@@ -3229,7 +3236,11 @@ export function makeHermesServeAdapterV2(
         const messages = yield* Effect.forEach(
           history.messages,
           Effect.fnUntraced(function* (message, ordinal) {
-            if (ordinal < inheritedCount && hydration.hiddenOrdinals.has(ordinal)) return [];
+            // A row subsumed by a rehydrated activity is hidden wherever it
+            // sits: now that activities cover the whole history, leaving the
+            // post-boundary ones in would print every tool result twice —
+            // once as a system message, once as the tool item it belongs to.
+            if (hydration.hiddenOrdinals.has(ordinal)) return [];
             const rawText = message.text ?? "";
             const text =
               ordinal < inheritedCount && message.role === "user"

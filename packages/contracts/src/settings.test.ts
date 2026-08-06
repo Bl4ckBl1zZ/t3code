@@ -233,7 +233,7 @@ describe("ServerSettings Hermes rollout", () => {
       importEnabled: false,
       mcpEnabled: true,
       attachmentsEnabled: true,
-      proactiveEnabled: false,
+      proactiveEnabled: true,
       voiceEnabled: false,
     });
   });

@@ -1988,6 +1988,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     reportHeaderMaterialVisibility(false);
   }, [props.threadId, reportHeaderMaterialVisibility]);
 
+  const alwaysExpandActivity = appearance.alwaysExpandActivity;
+
   const presentedFeed = useMemo(
     () =>
       deriveThreadFeedPresentation(
@@ -2000,9 +2002,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             .map(([groupId]) => groupId),
         ),
         props.activeWorkStartedAt,
-        { timelineClearedAt: props.timelineClearedAt ?? null, expandedAttemptIds },
+        {
+          timelineClearedAt: props.timelineClearedAt ?? null,
+          expandedAttemptIds,
+          alwaysExpandActivity,
+        },
       ),
     [
+      alwaysExpandActivity,
       expandedAttemptIds,
       expandedTurnIds,
       expandedWorkGroups,

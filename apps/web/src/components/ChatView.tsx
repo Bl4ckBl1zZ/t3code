@@ -1297,6 +1297,7 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setStickyModelSelection,
   );
   const timestampFormat = settings.timestampFormat;
+  const alwaysExpandActivity = settings.alwaysExpandActivity;
   const autoOpenPlanSidebar = settings.autoOpenPlanSidebar;
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
@@ -6676,6 +6677,7 @@ function ChatViewContent(props: ChatViewProps) {
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
+                alwaysExpandActivity={alwaysExpandActivity}
                 skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
                 providerStatuses={providerStatuses}
                 runs={serverProjection?.runs ?? EMPTY_PROJECTION_RUNS}

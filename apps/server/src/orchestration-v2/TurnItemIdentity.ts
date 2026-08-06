@@ -1,0 +1,103 @@
+import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
+
+/**
+ * Content identity for turn items that a provider can restate when T3 reads
+ * its transcript back.
+ *
+ * A snapshot read (history rehydration, session import, proactive catch-up)
+ * returns the provider's own record of a conversation, including the part T3
+ * already streamed live. Those two representations never share an id: a live
+ * item is keyed by the run that produced it, and server-side history has no
+ * run column to key by. Matching on content is what keeps a rehydrated
+ * transcript from printing every tool call twice.
+ *
+ * The key deliberately covers the *call*, never its result. Outputs are
+ * truncated at different limits on the live and history paths (and a command
+ * that was still running when T3 last saw it has no output at all), so keying
+ * on them would treat the same call as two. Repetition is handled by counting
+ * occurrences instead: a command that genuinely ran twice hydrates twice.
+ *
+ * Returns `null` for item types no rehydration produces — those are T3's own
+ * projections (checkpoints, plans, handoffs) and must never be suppressed.
+ */
+export function turnItemContentKey(item: OrchestrationV2TurnItem): string | null {
+  switch (item.type) {
+    case "reasoning":
+      return item.text.length === 0 ? null : `reasoning\n${item.text}`;
+    case "command_execution":
+      return `command_execution\n${item.input}`;
+    case "file_change":
+      return `file_change\n${item.fileName}`;
+    case "web_search":
+      return `web_search\n${(item.patterns ?? []).join(" ")}`;
+    case "dynamic_tool":
+      return `dynamic_tool\n${item.toolName ?? ""}\n${stableStringify(item.input)}`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Picks the snapshot items a thread's projection is actually missing.
+ *
+ * Ids settle the easy half: an item the snapshot has hydrated before is the
+ * same row and is skipped. What ids cannot settle is the same work arriving
+ * from two directions — streamed live under a run-scoped id, then read back
+ * from the provider's history under a content-derived one. Those are matched
+ * by content, spending one projected occurrence each, so a call that really
+ * did run twice still hydrates twice.
+ *
+ * Items the snapshot already owns by id are left out of the budget: they are
+ * that row's own reflection in the projection, not a second occurrence of it.
+ */
+export function selectMissingTurnItems(input: {
+  readonly projected: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly snapshot: ReadonlyArray<OrchestrationV2TurnItem>;
+}): ReadonlyArray<OrchestrationV2TurnItem> {
+  const projectedIds = new Set(input.projected.map((item) => String(item.id)));
+  const snapshotIds = new Set(input.snapshot.map((item) => String(item.id)));
+  const budget = new Map<string, number>();
+  for (const item of input.projected) {
+    if (snapshotIds.has(String(item.id))) continue;
+    const key = turnItemContentKey(item);
+    if (key === null) continue;
+    budget.set(key, (budget.get(key) ?? 0) + 1);
+  }
+  return input.snapshot.filter((item) => {
+    if (projectedIds.has(String(item.id))) return false;
+    const key = turnItemContentKey(item);
+    if (key === null) return true;
+    const remaining = budget.get(key) ?? 0;
+    if (remaining === 0) return true;
+    budget.set(key, remaining - 1);
+    return false;
+  });
+}
+
+const MAX_STABLE_STRINGIFY_DEPTH = 8;
+
+/**
+ * Key-order-independent JSON rendering, so a tool input that survived a
+ * gateway round-trip with its properties reordered still matches the input T3
+ * streamed. Cycles and over-deep values collapse to markers rather than
+ * throwing: this feeds a dedupe key, and an unusable key only costs a
+ * duplicate row.
+ */
+function stableStringify(value: unknown, depth = 0, seen = new WeakSet<object>()): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value !== "object") return JSON.stringify(String(value));
+  if (depth >= MAX_STABLE_STRINGIFY_DEPTH) return '"[depth]"';
+  if (seen.has(value)) return '"[circular]"';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry, depth + 1, seen)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, nested]) => nested !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested, depth + 1, seen)}`)
+    .join(",")}}`;
+}

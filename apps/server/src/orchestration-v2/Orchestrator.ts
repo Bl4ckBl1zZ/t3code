@@ -64,6 +64,7 @@ import {
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
 import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
+import { selectMissingTurnItems } from "./TurnItemIdentity.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedErrorClass<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -6194,10 +6195,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const missingMessages = snapshot.messages.filter(
           (message) => !projectedMessageIds.has(String(message.id)),
         );
-        const projectedTurnItemIds = new Set(current.turnItems.map((item) => String(item.id)));
-        const missingTurnItems = (snapshot.turnItems ?? []).filter(
-          (item) => !projectedTurnItemIds.has(String(item.id)),
-        );
+        // A snapshot restates work T3 already streamed live, and ids cannot
+        // settle that on their own — see `selectMissingTurnItems`.
+        const missingTurnItems = selectMissingTurnItems({
+          projected: current.turnItems,
+          snapshot: snapshot.turnItems ?? [],
+        });
         const projectedProviderThread = current.providerThreads.find(
           (candidate) => candidate.id === snapshot.providerThread.id,
         );

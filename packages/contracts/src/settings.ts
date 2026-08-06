@@ -111,6 +111,10 @@ export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200))
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
+  // Timelines fold a settled turn behind "Worked for …" and keep only the last
+  // entry of a work group, which reads well for a finished turn but hides the
+  // step-by-step stream a CLI shows. Turning this on keeps both open.
+  alwaysExpandActivity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -726,9 +730,9 @@ export const HermesSettings = makeProviderSettingsSchema(
       "Allow attachment uploads supported by the connected gateway.",
     ),
     proactiveEnabled: HermesFeatureSwitch(
-      false,
+      true,
       "Proactive mode",
-      "Allow proactive features only when explicitly supported by the gateway.",
+      "Keep Hermes threads subscribed so gateway-side runs stream in on their own, and answer requests those runs raise. Off still shows that work — it arrives when the thread is opened instead.",
     ),
     voiceEnabled: HermesFeatureSwitch(
       false,
@@ -890,6 +894,14 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Proactive mode shipped as opt-out, but every Hermes instance created
+  // before that has `proactiveEnabled: false` written into its config blob by
+  // the old default — a stored value a new schema default can never reach.
+  // The server rewrites those once and records it here, so a user who then
+  // turns the switch back off is not overruled on the next boot.
+  hermesProactiveDefaultApplied: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1045,10 +1057,12 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  alwaysExpandActivity: Schema.optionalKey(Schema.Boolean),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),

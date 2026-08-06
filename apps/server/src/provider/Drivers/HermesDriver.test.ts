@@ -188,7 +188,7 @@ describe("HermesDriver", () => {
       importEnabled: false,
       mcpEnabled: true,
       attachmentsEnabled: true,
-      proactiveEnabled: false,
+      proactiveEnabled: true,
       voiceEnabled: false,
     });
     assert.deepEqual(
@@ -207,7 +207,7 @@ describe("HermesDriver", () => {
         importEnabled: false,
         mcpEnabled: true,
         attachmentsEnabled: true,
-        proactiveEnabled: false,
+        proactiveEnabled: true,
         voiceEnabled: false,
       },
     );

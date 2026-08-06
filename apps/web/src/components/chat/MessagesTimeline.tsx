@@ -187,6 +187,8 @@ interface TimelineRowSharedState {
   }) => void;
   onToggleTurnFold: (runId: RunId) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
+  /** Opens work groups on arrival instead of showing only the newest entry. */
+  alwaysExpandActivity: boolean;
 }
 
 interface TimelineRowActivityState {
@@ -245,6 +247,7 @@ interface MessagesTimelineProps {
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  alwaysExpandActivity?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   providerStatuses?: ReadonlyArray<ServerProvider>;
   runs?: ReadonlyArray<HandoffTimelineRun>;
@@ -288,6 +291,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   resolvedTheme,
   timestampFormat,
   workspaceRoot,
+  alwaysExpandActivity = false,
   skills = EMPTY_TIMELINE_SKILLS,
   providerStatuses = EMPTY_TIMELINE_PROVIDERS,
   runs: runsProp = EMPTY_TIMELINE_RUNS,
@@ -366,6 +370,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         latestRun,
         expandedRunIds,
         expandedAttemptIds,
+        alwaysExpandActivity,
         isWorking,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
@@ -377,6 +382,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       latestRun,
       expandedRunIds,
       expandedAttemptIds,
+      alwaysExpandActivity,
       isWorking,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
@@ -514,8 +520,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
+      alwaysExpandActivity,
     }),
     [
+      alwaysExpandActivity,
       timestampFormat,
       routeThreadKey,
       threadRef,
@@ -1923,8 +1931,15 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
-  const { workspaceRoot } = use(TimelineRowCtx);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const { workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
+  const [isExpanded, setIsExpanded] = useState(alwaysExpandActivity);
+  // Flipping the setting has to reach groups that are already mounted, while
+  // still leaving a per-group toggle that outlives the next render.
+  const [appliedAlwaysExpand, setAppliedAlwaysExpand] = useState(alwaysExpandActivity);
+  if (appliedAlwaysExpand !== alwaysExpandActivity) {
+    setAppliedAlwaysExpand(alwaysExpandActivity);
+    setIsExpanded(alwaysExpandActivity);
+  }
   const sectionRef = useRef<HTMLElement>(null);
   const anchorBottomBeforeToggleRef = useRef<number | null>(null);
   const nonEmptyEntries = useMemo(

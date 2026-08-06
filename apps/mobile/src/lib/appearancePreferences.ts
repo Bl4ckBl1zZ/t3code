@@ -26,6 +26,12 @@ export interface AppearancePreferences {
   readonly terminalFontSize: number | null;
   readonly codeFontSize: number | null;
   readonly codeWordBreak: boolean;
+  /**
+   * Keeps every tool call and reasoning step in the thread feed instead of
+   * folding a settled turn behind "Worked for ..." and trimming work groups
+   * to their newest entry.
+   */
+  readonly alwaysExpandActivity: boolean;
 }
 
 /** Effective appearance values after applying base-size derivation. */
@@ -34,6 +40,7 @@ export interface ResolvedAppearance {
   readonly terminalFontSize: number;
   readonly codeFontSize: number;
   readonly codeWordBreak: boolean;
+  readonly alwaysExpandActivity: boolean;
   readonly isTerminalFontSizeCustom: boolean;
   readonly isCodeFontSizeCustom: boolean;
 }
@@ -87,6 +94,10 @@ export function normalizeCodeWordBreak(value: boolean | null | undefined): boole
   return value === true;
 }
 
+export function normalizeAlwaysExpandActivity(value: boolean | null | undefined): boolean {
+  return value === true;
+}
+
 /** Terminal size derived from base: 10.5pt at base 16, snapped to 0.5pt steps. */
 export function deriveTerminalFontSize(baseFontSize: number): number {
   const scale = normalizeBaseFontSize(baseFontSize) / DEFAULT_BASE_FONT_SIZE;
@@ -106,6 +117,7 @@ interface StoredAppearancePreferences {
   readonly terminalFontSize?: number | null | undefined;
   readonly codeFontSize?: number | null | undefined;
   readonly codeWordBreak?: boolean | null | undefined;
+  readonly alwaysExpandActivity?: boolean | null | undefined;
 }
 
 export function resolveAppearancePreferences(
@@ -122,6 +134,7 @@ export function resolveAppearancePreferences(
         ? normalizeCodeFontSize(stored.codeFontSize)
         : null,
     codeWordBreak: normalizeCodeWordBreak(stored?.codeWordBreak),
+    alwaysExpandActivity: normalizeAlwaysExpandActivity(stored?.alwaysExpandActivity),
   };
 }
 
@@ -132,6 +145,7 @@ export function resolveAppearance(preferences: AppearancePreferences): ResolvedA
       preferences.terminalFontSize ?? deriveTerminalFontSize(preferences.baseFontSize),
     codeFontSize: preferences.codeFontSize ?? deriveCodeFontSize(preferences.baseFontSize),
     codeWordBreak: preferences.codeWordBreak,
+    alwaysExpandActivity: preferences.alwaysExpandActivity,
     isTerminalFontSizeCustom: preferences.terminalFontSize !== null,
     isCodeFontSizeCustom: preferences.codeFontSize !== null,
   };

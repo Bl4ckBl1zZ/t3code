@@ -119,7 +119,7 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
         importEnabled: false,
         mcpEnabled: true,
         attachmentsEnabled: true,
-        proactiveEnabled: false,
+        proactiveEnabled: true,
         voiceEnabled: false,
       },
     },
