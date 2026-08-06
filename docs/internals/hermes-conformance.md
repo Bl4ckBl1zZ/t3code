@@ -134,6 +134,17 @@ Answering is refused when more than one approval is outstanding on a session. `a
 names a session, not a request, so with two in flight there is no way to say which one a decision
 belongs to.
 
+## Permission modes
+
+Hermes gates its own dangerous commands and `session.create` carries no approval or sandbox knob,
+so the thread's permission mode cannot be pushed down to the gateway: it is enforced on the events
+instead. Under **Full access** the adapter answers `approval.request` itself with `once` and
+projects nothing, matching every other provider, where that mode runs without prompts. Every other
+mode surfaces the request — including **Auto**, since Hermes has no reviewer to delegate the routine
+cases to. The auto answer is skipped when the session already has an approval parked on the user
+(`approval.respond` could not be aimed at the right one) and when the gateway reports the response
+was not applied; both fall back to asking rather than leaving the run parked on nobody.
+
 ## Proactive delivery boundary
 
 Hermes runs work that T3 never prompted: cron jobs, and prompts sent to the same session by another

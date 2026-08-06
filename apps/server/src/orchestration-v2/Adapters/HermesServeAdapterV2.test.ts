@@ -60,6 +60,7 @@ import {
   HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL,
   HermesImportedSessionUnavailableError,
   HermesProviderCapabilitiesV2,
+  hermesAutoApprovesCommands,
   hermesWireMutationId,
   makeHermesServeAdapterV2,
   sanitizeHermesToolValue,
@@ -334,12 +335,14 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     readonly choice: "once" | "session" | "deny";
   }> = [];
 
+  approvalsResolve = true;
+
   async respondToApproval(
     params: { readonly session_id: string; readonly choice: "once" | "session" | "deny" },
     _options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
   ) {
     this.approvalResponses.push(params);
-    return { resolved: true };
+    return { resolved: this.approvalsResolve };
   }
 
   async respondToClarification(
@@ -444,6 +447,11 @@ const runtimePolicy = {
   interactionMode: "default",
   cwd: "/tmp/hermes-project",
 } as const;
+/** Full access answers Hermes approvals itself, so a test that wants the prompt asks for it. */
+const supervisedRuntimePolicy = {
+  ...runtimePolicy,
+  runtimeMode: "approval-required",
+} as const;
 
 function appThread(): OrchestrationV2AppThread {
   const now = DateTime.nowUnsafe();
@@ -476,7 +484,10 @@ function appThread(): OrchestrationV2AppThread {
   };
 }
 
-function turnInput(providerThread: OrchestrationV2ProviderThread): ProviderAdapterV2TurnInput {
+function turnInput(
+  providerThread: OrchestrationV2ProviderThread,
+  policy: ProviderAdapterV2TurnInput["runtimePolicy"] = runtimePolicy,
+): ProviderAdapterV2TurnInput {
   return {
     appThread: appThread(),
     threadId,
@@ -494,7 +505,7 @@ function turnInput(providerThread: OrchestrationV2ProviderThread): ProviderAdapt
       creationSource: "web",
     },
     modelSelection,
-    runtimePolicy,
+    runtimePolicy: policy,
   };
 }
 
@@ -3034,6 +3045,23 @@ describe("HermesServeAdapterV2", () => {
   );
 });
 
+describe("hermesAutoApprovesCommands", () => {
+  it("answers for the modes that promised no prompts and asks for the rest", () => {
+    assert.isTrue(hermesAutoApprovesCommands(runtimePolicy));
+    assert.isFalse(hermesAutoApprovesCommands(supervisedRuntimePolicy));
+    // Hermes has no reviewer to delegate the routine cases to, so Auto asks.
+    assert.isFalse(hermesAutoApprovesCommands({ ...runtimePolicy, runtimeMode: "auto" }));
+    assert.isFalse(
+      hermesAutoApprovesCommands({ ...runtimePolicy, runtimeMode: "auto-accept-edits" }),
+    );
+    // An explicit policy override outranks the mode it was derived from.
+    assert.isTrue(
+      hermesAutoApprovesCommands({ ...supervisedRuntimePolicy, approvalPolicy: "never" }),
+    );
+    assert.isFalse(hermesAutoApprovesCommands({ ...runtimePolicy, approvalPolicy: "untrusted" }));
+  });
+});
+
 describe("HermesServeAdapterV2 runtime requests", () => {
   it.effect("fails a turn parked on an approval this gateway cannot answer", () =>
     Effect.scoped(
@@ -3134,7 +3162,7 @@ describe("HermesServeAdapterV2 runtime requests", () => {
           modelSelection,
           runtimePolicy,
         });
-        yield* runtime.startTurn(turnInput(providerThread));
+        yield* runtime.startTurn(turnInput(providerThread, supervisedRuntimePolicy));
 
         yield* Effect.promise(() => fake.emit("approval.request", { command: "ls" }));
 
@@ -3158,7 +3186,7 @@ describe("HermesServeAdapterV2 runtime requests", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("refuses to answer while several approvals are outstanding on one session", () =>
+  it.effect("answers a command approval itself under full access", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fake = new FakeHermesGatewayClient();
@@ -3170,6 +3198,75 @@ describe("HermesServeAdapterV2 runtime requests", () => {
           runtimePolicy,
         });
         yield* runtime.startTurn(turnInput(providerThread));
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "rm -rf build" }));
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        assert.deepEqual(fake.approvalResponses, [{ session_id: "live-create-1", choice: "once" }]);
+        // The mode the user chose says not to prompt, so nothing is parked on
+        // them and no approval card lands in the transcript.
+        assert.lengthOf(
+          [...projected].filter((event) => event.type === "runtime_request.updated"),
+          0,
+        );
+        assert.lengthOf(
+          [...projected].filter(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+          ),
+          0,
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("asks under full access when the gateway did not take the answer", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        fake.approvalsResolve = false;
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "deploy" }));
+
+        // An unapplied auto answer would otherwise leave the gateway parked on
+        // a decision nobody is going to make.
+        const projected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "runtime_request.updated"),
+          Stream.runCollect,
+        );
+        const request = [...projected].flatMap((event) =>
+          event.type === "runtime_request.updated" ? [event.runtimeRequest] : [],
+        )[0];
+        assert.equal(request?.status, "pending");
+        assert.equal(request?.responseCapability.type, "live");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("refuses to answer while several approvals are outstanding on one session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("events.approvals");
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread, supervisedRuntimePolicy));
 
         yield* Effect.promise(() => fake.emit("approval.request", { command: "first" }));
         yield* Effect.promise(() => fake.emit("approval.request", { command: "second" }));
@@ -3209,7 +3306,7 @@ describe("HermesServeAdapterV2 runtime requests", () => {
             modelSelection,
             runtimePolicy,
           });
-          yield* runtime.startTurn(turnInput(providerThread));
+          yield* runtime.startTurn(turnInput(providerThread, supervisedRuntimePolicy));
           yield* Effect.promise(() => fake.emit("approval.request", { command: "deploy" }));
           assert.lengthOf(fake.interrupts, 0);
         }),
@@ -3238,9 +3335,10 @@ describe("HermesServeAdapterV2 proactive runs", () => {
   function continuationTurnInput(
     providerThread: OrchestrationV2ProviderThread,
     ordinal = 2,
+    policy: ProviderAdapterV2TurnInput["runtimePolicy"] = runtimePolicy,
   ): ProviderAdapterV2TurnInput {
     return {
-      ...turnInput(providerThread),
+      ...turnInput(providerThread, policy),
       runId: RunId.make(`run:hermes-continuation-${ordinal}`),
       runOrdinal: ordinal,
       providerTurnOrdinal: ordinal,
@@ -3515,7 +3613,7 @@ describe("HermesServeAdapterV2 proactive runs", () => {
         // with nothing to answer and the gateway stays parked on it forever.
         yield* Effect.promise(() => fake.emit("approval.request", { command: "cron deploy" }));
 
-        yield* runtime.startTurn(continuationTurnInput(providerThread));
+        yield* runtime.startTurn(continuationTurnInput(providerThread, 2, supervisedRuntimePolicy));
         const projected = yield* runtime.events.pipe(
           Stream.filter(
             (event) =>

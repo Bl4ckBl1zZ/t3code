@@ -26,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
+import { HERMES_DRIVER_KIND } from "./t3WorkProject";
 
 /**
  * Local-only placeholder used while a draft has no provider it can safely
@@ -259,6 +260,25 @@ export function sortProviderInstanceEntries(
     sorted.push(...defaults, ...customs);
   }
   return sorted;
+}
+
+/**
+ * Which providers a composer may offer. Hermes is the T3 Work assistant and
+ * the only thing T3 Work runs on, and it is not a coding provider — so a T3
+ * Work picker keeps Hermes and drops everything else, and every Code picker
+ * does the reverse.
+ */
+export type HermesProviderScope = "only" | "hidden";
+
+export function filterProviderInstanceEntriesForScope(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  scope: HermesProviderScope,
+): ReadonlyArray<ProviderInstanceEntry> {
+  return entries.filter((entry) =>
+    scope === "only"
+      ? entry.driverKind === HERMES_DRIVER_KIND
+      : entry.driverKind !== HERMES_DRIVER_KIND,
+  );
 }
 
 /**

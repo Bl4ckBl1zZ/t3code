@@ -2265,17 +2265,20 @@ function ChatViewContent(props: ChatViewProps) {
     providers: providerStatuses,
     selectedProvider,
   });
-  // Hermes is the T3 Work assistant, not a coding provider: it stays out of
-  // the model picker except on the T3 Work backing project. A thread already
-  // running on Hermes keeps it selectable so its picker can still show what
-  // is driving it. This must not depend on `selectedProvider` — that comes
-  // from the picker, and gating the picker on it would be circular.
-  const allowHermesProvider =
+  // Hermes is the T3 Work assistant, not a coding provider, and T3 Work runs
+  // on nothing else — so the model picker shows one side or the other. T3 Work
+  // (and a thread already running Hermes, whose picker has to show what is
+  // driving it) lists only Hermes; every Code surface lists everything but.
+  // This must not depend on `selectedProvider` — that comes from the picker,
+  // and gating the picker on it would be circular.
+  const hermesProviderScope: "only" | "hidden" =
     (activeProject !== null && isT3WorkBackingProject(activeProject, serverConfigs)) ||
     (isServerThread &&
       providerStatuses.find(
         (candidate) => candidate.instanceId === activeRuntime?.providerInstanceId,
-      )?.driver === HERMES_DRIVER_KIND);
+      )?.driver === HERMES_DRIVER_KIND)
+      ? "only"
+      : "hidden";
   const phase = derivePhase(activeRuntime);
   const pendingRequests = useMemo(
     () =>
@@ -6790,7 +6793,7 @@ function ChatViewContent(props: ChatViewProps) {
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
                             isProjectlessConversation={isHermesConversation}
-                            allowHermesProvider={allowHermesProvider}
+                            hermesProviderScope={hermesProviderScope}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}

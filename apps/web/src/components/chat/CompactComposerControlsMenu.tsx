@@ -1,6 +1,7 @@
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon, ListTodoIcon } from "lucide-react";
+import type { resolveRuntimeModePicker } from "./composerRuntimeModes";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -17,7 +18,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   interactionMode: ProviderInteractionMode;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
-  runtimeMode: RuntimeMode;
+  runtimeModePicker: ReturnType<typeof resolveRuntimeModePicker>;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
   onToggleInteractionMode: () => void;
@@ -63,16 +64,17 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         ) : null}
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
         <MenuRadioGroup
-          value={props.runtimeMode}
+          value={props.runtimeModePicker.selected.mode}
           onValueChange={(value) => {
-            if (!value || value === props.runtimeMode) return;
+            if (!value || value === props.runtimeModePicker.selected.mode) return;
             props.onRuntimeModeChange(value as RuntimeMode);
           }}
         >
-          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-          <MenuRadioItem value="auto">Auto</MenuRadioItem>
-          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+          {props.runtimeModePicker.options.map((option) => (
+            <MenuRadioItem key={option.mode} value={option.mode}>
+              {option.label}
+            </MenuRadioItem>
+          ))}
         </MenuRadioGroup>
         {props.activePlan ? (
           <>

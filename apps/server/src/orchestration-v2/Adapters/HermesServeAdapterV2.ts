@@ -112,6 +112,7 @@ import {
   type ProviderAdapterV2EnsureThreadInput,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2OpenSessionInput,
+  type ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2SessionRuntime,
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2TurnInput,
@@ -839,6 +840,19 @@ export function hermesFastOverride(
 ): { readonly fast?: boolean } {
   const fast = getModelSelectionStringOptionValue(modelSelection, "fast");
   return fast === undefined ? {} : { fast: fast === "fast" };
+}
+
+/**
+ * Hermes gates its own dangerous commands and has no protocol knob to relax
+ * that per session, so the thread's permission mode is enforced here: under
+ * Full access T3 answers `approval.request` itself instead of stopping the run
+ * on a prompt the user already said they did not want. Every other mode -
+ * including Auto, which Hermes has no reviewer to delegate to - keeps asking.
+ */
+export function hermesAutoApprovesCommands(runtimePolicy: ProviderAdapterV2RuntimePolicy): boolean {
+  return runtimePolicy.approvalPolicy === undefined
+    ? runtimePolicy.runtimeMode === "full-access"
+    : runtimePolicy.approvalPolicy === "never";
 }
 
 export function hermesApprovalChoice(
@@ -1943,6 +1957,41 @@ export function makeHermesServeAdapterV2(
         };
       };
 
+      /**
+       * Answers a Hermes command approval on the thread's behalf. Returns false
+       * when the gateway did not take the answer, so the caller can fall back to
+       * asking the user rather than leaving the run parked on nobody.
+       */
+      const autoApproveCommand = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        prompt: string,
+        nativeIdentity: string,
+      ) {
+        const resolved = yield* gatewayEffect(() =>
+          client.respondToApproval(
+            { session_id: state.liveSessionId, choice: "once" },
+            mutationOptions(`hermes:auto-approve:${state.providerThread.id}:${nativeIdentity}`),
+          ),
+        ).pipe(
+          Effect.map((result) => result.resolved),
+          Effect.catch((cause) =>
+            Effect.logWarning("orchestration-v2.hermes-auto-approve-failed", {
+              providerSessionId: input.providerSessionId,
+              providerThreadId: state.providerThread.id,
+              cause,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (resolved) {
+          yield* Effect.logDebug("orchestration-v2.hermes-auto-approved", {
+            providerSessionId: input.providerSessionId,
+            providerThreadId: state.providerThread.id,
+            prompt,
+          });
+        }
+        return resolved;
+      });
+
       const emitRuntimeRequest = Effect.fnUntraced(function* (
         state: HermesThreadState,
         active: ActiveHermesTurn,
@@ -1976,6 +2025,22 @@ export function makeHermesServeAdapterV2(
               nonEmptyString(payload.description) ??
               "Hermes requests permission to run a command.")
             : (nonEmptyString(payload.question) ?? "Hermes requests more information.");
+        const answerable = canRespondToRuntimeRequest[kind];
+        if (
+          kind === "approval" &&
+          answerable &&
+          hermesAutoApprovesCommands(active.input.runtimePolicy) &&
+          // `approval.respond` names a session, not a request, so an answer can
+          // only be aimed while this is the session's sole outstanding
+          // approval. With another one already parked on the user, approving
+          // here would resolve whichever Hermes considers current.
+          ![...pendingRuntimeRequests.values()].some(
+            (candidate) => candidate.kind === "approval" && candidate.state === state,
+          ) &&
+          (yield* autoApproveCommand(state, prompt, nativeIdentity))
+        ) {
+          return;
+        }
         const requestId = yield* options.idAllocator.allocate.runtimeRequest({
           driver: HERMES_PROVIDER,
           providerTurnId: active.providerTurn.id,
@@ -1983,7 +2048,6 @@ export function makeHermesServeAdapterV2(
         });
         const now = yield* DateTime.now;
         const nodeId = options.idAllocator.derive.approvalNode({ requestId });
-        const answerable = canRespondToRuntimeRequest[kind];
         const request: OrchestrationV2RuntimeRequest = {
           id: requestId,
           nodeId,

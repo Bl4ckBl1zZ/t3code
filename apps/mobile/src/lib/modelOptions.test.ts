@@ -175,3 +175,47 @@ describe("mobile model options", () => {
     expect(resolveSelectableModelSelection(null, disabled)).toBe(disabled);
   });
 });
+
+describe("model option provider scope", () => {
+  const config = {
+    providers: [
+      {
+        instanceId: "codex",
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null }],
+      },
+      {
+        instanceId: "hermes",
+        driver: "hermes",
+        displayName: "Hermes",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        models: [{ slug: "default", name: "Default", isCustom: false, capabilities: null }],
+      },
+    ],
+  } as unknown as ServerConfig;
+
+  it("offers a T3 Work picker Hermes models only", () => {
+    expect(buildModelOptions(config, null, "hermes-only").map((option) => option.key)).toEqual([
+      "hermes:default",
+    ]);
+  });
+
+  it("keeps Hermes out of a Code picker", () => {
+    expect(buildModelOptions(config, null, "exclude-hermes").map((option) => option.key)).toEqual([
+      "codex:gpt-5.6-sol",
+    ]);
+  });
+
+  it("leaves surfaces that are neither with the full list", () => {
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "codex:gpt-5.6-sol",
+      "hermes:default",
+    ]);
+  });
+});

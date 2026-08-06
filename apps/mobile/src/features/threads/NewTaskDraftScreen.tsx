@@ -53,6 +53,7 @@ import {
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { buildModelMenuActions, resolveSelectableModelSelection } from "../../lib/modelOptions";
+import { runtimeModeMenu } from "../../lib/runtimeModeMenu";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
@@ -641,33 +642,26 @@ export function NewTaskDraftScreen(props: {
     [flow.selectedModel?.options, flow.selectedModelOption?.capabilities],
   );
 
+  const runtimeMenu = useMemo(
+    () =>
+      runtimeModeMenu({
+        isHermes: isWorkConversation,
+        runtimeMode: flow.runtimeMode,
+      }),
+    [flow.runtimeMode, isWorkConversation],
+  );
   const optionsMenuActions = useMemo(
     () => [
       ...buildProviderOptionMenuActions(providerOptionDescriptors),
       {
         id: "options-runtime",
         title: "Runtime",
-        subtitle:
-          flow.runtimeMode === "approval-required"
-            ? "Approve actions"
-            : flow.runtimeMode === "auto-accept-edits"
-              ? "Auto-accept edits"
-              : flow.runtimeMode === "auto"
-                ? "Auto"
-                : "Full access",
-        subactions: [
-          { id: "options:runtime:approval-required", title: "Approve actions" },
-          { id: "options:runtime:auto-accept-edits", title: "Auto-accept edits" },
-          { id: "options:runtime:auto", title: "Auto" },
-          { id: "options:runtime:full-access", title: "Full access" },
-        ].map((option) => {
-          const value = option.id.replace("options:runtime:", "");
-          return {
-            id: option.id,
-            title: option.title,
-            state: flow.runtimeMode === value ? ("on" as const) : undefined,
-          };
-        }),
+        subtitle: runtimeMenu.selected.title,
+        subactions: runtimeMenu.options.map((option) => ({
+          id: `options:runtime:${option.mode}`,
+          title: option.title,
+          state: runtimeMenu.selected.mode === option.mode ? ("on" as const) : undefined,
+        })),
       },
       {
         id: "options-interaction",
@@ -686,7 +680,7 @@ export function NewTaskDraftScreen(props: {
         }),
       },
     ],
-    [flow.interactionMode, flow.runtimeMode, providerOptionDescriptors],
+    [flow.interactionMode, providerOptionDescriptors, runtimeMenu],
   );
 
   const workspaceMenuActions = useMemo(() => {

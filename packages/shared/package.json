@@ -203,6 +203,10 @@
       "types": "./src/composerInlineTokens.ts",
       "import": "./src/composerInlineTokens.ts"
     },
+    "./runtimeModes": {
+      "types": "./src/runtimeModes.ts",
+      "import": "./src/runtimeModes.ts"
+    },
     "./terminalLabels": {
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
