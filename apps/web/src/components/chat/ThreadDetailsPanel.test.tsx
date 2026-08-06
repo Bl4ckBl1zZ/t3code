@@ -1,6 +1,7 @@
 import type { EnvironmentId, T3ProjectFileScript, ThreadId } from "@t3tools/contracts";
 
 import type { DraftId } from "../../composerDraftStore";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -9,6 +10,7 @@ const testState = vi.hoisted(() => ({
   useT3ProjectFilePreviewUrl: vi.fn(),
   projectScriptsControl: vi.fn(),
   backgroundTasksPanel: vi.fn(),
+  relationshipsPanel: vi.fn(),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
@@ -29,8 +31,13 @@ vi.mock("../ProjectScriptsControl", () => ({
 vi.mock("./ThreadAutomationsPanel", () => ({
   ThreadAutomationsPanel: () => null,
 }));
+// Stands in for a thread with no relationships yet: the real panel renders the
+// fallback in that case, so tests can read what the empty panel looks like.
 vi.mock("./ThreadRelationshipsControl", () => ({
-  ThreadRelationshipsPanel: () => null,
+  ThreadRelationshipsPanel: (props: { emptyFallback?: ReactNode }) => {
+    testState.relationshipsPanel(props);
+    return props.emptyFallback ?? null;
+  },
 }));
 vi.mock("./ThreadBackgroundTasksPanel", () => ({
   ThreadBackgroundTasksPanel: (props: unknown) => {
@@ -82,6 +89,7 @@ describe("ThreadDetailsPanel", () => {
     testState.useT3ProjectFilePreviewUrl.mockReturnValue(null);
     testState.projectScriptsControl.mockReset();
     testState.backgroundTasksPanel.mockReset();
+    testState.relationshipsPanel.mockReset();
   });
 
   it("passes checked-in t3.json scripts to the project scripts control", () => {
@@ -137,5 +145,57 @@ describe("ThreadDetailsPanel", () => {
     );
 
     expect(testState.backgroundTasksPanel).not.toHaveBeenCalled();
+  });
+
+  // A Hermes chat has no workspace, so what it delegated is the only thing the
+  // panel can show. Gating that on the draft id left the panel stuck on its
+  // "nothing yet" copy for the whole session.
+  it("shows relationships on a Hermes chat still sitting on its draft route", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...baseProps()}
+        draftId={"draft:thread-details" as DraftId}
+        isServerThread
+        isProjectlessConversation
+      />,
+    );
+
+    expect(testState.relationshipsPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ emptyFallback: expect.anything() }),
+    );
+  });
+
+  it("names the delegated tasks section on a Hermes chat with nothing delegated yet", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    const markup = renderToStaticMarkup(
+      <ThreadDetailsPanel {...baseProps()} isServerThread isProjectlessConversation />,
+    );
+
+    expect(markup).toContain("Delegated tasks");
+  });
+
+  it("keeps the delegated tasks placeholder before a Hermes draft has a thread", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    const markup = renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...baseProps()}
+        draftId={"draft:thread-details" as DraftId}
+        isServerThread={false}
+        isProjectlessConversation
+      />,
+    );
+
+    expect(testState.relationshipsPanel).not.toHaveBeenCalled();
+    expect(markup).toContain("Delegated tasks");
+  });
+
+  it("leaves the relationships section unlabelled on a coding thread", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    renderToStaticMarkup(<ThreadDetailsPanel {...baseProps()} isServerThread />);
+
+    expect(testState.relationshipsPanel).toHaveBeenCalledWith(
+      expect.not.objectContaining({ emptyFallback: expect.anything() }),
+    );
   });
 });

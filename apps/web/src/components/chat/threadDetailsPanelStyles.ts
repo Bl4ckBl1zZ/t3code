@@ -25,7 +25,15 @@ export const THREAD_DETAILS_PANEL_LINK_ROW_CLASS = `flex h-9 min-w-0 flex-1 curs
 
 export const THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS = `group/thread-details-link flex w-full items-center rounded-lg transition-colors ${THREAD_DETAILS_PANEL_HOVER_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS = `flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-start gap-2.5 rounded-e-none border border-transparent bg-transparent px-2.5 text-left text-[13px] font-medium text-foreground/80 shadow-none before:shadow-none disabled:cursor-not-allowed disabled:opacity-55 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
+/**
+ * `before:hidden` rather than `before:shadow-none`: this row is a flex
+ * container, and Tailwind's `before:` variant gives the element a real `::before`
+ * with `content: ""`. `Button` takes it out of flow with `before:absolute`, but a
+ * bare element wearing this class keeps it as the first flex item, where `gap`
+ * indents the whole row by one gap width. Nothing here paints a shadow layer, so
+ * drop the pseudo instead of just clearing its shadow.
+ */
+export const THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS = `flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-start gap-2.5 rounded-e-none border border-transparent bg-transparent px-2.5 text-left text-[13px] font-medium text-foreground/80 shadow-none before:hidden disabled:cursor-not-allowed disabled:opacity-55 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
 
 export const THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS = `h-9 w-8 shrink-0 rounded-s-none border-transparent bg-transparent px-0 text-[13px] font-medium text-foreground/80 shadow-none before:shadow-none sm:h-9 sm:w-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
 

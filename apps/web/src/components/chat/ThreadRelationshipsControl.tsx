@@ -22,7 +22,7 @@ import {
   MoreHorizontalIcon,
   UnplugIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { resolveThreadModelBadge } from "./threadModelBadge";
@@ -97,6 +97,13 @@ function relationshipThreadTitle(input: {
 export function ThreadRelationshipsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  /**
+   * Rendered instead of nothing when the thread has no relationships yet. Only
+   * surfaces where this section is the panel's whole content pass one — a
+   * coding thread still has a workspace to show, so a placeholder there would
+   * be noise.
+   */
+  readonly emptyFallback?: ReactNode;
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
@@ -141,7 +148,7 @@ export function ThreadRelationshipsPanel(props: {
   const [showDone, setShowDone] = useState(false);
 
   if (relationshipRows.length === 0) {
-    return null;
+    return props.emptyFallback ?? null;
   }
 
   const isSubagentChildRow = ({ edge }: (typeof relationshipRows)[number]) =>
