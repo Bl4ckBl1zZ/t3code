@@ -101,8 +101,8 @@ import {
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
-  timelineDayKey,
 } from "./MessagesTimeline.logic";
+import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -994,28 +994,11 @@ function ChatClearedTimelineRow() {
 }
 
 function DayDividerTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "day-divider" }> }) {
-  return <TimelineSystemDivider label={formatTimelineDayLabel(row.createdAt)} />;
-}
-
-/**
- * "Today" / "Yesterday" for the days a reader still holds in their head, and a
- * dated label beyond that. The year only appears once it isn't the current one.
- */
-function formatTimelineDayLabel(isoDate: string, nowMs: number = Date.now()): string {
-  const parsed = new Date(isoDate);
-  if (Number.isNaN(parsed.getTime())) return "Earlier";
-  const dayKey = timelineDayKey(isoDate);
-  const now = new Date(nowMs);
-  if (dayKey === timelineDayKey(now.toISOString())) return "Today";
-  const yesterday = new Date(nowMs);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (dayKey === timelineDayKey(yesterday.toISOString())) return "Yesterday";
-  return parsed.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    ...(parsed.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-  });
+  return (
+    <TimelineSystemDivider
+      label={formatOrchestrationV2TimelineDayLabel(row.createdAt, Date.now())}
+    />
+  );
 }
 
 // A run of consecutive agent-authored prompts (delegated-task wakes) collapses

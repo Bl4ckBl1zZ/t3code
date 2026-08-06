@@ -1854,11 +1854,16 @@ describe("day dividers", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
+  // Local-anchored, then zone-qualified: day keys are calendar-local, so bare
+  // timestamps would land on different days depending on where this runs.
+  const localIso = (year: number, monthIndex: number, day: number, hour: number) =>
+    new Date(year, monthIndex, day, hour, 0, 0).toISOString();
+
   it("separates calendar days and leaves the first day unmarked", () => {
     const rows = derive([
-      messageEntry("a", "2026-03-17T09:00:00"),
-      messageEntry("b", "2026-03-17T18:00:00"),
-      messageEntry("c", "2026-03-19T08:00:00"),
+      messageEntry("a", localIso(2026, 2, 17, 9)),
+      messageEntry("b", localIso(2026, 2, 17, 18)),
+      messageEntry("c", localIso(2026, 2, 19, 8)),
     ]);
 
     expect(rows.map((row) => row.kind)).toEqual(["message", "message", "day-divider", "message"]);
@@ -1867,8 +1872,8 @@ describe("day dividers", () => {
 
   it("adds nothing when every row falls on one day", () => {
     const rows = derive([
-      messageEntry("a", "2026-03-17T00:05:00"),
-      messageEntry("b", "2026-03-17T23:55:00"),
+      messageEntry("a", localIso(2026, 2, 17, 1)),
+      messageEntry("b", localIso(2026, 2, 17, 23)),
     ]);
 
     expect(rows.some((row) => row.kind === "day-divider")).toBe(false);

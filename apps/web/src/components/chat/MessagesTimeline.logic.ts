@@ -18,6 +18,7 @@ import {
   resolveT3McpToolPresentation,
   type T3McpToolPresentation,
 } from "@t3tools/shared/t3McpToolPresentation";
+import { orchestrationV2TimelineDayKey } from "@t3tools/shared/orchestrationV2Timeline";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
@@ -720,15 +721,6 @@ export function deriveMessagesTimelineRows(input: {
   return mergedRows;
 }
 
-/** Local calendar day of an ISO timestamp, or null when it doesn't parse. */
-export function timelineDayKey(isoDate: string): string | null {
-  const parsed = new Date(isoDate);
-  if (Number.isNaN(parsed.getTime())) return null;
-  const month = `${parsed.getMonth() + 1}`.padStart(2, "0");
-  const day = `${parsed.getDate()}`.padStart(2, "0");
-  return `${parsed.getFullYear()}-${month}-${day}`;
-}
-
 /**
  * A boundary between calendar days, so a thread picked up over a week doesn't
  * read as one sitting. Only between days: the first day carries no divider,
@@ -739,7 +731,7 @@ function insertDayDividers(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   let previousDayKey: string | null = null;
   for (const row of rows) {
     const createdAt = row.createdAt;
-    const dayKey = createdAt === null ? null : timelineDayKey(createdAt);
+    const dayKey = createdAt === null ? null : orchestrationV2TimelineDayKey(createdAt);
     if (dayKey !== null && createdAt !== null) {
       if (previousDayKey !== null && dayKey !== previousDayKey) {
         result.push({ kind: "day-divider", id: `day-divider:${dayKey}`, createdAt });

@@ -123,8 +123,14 @@ export function useThreadComposerState(options?: {
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
   const selectedThreadFeed = useMemo(
-    () => buildThreadFeed(selectedThreadVisibleTurnItems),
-    [selectedThreadVisibleTurnItems],
+    () =>
+      buildThreadFeed(selectedThreadVisibleTurnItems, {
+        // Attempt identity is what lets the feed fold a superseded attempt
+        // behind one boundary row instead of replaying its abandoned output.
+        attempts: selectedThreadProjection?.projection.attempts,
+        nodes: selectedThreadProjection?.projection.nodes,
+      }),
+    [selectedThreadVisibleTurnItems, selectedThreadProjection],
   );
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
