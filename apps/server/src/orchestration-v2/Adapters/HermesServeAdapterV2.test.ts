@@ -53,8 +53,10 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { IdAllocatorV2, layer as IdAllocatorV2Layer } from "../IdAllocator.ts";
 import type { ProviderAdapterV2TurnInput } from "../ProviderAdapter.ts";
+import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import {
   diagnoseHermesMcpIntegration,
+  HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL,
   HermesImportedSessionUnavailableError,
   HermesProviderCapabilitiesV2,
   hermesWireMutationId,
@@ -489,6 +491,8 @@ const makeRuntime = Effect.fnUntraced(function* (
   readAttachment?: (attachment: { readonly id: string }) => Effect.Effect<Uint8Array, never>,
   mcpEnabled = false,
   resolveHistoryMedia?: Parameters<typeof makeHermesServeAdapterV2>[0]["resolveHistoryMedia"],
+  continuationRequests?: Parameters<typeof makeHermesServeAdapterV2>[0]["continuationRequests"],
+  proactiveEnabled = false,
 ) {
   const idAllocator = yield* IdAllocatorV2;
   const repository = yield* HermesSessionBindingRepository;
@@ -504,7 +508,7 @@ const makeRuntime = Effect.fnUntraced(function* (
       importEnabled: false,
       mcpEnabled,
       attachmentsEnabled: readAttachment !== undefined,
-      proactiveEnabled: false,
+      proactiveEnabled,
       voiceEnabled: false,
     },
     enabled,
@@ -513,6 +517,7 @@ const makeRuntime = Effect.fnUntraced(function* (
     repository,
     ...(readAttachment === undefined ? {} : { readAttachment }),
     ...(resolveHistoryMedia === undefined ? {} : { resolveHistoryMedia }),
+    ...(continuationRequests === undefined ? {} : { continuationRequests }),
     clientFactory: () => fake,
   });
   return yield* adapter.openSession({
@@ -2968,6 +2973,272 @@ describe("HermesServeAdapterV2", () => {
         );
         assert.equal(exit._tag, "Failure");
         assert.equal(clientCreations, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+describe("HermesServeAdapterV2 proactive runs", () => {
+  const recordContinuations = () => {
+    const offers: Array<ProviderContinuationRequest> = [];
+    return {
+      offers,
+      sink: {
+        offer: (request: ProviderContinuationRequest) =>
+          Effect.sync(() => {
+            offers.push(request);
+          }),
+      },
+    };
+  };
+
+  function continuationTurnInput(
+    providerThread: OrchestrationV2ProviderThread,
+    ordinal = 2,
+  ): ProviderAdapterV2TurnInput {
+    return {
+      ...turnInput(providerThread),
+      runId: RunId.make(`run:hermes-continuation-${ordinal}`),
+      runOrdinal: ordinal,
+      providerTurnOrdinal: ordinal,
+      attemptId: RunAttemptId.make(`attempt:hermes-continuation-${ordinal}`),
+      message: {
+        messageId: MessageId.make(`message:hermes-continuation-${ordinal}`),
+        text: HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL,
+        attachments: [],
+        createdBy: "agent",
+        creationSource: "provider",
+      },
+    };
+  }
+
+  it.effect("offers a continuation for a gateway run T3 never submitted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* Effect.promise(() => fake.emit("message.delta", { text: "cron report" }));
+
+        assert.equal(continuations.offers.length, 1);
+        assert.equal(continuations.offers[0]?.threadId, threadId);
+        assert.equal(String(continuations.offers[0]?.providerThreadId), String(providerThread.id));
+        assert.equal(continuations.offers[0]?.driver, "hermes");
+        assert.equal(continuations.offers[0]?.detail, HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL);
+        // A second event of the same run must not queue a second turn.
+        yield* Effect.promise(() => fake.emit("message.delta", { text: " continued" }));
+        assert.equal(continuations.offers.length, 1);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("stays passive while proactive mode is switched off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          false,
+        );
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+
+        yield* Effect.promise(() => fake.emit("message.delta", { text: "cron report" }));
+
+        assert.equal(continuations.offers.length, 0);
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("ignores status-only traffic that carries no transcript content", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+
+        yield* Effect.promise(() => fake.emit("session.status", { status: "idle" }));
+        yield* Effect.promise(() => fake.emit("title.changed", { title: "x", revision: 1 }));
+
+        assert.equal(continuations.offers.length, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("streams the external run into the continuation turn without prompting Hermes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* Effect.promise(() => fake.emit("message.delta", { text: "inbox report" }));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "inbox report", status: "complete" }),
+        );
+        assert.equal(continuations.offers.length, 1);
+
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+
+        const collected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.map((events) => [...events]),
+        );
+        const assistantText = collected.flatMap((event) =>
+          event.type === "message.updated" && event.message.role === "assistant"
+            ? [event.message.text]
+            : [],
+        );
+        const terminal = collected.findLast((event) => event.type === "turn.terminal");
+
+        assert.equal(fake.prompts.length, 0);
+        assert.include(assistantText.at(-1) ?? "", "inbox report");
+        assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "completed");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("offers again for the next external run once a continuation has drained", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* Effect.promise(() => fake.emit("message.delta", { text: "first" }));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "first", status: "complete" }),
+        );
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+        // A genuinely new gateway run, not a trailing artifact of the first.
+        yield* Effect.promise(() =>
+          fake.emit("message.delta", { text: "second" }, { runId: "hermes-run-2" }),
+        );
+
+        assert.equal(continuations.offers.length, 2);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("ignores trailing artifacts of a run T3 itself just finished", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "answer", status: "complete" }),
+        );
+        // Hermes re-announces the settled message on the same run id.
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "answer", status: "complete" }),
+        );
+
+        assert.equal(continuations.offers.length, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("holds session release while an external run waits for its turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* Effect.promise(() => fake.emit("message.delta", { text: "pending" }));
+        assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "pending", status: "complete" }),
+        );
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );

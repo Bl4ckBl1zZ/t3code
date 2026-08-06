@@ -121,6 +121,10 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "../ProviderAdapterDriver.ts";
+import {
+  ProviderContinuationRequests,
+  type ProviderContinuationRequest,
+} from "../ProviderContinuationRequests.ts";
 
 export const HERMES_PROVIDER = ProviderDriverKind.make("hermes");
 export const HERMES_DRIVER_KIND = HERMES_PROVIDER;
@@ -367,6 +371,14 @@ export interface HermesServeAdapterV2Options {
     readonly endpoint: string;
     readonly authToken: string;
   }) => HermesGatewayClientLike;
+  /**
+   * Sink for continuation requests raised when a gateway run streams with no
+   * T3 turn attached. Defaults to dropping them so adapter construction stays
+   * dependency-free in tests.
+   */
+  readonly continuationRequests?: {
+    readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
+  };
 }
 
 export function resolveHermesGatewayToken(
@@ -406,6 +418,18 @@ interface ActiveHermesTurn {
   readonly operationId: string;
   readonly completion: Deferred.Deferred<void>;
   readonly bufferedEvents: Array<HermesGatewayOrderedEvent>;
+  /**
+   * True for a continuation turn that attaches to a gateway run T3 never
+   * submitted (a Hermes cron job, or a prompt from another client on the same
+   * session). It streams the run's events like any other turn but owns no
+   * prompt mutation, so it must not settle a durable mutation intent.
+   */
+  readonly external: boolean;
+  /**
+   * The gateway run an external continuation attached to. A T3 turn learns its
+   * run id from the prompt submission instead, so this stays null there.
+   */
+  readonly sourceRunId: string | null;
   providerTurn: OrchestrationV2ProviderTurn | null;
   assistantNativeId: string | null;
   assistantText: string;
@@ -631,6 +655,21 @@ interface HermesThreadState {
   providerThread: OrchestrationV2ProviderThread;
   activeTurn: ActiveHermesTurn | null;
   externalRunActive: boolean;
+  /**
+   * Events from a gateway run with no T3 turn attached. They are held until a
+   * continuation turn opens to drain them, which is what makes Hermes-native
+   * proactive work (cron jobs, other clients on the same session) land in the
+   * T3 transcript instead of being dropped.
+   */
+  readonly externalEvents: Array<HermesGatewayOrderedEvent>;
+  externalContinuationRequested: boolean;
+  externalRunId: string | null;
+  /**
+   * The gateway run of the turn that most recently terminalized. Hermes can
+   * emit trailing artifacts after a run settles; without this, they would be
+   * mistaken for new external work and open an empty continuation turn.
+   */
+  settledRunId: string | null;
   ownershipLost: boolean;
   readonly turns: Map<string, OrchestrationV2ProviderTurn>;
   readonly messages: Map<string, OrchestrationV2ConversationMessage>;
@@ -704,6 +743,49 @@ const isStoredSessionNotFound = (cause: unknown): boolean =>
 const isProviderAdapterRuntimeRequestResponseError = Schema.is(
   ProviderAdapterRuntimeRequestResponseError,
 );
+
+/**
+ * Continuation turns are dispatched by ProviderContinuationService for an
+ * adapter-buffered wake: the run already exists gateway-side, so the turn
+ * drains the adapter's buffered events instead of submitting the dispatched
+ * text as a new prompt.
+ */
+function isHermesProviderContinuationTurn(input: ProviderAdapterV2TurnInput): boolean {
+  return input.message.createdBy === "agent" && input.message.creationSource === "provider";
+}
+
+/** Message text for the continuation turn that carries an external Hermes run. */
+export const HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL = "Hermes ran this session outside T3.";
+
+/**
+ * Ceiling on events held for a continuation that never attaches (a thread the
+ * orchestrator refuses to wake). Dropping the tail keeps a long-running
+ * external session from growing the buffer without bound; the turn still shows
+ * everything up to the limit.
+ */
+const HERMES_EXTERNAL_EVENT_BUFFER_LIMIT = 5000;
+
+/**
+ * Event families that carry transcript content. Everything else (title,
+ * session info, bare status) only moves session state, so buffering it would
+ * open a continuation turn with nothing to show.
+ */
+const HERMES_EXTERNAL_CONTENT_EVENT_TYPES = new Set([
+  "message.start",
+  "message.delta",
+  "message.interim",
+  "message.complete",
+  "thinking.delta",
+  "reasoning.delta",
+  "reasoning.available",
+  "tool.generating",
+  "tool.progress",
+  "tool.start",
+  "tool.complete",
+  "tool.output_risk",
+  "approval.request",
+  "clarify.request",
+]);
 
 const gatewayEffect = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({
@@ -985,6 +1067,7 @@ export function makeHermesServeAdapterV2(
       supportsMcpTools: options.settings.mcpEnabled,
     },
   };
+  const continuationRequests = options.continuationRequests ?? { offer: () => Effect.void };
   const makeClient =
     options.clientFactory ??
     ((input) =>
@@ -2157,6 +2240,9 @@ export function makeHermesServeAdapterV2(
             }
             state.lease = reacquired.value;
           }
+          // An external run carries no prompt mutation of T3's, so there is no
+          // durable intent to settle — only the ownership lease above matters.
+          if (active.external) return;
           yield* transitionIntent(
             state,
             active.operationId,
@@ -2234,7 +2320,79 @@ export function makeHermesServeAdapterV2(
               },
         );
         yield* Deferred.succeed(active.completion, undefined);
+        state.settledRunId = active.gatewayRunId ?? active.sourceRunId ?? state.settledRunId;
         state.activeTurn = null;
+      });
+
+      /**
+       * Holds the events of a gateway run T3 never submitted and asks the
+       * orchestrator for a continuation turn to drain them. Hermes streams
+       * cron jobs and other clients' prompts on the same session, and without
+       * this the transcript would only ever move when a T3 turn was open.
+       *
+       * Content opens the offer; bare status events are captured only once
+       * content exists, so a terminal status that arrives before the
+       * continuation attaches still closes its turn instead of leaving it
+       * streaming forever.
+       */
+      const captureExternalEvent = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        event: HermesGatewayOrderedEvent,
+      ) {
+        // Opening a turn nobody asked for is opt-in per instance: without the
+        // switch, an external run only moves session status as it did before.
+        if (!options.settings.proactiveEnabled) return;
+        const eventType = event.frame.params.type;
+        const isContent = HERMES_EXTERNAL_CONTENT_EVENT_TYPES.has(eventType);
+        const isTerminalSignal =
+          eventType === "status.update" || eventType === "session.status" || eventType === "error";
+        if (!isContent && !(isTerminalSignal && state.externalEvents.length > 0)) return;
+        if (state.ownershipLost) return;
+        if (event.runId !== undefined && event.runId === state.settledRunId) return;
+        if (state.externalEvents.length >= HERMES_EXTERNAL_EVENT_BUFFER_LIMIT) {
+          if (state.externalEvents.length === HERMES_EXTERNAL_EVENT_BUFFER_LIMIT) {
+            state.externalEvents.push(event);
+            yield* Effect.logWarning("orchestration-v2.hermes-external-buffer-full", {
+              providerThreadId: state.providerThread.id,
+              limit: HERMES_EXTERNAL_EVENT_BUFFER_LIMIT,
+            });
+          }
+          return;
+        }
+        if (state.externalEvents.length === 0) {
+          state.externalRunId = event.runId ?? null;
+        }
+        state.externalEvents.push(event);
+        if (state.externalContinuationRequested) return;
+        const appThreadId = state.providerThread.appThreadId;
+        if (appThreadId === null) {
+          yield* Effect.logWarning("orchestration-v2.hermes-external-run-unroutable", {
+            providerThreadId: state.providerThread.id,
+            liveSessionId: state.liveSessionId,
+          });
+          return;
+        }
+        state.externalContinuationRequested = true;
+        yield* Effect.logInfo("orchestration-v2.hermes-external-run-detected", {
+          providerSessionId: input.providerSessionId,
+          providerThreadId: state.providerThread.id,
+          threadId: appThreadId,
+          gatewayRunId: state.externalRunId,
+        });
+        yield* continuationRequests.offer({
+          threadId: appThreadId,
+          providerThreadId: state.providerThread.id,
+          driver: HERMES_PROVIDER,
+          detail: HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL,
+          // A continuation the worker drops (archived thread) must clear the
+          // offer, or no later external run would ever be delivered.
+          clearIfCurrent: () =>
+            Effect.sync(() => {
+              state.externalContinuationRequested = false;
+              state.externalEvents.length = 0;
+              state.externalRunId = null;
+            }),
+        });
       });
 
       const settleExternalRun = Effect.fnUntraced(function* (
@@ -2407,6 +2565,7 @@ export function makeHermesServeAdapterV2(
               : event.frame.params.type === "error"
                 ? "error"
                 : eventStatus(event);
+          yield* captureExternalEvent(state, event);
           yield* settleExternalRun(state, externalStatus);
           return;
         }
@@ -2562,6 +2721,96 @@ export function makeHermesServeAdapterV2(
           ),
         ),
       );
+
+      /**
+       * Opens the turn that carries a gateway run T3 never submitted. Nothing
+       * is sent to Hermes: the run already exists, so the turn only replays
+       * the events captured while no turn was attached and then streams the
+       * rest live. Events that arrive after this turn terminalizes fall back
+       * to the capture path and offer their own continuation.
+       */
+      const startExternalContinuationTurn = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        turnInput: ProviderAdapterV2TurnInput,
+      ) {
+        const drained = state.externalEvents.splice(0);
+        const gatewayRunId = state.externalRunId;
+        state.externalContinuationRequested = false;
+        state.externalRunId = null;
+        alignStateProviderThread(state, turnInput.providerThread);
+        const operationId = `hermes:external:${turnInput.attemptId}`;
+        const nativeRunId =
+          gatewayRunId ?? stableDigest(state.binding.storedSessionKey, operationId, "external-run");
+        const completion = yield* Deferred.make<void>();
+        const active: ActiveHermesTurn = {
+          input: turnInput,
+          operationId,
+          completion,
+          external: true,
+          sourceRunId: gatewayRunId,
+          bufferedEvents: [],
+          providerTurn: null,
+          assistantNativeId: null,
+          assistantText: "",
+          assistantSnapshotPending: false,
+          assistantStartedAt: null,
+          reasoningText: "",
+          reasoningStartedAt: null,
+          reasoningHasStreamedDelta: false,
+          itemOrdinals: new Map(),
+          nextItemOrdinal: turnInput.providerTurnOrdinal * 100 + 1,
+          toolsByIdentity: new Map(),
+          toolsByNativeId: new Map(),
+          generatingToolsByName: new Map(),
+          seenEventIds: new Set(),
+          planId: null,
+          // Left unfiltered: a second external run that starts while this turn
+          // streams belongs in the same continuation rather than nowhere.
+          gatewayRunId: null,
+          pendingSteerCompletions: 0,
+          interrupted: false,
+          finalized: false,
+          intentState: "prepared",
+        };
+        state.activeTurn = active;
+        const startedAt = yield* DateTime.now;
+        const providerTurn: OrchestrationV2ProviderTurn = {
+          id: options.idAllocator.derive.providerTurn({
+            driver: HERMES_PROVIDER,
+            nativeTurnId: nativeRunId,
+          }),
+          providerThreadId: state.providerThread.id,
+          nodeId: turnInput.rootNodeId,
+          runAttemptId: turnInput.attemptId,
+          nativeTurnRef: providerRef(nativeRunId, gatewayRunId === null ? "weak" : "strong"),
+          ordinal: turnInput.providerTurnOrdinal,
+          status: "running",
+          startedAt,
+          completedAt: null,
+        };
+        active.providerTurn = providerTurn;
+        state.turns.set(String(providerTurn.id), providerTurn);
+        yield* emit({
+          type: "provider_turn.updated",
+          driver: HERMES_PROVIDER,
+          threadId: turnInput.threadId,
+          providerTurn,
+        });
+        yield* updateThread(state, {
+          status: "active",
+          firstRunOrdinal: state.providerThread.firstRunOrdinal ?? turnInput.runOrdinal,
+          lastRunOrdinal: turnInput.runOrdinal,
+        });
+        yield* updateSession("running", null);
+        for (const buffered of drained) {
+          yield* handleGatewayEvent(buffered);
+        }
+        if (!active.finalized && !state.externalRunActive) {
+          // The run had already settled before this turn attached, so no
+          // further event will arrive to terminalize it.
+          yield* finalizeTurn(state, "completed");
+        }
+      });
 
       const acquireLease = Effect.fnUntraced(function* (binding: HermesSessionBinding) {
         const { now, expiresAt } = leaseTimes();
@@ -2879,6 +3128,10 @@ export function makeHermesServeAdapterV2(
           providerThread,
           activeTurn: null,
           externalRunActive,
+          externalEvents: [],
+          externalContinuationRequested: false,
+          externalRunId: null,
+          settledRunId: null,
           ownershipLost: false,
           turns: new Map(),
           messages: new Map(hydrated.messages.map((message) => [String(message.id), message])),
@@ -3190,6 +3443,17 @@ export function makeHermesServeAdapterV2(
           return providerSession;
         },
         events: Stream.fromEffectRepeat(Queue.take(events)),
+        // Releasing the session while an external run is streaming would drop
+        // the gateway subscription that feeds the continuation turn, so idle
+        // release waits for the wake to be delivered.
+        hasPendingBackgroundWork: Effect.sync(() =>
+          [...statesByProviderThread.values()].some(
+            (state) =>
+              state.externalRunActive ||
+              state.externalContinuationRequested ||
+              state.externalEvents.length > 0,
+          ),
+        ),
         ensureThread: (threadInput) =>
           Effect.gen(function* () {
             if (threadInput.existingProviderThread !== undefined) {
@@ -3274,6 +3538,12 @@ export function makeHermesServeAdapterV2(
                 driver: HERMES_PROVIDER,
                 detail: "Hermes thread ownership was lost and cannot accept another prompt",
               });
+            }
+            // An adapter-buffered wake attaches to the external run instead of
+            // prompting, so it deliberately runs before the guard that rejects
+            // prompts while such a run is in flight.
+            if (isHermesProviderContinuationTurn(turnInput)) {
+              return yield* startExternalContinuationTurn(state, turnInput);
             }
             if (state.externalRunActive) {
               const authoritative = yield* gatewayEffect(() =>
@@ -3467,6 +3737,8 @@ export function makeHermesServeAdapterV2(
               input: turnInput,
               operationId,
               completion,
+              external: false,
+              sourceRunId: null,
               bufferedEvents: [],
               providerTurn: null,
               assistantNativeId: null,
@@ -4082,6 +4354,7 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
     const hostPlatform = yield* HostProcessPlatform;
+    const continuationRequests = yield* ProviderContinuationRequests;
     const configuredHermesHome = input.environment.find(
       (variable) => variable.name === "HERMES_HOME" && variable.value.trim().length > 0,
     )?.value;
@@ -4112,6 +4385,7 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
         : { connectionRuntime: options.connectionRuntime }),
       idAllocator,
       repository,
+      continuationRequests,
       readAttachment: (attachment) =>
         Effect.gen(function* () {
           const attachmentPath = resolveAttachmentPath({

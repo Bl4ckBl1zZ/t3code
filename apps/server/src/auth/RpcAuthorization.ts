@@ -64,6 +64,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.hermesHistoryReset]: AuthOrchestrationOperateScope,
   [WS_METHODS.hermesCronList]: AuthOrchestrationReadScope,
   [WS_METHODS.hermesCronMutate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hermesProactiveStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.hermesSkillsList]: AuthOrchestrationReadScope,
   [WS_METHODS.hermesSkillsSearch]: AuthOrchestrationReadScope,
   [WS_METHODS.hermesSkillsInspect]: AuthOrchestrationReadScope,

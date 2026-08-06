@@ -338,6 +338,19 @@ export interface HermesSessionBindingRepositoryShape {
     readonly inheritedMessageCount: number;
     readonly now: string;
   }) => Effect.Effect<number, HermesSessionBindingRepositoryError>;
+  /**
+   * Bindings for one gateway profile, newest first. Proactive residency uses
+   * it to decide which Hermes threads stay subscribed to the gateway, so it is
+   * scoped to the profile rather than to a single project.
+   */
+  readonly listProfileBindings: (input: {
+    readonly providerInstanceId: string;
+    readonly profileKey: string;
+    readonly limit: number;
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly threadId: string; readonly storedSessionKey: string }>,
+    HermesSessionBindingRepositoryError
+  >;
   readonly listHistoryThreadIds: (
     scope: HermesHistoryScope,
   ) => Effect.Effect<ReadonlyArray<string>, HermesSessionBindingRepositoryError>;
@@ -1363,6 +1376,33 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  const listProfileBindings = Effect.fn("HermesSessionBindingRepository.listProfileBindings")(
+    function* (input: {
+      readonly providerInstanceId: string;
+      readonly profileKey: string;
+      readonly limit: number;
+    }) {
+      const rows = yield* sql<{
+        readonly thread_id: string;
+        readonly stored_session_key: string;
+      }>`
+        SELECT thread_id, stored_session_key
+        FROM hermes_session_bindings
+        WHERE provider_instance_id = ${input.providerInstanceId}
+          AND profile_key = ${input.profileKey}
+        ORDER BY updated_at DESC, binding_id
+        LIMIT ${input.limit}
+      `;
+      return rows.map((row) => ({
+        threadId: row.thread_id,
+        storedSessionKey: row.stored_session_key,
+      }));
+    },
+    Effect.mapError(
+      mapRepositoryError("listProfileBindings", "Could not list Hermes bindings for the profile."),
+    ),
+  );
+
   const listHistoryThreadIds = Effect.fn("HermesSessionBindingRepository.listHistoryThreadIds")(
     function* (scope: HermesHistoryScope) {
       const rows = yield* sql<{ readonly thread_id: string }>`
@@ -1460,6 +1500,7 @@ export const make = Effect.gen(function* () {
     getMainSessionImport,
     transitionSessionImport,
     setSessionImportInheritedCount,
+    listProfileBindings,
     listHistoryThreadIds,
     clearHistoryRecords,
   });

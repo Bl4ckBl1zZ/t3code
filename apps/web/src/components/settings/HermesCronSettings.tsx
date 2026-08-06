@@ -1,4 +1,12 @@
-import { Clock3Icon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  Clock3Icon,
+  PauseIcon,
+  PencilIcon,
+  PlayIcon,
+  PlusIcon,
+  RadioIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type {
   HermesCronJob,
@@ -51,6 +59,85 @@ const EMPTY_DRAFT: Draft = {
   schedule: "",
   prompt: "",
 };
+
+/**
+ * Proactive delivery is what makes a Hermes-side run (a cron job, or a prompt
+ * from another Hermes client) appear in the T3 thread without anyone sending a
+ * message. It only works while T3 is subscribed to that gateway session, so the
+ * panel reports which threads are being kept subscribed and why.
+ */
+function HermesProactiveStatus() {
+  const environment = usePrimaryEnvironment();
+  const query = useEnvironmentQuery(
+    environment
+      ? serverEnvironment.hermesProactive({
+          environmentId: environment.environmentId,
+          input: {},
+        })
+      : null,
+  );
+  const providers = query.data?.providers ?? [];
+
+  return (
+    <SettingsSection title="Proactive delivery" icon={<RadioIcon className="size-3.5" />}>
+      <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+        When proactive mode is on, T3 keeps Hermes threads subscribed so runs that start on the
+        gateway stream into the conversation on their own.
+      </div>
+      {query.error ? (
+        <div className="px-5 py-4 text-xs text-destructive">{query.error}</div>
+      ) : providers.length === 0 ? (
+        <div className="px-5 py-8 text-center text-xs text-muted-foreground">
+          {query.isPending
+            ? "Loading proactive status…"
+            : "No Hermes provider instances are configured."}
+        </div>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {providers.map((provider) => (
+            <section key={provider.providerInstanceId} className="space-y-2 px-5 py-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-semibold">{provider.displayName}</h3>
+                <Badge variant={provider.enabled ? "success" : "outline"}>
+                  {provider.enabled ? "Proactive on" : "Proactive off"}
+                </Badge>
+                {provider.source ? (
+                  <Badge variant={provider.source.state === "ready" ? "success" : "outline"}>
+                    {provider.source.state === "ready" ? "Durable replay" : "Live only"}
+                  </Badge>
+                ) : null}
+                <span className="text-[11px] text-muted-foreground">
+                  Profile {provider.profileKey}
+                </span>
+              </div>
+              {provider.enabled ? (
+                <p className="text-xs text-muted-foreground">
+                  {provider.enabledJobCount} scheduled job
+                  {provider.enabledJobCount === 1 ? "" : "s"} · {provider.residentThreads.length}{" "}
+                  thread
+                  {provider.residentThreads.length === 1 ? "" : "s"} kept subscribed
+                  {provider.residentThreads.some((thread) => thread.selectedBy === "recent")
+                    ? " (most recent)"
+                    : ""}
+                </p>
+              ) : null}
+              {provider.diagnostics.map((diagnostic) => (
+                <p key={diagnostic} className="text-[11px] text-muted-foreground">
+                  {diagnostic}
+                </p>
+              ))}
+            </section>
+          ))}
+        </div>
+      )}
+      {query.data?.sweptAt ? (
+        <div className="border-t border-border/60 px-5 py-2 text-[11px] text-muted-foreground">
+          Last checked {new Date(query.data.sweptAt).toLocaleTimeString()}
+        </div>
+      ) : null}
+    </SettingsSection>
+  );
+}
 
 function reportFailure(title: string, error: unknown) {
   toastManager.add(
@@ -217,6 +304,7 @@ export function HermesCronSettings() {
 
   return (
     <SettingsPageContainer className="max-w-4xl">
+      <HermesProactiveStatus />
       <SettingsSection
         title="Hermes native cron"
         icon={<Clock3Icon className="size-3.5" />}

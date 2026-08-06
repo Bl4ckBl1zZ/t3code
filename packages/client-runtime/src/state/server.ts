@@ -716,6 +716,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:hermes-cron",
       tag: WS_METHODS.hermesCronList,
     }),
+    hermesProactive: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:hermes-proactive",
+      tag: WS_METHODS.hermesProactiveStatus,
+    }),
     hermesSkills: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:hermes-skills",
       tag: WS_METHODS.hermesSkillsList,

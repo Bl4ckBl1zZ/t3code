@@ -19,6 +19,8 @@ export interface HermesProviderConnection {
   readonly profileKey: string;
   readonly endpoint: string;
   readonly token: string;
+  /** Decoded instance settings, so callers can read per-instance feature switches. */
+  readonly settings: HermesSettings;
 }
 
 export interface UnavailableHermesProvider {
@@ -105,6 +107,7 @@ export function resolveHermesProviderConnections(
           profileKey: config.profileKey,
           endpoint: security.endpoint,
           token: security.authToken,
+          settings: config,
         });
       } else {
         unavailable.push({

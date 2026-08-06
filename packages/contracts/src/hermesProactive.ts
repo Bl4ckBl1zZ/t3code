@@ -69,6 +69,42 @@ export const HermesProactiveSourceStatus = Schema.Struct({
 });
 export type HermesProactiveSourceStatus = typeof HermesProactiveSourceStatus.Type;
 
+/**
+ * A Hermes thread T3 keeps subscribed to its gateway so runs that start
+ * without a T3 turn (cron jobs, other clients) are witnessed live.
+ * `selectedBy` records why: "job" when the gateway named the session its
+ * scheduled job runs in, "recent" when it did not and T3 fell back to the most
+ * recently used threads on the profile.
+ */
+export const HermesProactiveResidentThread = Schema.Struct({
+  providerInstanceId: Schema.String,
+  threadId: Schema.String,
+  storedSessionKey: Schema.String,
+  selectedBy: Schema.Literals(["job", "recent"]),
+});
+export type HermesProactiveResidentThread = typeof HermesProactiveResidentThread.Type;
+
+export const HermesProactiveProviderStatus = Schema.Struct({
+  providerInstanceId: Schema.String,
+  displayName: Schema.String,
+  profileKey: Schema.String,
+  enabled: Schema.Boolean,
+  source: Schema.NullOr(HermesProactiveSourceStatus),
+  enabledJobCount: NonNegativeInt,
+  residentThreads: Schema.Array(HermesProactiveResidentThread),
+  diagnostics: Schema.Array(Schema.String),
+});
+export type HermesProactiveProviderStatus = typeof HermesProactiveProviderStatus.Type;
+
+export const HermesProactiveStatusInput = Schema.Struct({});
+export type HermesProactiveStatusInput = typeof HermesProactiveStatusInput.Type;
+
+export const HermesProactiveStatusResult = Schema.Struct({
+  providers: Schema.Array(HermesProactiveProviderStatus),
+  sweptAt: Schema.NullOr(IsoDateTime),
+});
+export type HermesProactiveStatusResult = typeof HermesProactiveStatusResult.Type;
+
 export const HermesProactiveEventProvenance = Schema.Struct({
   provider: Schema.Literal("hermes"),
   providerInstanceId: Schema.String,

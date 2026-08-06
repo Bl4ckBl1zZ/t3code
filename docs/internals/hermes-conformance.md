@@ -107,6 +107,33 @@ Known pinned-protocol blockers are recorded rather than papered over:
 - There is no per-session MCP registration/revocation, writer fencing, or durable global cron
   event cursor.
 
+## Proactive delivery boundary
+
+Hermes runs work that T3 never prompted: cron jobs, and prompts sent to the same session by another
+Hermes client. Those runs stream on the gateway socket like any other, so when the instance's
+**Proactive mode** switch is on the adapter buffers their events and asks the orchestrator for a
+continuation turn (the same
+`ProviderContinuationRequests` path Claude uses for background-task wakes). The run is projected
+into the T3 thread as a normal turn, with no prompt submitted and no durable mutation intent to
+settle — nobody has to send a message for the conversation to move.
+
+Delivery is therefore live-only, and bounded by two pinned-protocol facts:
+
+- There is no durable global cron event cursor, so a run that happens while T3 is not connected
+  cannot be replayed afterwards. `hermes_proactive_sources` records that state per gateway
+  (`missing_durable_global_cursor`) instead of pretending the backfill happened; the durable
+  ingest path in `HermesProactiveEventRepository` stays inert until a gateway advertises
+  `cron.events.global_cursor` and `events.stable_ids`.
+- Cron rows are not required to name the session a job runs in. When they do, T3 keeps exactly
+  that thread subscribed; when they do not, it falls back to the most recently used threads on the
+  profile, capped, and says so in the proactive status.
+
+Because T3 retires idle provider sessions, being connected is not automatic. `HermesProactiveService`
+re-establishes residency on an interval for instances with proactive mode enabled, and the adapter
+reports an in-flight external run as pending background work so idle release cannot drop the
+subscription mid-wake. Runs on a gateway that T3 has never opened, or that occur while the server is
+stopped, are missed by design rather than silently.
+
 ## H5 import boundary
 
 The pinned `session.list` method is sufficient for profile-scoped, most-recent-first discovery. It

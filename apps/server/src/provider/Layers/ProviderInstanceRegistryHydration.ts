@@ -91,6 +91,7 @@ const UnavailableHermesSessionBindingRepository = HermesSessionBindingRepository
   createBinding: () => unavailableHermesRepositoryOperation("createBinding"),
   getByThreadId: () => unavailableHermesRepositoryOperation("getByThreadId"),
   getByStoredIdentity: () => unavailableHermesRepositoryOperation("getByStoredIdentity"),
+  listProfileBindings: () => unavailableHermesRepositoryOperation("listProfileBindings"),
   updateNegotiation: () => unavailableHermesRepositoryOperation("updateNegotiation"),
   updateReconciliation: () => unavailableHermesRepositoryOperation("updateReconciliation"),
   updateTitleState: () => unavailableHermesRepositoryOperation("updateTitleState"),
