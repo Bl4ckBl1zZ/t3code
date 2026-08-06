@@ -1945,6 +1945,10 @@ it.effect("ProviderSessionManagerV2 releases sessions when provider event stream
         runtimePolicy,
       });
       yield* runtime.events.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+      // One hop lets the drain fiber observe the failure and release; a second
+      // lets the event sink's group-commit fiber drain the queued release
+      // write, which is what publishes the terminal status to the projection.
+      yield* Effect.yieldNow;
       yield* Effect.yieldNow;
 
       const liveSession = yield* manager.get(providerSessionId);

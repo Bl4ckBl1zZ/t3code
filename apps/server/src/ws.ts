@@ -88,6 +88,7 @@ import {
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
 } from "./orchestration-v2/ShellStream.ts";
+import { coalesceThreadStreamFrames } from "./orchestration-v2/ThreadStreamFrames.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadSearchQuery from "./orchestration-v2/ThreadSearchQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
@@ -643,6 +644,7 @@ const makeWsRpcLayer = (
                   sequence: stored.sequence,
                   event: stored.event,
                 })),
+                coalesceThreadStreamFrames,
                 Stream.mapError(
                   (cause) =>
                     new OrchestrationV2GetThreadProjectionError({
@@ -666,6 +668,7 @@ const makeWsRpcLayer = (
                   sequence: stored.sequence,
                   event: stored.event,
                 })),
+                coalesceThreadStreamFrames,
                 Stream.mapError(
                   (cause) =>
                     new OrchestrationV2GetThreadProjectionError({

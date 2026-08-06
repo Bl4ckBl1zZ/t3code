@@ -35,6 +35,17 @@ const setup = Layer.effectDiscard(
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    // WAL defaults to `synchronous = FULL`, which fsyncs on every commit. The
+    // orchestration event stream commits continuously while a run is
+    // streaming, so that default costs one fsync per provider event and
+    // stalls the (synchronous) SQLite driver — and therefore every connected
+    // client's frames — on disk I/O.
+    //
+    // `NORMAL` keeps WAL crash-safe for process crashes; only an OS crash or
+    // power loss can drop the most recent commits. That is an acceptable
+    // trade here: projections are rebuildable from the event log, and a run
+    // interrupted by power loss is re-run rather than resumed mid-turn.
+    yield* sql`PRAGMA synchronous = NORMAL;`;
     yield* runMigrations();
   }),
 );
