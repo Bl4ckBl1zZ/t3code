@@ -107,7 +107,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
             selection: nil
         )
 
-        let routedHosts = await fixture.transport.dispatchHosts()
+        let routedHosts = await fixture.dispatches.hosts()
         XCTAssertEqual(routedHosts, ["two.example", "two.example"])
         await fixture.client.disconnect()
     }
@@ -210,7 +210,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         _ = try await fixture.client.loadThread(id: remote.id)
         try await fixture.client.renameThread(id: remote.id, title: "Remote only")
 
-        let hosts = await fixture.transport.dispatchHosts()
+        let hosts = await fixture.dispatches.hosts()
         XCTAssertEqual(hosts, ["two.example"])
         await fixture.client.disconnect()
     }
@@ -234,7 +234,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         XCTAssertNotNil(created.wireID)
         try await fixture.client.renameThread(id: created.id, title: "Fallback routed")
 
-        let records = await fixture.transport.dispatchRecords()
+        let records = await fixture.dispatches.records()
         XCTAssertEqual(records.map(\.host), ["two.example", "two.example"])
         XCTAssertEqual(records[0].command["type"]?.stringValue, "thread.create")
         XCTAssertEqual(records[0].command["projectId"]?.stringValue, "project-two")
@@ -356,6 +356,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         )
         try await store.save(environments)
         try await store.setActiveEnvironment(id: "one")
+        let dispatches = MultiEnvironmentDispatchLog()
         let transport = MultiEnvironmentHTTPTransport(
             shells: [
                 "one.example": multiEnvironmentShell(
@@ -381,7 +382,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
                 ]
             ),
             httpTransport: transport,
-            webSocketConnector: UnavailableMultiEnvironmentWebSocketConnector()
+            webSocketConnector: MultiEnvironmentWebSocketConnector(log: dispatches)
         )
         let settings = UserDefaults(
             suiteName: "t3-native-multi-\(UUID().uuidString)"
@@ -389,6 +390,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         return MultiEnvironmentFixture(
             directory: directory,
             transport: transport,
+            dispatches: dispatches,
             client: NativeFeatureClient(
                 runtime: runtime,
                 settingsStore: settings,
@@ -518,6 +520,7 @@ private actor RuntimeReplacementHTTPTransport: HTTPTransport {
 private struct MultiEnvironmentFixture {
     let directory: URL
     let transport: MultiEnvironmentHTTPTransport
+    let dispatches: MultiEnvironmentDispatchLog
     let client: NativeFeatureClient
 }
 
@@ -526,7 +529,6 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
     private var shellData: [String: Data]
     private var reachableHosts: Set<String>
     private var shellReadsEnabledHosts: Set<String>
-    private var dispatched: [MultiEnvironmentDispatchRecord] = []
 
     init(shells: [String: OrchestrationV2ShellSnapshot]) {
         self.shells = shells
@@ -555,14 +557,6 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
         shellData[host] = try! JSONEncoder.t3.encode(shell)
     }
 
-    func dispatchHosts() -> [String] {
-        dispatched.map(\.host)
-    }
-
-    func dispatchRecords() -> [MultiEnvironmentDispatchRecord] {
-        dispatched
-    }
-
     func data(for request: URLRequest) throws -> (Data, HTTPURLResponse) {
         let host = request.url?.host ?? ""
         guard reachableHosts.contains(host) else {
@@ -586,19 +580,6 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
                 multiEnvironmentResponse(request)
             )
         }
-        if path == "/api/orchestration/dispatch" {
-            guard let body = request.httpBody else { throw URLError(.badServerResponse) }
-            dispatched.append(
-                MultiEnvironmentDispatchRecord(
-                    host: host,
-                    command: try JSONDecoder.t3.decode(JSONValue.self, from: body)
-                )
-            )
-            return (
-                try JSONEncoder.t3.encode(DispatchResult(sequence: 2)),
-                multiEnvironmentResponse(request)
-            )
-        }
         if path == "/api/auth/websocket-ticket" {
             return (
                 Data(
@@ -618,9 +599,113 @@ private struct MultiEnvironmentDispatchRecord: Sendable {
     let command: JSONValue
 }
 
-private struct UnavailableMultiEnvironmentWebSocketConnector: WebSocketConnecting {
-    func connect(to _: URL) async throws -> any WebSocketConnection {
-        throw URLError(.cannotConnectToHost)
+/// Commands are WebSocket-only, so a fixture that wants to observe routing has
+/// to speak the socket. Only `orchestration.dispatchCommand` and
+/// `orchestration.launchThread` are answered; everything else — the shell,
+/// thread and server-config subscriptions — is accepted and never delivers, so
+/// these tests keep exercising the HTTP refresh path.
+private struct MultiEnvironmentWebSocketConnector: WebSocketConnecting {
+    let log: MultiEnvironmentDispatchLog
+
+    func connect(to url: URL) async throws -> any WebSocketConnection {
+        MultiEnvironmentWebSocketConnection(host: url.host ?? "", log: log)
+    }
+}
+
+private actor MultiEnvironmentDispatchLog {
+    private var dispatched: [MultiEnvironmentDispatchRecord] = []
+
+    func record(_ record: MultiEnvironmentDispatchRecord) {
+        dispatched.append(record)
+    }
+
+    func hosts() -> [String] {
+        dispatched.map(\.host)
+    }
+
+    func records() -> [MultiEnvironmentDispatchRecord] {
+        dispatched
+    }
+}
+
+private actor MultiEnvironmentWebSocketConnection: WebSocketConnection {
+    private let host: String
+    private let log: MultiEnvironmentDispatchLog
+    private var queued: [Data] = []
+    private var receiver: CheckedContinuation<Data, Error>?
+
+    init(host: String, log: MultiEnvironmentDispatchLog) {
+        self.host = host
+        self.log = log
+    }
+
+    func send(_ data: Data) async throws {
+        let request = try JSONDecoder.t3.decode(JSONValue.self, from: data)
+        guard case let .number(rawID) = request["id"] else { return }
+        let tag = request["tag"]?.stringValue
+        let exit: JSONValue
+        switch tag {
+        case RPCMethod.dispatchCommand.rawValue:
+            await log.record(
+                MultiEnvironmentDispatchRecord(
+                    host: host,
+                    command: request["payload"] ?? .null
+                )
+            )
+            exit = .object([
+                "_tag": .string("Success"),
+                "value": .object(["sequence": .number(2)]),
+            ])
+        case RPCMethod.launchThread.rawValue:
+            await log.record(
+                MultiEnvironmentDispatchRecord(
+                    host: host,
+                    command: request["payload"] ?? .null
+                )
+            )
+            exit = .object([
+                "_tag": .string("Success"),
+                "value": .object([
+                    "threadId": request["payload"]?["threadId"] ?? .string("thread"),
+                    "resumed": .bool(false),
+                ]),
+            ])
+        default:
+            // Silence, not a failure: a subscription that ends would flip the
+            // connection state and turn granular thread events into whole
+            // snapshot replacements, which is not what these tests are about.
+            return
+        }
+        enqueue(
+            try JSONEncoder.t3.encode(
+                JSONValue.object([
+                    "_tag": .string("Exit"),
+                    "requestId": .number(rawID),
+                    "exit": exit,
+                ])
+            )
+        )
+    }
+
+    func receive() async throws -> Data {
+        if !queued.isEmpty { return queued.removeFirst() }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver = continuation
+        }
+    }
+
+    func close() {
+        receiver?.resume(throwing: CancellationError())
+        receiver = nil
+    }
+
+    private func enqueue(_ data: Data) {
+        if let receiver {
+            self.receiver = nil
+            receiver.resume(returning: data)
+        } else {
+            queued.append(data)
+        }
     }
 }
 

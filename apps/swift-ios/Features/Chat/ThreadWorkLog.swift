@@ -709,6 +709,40 @@ public enum ChangedFilesPreview {
     }
 }
 
+// MARK: - Row expansion
+
+/// Which work-log rows are open.
+///
+/// Three states per row rather than two — open, closed, and "not asked" — which
+/// is what lets `FeatureSettings.alwaysExpandActivity` mean *default* instead of
+/// *lock*. The preference only decides rows the reader has not touched; a row
+/// they closed stays closed while it is on, and a row they opened stays open
+/// after it is turned off.
+public struct ThreadWorkLogExpansion: Equatable, Sendable {
+    private var openedIDs: Set<String> = []
+    private var closedIDs: Set<String> = []
+
+    public init() {}
+
+    public func isExpanded(_ id: String, expandedByDefault: Bool) -> Bool {
+        if closedIDs.contains(id) { return false }
+        return expandedByDefault || openedIDs.contains(id)
+    }
+
+    /// Records what the reader asked for, against what they can currently see:
+    /// toggling a row the preference opened has to register as a close, not as
+    /// the absence of an open.
+    public mutating func toggle(_ id: String, expandedByDefault: Bool) {
+        if isExpanded(id, expandedByDefault: expandedByDefault) {
+            openedIDs.remove(id)
+            closedIDs.insert(id)
+        } else {
+            closedIDs.remove(id)
+            openedIDs.insert(id)
+        }
+    }
+}
+
 // MARK: - Views
 
 /// Additions and deletions, the first thing a reader looks for on a file row.
@@ -739,6 +773,7 @@ struct WorkRowDiffStat: View {
 struct ThreadWorkLog: View {
     let rows: [ThreadWorkLogRow]
     let currentThreadID: String
+    let currentWireThreadID: String
     var workspaceRoot: String?
     /// Relational V2 support for one row, when the caller has the projection.
     var itemSupport: (OrchestrationV2ProjectedTurnItem) -> ThreadActivityItemSupport = { _ in
@@ -750,10 +785,16 @@ struct ThreadWorkLog: View {
     /// Checkpoint id and, when a chip was tapped, the file to select.
     var onOpenDiff: (String, String?) -> Void = { _, _ in }
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
+    /// `FeatureSettings.alwaysExpandActivity`: the log opens unfolded and every
+    /// row opens with it, the way a provider CLI leaves its scrollback alone.
+    var alwaysExpandActivity: Bool = false
 
-    @State private var isExpanded = false
-    @State private var expandedRowIDs: Set<String> = []
+    /// `nil` until the reader touches the fold, so the preference decides it.
+    @State private var overflowExpanded: Bool?
+    @State private var expansion = ThreadWorkLogExpansion()
     @State private var copiedRowID: String?
+
+    private var isExpanded: Bool { overflowExpanded ?? alwaysExpandActivity }
 
     private var visibleCandidates: [ThreadWorkLogRow] { ThreadWorkLogRow.visible(rows) }
 
@@ -804,7 +845,7 @@ struct ThreadWorkLog: View {
                 checkpointID: checkpointID,
                 files: files,
                 workspaceRoot: workspaceRoot,
-                isExpanded: expandedRowIDs.contains(row.id),
+                isExpanded: isRowExpanded(row.id),
                 onToggle: { toggleRow(row.id) },
                 onOpenDiff: { onOpenDiff(checkpointID, $0) }
             )
@@ -813,20 +854,22 @@ struct ThreadWorkLog: View {
                 WorkLogRowButton(
                     row: row,
                     workspaceRoot: workspaceRoot,
-                    isExpanded: expandedRowIDs.contains(row.id),
+                    isExpanded: isRowExpanded(row.id),
                     isCopied: copiedRowID == row.id,
                     onToggle: { toggleRow(row.id) },
                     onCopy: { copy(row) }
                 )
 
-                if expandedRowIDs.contains(row.id) {
+                if isRowExpanded(row.id) {
                     ThreadActivityInspectorView(
                         model: ThreadActivityInspector.build(
                             row: row.projectedItem,
                             support: itemSupport(row.projectedItem),
-                            currentThreadID: currentThreadID
+                            currentThreadID: currentThreadID,
+                            currentWireThreadID: currentWireThreadID
                         ),
                         currentThreadID: currentThreadID,
+                        currentWireThreadID: currentWireThreadID,
                         activitySourceThreadID: row.projectedItem.sourceThreadId,
                         workspaceRoot: workspaceRoot,
                         onOpenFile: onOpenFile,
@@ -869,7 +912,7 @@ struct ThreadWorkLog: View {
         let noun = ThreadWorkLogRow.overflowNoun(onlyToolRows: onlyToolRows, count: hiddenCount)
         let stats = ThreadWorkLogRow.totalDiffStat(hiddenRows)
         return Button {
-            isExpanded.toggle()
+            overflowExpanded = !isExpanded
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -895,19 +938,20 @@ struct ThreadWorkLog: View {
         )
     }
 
+    private func isRowExpanded(_ id: String) -> Bool {
+        expansion.isExpanded(id, expandedByDefault: alwaysExpandActivity)
+    }
+
     private func toggleRow(_ id: String) {
-        if expandedRowIDs.contains(id) {
-            expandedRowIDs.remove(id)
-        } else {
-            expandedRowIDs.insert(id)
-        }
+        expansion.toggle(id, expandedByDefault: alwaysExpandActivity)
     }
 
     private func copy(_ row: ThreadWorkLogRow) {
         let model = ThreadActivityInspector.build(
             row: row.projectedItem,
             support: itemSupport(row.projectedItem),
-            currentThreadID: currentThreadID
+            currentThreadID: currentThreadID,
+            currentWireThreadID: currentWireThreadID
         )
         UIPasteboard.general.string = row.copyText(structuredDetails: model.structuredDetails)
         copiedRowID = row.id

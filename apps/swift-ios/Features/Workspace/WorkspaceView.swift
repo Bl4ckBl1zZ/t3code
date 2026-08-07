@@ -641,8 +641,11 @@ public struct WorkspaceView: View {
     /// that there is no way to tell the backing project apart from any other, so
     /// a Work launch honestly reports itself unavailable rather than attaching
     /// the conversation to an arbitrary project.
+    /// Ordered by the saved-environment list, because Hermes routing takes the
+    /// first environment that can host the conversation — an unordered source
+    /// would make the chosen project depend on hashing.
     private var workspaceServerConfigs: [MobileWorkspaceEnvironmentConfig] {
-        []
+        model.client.workspaceServerConfigs()
     }
 
     private var selectedProject: FeatureProject? {

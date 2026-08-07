@@ -30,6 +30,10 @@ public final class FeatureRootModel {
     public private(set) var isPerformingAction = false
     public private(set) var isManagingConnections = false
     public var errorMessage: String?
+    /// What each thread's review is pointed at. Lives here rather than in the
+    /// review screen because the thread feed arms it and the review — presented
+    /// later, from a sheet that does not exist yet — spends it.
+    public let reviewSelection = ReviewSelectionStore()
 
     let client: any FeatureClient
     private let outboxStore: FeatureOutboxStore
@@ -341,6 +345,9 @@ public final class FeatureRootModel {
             guard currentEnvironmentIdentity == environment else { return }
             removeThread(id: id)
             removeDetail(id: id)
+            // A deleted thread is the one thing that should drop a review
+            // selection: it survives leaving and re-entering the review.
+            reviewSelection.forget(threadID: id)
         }
     }
 
@@ -593,6 +600,7 @@ public final class FeatureRootModel {
         case let .threadRemoved(id):
             removeThread(id: id)
             removeDetail(id: id)
+            reviewSelection.forget(threadID: id)
         case let .detail(value):
             store(value)
             upsert(value.thread)
@@ -709,6 +717,7 @@ public final class FeatureRootModel {
             merged.timelineRuns = prepared.timelineRuns
             merged.itemSupport = prepared.itemSupport
             merged.subagentChildThreadIDs = prepared.subagentChildThreadIDs
+            merged.workflow = prepared.workflow
             return merged
         } ?? prepared
         guard details[id] != next else { return }

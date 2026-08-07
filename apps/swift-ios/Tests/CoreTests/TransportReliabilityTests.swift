@@ -196,7 +196,14 @@ final class TransportReliabilityTests: XCTestCase {
         XCTAssertEqual(httpRequests.map(\.url?.path), ["/api/auth/websocket-ticket"])
     }
 
-    func testUnsentCommandsFallBackToHTTPButBootstrapDoesNot() async throws {
+    /// Commands are WebSocket-only on this fork.
+    ///
+    /// `EnvironmentOrchestrationHttpApi` serves the shell and thread-snapshot
+    /// GETs and nothing else, so an HTTP dispatch fallback could only ever
+    /// answer 404 — and a 404 read as a command failure hides the fact that the
+    /// socket is down. An unsent command surfaces its `RPCError` instead, and
+    /// the only HTTP request a disconnected client makes is the socket ticket.
+    func testCommandsSurfaceTheSocketFailureRatherThanPostingToAMissingEndpoint() async throws {
         let environment = Environment(
             id: "environment-1",
             label: "Studio",
@@ -209,18 +216,12 @@ final class TransportReliabilityTests: XCTestCase {
             ]
         )
         let transport = RecordingHTTPTransport { request in
-            let body = if request.url?.path == "/api/auth/websocket-ticket" {
-                """
-                {
-                  "ticket": "websocket-ticket",
-                  "expiresAt": "2026-07-30T12:05:00.000Z"
-                }
-                """
-            } else {
-                """
-                {"sequence": 9}
-                """
+            let body = """
+            {
+              "ticket": "websocket-ticket",
+              "expiresAt": "2026-07-30T12:05:00.000Z"
             }
+            """
             return (Data(body.utf8), transportResponse(request))
         }
         let client = T3Client(
@@ -231,8 +232,14 @@ final class TransportReliabilityTests: XCTestCase {
             rpcConnectionWaitTimeout: .milliseconds(30)
         )
 
-        let rename = try await client.rename(threadID: "thread-1", title: "Renamed")
-        XCTAssertEqual(rename.sequence, 9)
+        do {
+            _ = try await client.rename(threadID: "thread-1", title: "Renamed")
+            XCTFail("A command must not report success while the socket is down.")
+        } catch let error as RPCError {
+            guard case .connectionUnavailable = error else {
+                return XCTFail("Unexpected RPC error: \(error)")
+            }
+        }
 
         do {
             _ = try await client.createThreadAndSend(
@@ -252,15 +259,179 @@ final class TransportReliabilityTests: XCTestCase {
         await client.disconnect()
 
         let requests = await transport.requests
-        let dispatchRequests = requests.filter {
-            $0.url?.path == "/api/orchestration/dispatch"
-        }
-        XCTAssertEqual(dispatchRequests.count, 1)
-        let command = try JSONDecoder.t3.decode(
-            JSONValue.self,
-            from: try XCTUnwrap(dispatchRequests.first?.httpBody)
+        XCTAssertEqual(
+            Set(requests.compactMap(\.url?.path)),
+            ["/api/auth/websocket-ticket"]
         )
-        XCTAssertEqual(command["type"]?.stringValue, "thread.metadata.update")
+    }
+
+    func testCheckpointRollbackNamesBothTheScopeAndTheCheckpoint() async throws {
+        let environment = Environment(
+            id: "environment-1",
+            label: "Studio",
+            httpBaseURL: URL(string: "https://studio.example")!,
+            webSocketBaseURL: URL(string: "wss://studio.example")!
+        )
+        let connection = RecordingWebSocketConnection()
+        let client = T3Client(
+            environment: environment,
+            credentialStore: InMemoryCredentialStore(
+                credentials: [
+                    environment.id: EnvironmentCredential(accessToken: "access-token"),
+                ]
+            ),
+            httpTransport: RecordingHTTPTransport { request in
+                let body = """
+                {"ticket":"websocket-ticket","expiresAt":"2026-07-30T12:05:00.000Z"}
+                """
+                return (Data(body.utf8), transportResponse(request))
+            },
+            webSocketConnector: StaticWebSocketConnector(connection: connection)
+        )
+
+        _ = try await client.rollBackToCheckpoint(
+            threadID: "thread-1",
+            scopeID: "scope-1",
+            checkpointID: "checkpoint-3",
+            commandID: "stable-rollback"
+        )
+        await client.disconnect()
+
+        let requests = await connection.requests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(
+            requests.first?["tag"]?.stringValue,
+            RPCMethod.dispatchCommand.rawValue
+        )
+        let command = try XCTUnwrap(requests.first?["payload"])
+        XCTAssertEqual(command["type"]?.stringValue, "checkpoint.rollback")
+        XCTAssertEqual(command["commandId"]?.stringValue, "stable-rollback")
+        XCTAssertEqual(command["threadId"]?.stringValue, "thread-1")
+        XCTAssertEqual(command["scopeId"]?.stringValue, "scope-1")
+        XCTAssertEqual(command["checkpointId"]?.stringValue, "checkpoint-3")
+    }
+
+    func testScheduledTaskUpsertMatchesTheContractInput() throws {
+        let created = try ScheduledTaskUpsert(
+            title: "Morning triage",
+            prompt: "Summarize overnight failures",
+            enabled: true,
+            schedule: .fixedTime(timeOfDay: "09:00", weekdays: [1, 2, 3, 4, 5]),
+            projectID: "project-1",
+            threadID: nil,
+            workspaceStrategy: .object([
+                "type": .string("worktree"),
+                "baseRef": .string("main"),
+            ]),
+            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
+            creationSource: "mobile"
+        ).jsonValue(commandID: "stable-upsert")
+
+        XCTAssertNil(created["id"])
+        XCTAssertEqual(created["commandId"]?.stringValue, "stable-upsert")
+        XCTAssertEqual(created["title"]?.stringValue, "Morning triage")
+        XCTAssertEqual(created["projectId"]?.stringValue, "project-1")
+        // Optional *and* nullable on the wire: an explicit null is what clears a
+        // pinned thread back to "start a fresh thread per run".
+        XCTAssertEqual(created["threadId"], JSONValue.null)
+        XCTAssertEqual(created["schedule"]?["type"]?.stringValue, "fixed_time")
+        XCTAssertEqual(created["schedule"]?["timeOfDay"]?.stringValue, "09:00")
+        XCTAssertEqual(
+            created["schedule"]?["weekdays"],
+            JSONValue.array([.number(1), .number(2), .number(3), .number(4), .number(5)])
+        )
+        XCTAssertEqual(created["workspaceStrategy"]?["baseRef"]?.stringValue, "main")
+        XCTAssertEqual(created["modelSelection"]?["instanceId"]?.stringValue, "codex")
+        XCTAssertEqual(created["runtimeMode"]?.stringValue, "full-access")
+        XCTAssertEqual(created["interactionMode"]?.stringValue, "default")
+        XCTAssertEqual(created["creationSource"]?.stringValue, "mobile")
+        XCTAssertEqual(created["createdBy"]?.stringValue, "user")
+
+        // An edit keeps the creation attribution the server already recorded.
+        let edited = try ScheduledTaskUpsert(
+            id: "task-1",
+            title: "Morning triage",
+            prompt: "Summarize overnight failures",
+            enabled: false,
+            schedule: .interval(everyMs: 900_000),
+            projectID: "project-1",
+            threadID: "thread-7",
+            workspaceStrategy: .object(["type": .string("root")]),
+            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.4")
+        ).jsonValue(commandID: "stable-edit")
+
+        XCTAssertEqual(edited["id"]?.stringValue, "task-1")
+        XCTAssertEqual(edited["threadId"]?.stringValue, "thread-7")
+        XCTAssertEqual(edited["schedule"]?["type"]?.stringValue, "interval")
+        XCTAssertEqual(edited["schedule"]?["everyMs"], JSONValue.number(900_000))
+        XCTAssertNil(edited["creationSource"])
+        XCTAssertNil(edited["createdBy"])
+    }
+
+    func testScheduledTaskRecordDecodesBothScheduleShapes() throws {
+        let json = """
+        {
+          "tasks": [
+            {
+              "id": "task-1",
+              "title": "Nightly",
+              "prompt": "Run the suite",
+              "enabled": true,
+              "schedule": {"type": "fixed_time", "timeOfDay": "23:30"},
+              "projectId": "project-1",
+              "threadId": null,
+              "workspaceStrategy": {"type": "worktree", "baseRef": "main"},
+              "modelSelection": {"instanceId": "codex", "model": "gpt-5.4"},
+              "runtimeMode": "full-access",
+              "interactionMode": "default",
+              "createdBy": "user",
+              "creationSource": "web",
+              "createdAt": "2026-07-31T12:00:00.000Z",
+              "updatedAt": "2026-07-31T12:00:00.000Z",
+              "nextRunAt": "2026-08-01T23:30:00.000Z",
+              "lastRunAt": null,
+              "lastRunStatus": "never",
+              "lastRunError": null,
+              "runCount": 0
+            },
+            {
+              "id": "task-2",
+              "title": "Every quarter hour",
+              "prompt": "Check the queue",
+              "enabled": false,
+              "schedule": {"type": "interval", "everyMs": 900000},
+              "projectId": "project-2",
+              "threadId": "thread-9",
+              "workspaceStrategy": {"type": "root"},
+              "modelSelection": {"instanceId": "claudeAgent", "model": "opus"},
+              "runtimeMode": "full-access",
+              "interactionMode": "default",
+              "createdBy": "user",
+              "creationSource": "mobile",
+              "createdAt": "2026-07-31T12:00:00.000Z",
+              "updatedAt": "2026-07-31T12:00:00.000Z",
+              "nextRunAt": null,
+              "lastRunAt": "2026-07-31T11:45:00.000Z",
+              "lastRunStatus": "failed",
+              "lastRunError": "boom",
+              "runCount": 4
+            }
+          ]
+        }
+        """
+        struct Payload: Decodable { let tasks: [ScheduledTaskRecord] }
+        let tasks = try JSONDecoder.t3.decode(Payload.self, from: Data(json.utf8)).tasks
+
+        XCTAssertEqual(tasks.count, 2)
+        // Absent weekdays mean every day, which has to stay distinguishable
+        // from an empty list.
+        XCTAssertEqual(tasks[0].schedule, .fixedTime(timeOfDay: "23:30", weekdays: nil))
+        XCTAssertNil(tasks[0].threadId)
+        XCTAssertEqual(tasks[0].workspaceStrategy["baseRef"]?.stringValue, "main")
+        XCTAssertEqual(tasks[1].schedule, .interval(everyMs: 900_000))
+        XCTAssertEqual(tasks[1].threadId, "thread-9")
+        XCTAssertEqual(tasks[1].lastRunStatus, "failed")
+        XCTAssertEqual(tasks[1].runCount, 4)
     }
 
     /// Set `T3_SWIFT_WS_DEFLATE_ECHO_URL` to a WebSocket endpoint that rejects

@@ -139,7 +139,6 @@ final class NativeRetryIdentityTests: XCTestCase {
         }
 
         let commands = await connection.recordedCommands()
-            + transport.dispatchCommands()
         XCTAssertEqual(commands.count, 4)
         let turnCommands = commands.filter {
             messageText($0) == "Retry without duplicating"
@@ -231,7 +230,6 @@ final class NativeRetryIdentityTests: XCTestCase {
         )
 
         let commands = await connection.recordedCommands()
-            + transport.dispatchCommands()
         XCTAssertEqual(commands.count, 2)
         // The launch is the one carrying `initialMessage`; the recovery turn is
         // an ordinary `message.dispatch`.
@@ -428,7 +426,6 @@ private func retryShellSnapshot() -> OrchestrationV2ShellSnapshot {
 
 private actor RetryIdentityHTTPTransport: HTTPTransport {
     private let shellData: Data
-    private var commands: [JSONValue] = []
 
     init(shell: OrchestrationV2ShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
@@ -455,15 +452,7 @@ private actor RetryIdentityHTTPTransport: HTTPTransport {
         if path.hasPrefix("/api/orchestration/threads/") {
             throw URLError(.networkConnectionLost)
         }
-        if path == "/api/orchestration/dispatch" {
-            commands.append(try retryDispatchCommand(from: request))
-            throw URLError(.networkConnectionLost)
-        }
         throw URLError(.unsupportedURL)
-    }
-
-    func dispatchCommands() -> [JSONValue] {
-        commands
     }
 }
 
@@ -477,7 +466,6 @@ private struct RetryIdentityWebSocketConnector: WebSocketConnecting {
 
 private actor PartialBootstrapHTTPTransport: HTTPTransport {
     private let shellData: Data
-    private var commands: [JSONValue] = []
 
     init(shell: OrchestrationV2ShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
@@ -506,18 +494,7 @@ private actor PartialBootstrapHTTPTransport: HTTPTransport {
             let snapshot = retryEmptyThreadDetail(id: threadID)
             return (try JSONEncoder.t3.encode(snapshot), retryHTTPResponse(request))
         }
-        if path == "/api/orchestration/dispatch" {
-            commands.append(try retryDispatchCommand(from: request))
-            return (
-                Data("{\"sequence\":42}".utf8),
-                retryHTTPResponse(request)
-            )
-        }
         throw URLError(.unsupportedURL)
-    }
-
-    func dispatchCommands() -> [JSONValue] {
-        commands
     }
 }
 
@@ -699,11 +676,4 @@ private func retryHTTPResponse(_ request: URLRequest) -> HTTPURLResponse {
         httpVersion: "HTTP/1.1",
         headerFields: ["Content-Type": "application/json"]
     )!
-}
-
-private func retryDispatchCommand(from request: URLRequest) throws -> JSONValue {
-    guard let body = request.httpBody else {
-        throw URLError(.cannotDecodeContentData)
-    }
-    return try JSONDecoder.t3.decode(JSONValue.self, from: body)
 }

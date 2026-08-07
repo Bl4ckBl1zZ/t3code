@@ -5,15 +5,79 @@ import UIKit
 public struct FeatureFilesView: View {
     let client: any FeatureClient
     let threadID: String
+    /// A workspace-relative file the browser should open straight away, handed
+    /// over by a file link in the thread feed.
+    let initialPath: String?
+    /// The 1-based line inside that file to scroll to, when the link named one.
+    let initialLine: Int?
 
-    public init(client: any FeatureClient, threadID: String) {
+    /// The pushed preview. Set from `initialPath`: a link that named a file
+    /// should land on it, not on the tree root with the reader left to walk down
+    /// to it.
+    @State private var deepLinkedFile: FeatureFileEntry?
+    /// Spent once. Popping back to the tree clears `deepLinkedFile`, and this
+    /// view appearing again behind that pop must not push the same file straight
+    /// back on top of it.
+    @State private var didFollowDeepLink = false
+
+    public init(
+        client: any FeatureClient,
+        threadID: String,
+        initialPath: String? = nil,
+        initialLine: Int? = nil
+    ) {
         self.client = client
         self.threadID = threadID
+        self.initialPath = initialPath
+        self.initialLine = initialLine
+    }
+
+    /// Where the route a work-log file link built lands in this browser.
+    ///
+    /// The route models a URL — escaped segments, a line as a string — because
+    /// that is what the React Native client navigates with. This client pushes
+    /// the preview itself, so the segments rejoin and the line becomes a number
+    /// again; a route with no segments names no file and opens the tree root.
+    static func destination(for route: ThreadActivityFileRoute) -> (path: String?, line: Int?) {
+        (
+            path: route.path.isEmpty ? nil : route.path.joined(separator: "/"),
+            line: route.line.flatMap(Int.init)
+        )
     }
 
     public var body: some View {
         FeatureFileDirectoryView(client: client, threadID: threadID, path: nil, title: "Files")
             .background(T3Colors.background)
+            .navigationDestination(item: $deepLinkedFile) { entry in
+                FeatureFilePreviewView(
+                    client: client,
+                    threadID: threadID,
+                    entry: entry,
+                    focusedLine: initialLine
+                )
+            }
+            .task {
+                guard !didFollowDeepLink else { return }
+                didFollowDeepLink = true
+                deepLinkedFile = Self.deepLinkedEntry(path: initialPath)
+            }
+    }
+
+    /// The entry a deep link opens, built from the path alone.
+    ///
+    /// Synthesized rather than looked up: the listing that would confirm it
+    /// belongs to the directory the file sits in, which is exactly the walk the
+    /// link exists to skip. A path with no segments — empty, or all separators —
+    /// names no file and opens the tree root instead.
+    static func deepLinkedEntry(path: String?) -> FeatureFileEntry? {
+        guard let path else { return nil }
+        let segments = path.split(separator: "/").map(String.init)
+        guard let name = segments.last else { return nil }
+        return FeatureFileEntry(
+            path: segments.joined(separator: "/"),
+            name: name,
+            kind: .file
+        )
     }
 }
 
@@ -153,6 +217,9 @@ private struct FeatureFilePreviewView: View {
     let client: any FeatureClient
     let threadID: String
     let entry: FeatureFileEntry
+    /// The 1-based line a deep link pointed at, highlighted and scrolled to once
+    /// the file has been read and highlighted.
+    var focusedLine: Int?
 
     @State private var content: FeatureFileContent?
     @State private var sourceLines: [FeatureSourceLine] = []
@@ -195,7 +262,7 @@ private struct FeatureFilePreviewView: View {
                         }
                         .scrollDismissesKeyboard(.interactively)
                     case .source, .plainText:
-                        FeatureSourceTextView(lines: sourceLines)
+                        FeatureSourceTextView(lines: sourceLines, focusedLine: focusedLine)
                     case .image:
                         EmptyView()
                     }
@@ -304,32 +371,61 @@ private struct FeatureFilePreviewView: View {
 
 private struct FeatureSourceTextView: View {
     let lines: [FeatureSourceLine]
+    /// 1-based, as a reader and a tool call both count lines.
+    var focusedLine: Int?
+
+    /// The identity of the focused row, which is the line's 0-based index.
+    /// `nil` while the file is still loading, so the scroll waits for the lines
+    /// rather than being spent on an empty stack.
+    private var focusedLineID: Int? {
+        guard let focusedLine, focusedLine > 0, !lines.isEmpty else { return nil }
+        let id = focusedLine - 1
+        return lines.contains { $0.id == id } ? id : nil
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(lines) { line in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text("\(line.number)")
-                                .foregroundStyle(.tertiary)
-                                .frame(width: 44, alignment: .trailing)
-                                .accessibilityHidden(true)
-                            FeatureHighlightedSourceLine(line: line)
+            ScrollViewReader { scroll in
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(lines) { line in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text("\(line.number)")
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 44, alignment: .trailing)
+                                    .accessibilityHidden(true)
+                                FeatureHighlightedSourceLine(line: line)
+                            }
+                            .font(T3Typography.code)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(
+                                minWidth: proxy.size.width,
+                                minHeight: 22,
+                                alignment: .leading
+                            )
+                            .background(
+                                line.id == focusedLineID
+                                    ? T3Colors.accent.opacity(0.16)
+                                    : Color.clear
+                            )
+                            .id(line.id)
                         }
-                        .font(T3Typography.code)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(
-                            minWidth: proxy.size.width,
-                            minHeight: 22,
-                            alignment: .leading
-                        )
                     }
+                    .frame(minWidth: proxy.size.width, alignment: .leading)
+                    .padding(.vertical, 10)
+                    .padding(.trailing, 14)
+                    .textSelection(.enabled)
                 }
-                .frame(minWidth: proxy.size.width, alignment: .leading)
-                .padding(.vertical, 10)
-                .padding(.trailing, 14)
-                .textSelection(.enabled)
+                // Keyed on the resolved row: the file is read asynchronously, so
+                // the target only exists once the highlighter has run.
+                .task(id: focusedLineID) {
+                    guard let focusedLineID else { return }
+                    // One turn of the run loop for the lazy stack to build the
+                    // rows the proxy is about to look for.
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scroll.scrollTo(focusedLineID, anchor: .center)
+                }
             }
         }
         .background(T3Colors.background)

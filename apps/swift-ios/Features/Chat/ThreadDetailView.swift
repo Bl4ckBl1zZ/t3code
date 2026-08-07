@@ -121,10 +121,20 @@ public struct ThreadDetailView: View {
                         onMergeBack: mergeBack,
                         onDetachSession: detachSession
                     )
-                case .files:
-                    FeatureFilesView(client: model.client, threadID: thread.id)
-                case .review:
-                    FeatureReviewView(client: model.client, threadID: thread.id)
+                case let .files(path, line):
+                    FeatureFilesView(
+                        client: model.client,
+                        threadID: thread.id,
+                        initialPath: path,
+                        initialLine: line
+                    )
+                case let .review(filePath):
+                    FeatureReviewView(
+                        client: model.client,
+                        threadID: thread.id,
+                        selection: model.reviewSelection,
+                        initialFilePath: filePath
+                    )
                 case .sourceControl:
                     FeatureSourceControlView(client: model.client, threadID: thread.id)
                 case .terminal:
@@ -255,10 +265,10 @@ public struct ThreadDetailView: View {
     private var threadActionsMenu: some View {
         Menu {
             Section("Workspace") {
-                Button { toolSurface = .files } label: {
+                Button { toolSurface = .files(path: nil, line: nil) } label: {
                     Label("Files", systemImage: "folder")
                 }
-                Button { toolSurface = .review } label: {
+                Button { toolSurface = .review(filePath: nil) } label: {
                     Label("Review changes", systemImage: "doc.text.magnifyingglass")
                 }
                 Button { toolSurface = .sourceControl } label: {
@@ -357,6 +367,19 @@ public struct ThreadDetailView: View {
             } else {
                 FeatureTranscriptCollectionView(
                     threadID: thread.id,
+                    // Projected rows name their source thread with a wire id, so
+                    // the rollback affordance has to compare against one.
+                    wireThreadID: thread.wireID ?? thread.id,
+                    onRollback: { target in
+                        Task {
+                            try? await model.client.rollBackToCheckpoint(
+                                threadID: target.threadID,
+                                scopeID: target.scopeID,
+                                checkpointID: target.checkpointID
+                            )
+                            _ = await model.detail(for: thread.id, force: true)
+                        }
+                    },
                     detail: detail,
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
@@ -364,16 +387,15 @@ public struct ThreadDetailView: View {
                     canLoadEarlier: detail.page?.hasMore == true,
                     isLoadingEarlier: detail.page?.isLoading == true,
                     workspaceRoot: threadWorkspaceRoot,
+                    alwaysExpandActivity: model.snapshot.settings.alwaysExpandActivity,
                     onLoadEarlier: {
                         Task { await model.loadEarlierTurns(for: thread.id) }
                     },
                     onDismissKeyboard: dismissKeyboard,
                     onOpenThread: openRelatedThread,
-                    // No file or diff route reaches a path yet, so a link opens
-                    // the surface that owns it rather than doing nothing.
-                    onOpenFile: { _ in toolSurface = .files },
+                    onOpenFile: openFile,
                     onOpenURL: { openURL($0) },
-                    onOpenDiff: { _, _ in toolSurface = .review }
+                    onOpenDiff: openDiff
                 )
             }
         }
@@ -660,16 +682,9 @@ public struct ThreadDetailView: View {
     /// Server state, not the phone's outbox: a message sent with dispatch mode
     /// "queue" becomes a run in `queued` status that every client can see.
     ///
-    /// Empty on every build today. The derivation needs run statuses, queue
-    /// positions, the active attempt's provider turn and the provider session's
-    /// capabilities; `FeatureThreadDetail` carries none of them, because
-    /// `timelineRuns` is narrowed to the four fields handoff rows read and the
-    /// rest of the projection's tables are dropped by `mapDetail`. Everything
-    /// below is wired through this one value, so the queue appears as soon as
-    /// the detail carries the projection's `runs`, `providerTurns` and
-    /// `providerSessions`.
+    /// The thread's queue, derived by the adapter from the projection.
     private var queueState: ThreadQueueWorkflowState {
-        ThreadWorkflows.deriveQueueWorkflowState(runs: [])
+        model.details[thread.id]?.workflow.queueState ?? .empty
     }
 
     /// Runs one queue command, locking the row it targets for its duration and
@@ -696,9 +711,9 @@ public struct ThreadDetailView: View {
             toolSurface = nil
             model.setConnectionManagementPresented(true)
         case .files:
-            toolSurface = .files
+            toolSurface = .files(path: nil, line: nil)
         case .review:
-            toolSurface = .review
+            toolSurface = .review(filePath: nil)
         case .sourceControl:
             toolSurface = .sourceControl
         case .terminal:
@@ -707,6 +722,39 @@ public struct ThreadDetailView: View {
             toolSurface = nil
             onOpenRelatedThread(id, isArchived)
         }
+    }
+
+    /// Opens the file browser on the file a work-log link named, at its line.
+    ///
+    /// The route is built rather than followed as a URL — this client pushes the
+    /// preview itself — but building it is what splits the path into segments,
+    /// drops a non-positive line, and discards the activity's own provenance in
+    /// favour of the thread whose workspace is on screen.
+    private func openFile(_ request: ThreadActivityFileOpenRequest) {
+        let route = ThreadActivityFileRoute.build(
+            environmentID: threadEnvironment?.id ?? currentThread.environmentID ?? "",
+            currentThreadID: thread.id,
+            activitySourceThreadID: request.sourceThreadID ?? thread.id,
+            relativePath: request.relativePath,
+            line: request.line
+        )
+        let destination = FeatureFilesView.destination(for: route)
+        toolSurface = .files(path: destination.path, line: destination.line)
+    }
+
+    /// Opens the review on a checkpoint's diff, pointed at one file when a chip
+    /// rather than the row was tapped.
+    ///
+    /// The section is recorded even though nothing reads it yet: this client's
+    /// `loadReview` returns the working tree, so a checkpoint's own diff is not
+    /// reachable, and the store is where that turn will be waiting when it is.
+    private func openDiff(checkpointID: String, filePath: String?) {
+        model.reviewSelection.openReview(
+            threadID: thread.id,
+            sectionID: checkpointID,
+            filePath: filePath
+        )
+        toolSurface = .review(filePath: filePath)
     }
 
     /// Routes a thread id from a timeline row. Whether the target is archived
@@ -871,14 +919,29 @@ private struct FeatureThreadOpeningView: View {
     }
 }
 
-private enum FeatureThreadToolSurface: String, Identifiable {
+/// A sheet over the thread, and where inside it to land.
+///
+/// The two workspace surfaces carry a destination because the transcript can
+/// deep-link into them: a file link names a file and sometimes a line, and a
+/// changed-files chip names one file of a diff. The identity below includes that
+/// destination, so opening the same surface at a different place re-presents it
+/// rather than reusing a sheet already pointed somewhere else.
+private enum FeatureThreadToolSurface: Identifiable {
     case details
-    case files
-    case review
+    case files(path: String?, line: Int?)
+    case review(filePath: String?)
     case sourceControl
     case terminal
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .details: "details"
+        case let .files(path, line): "files:\(path ?? "")#\(line.map(String.init) ?? "")"
+        case let .review(filePath): "review:\(filePath ?? "")"
+        case .sourceControl: "sourceControl"
+        case .terminal: "terminal"
+        }
+    }
 }
 
 /// Merges a stored draft with edits made while that draft was loading. Each
@@ -1162,7 +1225,10 @@ private extension FeatureMessage {
 private struct ThreadTimelineEntryView: View {
     let entry: ThreadTimelineEntry
     let currentThreadID: String
+    let currentWireThreadID: String
+    let onRollback: (ThreadActivityRollbackTarget) -> Void
     let workspaceRoot: String?
+    let alwaysExpandActivity: Bool
     let onOpenThread: (String) -> Void
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
@@ -1196,12 +1262,15 @@ private struct ThreadTimelineEntryView: View {
             ThreadWorkLog(
                 rows: workLog.rows,
                 currentThreadID: currentThreadID,
+                currentWireThreadID: currentWireThreadID,
                 workspaceRoot: workspaceRoot,
                 itemSupport: { workLog.support[$0.id] ?? .empty },
                 onOpenThread: onOpenThread,
                 onOpenFile: onOpenFile,
                 onOpenURL: onOpenURL,
-                onOpenDiff: onOpenDiff
+                onOpenDiff: onOpenDiff,
+                onRollback: onRollback,
+                alwaysExpandActivity: alwaysExpandActivity
             )
             .frame(maxWidth: .infinity, alignment: .leading)
             // The log already ends on 12pt of its own.
@@ -1224,6 +1293,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 
     let threadID: String
+    let wireThreadID: String
+    let onRollback: (ThreadActivityRollbackTarget) -> Void
     /// The whole detail rather than its rows: building the feed costs O(window),
     /// so it happens inside the coordinator once the revision guard has proved
     /// something actually changed, not on every SwiftUI body evaluation.
@@ -1234,6 +1305,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let canLoadEarlier: Bool
     let isLoadingEarlier: Bool
     let workspaceRoot: String?
+    /// `FeatureSettings.alwaysExpandActivity`, which decides how work-log rows
+    /// open. Tracked like the type size below rather than passed through the row
+    /// context alone: a preference change has to reconfigure cells that are
+    /// already on screen.
+    let alwaysExpandActivity: Bool
     let onLoadEarlier: () -> Void
     let onDismissKeyboard: () -> Void
     let onOpenThread: (String) -> Void
@@ -1270,9 +1346,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isWorking: isWorking,
             canLoadEarlier: canLoadEarlier,
             isLoadingEarlier: isLoadingEarlier,
+            alwaysExpandActivity: alwaysExpandActivity,
             rowContext: Coordinator.RowContext(
                 currentThreadID: threadID,
+                currentWireThreadID: wireThreadID,
+                onRollback: onRollback,
                 workspaceRoot: workspaceRoot,
+                alwaysExpandActivity: alwaysExpandActivity,
                 onOpenThread: onOpenThread,
                 onOpenFile: onOpenFile,
                 onOpenURL: onOpenURL,
@@ -1325,7 +1405,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         /// body evaluation can't be mistaken for a content change.
         struct RowContext {
             var currentThreadID: String = ""
+            var currentWireThreadID: String = ""
+            var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
             var workspaceRoot: String?
+            var alwaysExpandActivity = false
             var onOpenThread: (String) -> Void = { _ in }
             var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
             var onOpenURL: (URL) -> Void = { _ in }
@@ -1338,6 +1421,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentThreadID: String?
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
+        private var currentAlwaysExpandActivity = false
         private var currentIsWorking = false
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
@@ -1385,7 +1469,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     ThreadTimelineEntryView(
                         entry: entry,
                         currentThreadID: context.currentThreadID,
+                        currentWireThreadID: context.currentWireThreadID,
+                        onRollback: context.onRollback,
                         workspaceRoot: context.workspaceRoot,
+                        alwaysExpandActivity: context.alwaysExpandActivity,
                         onOpenThread: context.onOpenThread,
                         onOpenFile: context.onOpenFile,
                         onOpenURL: context.onOpenURL,
@@ -1423,6 +1510,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isWorking: Bool,
             canLoadEarlier: Bool,
             isLoadingEarlier: Bool,
+            alwaysExpandActivity: Bool,
             rowContext: RowContext,
             onLoadEarlier: @escaping () -> Void,
             onDismissKeyboard: @escaping () -> Void,
@@ -1435,12 +1523,17 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
             let threadChanged = currentThreadID != threadID
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
+            // Same treatment as the type size: it changes how every row renders
+            // rather than what any row contains, so nothing else in this update
+            // would report it.
+            let expansionPreferenceChanged =
+                currentAlwaysExpandActivity != alwaysExpandActivity
             let revisionChanged = currentDetailRevision != renderUpdate?.revision
             let workingChanged = currentIsWorking != isWorking
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
-            guard threadChanged || typeSizeChanged || revisionChanged || workingChanged
-                || loadEarlierChanged else { return }
+            guard threadChanged || typeSizeChanged || expansionPreferenceChanged
+                || revisionChanged || workingChanged || loadEarlierChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
@@ -1450,12 +1543,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let state = entryState(ThreadTimelineFeed.entries(for: detail))
             let newIDs = state.ids
             let idsChanged = state.idsChanged
-            let changedIDs = typeSizeChanged
+            let changedIDs = typeSizeChanged || expansionPreferenceChanged
                 ? newIDs
                 : state.changedIDs
 
             currentDetailRevision = renderUpdate?.revision
             currentDynamicTypeSize = dynamicTypeSize
+            currentAlwaysExpandActivity = alwaysExpandActivity
             currentIsWorking = isWorking
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier

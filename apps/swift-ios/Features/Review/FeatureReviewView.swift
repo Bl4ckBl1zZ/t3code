@@ -5,14 +5,28 @@ public struct FeatureReviewView: View {
     @SwiftUI.Environment(\.scenePhase) private var scenePhase
     let client: any FeatureClient
     let threadID: String
+    /// A file the review should open pointed at, handed over by a changed-files
+    /// row in the thread feed. Armed on the store rather than used directly: the
+    /// review has the request before it has a diff to spend it against.
+    let initialFilePath: String?
+    private let selection: ReviewSelectionStore
 
     @State private var review: FeatureReview?
     @State private var isLoading = true
     @State private var errorMessage: String?
+    /// The row the preselection resolved to, highlighted and scrolled to once.
+    @State private var focusedFileID: String?
 
-    public init(client: any FeatureClient, threadID: String) {
+    public init(
+        client: any FeatureClient,
+        threadID: String,
+        selection: ReviewSelectionStore,
+        initialFilePath: String? = nil
+    ) {
         self.client = client
         self.threadID = threadID
+        self.selection = selection
+        self.initialFilePath = initialFilePath
     }
 
     public var body: some View {
@@ -21,7 +35,19 @@ public struct FeatureReviewView: View {
                 ProgressView("Loading changes…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let review {
-                reviewList(review)
+                ScrollViewReader { scroll in
+                    reviewList(review)
+                        // `task(id:)` rather than `onChange`: the list only
+                        // exists once the diff has parsed, and by then the
+                        // preselection has already been spent — a change
+                        // handler mounting with the value would never fire.
+                        .task(id: focusedFileID) {
+                            guard let focusedFileID else { return }
+                            await Task.yield()
+                            guard !Task.isCancelled else { return }
+                            scroll.scrollTo(focusedFileID, anchor: .center)
+                        }
+                }
             } else {
                 ContentUnavailableView(
                     "Review unavailable",
@@ -43,7 +69,16 @@ public struct FeatureReviewView: View {
                 .accessibilityLabel("Reload changes")
             }
         }
-        .task { await load() }
+        .task {
+            // Armed before the first read, so a diff that parses while this
+            // screen is still loading already has the request waiting for it.
+            // Unconditional, `nil` included: opening the review from anywhere
+            // but a file chip has to disarm a request that was never spent —
+            // a sheet dismissed before its diff parsed would otherwise scroll
+            // the next reader to a file they did not ask for.
+            selection.selectFile(initialFilePath, for: threadID)
+            await load()
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, review != nil, !isLoading else { return }
             Task { await load() }
@@ -90,6 +125,8 @@ public struct FeatureReviewView: View {
                     } label: {
                         FeatureReviewFileRow(file: file)
                     }
+                    .id(file.id)
+                    .listRowBackground(rowBackground(for: file))
                 }
             }
         }
@@ -98,12 +135,28 @@ public struct FeatureReviewView: View {
         .refreshable { await load() }
     }
 
+    /// A tint on the row a deep link landed on, so the scroll has something to
+    /// point at. `nil` — the list's own background — for every other row.
+    private func rowBackground(for file: FeatureReviewFile) -> Color? {
+        file.id == focusedFileID ? T3Colors.accent.opacity(0.12) : nil
+    }
+
     private func load() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            review = try await client.loadReview(threadID: threadID)
+            let loaded = try await client.loadReview(threadID: threadID)
+            review = loaded
             errorMessage = nil
+            // Every load re-runs this, and the store is what makes that safe:
+            // an unparsed diff leaves the request armed, and a parsed one spends
+            // it whether or not the file was in this diff.
+            if let target = selection.consumePreselectedFile(
+                for: threadID,
+                files: loaded.files
+            ) {
+                focusedFileID = target.id
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -9,11 +9,22 @@ import SwiftUI
 public struct ThreadActivityFileOpenRequest: Equatable, Sendable {
     public let relativePath: String
     public let line: Int?
+    /// The thread the activity came from, which can be a parent rather than the
+    /// thread being read. Carried so the caller builds the route with the real
+    /// provenance; `ThreadActivityFileRoute` is what decides to discard it.
+    public let sourceThreadID: String?
+
+    public init(relativePath: String, line: Int?, sourceThreadID: String? = nil) {
+        self.relativePath = relativePath
+        self.line = line
+        self.sourceThreadID = sourceThreadID
+    }
 }
 
 struct ThreadActivityInspectorView: View {
     let model: ThreadActivityInspectorModel
     let currentThreadID: String
+    let currentWireThreadID: String
     let activitySourceThreadID: String
     var workspaceRoot: String?
     var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
@@ -164,7 +175,11 @@ struct ThreadActivityInspectorView: View {
         Button {
             guard let relativePath else { return }
             onOpenFile(
-                ThreadActivityFileOpenRequest(relativePath: relativePath, line: link.line)
+                ThreadActivityFileOpenRequest(
+                    relativePath: relativePath,
+                    line: link.line,
+                    sourceThreadID: activitySourceThreadID
+                )
             )
         } label: {
             HStack(spacing: 8) {

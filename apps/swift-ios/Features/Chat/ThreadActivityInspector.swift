@@ -255,6 +255,10 @@ public enum ThreadActivityInspector {
         row: OrchestrationV2ProjectedTurnItem,
         support: ThreadActivityItemSupport = .empty,
         currentThreadID: String,
+        /// The on-screen thread's **wire** id. `sourceThreadId` on a projected
+        /// row is a wire id, so comparing it against a feature-scoped id never
+        /// matches and the affordance silently never appears.
+        currentWireThreadID: String,
         now: Date = Date()
     ) -> ThreadActivityInspectorModel {
         let item = row.item
@@ -477,7 +481,7 @@ public enum ThreadActivityInspector {
         // child that merely inherited the row.
         var rollbackTarget: ThreadActivityRollbackTarget?
         if checkpointFiles != nil,
-            row.sourceThreadId == currentThreadID,
+            row.sourceThreadId == currentWireThreadID,
             let checkpoint = support.checkpoint,
             checkpoint.status == "ready" {
             rollbackTarget = ThreadActivityRollbackTarget(

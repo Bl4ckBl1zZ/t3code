@@ -97,6 +97,23 @@ public protocol FeatureClient: AnyObject {
     /// Detaches every provider session backing the thread, ending the agent
     /// processes without touching the thread's history.
     func stopThreadSession(threadID: String) async throws
+    /// Restores the thread's workspace to a checkpoint captured earlier in its
+    /// history. `scopeID` and `checkpointID` come from the checkpoint row the
+    /// activity inspector resolved; both are required, because a checkpoint id
+    /// is only unique inside its scope.
+    func rollBackToCheckpoint(
+        threadID: String,
+        scopeID: String,
+        checkpointID: String
+    ) async throws
+
+    /// One entry per environment whose server config this client has seen, in
+    /// the order the environments are listed.
+    ///
+    /// Exists because `FeatureSnapshot` carries provider catalogues but not
+    /// `t3WorkDirectory`, and without that a T3 Work launch cannot tell its
+    /// backing project apart from any other project on the server.
+    func workspaceServerConfigs() -> [MobileWorkspaceEnvironmentConfig]
 
     /// Moves a queued run before `beforeRunID`, or to the end when it is nil.
     func reorderQueuedRun(threadID: String, runID: String, beforeRunID: String?) async throws
@@ -197,6 +214,20 @@ public extension FeatureClient {
 
     func stopThreadSession(threadID: String) async throws {
         throw FeatureCapabilityUnavailable("Stop session")
+    }
+
+    func rollBackToCheckpoint(
+        threadID: String,
+        scopeID: String,
+        checkpointID: String
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Checkpoint rollback")
+    }
+
+    /// No server config, so no Work checkout: T3 Work reports itself
+    /// unavailable rather than attaching a conversation to an arbitrary project.
+    func workspaceServerConfigs() -> [MobileWorkspaceEnvironmentConfig] {
+        []
     }
 
     func reorderQueuedRun(

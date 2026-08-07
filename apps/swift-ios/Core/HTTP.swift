@@ -170,18 +170,9 @@ public actor EnvironmentAPI {
         )
     }
 
-    public func dispatch(
-        _ command: JSONValue,
-        environment: Environment
-    ) async throws -> DispatchResult {
-        try await authorized(
-            environment: environment,
-            path: "/api/orchestration/dispatch",
-            method: "POST",
-            body: JSONEncoder.t3.encode(command),
-            as: DispatchResult.self
-        )
-    }
+    // Commands have no HTTP form on this fork. `EnvironmentOrchestrationHttpApi`
+    // exposes the shell and thread-snapshot GETs only, so dispatch lives
+    // entirely on `orchestration.dispatchCommand` over the WebSocket.
 
     public func webSocketTicket(for environment: Environment) async throws -> WebSocketTicket {
         try await authorized(

@@ -180,18 +180,17 @@ public actor T3Client {
         )
     }
 
+    /// Sends an orchestration V2 command.
+    ///
+    /// WebSocket only. This fork's `EnvironmentOrchestrationHttpApi` serves the
+    /// shell and thread-snapshot GETs and nothing else, so the HTTP dispatch
+    /// fallback that used to sit here could only ever 404 — turning "the socket
+    /// is down" into an opaque HTTP error on the way out. Letting `RPCError`
+    /// surface keeps the real reason visible, and every caller that needs to
+    /// survive an ambiguous send already reconciles against a fresh snapshot.
     @discardableResult
     public func dispatch(_ command: JSONValue) async throws -> DispatchResult {
-        guard await rpc.isConnected() else {
-            return try await api.dispatch(command, environment: environment)
-        }
-        do {
-            return try await dispatchOverWebSocket(command)
-        } catch RPCError.connectionUnavailable {
-            // The request provably never crossed the socket, so HTTP is a safe
-            // fallback without risking duplicate side effects.
-            return try await api.dispatch(command, environment: environment)
-        }
+        try await dispatchOverWebSocket(command)
     }
 
     /// Sends a message on an existing thread.
@@ -492,6 +491,24 @@ public actor T3Client {
         )
     }
 
+    /// Restores the thread's workspace to `checkpointID` within `scopeID`.
+    @discardableResult
+    public func rollBackToCheckpoint(
+        threadID: String,
+        scopeID: String,
+        checkpointID: String,
+        commandID: String = UUID().uuidString
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.checkpointRollback(
+                threadID: threadID,
+                scopeID: scopeID,
+                checkpointID: checkpointID,
+                commandID: commandID
+            )
+        )
+    }
+
     @discardableResult
     public func editQueuedRun(
         threadID: String,
@@ -593,6 +610,58 @@ public actor T3Client {
     }
 
     // MARK: Workspace files
+
+    // MARK: - Scheduled tasks
+    //
+    // Environment-scoped, and RPCs rather than orchestration commands: an
+    // automation is a row the server owns and answers with, not a mutation of a
+    // thread's projection.
+
+    public func scheduledTasks() async throws -> [ScheduledTaskRecord] {
+        try await rpc.request(
+            RPCMethod.scheduledTasksList.rawValue,
+            as: ScheduledTaskListResult.self
+        ).tasks
+    }
+
+    public func upsertScheduledTask(
+        _ input: ScheduledTaskUpsert,
+        commandID: String = UUID().uuidString
+    ) async throws -> ScheduledTaskRecord {
+        try await rpc.request(
+            RPCMethod.scheduledTasksUpsert.rawValue,
+            payload: try input.jsonValue(commandID: commandID),
+            as: ScheduledTaskMutationResult.self
+        ).task
+    }
+
+    /// Partial update: only the flag moves, so toggling a row cannot revert an
+    /// edit made to the same automation somewhere else.
+    public func setScheduledTaskEnabled(
+        id: String,
+        enabled: Bool
+    ) async throws -> ScheduledTaskRecord {
+        try await rpc.request(
+            RPCMethod.scheduledTasksSetEnabled.rawValue,
+            payload: .object(["id": .string(id), "enabled": .bool(enabled)]),
+            as: ScheduledTaskMutationResult.self
+        ).task
+    }
+
+    public func runScheduledTaskNow(id: String) async throws -> ScheduledTaskRecord {
+        try await rpc.request(
+            RPCMethod.scheduledTasksRunNow.rawValue,
+            payload: .object(["id": .string(id)]),
+            as: ScheduledTaskMutationResult.self
+        ).task
+    }
+
+    public func deleteScheduledTask(id: String) async throws {
+        try await rpc.request(
+            RPCMethod.scheduledTasksDelete.rawValue,
+            payload: .object(["id": .string(id)])
+        )
+    }
 
     public func listProjectEntries(cwd: String) async throws -> ProjectEntriesResult {
         try await rpc.request(
@@ -1453,6 +1522,202 @@ public enum RPCMethod: String, Sendable {
     case terminalClose = "terminal.close"
     case subscribeTerminalEvents
     case subscribeTerminalMetadata
+    case scheduledTasksList = "scheduledTasks.list"
+    case scheduledTasksUpsert = "scheduledTasks.upsert"
+    case scheduledTasksSetEnabled = "scheduledTasks.setEnabled"
+    case scheduledTasksDelete = "scheduledTasks.delete"
+    case scheduledTasksRunNow = "scheduledTasks.runNow"
+}
+
+/// A persisted automation, as `packages/contracts/src/scheduledTask.ts` reports
+/// it. Only the fields a client acts on are modelled; the launch settings it
+/// does not edit are kept verbatim as `workspaceStrategy` so an edit round-trips
+/// whatever another surface configured.
+public struct ScheduledTaskRecord: Decodable, Equatable, Sendable, Identifiable {
+    /// `ScheduledTaskSchedule`. The read model still accepts sub-minute legacy
+    /// interval rows, so nothing is validated on the way in.
+    public enum Schedule: Decodable, Equatable, Sendable {
+        case interval(everyMs: Int)
+        /// A wall-clock "HH:MM" the server resolves in its own zone. Absent
+        /// weekdays mean every day.
+        case fixedTime(timeOfDay: String, weekdays: [Int]?)
+
+        private enum CodingKeys: String, CodingKey {
+            case type, everyMs, timeOfDay, weekdays
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            switch try container.decode(String.self, forKey: .type) {
+            case "interval":
+                self = .interval(everyMs: try container.decode(Int.self, forKey: .everyMs))
+            case "fixed_time":
+                self = .fixedTime(
+                    timeOfDay: try container.decode(String.self, forKey: .timeOfDay),
+                    weekdays: try container.decodeIfPresent([Int].self, forKey: .weekdays)
+                )
+            case let type:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .type,
+                    in: container,
+                    debugDescription: "Unknown scheduled task schedule type \(type)"
+                )
+            }
+        }
+
+        public var jsonValue: JSONValue {
+            switch self {
+            case let .interval(everyMs):
+                .object([
+                    "type": .string("interval"),
+                    "everyMs": .number(Double(everyMs)),
+                ])
+            case let .fixedTime(timeOfDay, weekdays):
+                if let weekdays {
+                    .object([
+                        "type": .string("fixed_time"),
+                        "timeOfDay": .string(timeOfDay),
+                        "weekdays": .array(weekdays.map { .number(Double($0)) }),
+                    ])
+                } else {
+                    .object([
+                        "type": .string("fixed_time"),
+                        "timeOfDay": .string(timeOfDay),
+                    ])
+                }
+            }
+        }
+    }
+
+    public let id: String
+    public let title: String
+    public let prompt: String
+    public let enabled: Bool
+    public let schedule: Schedule
+    public let projectId: String
+    public let threadId: String?
+    /// `OrchestrationV2ThreadLaunchWorkspaceStrategy`, held opaquely: only the
+    /// server and the web client act on it, and re-deriving it here would mean
+    /// re-deriving a contract this client never inspects.
+    public let workspaceStrategy: JSONValue
+    public let modelSelection: ModelSelection
+    public let runtimeMode: String
+    public let interactionMode: String
+    public let nextRunAt: String?
+    public let lastRunAt: String?
+    public let lastRunStatus: String
+    public let lastRunError: String?
+    public let runCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, prompt, enabled, schedule, projectId, threadId
+        case workspaceStrategy, modelSelection, runtimeMode, interactionMode
+        case nextRunAt, lastRunAt, lastRunStatus, lastRunError, runCount
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        schedule = try container.decode(Schedule.self, forKey: .schedule)
+        projectId = try container.decode(String.self, forKey: .projectId)
+        threadId = try container.decodeIfPresent(String.self, forKey: .threadId)
+        workspaceStrategy = try container.decodeIfPresent(
+            JSONValue.self, forKey: .workspaceStrategy
+        ) ?? .object(["type": .string("root")])
+        modelSelection = try container.decode(ModelSelection.self, forKey: .modelSelection)
+        runtimeMode = try container.decodeIfPresent(String.self, forKey: .runtimeMode)
+            ?? RuntimeMode.fullAccess.rawValue
+        interactionMode = try container.decodeIfPresent(String.self, forKey: .interactionMode)
+            ?? InteractionMode.default.rawValue
+        nextRunAt = try container.decodeIfPresent(String.self, forKey: .nextRunAt)
+        lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
+        lastRunStatus = try container.decodeIfPresent(String.self, forKey: .lastRunStatus)
+            ?? "never"
+        lastRunError = try container.decodeIfPresent(String.self, forKey: .lastRunError)
+        runCount = try container.decodeIfPresent(Int.self, forKey: .runCount) ?? 0
+    }
+}
+
+/// The `scheduledTasks.upsert` input. Create when `id` is nil, update otherwise.
+public struct ScheduledTaskUpsert: Equatable, Sendable {
+    public var id: String?
+    public var title: String
+    public var prompt: String
+    public var enabled: Bool
+    public var schedule: ScheduledTaskRecord.Schedule
+    public var projectID: String
+    public var threadID: String?
+    public var workspaceStrategy: JSONValue
+    public var modelSelection: ModelSelection
+    public var runtimeMode: String
+    public var interactionMode: String
+    /// Only set on create: the server attributes the automation to the surface
+    /// that made it, and re-sending it on an edit would rewrite that history.
+    public var creationSource: String?
+
+    public init(
+        id: String? = nil,
+        title: String,
+        prompt: String,
+        enabled: Bool,
+        schedule: ScheduledTaskRecord.Schedule,
+        projectID: String,
+        threadID: String? = nil,
+        workspaceStrategy: JSONValue,
+        modelSelection: ModelSelection,
+        runtimeMode: String = RuntimeMode.fullAccess.rawValue,
+        interactionMode: String = InteractionMode.default.rawValue,
+        creationSource: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.prompt = prompt
+        self.enabled = enabled
+        self.schedule = schedule
+        self.projectID = projectID
+        self.threadID = threadID
+        self.workspaceStrategy = workspaceStrategy
+        self.modelSelection = modelSelection
+        self.runtimeMode = runtimeMode
+        self.interactionMode = interactionMode
+        self.creationSource = creationSource
+    }
+
+    /// `ScheduledTaskUpsertInput`. `threadId` is optional *and* nullable on the
+    /// wire; an explicit null is what clears a pinned thread back to "start a
+    /// fresh thread per run", so the key is always present.
+    public func jsonValue(commandID: String = UUID().uuidString) throws -> JSONValue {
+        var input: [String: JSONValue] = [
+            "commandId": .string(commandID),
+            "title": .string(title),
+            "prompt": .string(prompt),
+            "enabled": .bool(enabled),
+            "schedule": schedule.jsonValue,
+            "projectId": .string(projectID),
+            "threadId": threadID.map(JSONValue.string) ?? .null,
+            "workspaceStrategy": workspaceStrategy,
+            "modelSelection": try .encode(modelSelection),
+            "runtimeMode": .string(runtimeMode),
+            "interactionMode": .string(interactionMode),
+        ]
+        if let id { input["id"] = .string(id) }
+        if let creationSource {
+            input["createdBy"] = .string(OrchestrationCommands.createdBy)
+            input["creationSource"] = .string(creationSource)
+        }
+        return .object(input)
+    }
+}
+
+private struct ScheduledTaskListResult: Decodable, Sendable {
+    let tasks: [ScheduledTaskRecord]
+}
+
+private struct ScheduledTaskMutationResult: Decodable, Sendable {
+    let task: ScheduledTaskRecord
 }
 
 /// How a dispatched message should meet an already-running turn.
@@ -1926,6 +2191,24 @@ public enum OrchestrationCommands {
             "threadId": .string(threadID),
             "queuedRunId": .string(queuedRunID),
             "targetRunId": .string(targetRunID),
+        ])
+    }
+
+    /// `checkpoint.rollback`. Both identifiers travel: a checkpoint id is only
+    /// unique inside its scope, and the server resolves the rollback target
+    /// against the pair.
+    public static func checkpointRollback(
+        threadID: String,
+        scopeID: String,
+        checkpointID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("checkpoint.rollback"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "scopeId": .string(scopeID),
+            "checkpointId": .string(checkpointID),
         ])
     }
 

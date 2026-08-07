@@ -51,7 +51,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
             support: support,
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
 
         XCTAssertEqual(model.fields.first, .init(label: "Item", value: "command execution"))
@@ -85,7 +86,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
             support: .init(attempts: [.init(attemptOrdinal: 1, status: "completed", reason: "initial")]),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
         XCTAssertNil(block(model, "Attempt history"))
         XCTAssertEqual(
@@ -112,7 +114,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
 
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
 
         XCTAssertEqual(
@@ -146,7 +149,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
 
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
 
         XCTAssertEqual(
@@ -170,7 +174,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
 
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
 
         XCTAssertEqual(
@@ -219,7 +224,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
         let owning = ThreadActivityInspector.build(
             row: inheritedRow(item),
             support: support,
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
         XCTAssertTrue(owning.canRollback)
         XCTAssertEqual(
@@ -247,7 +253,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
         let inherited = ThreadActivityInspector.build(
             row: inheritedRow(item),
             support: support,
-            currentThreadID: "child-thread"
+            currentThreadID: "child-thread",
+            currentWireThreadID: "child-thread"
         )
         XCTAssertFalse(inherited.canRollback)
         XCTAssertNil(inherited.rollbackTarget)
@@ -265,7 +272,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
             support: .init(checkpoint: .init(id: "checkpoint-1", scopeID: "scope-1", status: "stale")),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
         XCTAssertFalse(model.canRollback)
         XCTAssertNil(model.rollbackTarget)
@@ -306,7 +314,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
             )
             return ThreadActivityInspector.build(
                 row: inheritedRow(item),
-                currentThreadID: sourceThreadID
+                currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
             )
         }
 
@@ -345,7 +354,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
             )
             return ThreadActivityInspector.build(
                 row: inheritedRow(item),
-                currentThreadID: sourceThreadID
+                currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
             )
         }
 
@@ -385,7 +395,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
 
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
 
         XCTAssertEqual(block(model, "Tasks")?.value, "✓ Read the reducer\n○ Write the test")
@@ -406,7 +417,8 @@ final class ThreadActivityInspectorTests: XCTestCase {
                 sourceItemId: item.id,
                 item: item
             ),
-            currentThreadID: sourceThreadID
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
         )
         XCTAssertNil(model.fields.first { $0.label == "Visibility" })
         XCTAssertEqual(block(model, "Reasoning")?.value, "thinking")
@@ -425,6 +437,7 @@ final class ThreadActivityInspectorTests: XCTestCase {
         let model = ThreadActivityInspector.build(
             row: inheritedRow(item),
             currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID,
             now: Date(timeIntervalSince1970: 1_781_913_690)  // 2026-06-20T00:01:30Z
         )
         XCTAssertEqual(model.fields.first { $0.label == "Duration" }?.value, "1m 30s")

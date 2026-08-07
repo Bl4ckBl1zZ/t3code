@@ -555,10 +555,10 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     // relationship rows — reads the projection itself, so the detail carries it
     // alongside rather than making those surfaces refetch it.
     //
-    // These four are deliberately outside `CodingKeys`: `LifecycleTimelineRun`
-    // and `ThreadActivityItemSupport` are presentation value types with no wire
-    // form, and a detail is never persisted — it is rebuilt from the projection
-    // on every snapshot.
+    // These five are deliberately outside `CodingKeys`: `LifecycleTimelineRun`,
+    // `ThreadActivityItemSupport` and `FeatureThreadWorkflow` are presentation
+    // value types with no wire form, and a detail is never persisted — it is
+    // rebuilt from the projection on every snapshot.
 
     /// The projection's visible turn items, in position order.
     public var timelineItems: [OrchestrationV2ProjectedTurnItem] = []
@@ -576,6 +576,10 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     /// row in `timelineItems`, which is exactly the set a timeline row can be
     /// tapped from.
     public var subagentChildThreadIDs: [String: String] = [:]
+    /// The projection's relational tables, narrowed to what the queue control
+    /// and the relationship graph take as input. One field rather than ten so a
+    /// caller that rebuilds a detail from parts carries it across in one line.
+    public var workflow: FeatureThreadWorkflow = .empty
 
     public init(
         thread: FeatureThread,
@@ -586,7 +590,8 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         timelineItems: [OrchestrationV2ProjectedTurnItem] = [],
         timelineRuns: [LifecycleTimelineRun] = [],
         itemSupport: [String: ThreadActivityItemSupport] = [:],
-        subagentChildThreadIDs: [String: String] = [:]
+        subagentChildThreadIDs: [String: String] = [:],
+        workflow: FeatureThreadWorkflow = .empty
     ) {
         self.thread = thread
         self.messages = messages
@@ -597,6 +602,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         self.timelineRuns = timelineRuns
         self.itemSupport = itemSupport
         self.subagentChildThreadIDs = subagentChildThreadIDs
+        self.workflow = workflow
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -613,6 +619,129 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         for item: OrchestrationV2ProjectedTurnItem
     ) -> ThreadActivityItemSupport {
         itemSupport[item.id] ?? .empty
+    }
+}
+
+/// The relational half of a thread projection, narrowed to the value types
+/// ``ThreadWorkflows`` and ``ThreadRelationships`` already accept.
+///
+/// Thread ids appear in two scopes here and the difference is load bearing.
+/// `runs`, `providerTurns`, `providerThreads` and `providerSessions` only ever
+/// join against each other inside a single projection, so they keep the
+/// server's wire ids. `thread`, `subagents` and `transfers` leave the
+/// projection: the relationship rows match them against
+/// ``FeatureSnapshot/threads`` and route taps by feature id, so those carry
+/// *feature-scoped* thread ids instead.
+public struct FeatureThreadWorkflow: Sendable, Equatable {
+    /// The projection thread's wire id — the anchor
+    /// ``ThreadWorkflows`` matches provider threads against when resolving the
+    /// session. Empty on the placeholder value, which resolves no session.
+    public var appThreadID: String
+    /// `thread.activeProviderThreadId`, the fallback when no run names one.
+    public var activeProviderThreadID: String?
+    public var runs: [ThreadWorkflowRun]
+    public var providerTurns: [ThreadWorkflowProviderTurn]
+    public var providerThreads: [ThreadWorkflowProviderThread]
+    public var providerSessions: [ThreadWorkflowSession]
+    /// Message text keyed by message id, for the runs that are actually queued.
+    /// Narrowed to those on purpose: the transcript already carries every other
+    /// message, and the queue only ever renders these.
+    public var queuedMessageTexts: [String: String]
+    public var queuedMessageAttachmentCounts: [String: Int]
+    /// The open thread as the relationship graph reads it, feature-scoped.
+    public var thread: ThreadRelationshipShell?
+    /// The projection's own subagent table — authoritative, and the only source
+    /// that carries the workflow and usage annotations a row renders.
+    public var subagents: [ThreadRelationshipSubagentLink]
+    public var transfers: [ThreadRelationshipTransferLink]
+
+    public init(
+        appThreadID: String = "",
+        activeProviderThreadID: String? = nil,
+        runs: [ThreadWorkflowRun] = [],
+        providerTurns: [ThreadWorkflowProviderTurn] = [],
+        providerThreads: [ThreadWorkflowProviderThread] = [],
+        providerSessions: [ThreadWorkflowSession] = [],
+        queuedMessageTexts: [String: String] = [:],
+        queuedMessageAttachmentCounts: [String: Int] = [:],
+        thread: ThreadRelationshipShell? = nil,
+        subagents: [ThreadRelationshipSubagentLink] = [],
+        transfers: [ThreadRelationshipTransferLink] = []
+    ) {
+        self.appThreadID = appThreadID
+        self.activeProviderThreadID = activeProviderThreadID
+        self.runs = runs
+        self.providerTurns = providerTurns
+        self.providerThreads = providerThreads
+        self.providerSessions = providerSessions
+        self.queuedMessageTexts = queuedMessageTexts
+        self.queuedMessageAttachmentCounts = queuedMessageAttachmentCounts
+        self.thread = thread
+        self.subagents = subagents
+        self.transfers = transfers
+    }
+
+    /// What a client that cannot supply the projection reports: no queue, no
+    /// detach affordance, and a relationship graph built from whatever the
+    /// transcript alone yields.
+    public static let empty = FeatureThreadWorkflow()
+
+    /// The session the thread is currently attached to, or the newest live one.
+    public var providerSession: ThreadWorkflowSession? {
+        ThreadWorkflows.resolveProviderSession(
+            appThreadID: appThreadID,
+            threadActiveProviderThreadID: activeProviderThreadID,
+            runs: runs,
+            providerThreads: providerThreads,
+            providerSessions: providerSessions
+        )
+    }
+
+    /// The queue readout above the composer. Derived rather than stored so it
+    /// cannot disagree with the runs it came from.
+    public var queueState: ThreadQueueWorkflowState {
+        ThreadWorkflows.deriveQueueWorkflowState(
+            runs: runs,
+            providerTurns: providerTurns,
+            session: providerSession,
+            messageTexts: queuedMessageTexts,
+            messageAttachmentCounts: queuedMessageAttachmentCounts
+        )
+    }
+
+    /// Whether "Disconnect agent" has a session to act on.
+    public var canDetachProviderSession: Bool {
+        ThreadWorkflows.canDetachProviderSession(providerSession)
+    }
+
+    /// The relationship model for this thread.
+    ///
+    /// - Parameters:
+    ///   - relatedThreads: Shells for the threads the graph may reference,
+    ///     live first and archived after, all feature-scoped. The open thread
+    ///     itself does not need to be included — ``thread`` is prepended.
+    ///   - subagents: Extra subagent edges recovered from the transcript, for
+    ///     the rows the projection's own table does not cover. Projection rows
+    ///     win: they carry the workflow and usage annotations.
+    public func relationships(
+        relatedThreads: [ThreadRelationshipShell] = [],
+        additionalSubagents: [ThreadRelationshipSubagentLink] = []
+    ) -> ThreadRelationshipsModel? {
+        guard let thread else { return nil }
+        var links = subagents
+        var seen = Set(subagents.map(\.id))
+        for link in additionalSubagents where seen.insert(link.id).inserted {
+            links.append(link)
+        }
+        return ThreadRelationships.build(
+            currentThreadID: thread.id,
+            currentThread: thread,
+            threads: [thread] + relatedThreads,
+            subagents: links,
+            transfers: transfers,
+            runs: runs,
+            providerSession: providerSession
+        )
     }
 }
 

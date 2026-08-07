@@ -1,3 +1,4 @@
+import ClerkKit
 import Foundation
 
 extension FeatureInputAnswer {
@@ -1069,6 +1070,65 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return projection.providerSessions.map(\.id).filter { seen.insert($0).inserted }
     }
 
+    /// Restores the thread's workspace to an earlier checkpoint.
+    ///
+    /// The rollback target is resolved from the projection's checkpoint table,
+    /// so its `threadID` is the row's *source* thread id — a wire id, and not
+    /// necessarily this environment's open thread when the row was inherited.
+    /// Both spellings are accepted for that reason: a feature-scoped id routes
+    /// directly, and a bare wire id is resolved inside the open thread's
+    /// environment rather than guessed at across every saved server.
+    func rollBackToCheckpoint(
+        threadID: String,
+        scopeID: String,
+        checkpointID: String
+    ) async throws {
+        let route = try checkpointRoute(for: threadID)
+        _ = try await route.client.rollBackToCheckpoint(
+            threadID: route.wireID,
+            scopeID: scopeID,
+            checkpointID: checkpointID
+        )
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    private func checkpointRoute(for threadID: String) throws -> NativeThreadRoute {
+        if let route = try? threadRoute(for: threadID) { return route }
+        guard let environmentID = activeThreadEnvironmentID ?? activeEnvironment?.id else {
+            throw NativeFeatureClientError.threadNotFound
+        }
+        return try threadRoute(
+            for: FeatureScopedID.thread(environmentID: environmentID, wireID: threadID)
+        )
+    }
+
+    /// One entry per environment whose server config this client has seen.
+    ///
+    /// Ordered by the saved-environment list rather than by dictionary hashing:
+    /// `resolveHermesConversationTarget` takes the first environment that can
+    /// host the conversation, so an unstable order would make a Work launch
+    /// land on a different server between runs.
+    func workspaceServerConfigs() -> [MobileWorkspaceEnvironmentConfig] {
+        var ordered = latestSnapshot?.environments.map(\.id) ?? []
+        if ordered.isEmpty, let activeID = activeEnvironment?.id {
+            ordered = [activeID]
+        }
+        var seen = Set(ordered)
+        ordered.append(
+            contentsOf: serverConfigsByEnvironmentID.keys
+                .sorted()
+                .filter { seen.insert($0).inserted }
+        )
+        return ordered.compactMap { environmentID in
+            guard let config = serverConfigsByEnvironmentID[environmentID] else { return nil }
+            return MobileWorkspaceEnvironmentConfig(
+                environmentID: environmentID,
+                t3WorkDirectory: config.t3WorkDirectory,
+                providers: config.providers
+            )
+        }
+    }
+
     func reorderQueuedRun(
         threadID: String,
         runID: String,
@@ -1934,6 +1994,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     private func projectCreationClient(environmentID: String) async throws -> T3Client {
+        try await environmentClient(id: environmentID)
+    }
+
+    /// The client for a saved environment, connecting one if this session has
+    /// not touched that environment yet. Environment-scoped surfaces — project
+    /// creation, automations — act on servers the user is not currently viewing.
+    private func environmentClient(id environmentID: String) async throws -> T3Client {
         if let client = environmentClients[environmentID] {
             return client
         }
@@ -2389,6 +2456,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     case let .snapshot(config):
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
+                    // A delta event reports one slice of the config. Every field
+                    // it does not carry is copied from the last full snapshot —
+                    // `t3WorkDirectory` in particular, because dropping it would
+                    // silently disable T3 Work the first time a provider changed
+                    // status.
                     case let .providerStatuses(providers):
                         let previous = self.serverConfigsByEnvironmentID[
                             activeClient.environment.id
@@ -2396,20 +2468,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         let config = ServerConfigSnapshot(
                             providers: providers,
                             settings: previous?.settings,
-                            threadSnapshotWindow: previous?.threadSnapshotWindow
+                            t3WorkDirectory: previous?.t3WorkDirectory,
+                            threadSnapshotWindow: previous?.threadSnapshotWindow,
+                            threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
+                            shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     case let .settingsUpdated(settings):
-                        let providers = self.serverConfigsByEnvironmentID[
+                        let previous = self.serverConfigsByEnvironmentID[
                             activeClient.environment.id
-                        ]?.providers ?? self.latestServerConfig?.providers ?? []
+                        ]
                         let config = ServerConfigSnapshot(
-                            providers: providers,
+                            providers: previous?.providers
+                                ?? self.latestServerConfig?.providers ?? [],
                             settings: settings,
-                            threadSnapshotWindow: self.serverConfigsByEnvironmentID[
-                                activeClient.environment.id
-                            ]?.threadSnapshotWindow
+                            t3WorkDirectory: previous?.t3WorkDirectory,
+                            threadSnapshotWindow: previous?.threadSnapshotWindow,
+                            threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
+                            shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
@@ -3414,7 +3491,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             timelineItems: incoming.timelineItems,
             timelineRuns: incoming.timelineRuns,
             itemSupport: incoming.itemSupport,
-            subagentChildThreadIDs: incoming.subagentChildThreadIDs
+            subagentChildThreadIDs: incoming.subagentChildThreadIDs,
+            workflow: incoming.workflow
         )
     }
 
@@ -3684,7 +3762,112 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             timelineItems: timelineItems,
             timelineRuns: projection.runs.map(Self.timelineRun),
             itemSupport: itemSupport,
-            subagentChildThreadIDs: subagentChildThreadIDs
+            subagentChildThreadIDs: subagentChildThreadIDs,
+            workflow: mapWorkflow(projection, environment: environment)
+        )
+    }
+
+    /// The projection's relational tables, narrowed for the queue control and
+    /// the relationship graph.
+    ///
+    /// Two scopes travel out of here on purpose. The provider joins keep wire
+    /// ids because they only ever resolve against each other inside this one
+    /// projection. Everything that names a *thread* to the UI — the open
+    /// thread's own shell, its subagent children, both ends of a context
+    /// transfer — is rewritten to feature-scoped ids, because those are what
+    /// the relationship rows match against the home snapshot and what a tap
+    /// routes with.
+    private func mapWorkflow(
+        _ projection: OrchestrationV2ThreadProjection,
+        environment: Environment
+    ) -> FeatureThreadWorkflow {
+        func scoped(_ wireID: String) -> String {
+            FeatureScopedID.thread(environmentID: environment.id, wireID: wireID)
+        }
+
+        let runs = projection.runs.map(ThreadWorkflowRun.init)
+        // Only the queued runs' messages are carried: the transcript already
+        // holds every other message, and these are the only ones the queue
+        // renders. `messages` is the table `run.userMessageId` resolves against.
+        let queuedMessageIDs = Set(
+            projection.runs.lazy.filter { $0.status == "queued" }.compactMap(\.userMessageId)
+        )
+        var queuedMessageTexts: [String: String] = [:]
+        var queuedMessageAttachmentCounts: [String: Int] = [:]
+        for message in projection.messages where queuedMessageIDs.contains(message.id) {
+            queuedMessageTexts[message.id] = message.text
+            queuedMessageAttachmentCounts[message.id] = message.attachments.count
+        }
+
+        let subagents = projection.subagents.map { subagent -> ThreadRelationshipSubagentLink in
+            let link = ThreadRelationshipSubagentLink(subagent)
+            guard let childThreadID = link.childThreadID else { return link }
+            return ThreadRelationshipSubagentLink(
+                id: link.id,
+                childThreadID: scoped(childThreadID),
+                status: link.status,
+                title: link.title,
+                workflow: link.workflow,
+                usage: link.usage
+            )
+        }
+
+        let transfers = projection.contextTransfers.map { transfer in
+            ThreadRelationshipTransferLink(
+                id: transfer.id,
+                sourceThreadID: scoped(transfer.sourceThreadId),
+                targetThreadID: scoped(transfer.targetThreadId),
+                status: transfer.status
+            )
+        }
+
+        return FeatureThreadWorkflow(
+            appThreadID: projection.thread.id,
+            activeProviderThreadID: projection.thread.activeProviderThreadId,
+            runs: runs,
+            providerTurns: projection.providerTurns.map(ThreadWorkflowProviderTurn.init),
+            providerThreads: projection.providerThreads.map(ThreadWorkflowProviderThread.init),
+            providerSessions: projection.providerSessions.map(ThreadWorkflowSession.init),
+            queuedMessageTexts: queuedMessageTexts,
+            queuedMessageAttachmentCounts: queuedMessageAttachmentCounts,
+            thread: relationshipShell(projection.thread, environment: environment, runs: runs),
+            subagents: subagents,
+            transfers: transfers
+        )
+    }
+
+    /// The open thread as the relationship graph reads it.
+    ///
+    /// `AppThread` has no status column — it is a run-level notion — so the
+    /// shell's status is preferred and the active run's status is the fallback,
+    /// which is what the graph's edge statuses and orb states are derived from.
+    private func relationshipShell(
+        _ thread: OrchestrationV2AppThread,
+        environment: Environment,
+        runs: [ThreadWorkflowRun]
+    ) -> ThreadRelationshipShell {
+        func scoped(_ wireID: String) -> String {
+            FeatureScopedID.thread(environmentID: environment.id, wireID: wireID)
+        }
+        let status = shellsByEnvironmentID[environment.id]?.threads
+            .first { $0.id == thread.id }?
+            .status
+            ?? ThreadWorkflows.resolveActiveRun(runs: runs)?.status
+            ?? "idle"
+        let forkedFromRunThreadID: String? = if case let .run(sourceThreadID, _) = thread.forkedFrom {
+            scoped(sourceThreadID)
+        } else {
+            nil
+        }
+        return ThreadRelationshipShell(
+            id: scoped(thread.id),
+            title: thread.title,
+            status: status,
+            parentThreadID: thread.lineage.parentThreadId.map(scoped),
+            relationshipToParent: thread.lineage.relationshipToParent,
+            forkedFromRunThreadID: forkedFromRunThreadID,
+            archivedAt: thread.archivedAt,
+            deletedAt: thread.deletedAt
         )
     }
 
@@ -5120,5 +5303,433 @@ private enum NativeFeatureClientError: LocalizedError {
         case .crossEnvironmentMerge:
             "These threads are on different environments and cannot be merged."
         }
+    }
+}
+
+// MARK: - Automations
+
+/// Scheduled tasks are environment state: two paired servers keep independent
+/// schedules, and the RPCs (`scheduledTasks.*` in
+/// `packages/contracts/src/rpc.ts`) are answered by the environment that owns
+/// the row, so every call routes through that environment's client rather than
+/// the active one.
+extension NativeFeatureClient: FeatureScheduledTaskManaging {
+    func loadScheduledTasks(environmentID: String) async throws -> [FeatureScheduledTask] {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.scheduledTasks().map(Self.mapScheduledTask)
+    }
+
+    func upsertScheduledTask(
+        environmentID: String,
+        input: FeatureScheduledTaskUpsert
+    ) async throws -> FeatureScheduledTask {
+        let client = try await environmentClient(id: environmentID)
+        let record = try await client.upsertScheduledTask(
+            ScheduledTaskUpsert(
+                id: input.id,
+                title: input.title,
+                prompt: input.prompt,
+                enabled: input.enabled,
+                schedule: Self.wireSchedule(input.schedule),
+                projectID: input.projectID,
+                threadID: input.threadID,
+                // The launch settings this form does not edit travel back
+                // verbatim, so a mobile edit cannot flatten a worktree strategy
+                // an agent or the web client configured.
+                workspaceStrategy: input.launch.workspaceStrategy,
+                modelSelection: input.launch.modelSelection,
+                runtimeMode: input.launch.runtimeMode,
+                interactionMode: input.launch.interactionMode,
+                creationSource: input.creationSource
+            )
+        )
+        return Self.mapScheduledTask(record)
+    }
+
+    func setScheduledTaskEnabled(
+        environmentID: String,
+        id: String,
+        enabled: Bool
+    ) async throws -> FeatureScheduledTask {
+        let client = try await environmentClient(id: environmentID)
+        return Self.mapScheduledTask(
+            try await client.setScheduledTaskEnabled(id: id, enabled: enabled)
+        )
+    }
+
+    func runScheduledTaskNow(
+        environmentID: String,
+        id: String
+    ) async throws -> FeatureScheduledTask {
+        let client = try await environmentClient(id: environmentID)
+        return Self.mapScheduledTask(try await client.runScheduledTaskNow(id: id))
+    }
+
+    func deleteScheduledTask(environmentID: String, id: String) async throws {
+        let client = try await environmentClient(id: environmentID)
+        try await client.deleteScheduledTask(id: id)
+    }
+
+    /// The environment's provider catalogue, cached from the live config
+    /// subscription when this is the active environment and fetched once
+    /// otherwise — an automation on a second server still needs a model.
+    func scheduledTaskModelCatalog(
+        environmentID: String
+    ) async throws -> ServerConfigSnapshot? {
+        if let cached = serverConfigsByEnvironmentID[environmentID] { return cached }
+        let client = try await environmentClient(id: environmentID)
+        let config = try await client.serverConfig()
+        setServerConfig(config, environmentID: environmentID)
+        return config
+    }
+
+    private static func mapScheduledTask(
+        _ record: ScheduledTaskRecord
+    ) -> FeatureScheduledTask {
+        FeatureScheduledTask(
+            id: record.id,
+            title: record.title,
+            prompt: record.prompt,
+            enabled: record.enabled,
+            schedule: featureSchedule(record.schedule),
+            projectID: record.projectId,
+            threadID: record.threadId,
+            launch: FeatureScheduledTaskLaunch(
+                workspaceStrategy: record.workspaceStrategy,
+                modelSelection: record.modelSelection,
+                runtimeMode: record.runtimeMode,
+                interactionMode: record.interactionMode
+            ),
+            nextRunAt: record.nextRunAt,
+            lastRunAt: record.lastRunAt,
+            // A status this build cannot name reads as "never run" rather than
+            // failing the whole list.
+            lastRunStatus: ScheduledTaskRunStatus(rawValue: record.lastRunStatus) ?? .never,
+            lastRunError: record.lastRunError,
+            runCount: record.runCount
+        )
+    }
+
+    private static func featureSchedule(
+        _ schedule: ScheduledTaskRecord.Schedule
+    ) -> ScheduledTaskSchedule {
+        switch schedule {
+        case let .interval(everyMs):
+            .interval(everyMs: everyMs)
+        case let .fixedTime(timeOfDay, weekdays):
+            .fixedTime(
+                timeOfDay: timeOfDay,
+                // Absent weekdays mean every day, which the editor renders as
+                // all seven selected. An empty list would mean the opposite, so
+                // the distinction is preserved rather than normalized here.
+                weekdays: weekdays.map { $0.compactMap(ScheduledTaskWeekday.init(rawValue:)) }
+            )
+        }
+    }
+
+    private static func wireSchedule(
+        _ schedule: ScheduledTaskSchedule
+    ) -> ScheduledTaskRecord.Schedule {
+        switch schedule {
+        case let .interval(everyMs):
+            .interval(everyMs: everyMs)
+        case let .fixedTime(timeOfDay, weekdays):
+            .fixedTime(timeOfDay: timeOfDay, weekdays: weekdays?.map(\.rawValue))
+        }
+    }
+}
+
+// MARK: - Voice Input
+
+/// Voice Input and its OpenRouter credential are *account* state, not
+/// environment state: they live on the T3 Connect relay behind the same Clerk
+/// bearer the environment list uses (`packages/contracts/src/relay.ts`), and no
+/// paired T3 server can answer for them. That is why these calls do not go
+/// through `T3Client` the way automations do.
+extension NativeFeatureClient: FeatureVoiceSettingsManaging {
+    /// Reads report an unreachable integration as `.unavailable` rather than
+    /// throwing, so a build without relay configuration or an account that is
+    /// signed out renders the disconnected state instead of an error.
+    func openRouterIntegration() async throws -> OpenRouterIntegrationStatus {
+        guard let relay = voiceRelay() else {
+            return OpenRouterIntegrationStatus(state: .unavailable)
+        }
+        do {
+            return try await relay.openRouterIntegration()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return OpenRouterIntegrationStatus(state: .unavailable)
+        }
+    }
+
+    func putOpenRouterCredential(apiKey: String) async throws -> OpenRouterIntegrationStatus {
+        try await requireVoiceRelay().putOpenRouterCredential(apiKey: apiKey)
+    }
+
+    func validateOpenRouterCredential() async throws -> OpenRouterIntegrationStatus {
+        try await requireVoiceRelay().validateOpenRouterCredential()
+    }
+
+    func deleteOpenRouterCredential() async throws -> OpenRouterIntegrationStatus {
+        try await requireVoiceRelay().deleteOpenRouterCredential()
+    }
+
+    func voiceInputSettings() async throws -> VoiceInputSettings {
+        guard let relay = voiceRelay() else { return VoiceInputSettings() }
+        do {
+            return try await relay.voiceInputSettings()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // The screen still has to render something to edit; the defaults
+            // are the same ones the relay seeds a new account with.
+            return VoiceInputSettings()
+        }
+    }
+
+    func patchVoiceInputSettings(
+        _ patch: VoiceInputSettingsPatch
+    ) async throws -> VoiceInputSettings {
+        try await requireVoiceRelay().patchVoiceInputSettings(patch)
+    }
+
+    func listOpenRouterAudioModels() async throws -> [OpenRouterModelOption] {
+        guard let relay = voiceRelay() else { return [] }
+        return try await relay.listOpenRouterModels(capability: "audio")
+    }
+
+    private func requireVoiceRelay() throws -> NativeVoiceRelayClient {
+        guard let relay = voiceRelay() else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                t3ConnectController.unavailableReason
+                    ?? "Sign in to your T3 account to use Voice Input."
+            )
+        }
+        return relay
+    }
+
+    private func voiceRelay() -> NativeVoiceRelayClient? {
+        guard let configuration = t3ConnectController.resolution.configuration else {
+            return nil
+        }
+        let controller = t3ConnectController
+        return NativeVoiceRelayClient(
+            baseURL: configuration.relayHTTPURL,
+            transport: URLSessionHTTPTransport()
+        ) { @MainActor in
+            // Minted per call rather than cached: ClerkKit already caches the
+            // template token and knows when it has to be refreshed, and a copy
+            // here could only go stale.
+            guard let clerk = controller.clerk else { throw T3ConnectAuthError.noSession }
+            if !clerk.isLoaded { _ = try await clerk.refreshClient() }
+            let token = try await clerk.auth.getToken(
+                .init(template: configuration.clerkJWTTemplate, expirationBuffer: 20)
+            )
+            guard let token, !token.isEmpty else { throw T3ConnectAuthError.noSession }
+            return token
+        }
+    }
+}
+
+/// The relay's account-preferences surface, narrowed to Voice Input.
+///
+/// Separate from `T3ConnectRelayClient` because that client speaks DPoP for
+/// environment operations, while every endpoint here is a plain Clerk bearer
+/// call. Kept injectable so its request shapes and decoding can be asserted
+/// against `packages/contracts/src/relay.ts` without a Clerk session.
+struct NativeVoiceRelayClient: Sendable {
+    let baseURL: URL
+    let transport: any HTTPTransport
+    /// Main-actor isolated because the only source of a relay token is the
+    /// Clerk session the T3 Connect controller owns, and that controller is UI
+    /// state.
+    let bearerToken: @MainActor @Sendable () async throws -> String
+
+    init(
+        baseURL: URL,
+        transport: any HTTPTransport,
+        bearerToken: @escaping @MainActor @Sendable () async throws -> String
+    ) {
+        self.baseURL = baseURL
+        self.transport = transport
+        self.bearerToken = bearerToken
+    }
+
+    func openRouterIntegration() async throws -> OpenRouterIntegrationStatus {
+        try await send(
+            path: ["v1", "client", "integrations", "openrouter"],
+            method: "GET",
+            as: OpenRouterIntegrationStatus.self
+        )
+    }
+
+    func putOpenRouterCredential(apiKey: String) async throws -> OpenRouterIntegrationStatus {
+        try await send(
+            path: ["v1", "client", "integrations", "openrouter", "credential"],
+            method: "PUT",
+            body: try JSONEncoder.t3.encode(PutOpenRouterCredentialRequest(apiKey: apiKey)),
+            as: OpenRouterIntegrationStatus.self
+        )
+    }
+
+    func validateOpenRouterCredential() async throws -> OpenRouterIntegrationStatus {
+        try await send(
+            path: ["v1", "client", "integrations", "openrouter", "validate"],
+            method: "POST",
+            as: OpenRouterIntegrationStatus.self
+        )
+    }
+
+    func deleteOpenRouterCredential() async throws -> OpenRouterIntegrationStatus {
+        try await send(
+            path: ["v1", "client", "integrations", "openrouter", "credential"],
+            method: "DELETE",
+            as: OpenRouterIntegrationStatus.self
+        )
+    }
+
+    func voiceInputSettings() async throws -> VoiceInputSettings {
+        try await send(
+            path: ["v1", "client", "preferences", "voice-input"],
+            method: "GET",
+            as: WireVoiceInputSettings.self
+        ).feature
+    }
+
+    func patchVoiceInputSettings(
+        _ patch: VoiceInputSettingsPatch
+    ) async throws -> VoiceInputSettings {
+        try await send(
+            path: ["v1", "client", "preferences", "voice-input"],
+            method: "PATCH",
+            body: try JSONEncoder.t3.encode(Self.patchPayload(patch)),
+            as: WireVoiceInputSettings.self
+        ).feature
+    }
+
+    func listOpenRouterModels(capability: String) async throws -> [OpenRouterModelOption] {
+        try await send(
+            path: ["v1", "client", "integrations", "openrouter", "models"],
+            method: "GET",
+            queryItems: [URLQueryItem(name: "capability", value: capability)],
+            as: WireOpenRouterModels.self
+        ).models.map {
+            OpenRouterModelOption(
+                id: $0.id,
+                name: $0.name,
+                providerName: $0.providerName,
+                // Absent means the relay did not say; a model the account
+                // cannot call still has to list, so the optimistic reading is
+                // the one that keeps another client's selection visible.
+                available: $0.available ?? true
+            )
+        }
+    }
+
+    /// `VoiceInputSettingsPatch`. Only the keys the user actually changed are
+    /// sent, so two screens editing different fields cannot overwrite each
+    /// other — and `language` distinguishes absent (leave it) from explicit
+    /// null (detect the spoken language).
+    static func patchPayload(_ patch: VoiceInputSettingsPatch) -> JSONValue {
+        var payload: [String: JSONValue] = [:]
+        if let model = patch.model { payload["model"] = .string(model) }
+        switch patch.language {
+        case .none: break
+        case .automatic: payload["language"] = .null
+        case let .explicit(language): payload["language"] = .string(language)
+        }
+        if let cleanupEnabled = patch.cleanupEnabled {
+            payload["cleanup"] = .object(["enabled": .bool(cleanupEnabled)])
+        }
+        if let dictionary = patch.dictionary {
+            payload["dictionary"] = .array(dictionary.map(JSONValue.string))
+        }
+        return .object(payload)
+    }
+
+    private func send<Result: Decodable & Sendable>(
+        path: [String],
+        method: String,
+        queryItems: [URLQueryItem] = [],
+        body: Data? = nil,
+        as type: Result.Type
+    ) async throws -> Result {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        components?.query = nil
+        components?.fragment = nil
+        components?.path = "/" + path.joined(separator: "/")
+        if !queryItems.isEmpty { components?.queryItems = queryItems }
+        guard let url = components?.url else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                "The T3 Connect relay URL is invalid."
+            )
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        request.setValue("Bearer \(try await bearerToken())", forHTTPHeaderField: "Authorization")
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await transport.data(
+            for: HTTPRequestPolicy.prepare(request)
+        )
+        guard (200..<300).contains(response.statusCode) else {
+            let error = try? JSONDecoder.t3.decode(RelayErrorBody.self, from: data)
+            throw T3ConnectRelayError.response(
+                status: response.statusCode,
+                message: error?.message ?? error?.reason ?? error?.code
+                    ?? "T3 Connect request failed.",
+                traceID: error?.traceId
+            )
+        }
+        do {
+            return try JSONDecoder.t3.decode(type, from: data)
+        } catch {
+            throw T3ConnectRelayError.invalidResponse
+        }
+    }
+
+    private struct PutOpenRouterCredentialRequest: Encodable {
+        let apiKey: String
+    }
+
+    private struct RelayErrorBody: Decodable {
+        let message: String?
+        let reason: String?
+        let code: String?
+        let traceId: String?
+    }
+
+    /// The wire spells cleanup as a nested object; the feature model flattens it
+    /// to one toggle, which is all the screen exposes.
+    private struct WireVoiceInputSettings: Decodable, Sendable {
+        struct Cleanup: Decodable, Sendable { let enabled: Bool }
+
+        let model: String
+        let language: String?
+        let cleanup: Cleanup?
+        let dictionary: [String]?
+
+        var feature: VoiceInputSettings {
+            VoiceInputSettings(
+                model: model,
+                language: language,
+                cleanupEnabled: cleanup?.enabled ?? true,
+                dictionary: dictionary ?? []
+            )
+        }
+    }
+
+    private struct WireOpenRouterModels: Decodable, Sendable {
+        struct Model: Decodable, Sendable {
+            let id: String
+            let name: String
+            let providerName: String
+            let available: Bool?
+        }
+
+        let models: [Model]
     }
 }
