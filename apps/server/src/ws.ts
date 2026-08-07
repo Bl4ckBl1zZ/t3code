@@ -93,6 +93,7 @@ import {
 import { coalesceThreadStreamFrames } from "./orchestration-v2/ThreadStreamFrames.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadSearchQuery from "./orchestration-v2/ThreadSearchQuery.ts";
+import { readWorkflowScript } from "./orchestration-v2/WorkflowScriptQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import {
@@ -1226,6 +1227,14 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "orchestration",
               "orchestration_v2.command_id": input.commandId,
               "orchestration_v2.project_id": input.projectId,
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
+            readWorkflowScript({ scriptPath: input.scriptPath }),
+            {
+              "rpc.aggregate": "orchestration",
             },
           ),
         [ORCHESTRATION_V2_WS_METHODS.generateHandoffScript]: (input) =>
