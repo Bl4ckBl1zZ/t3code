@@ -52,6 +52,9 @@ public protocol FeatureClient: AnyObject {
         refresh: Bool
     ) async throws -> [FeatureWorkspaceBranch]
     func renameThread(id: String, title: String) async throws
+    /// Asks the server to generate a fresh title. The result arrives through the
+    /// thread stream, not this call, so it returns as soon as it is accepted.
+    func regenerateThreadTitle(id: String) async throws
     func setThreadArchived(id: String, archived: Bool) async throws
     func setThreadSettled(id: String, settled: Bool) async throws
     func setThreadSnoozed(id: String, until: Date?) async throws
@@ -80,6 +83,27 @@ public protocol FeatureClient: AnyObject {
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws
+
+    /// A prompt-ready document for continuing this thread somewhere else.
+    /// Generated server side, so it can take a moment and can come back either
+    /// AI-written or from the deterministic fallback.
+    func generateHandoffScript(threadID: String) async throws -> String
+    /// Folds a fork's work back into the thread it came from, at `runID`.
+    func mergeThreadBack(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String
+    ) async throws
+    /// Detaches every provider session backing the thread, ending the agent
+    /// processes without touching the thread's history.
+    func stopThreadSession(threadID: String) async throws
+
+    /// Moves a queued run before `beforeRunID`, or to the end when it is nil.
+    func reorderQueuedRun(threadID: String, runID: String, beforeRunID: String?) async throws
+    /// Turns a queued message into a steer of the run that is already going.
+    func promoteQueuedRun(threadID: String, queuedRunID: String, targetRunID: String) async throws
+    func cancelQueuedRun(threadID: String, runID: String) async throws
+    func editQueuedRun(threadID: String, runID: String, text: String) async throws
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
@@ -154,6 +178,51 @@ public extension FeatureClient {
     func setThreadPinned(id: String, pinned: Bool) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
+
+    func generateHandoffScript(threadID: String) async throws -> String {
+        throw FeatureCapabilityUnavailable("Handoff script")
+    }
+
+    func regenerateThreadTitle(id: String) async throws {
+        throw FeatureCapabilityUnavailable("Title regeneration")
+    }
+
+    func mergeThreadBack(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Merge back")
+    }
+
+    func stopThreadSession(threadID: String) async throws {
+        throw FeatureCapabilityUnavailable("Stop session")
+    }
+
+    func reorderQueuedRun(
+        threadID: String,
+        runID: String,
+        beforeRunID: String?
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Queue reordering")
+    }
+
+    func promoteQueuedRun(
+        threadID: String,
+        queuedRunID: String,
+        targetRunID: String
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Queue promotion")
+    }
+
+    func cancelQueuedRun(threadID: String, runID: String) async throws {
+        throw FeatureCapabilityUnavailable("Queue cancellation")
+    }
+
+    func editQueuedRun(threadID: String, runID: String, text: String) async throws {
+        throw FeatureCapabilityUnavailable("Queued message editing")
+    }
+
     func loadReviewFileContents(
         threadID: String,
         file: FeatureReviewFile

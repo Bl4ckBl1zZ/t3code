@@ -693,13 +693,23 @@ public final class FeatureRootModel {
         acknowledgeDeliveredMessages(incoming.messages)
         let prepared = addingPendingMessages(to: incoming)
         let next = details[id].map { current in
-            FeatureThreadDetail(
+            // Rebuilt from parts to reuse unchanged prefixes, so anything the
+            // initializer does not take is dropped. The timeline fields have no
+            // wire form and are not in CodingKeys, so they have to be carried
+            // across explicitly or the transcript would empty itself on the
+            // second update.
+            var merged = FeatureThreadDetail(
                 thread: prepared.thread,
                 messages: replacingChangedSuffix(current.messages, with: prepared.messages),
                 approvals: replacingChangedSuffix(current.approvals, with: prepared.approvals),
                 userInputs: replacingChangedSuffix(current.userInputs, with: prepared.userInputs),
                 page: prepared.page
             )
+            merged.timelineItems = prepared.timelineItems
+            merged.timelineRuns = prepared.timelineRuns
+            merged.itemSupport = prepared.itemSupport
+            merged.subagentChildThreadIDs = prepared.subagentChildThreadIDs
+            return merged
         } ?? prepared
         guard details[id] != next else { return }
         details[id] = next

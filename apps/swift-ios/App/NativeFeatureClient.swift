@@ -43,6 +43,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ] = [:]
     private var projectEnvironmentIDs: [String: String] = [:]
     private var projectWireIDs: [String: String] = [:]
+    /// `previewUrl` from each project's checked-in `t3.json`, keyed by the
+    /// project's feature id. Read from the workspace rather than the shell
+    /// snapshot: the file belongs to the repository, not to T3's database.
+    private var pinnedPreviewURLs: [String: String] = [:]
+    private var probedPreviewURLProjectIDs: Set<String> = []
+    private var pinnedPreviewURLTasks: [String: Task<Void, Never>] = [:]
     private var threadEnvironmentIDs: [String: String] = [:]
     private var threadWireIDs: [String: String] = [:]
     private var provisionalThreadRoutes: [String: ProvisionalThreadRoute] = [:]
@@ -377,6 +383,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             archivedShellThreadsByEnvironmentID.removeAll()
             projectEnvironmentIDs.removeAll()
             projectWireIDs.removeAll()
+            pinnedPreviewURLTasks.values.forEach { $0.cancel() }
+            pinnedPreviewURLTasks.removeAll()
+            pinnedPreviewURLs.removeAll()
+            probedPreviewURLProjectIDs.removeAll()
             threadEnvironmentIDs.removeAll()
             threadWireIDs.removeAll()
             provisionalThreadRoutes.removeAll()
@@ -988,6 +998,122 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ = try await route.client.rename(threadID: route.wireID, title: title)
         updateCachedArchivedThread(id: route.uiID) { $0.title = title }
         try? await refresh(client: route.client)
+    }
+
+    /// The regenerated title arrives on the thread stream, not in this reply, so
+    /// the command only starts the work. The shell's `titleRegeneration` is what
+    /// puts the row into its regenerating state until it lands.
+    func regenerateThreadTitle(id: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.regenerateTitle(threadID: route.wireID)
+        try? await refresh(client: route.client)
+    }
+
+    func generateHandoffScript(threadID: String) async throws -> String {
+        let route = try threadRoute(for: threadID)
+        return try await route.client.handoffScript(threadID: route.wireID).script
+    }
+
+    func mergeThreadBack(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String
+    ) async throws {
+        let source = try threadRoute(for: sourceThreadID)
+        let target = try threadRoute(for: targetThreadID)
+        // Both threads are one server's rows; a merge across two paired
+        // environments has no meaning and no command to express it.
+        guard source.environmentID == target.environmentID else {
+            throw NativeFeatureClientError.crossEnvironmentMerge
+        }
+        _ = try await source.client.mergeBack(
+            sourceThreadID: source.wireID,
+            targetThreadID: target.wireID,
+            runID: runID
+        )
+        try? await refresh(client: source.client)
+    }
+
+    /// Ends the agent processes behind a thread without touching its history.
+    ///
+    /// One thread can be backed by several provider sessions, and there is no
+    /// "stop this thread" command — each session is detached individually,
+    /// which is what `client-runtime`'s `stopThreadSession` does too.
+    func stopThreadSession(threadID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        let sessionIDs = try await providerSessionIDs(for: route)
+        guard !sessionIDs.isEmpty else { return }
+        try await route.client.detachProviderSessions(
+            threadID: route.wireID,
+            providerSessionIDs: sessionIDs,
+            reason: "client-requested"
+        )
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    /// The open thread's projection is already in hand; any other thread is
+    /// read fresh, because a stale session list would detach the wrong sessions
+    /// or none at all.
+    private func providerSessionIDs(
+        for route: NativeThreadRoute
+    ) async throws -> [String] {
+        let projection: OrchestrationV2ThreadProjection
+        if activeThreadID == route.uiID, let cached = activeRawThread {
+            projection = cached
+        } else {
+            projection = try await route.client
+                .threadSnapshot(id: route.wireID)
+                .projection
+        }
+        var seen: Set<String> = []
+        return projection.providerSessions.map(\.id).filter { seen.insert($0).inserted }
+    }
+
+    func reorderQueuedRun(
+        threadID: String,
+        runID: String,
+        beforeRunID: String?
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.reorderQueuedRun(
+            threadID: route.wireID,
+            runID: runID,
+            beforeRunID: beforeRunID
+        )
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func promoteQueuedRun(
+        threadID: String,
+        queuedRunID: String,
+        targetRunID: String
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.promoteQueuedRun(
+            threadID: route.wireID,
+            queuedRunID: queuedRunID,
+            targetRunID: targetRunID
+        )
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func cancelQueuedRun(threadID: String, runID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.cancelQueuedRun(
+            threadID: route.wireID,
+            runID: runID
+        )
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func editQueuedRun(threadID: String, runID: String, text: String) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.editQueuedRun(
+            threadID: route.wireID,
+            runID: runID,
+            text: text
+        )
+        try? await refreshThread(id: route.uiID, client: route.client)
     }
 
     func setThreadArchived(id: String, archived: Bool) async throws {
@@ -1938,6 +2064,69 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         var restored = thread
         restored.archivedAt = nil
         return restored
+    }
+
+    /// The file name a project pins its dev-server URL in. Mirrors
+    /// `T3_PROJECT_FILE_NAME` in packages/contracts/src/t3ProjectFile.ts.
+    private static let projectFileName = "t3.json"
+
+    /// Reads each project's `t3.json` once, and re-emits when one turns up a
+    /// pinned `previewUrl`.
+    ///
+    /// The read is deliberately off the snapshot's critical path: a project's
+    /// Ports section is one row poorer until it lands, whereas awaiting a
+    /// per-project workspace read inside `emitSnapshot` would delay every
+    /// thread update behind file I/O on the environment. A missing, truncated,
+    /// or invalid file resolves to "no pinned URL" — a repository mid-edit must
+    /// not make the section flicker.
+    private func schedulePinnedPreviewURLReads(
+        for environment: Environment,
+        shell: OrchestrationV2ShellSnapshot
+    ) {
+        guard let client = environmentClients[environment.id] else { return }
+        let generation = environmentGeneration
+        for project in shell.projects {
+            let uiID = FeatureScopedID.project(
+                environmentID: environment.id,
+                wireID: project.id
+            )
+            guard !probedPreviewURLProjectIDs.contains(uiID),
+                  pinnedPreviewURLTasks[uiID] == nil else { continue }
+            let workspaceRoot = project.workspaceRoot
+            pinnedPreviewURLTasks[uiID] = Task { [weak self] in
+                let url = await Self.pinnedPreviewURL(
+                    client: client,
+                    workspaceRoot: workspaceRoot
+                )
+                guard let self, !Task.isCancelled else { return }
+                self.pinnedPreviewURLTasks[uiID] = nil
+                guard self.isKnownClient(
+                    client,
+                    environmentID: environment.id,
+                    generation: generation
+                ) else { return }
+                self.probedPreviewURLProjectIDs.insert(uiID)
+                guard let url else { return }
+                self.pinnedPreviewURLs[uiID] = url
+                await self.emitCachedSnapshot(for: environment.id)
+            }
+        }
+    }
+
+    private static func pinnedPreviewURL(
+        client: T3Client,
+        workspaceRoot: String
+    ) async -> String? {
+        guard let file = try? await client.readProjectFile(
+            cwd: workspaceRoot,
+            relativePath: projectFileName
+        ), !file.truncated else { return nil }
+        guard let document = try? JSONDecoder.t3.decode(
+            JSONValue.self,
+            from: Data(file.contents.utf8)
+        ), let raw = document["previewUrl"]?.stringValue else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func emitCachedSnapshot(for environmentID: String) async {
@@ -3055,6 +3244,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             latestShell = shell
         }
         rebuildEntityIndexes(environments)
+        schedulePinnedPreviewURLReads(for: sourceEnvironment, shell: shell)
         let connectionState: FeatureConnection.State
         let connectionDetail: String?
         if sourceEnvironment.id == environment.id, markSourceConnected {
@@ -3211,12 +3401,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         current: FeatureThreadDetail,
         incoming: FeatureThreadDetail
     ) -> FeatureThreadDetail {
+        // The suffix merge exists to keep unchanged rendered rows identical so
+        // the transcript updates in place. The projection passthrough is not
+        // rendered directly and is always whole, so it is taken from the
+        // incoming detail rather than merged.
         FeatureThreadDetail(
             thread: incoming.thread,
             messages: replacingChangedSuffix(current.messages, with: incoming.messages),
             approvals: replacingChangedSuffix(current.approvals, with: incoming.approvals),
             userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
-            page: incoming.page
+            page: incoming.page,
+            timelineItems: incoming.timelineItems,
+            timelineRuns: incoming.timelineRuns,
+            itemSupport: incoming.itemSupport,
+            subagentChildThreadIDs: incoming.subagentChildThreadIDs
         )
     }
 
@@ -3305,7 +3503,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     name: project.title,
                     path: project.workspaceRoot,
                     threadCount: threadCountByProjectID[uiID, default: 0],
-                    defaultSelection: project.defaultModelSelection.map(mapSelection)
+                    defaultSelection: project.defaultModelSelection.map(mapSelection),
+                    scripts: project.scripts,
+                    previewUrl: pinnedPreviewURLs[uiID]
                 )
             }
         }
@@ -3389,9 +3589,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         var messages: [FeatureMessage] = []
         var approvals: [FeatureApproval] = []
         var userInputs: [FeatureUserInput] = []
+        var timelineItems: [OrchestrationV2ProjectedTurnItem] = []
+        var itemSupport: [String: ThreadActivityItemSupport] = [:]
+        var subagentChildThreadIDs: [String: String] = [:]
+        let support = ProjectionItemSupportIndex(projection)
 
         for projected in projection.visibleTurnItems.sorted(by: { $0.position < $1.position }) {
             let item = projected.item
+            timelineItems.append(projected)
+            itemSupport[projected.id] = support.resolve(item)
+            if case let .subagent(subagentID, _, _, _, childThreadID?, _, _, _) = item.payload {
+                subagentChildThreadIDs[subagentID] = FeatureScopedID.thread(
+                    environmentID: environment.id,
+                    wireID: childThreadID
+                )
+            }
 
             switch item.payload {
             case let .approvalRequest(requestID, requestKind, prompt):
@@ -3468,7 +3680,26 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             messages: messages,
             approvals: approvals,
             userInputs: userInputs,
-            page: page
+            page: page,
+            timelineItems: timelineItems,
+            timelineRuns: projection.runs.map(Self.timelineRun),
+            itemSupport: itemSupport,
+            subagentChildThreadIDs: subagentChildThreadIDs
+        )
+    }
+
+    /// A run as the handoff rows read it.
+    ///
+    /// A handoff item persisted before models were stamped carries only instance
+    /// ids, so the row recovers the origin model from run history. Empty strings
+    /// on an older server are inert: the lookup simply fails to match and falls
+    /// back to the instance ids the handoff item itself carries.
+    private static func timelineRun(_ run: OrchestrationV2Run) -> LifecycleTimelineRun {
+        LifecycleTimelineRun(
+            id: run.id,
+            ordinal: run.ordinal,
+            providerInstanceID: run.providerInstanceId ?? "",
+            model: run.modelSelection?.model ?? ""
         )
     }
 
@@ -3658,6 +3889,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            workInboxRole: thread.workInboxRole,
+            relationshipToParent: thread.lineage.relationshipToParent,
+            isRegeneratingTitle: thread.titleRegeneration != nil,
+            supportsTitleRegeneration: environment.descriptor?.capabilities
+                .threadTitleRegeneration,
             attentionAt: latestRun?.status == "failed"
                 ? parseDate(latestRun?.completedAt ?? thread.updatedAt)
                 : nil,
@@ -3741,6 +3977,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            // The two fields the workspaces sort on: `workInboxRole` is what
+            // gives the T3 Work inbox a Main section at all, and
+            // `relationshipToParent` is what keeps a subagent's thread out of
+            // both lists rather than showing it beside the work that spawned it.
+            workInboxRole: thread.workInboxRole,
+            relationshipToParent: thread.lineage.relationshipToParent,
+            isRegeneratingTitle: thread.titleRegeneration != nil,
+            supportsTitleRegeneration: environment.descriptor?.capabilities
+                .threadTitleRegeneration,
             // A failed run is the only thing that earns an attention marker; a
             // `lastError` on a run that recovered is history, not a call to act.
             attentionAt: thread.status == "failed"
@@ -4661,6 +4906,155 @@ private struct CommandIdentity: Equatable {
     }
 }
 
+/// Resolves the relational V2 rows that enrich one turn item.
+///
+/// The Swift stand-in for `useV2ItemSupport`, with the resolution rules ported
+/// from packages/client-runtime/src/state/itemSupport.ts. The RN version scans
+/// the projection's arrays per item; this indexes them once per projection
+/// instead, because the native transcript resolves every visible row on each
+/// snapshot rather than one row at a time behind a memo.
+///
+/// Inherited rows degrade rather than lie: their supporting rows live in the
+/// *source* thread's projection, which this client does not hold, so the joins
+/// simply miss and the inspector shows the fields the item itself carries.
+private struct ProjectionItemSupportIndex {
+    private let runs: [String: OrchestrationV2Run]
+    private let attemptsByRunID: [String: [OrchestrationV2RunAttempt]]
+    private let nodes: [String: OrchestrationV2ExecutionNode]
+    private let providerSessions: [String: OrchestrationV2ProviderSession]
+    private let providerThreads: [String: OrchestrationV2ProviderThread]
+    private let providerTurns: [String: OrchestrationV2ProviderTurn]
+    private let runtimeRequests: [String: OrchestrationV2RuntimeRequest]
+    private let checkpoints: [String: OrchestrationV2Checkpoint]
+    private let subagents: [String: OrchestrationV2Subagent]
+    private let contextHandoffs: [String: OrchestrationV2ContextHandoff]
+    private let contextTransfers: [String: OrchestrationV2ContextTransfer]
+
+    init(_ projection: OrchestrationV2ThreadProjection) {
+        // A duplicate id would mean a malformed projection; keeping the first
+        // occurrence matches `Array.find`, which is what the RN client does.
+        runs = Self.index(projection.runs)
+        attemptsByRunID = Dictionary(grouping: projection.attempts, by: \.runId)
+        nodes = Self.index(projection.nodes)
+        providerSessions = Self.index(projection.providerSessions)
+        providerThreads = Self.index(projection.providerThreads)
+        providerTurns = Self.index(projection.providerTurns)
+        runtimeRequests = Self.index(projection.runtimeRequests)
+        checkpoints = Self.index(projection.checkpoints)
+        subagents = Self.index(projection.subagents)
+        contextHandoffs = Self.index(projection.contextHandoffs)
+        contextTransfers = Self.index(projection.contextTransfers)
+    }
+
+    func resolve(_ item: OrchestrationV2TurnItem) -> ThreadActivityItemSupport {
+        let node = item.base.nodeId.flatMap { nodes[$0] }
+        let providerThread = item.base.providerThreadId.flatMap { providerThreads[$0] }
+        let providerSession = providerThread?.providerSessionId
+            .flatMap { providerSessions[$0] }
+
+        // An approval or user-input row names its own request; every other row
+        // reaches it through the execution node that raised it.
+        let requestID: String? = switch item.payload {
+        case let .approvalRequest(requestID, _, _): requestID
+        case let .userInputRequest(requestID, _): requestID
+        default: node?.runtimeRequestId
+        }
+
+        var checkpoint: OrchestrationV2Checkpoint?
+        if case let .checkpoint(checkpointID, _, _) = item.payload {
+            checkpoint = checkpoints[checkpointID]
+        }
+
+        var subagent: OrchestrationV2Subagent?
+        if case let .subagent(subagentID, _, _, _, _, _, _, _) = item.payload {
+            subagent = subagents[subagentID]
+        }
+
+        var contextHandoff: OrchestrationV2ContextHandoff?
+        if case let .handoff(contextHandoffID, _, _, _, _, _, _, _) = item.payload {
+            contextHandoff = contextHandoffs[contextHandoffID]
+        }
+        let contextTransfer = contextHandoff?.transferId.flatMap { contextTransfers[$0] }
+
+        return ThreadActivityItemSupport(
+            run: item.base.runId
+                .flatMap { runs[$0] }
+                .map { ThreadActivityItemSupport.Run(status: $0.status) },
+            attempts: (item.base.runId.flatMap { attemptsByRunID[$0] } ?? []).map {
+                ThreadActivityItemSupport.Attempt(
+                    attemptOrdinal: $0.attemptOrdinal,
+                    status: $0.status,
+                    // `reason` is required on the wire; Core keeps it optional
+                    // so a value this build predates cannot fail the decode.
+                    reason: $0.reason ?? ""
+                )
+            },
+            node: node.map {
+                ThreadActivityItemSupport.Node(kind: $0.kind, status: $0.status)
+            },
+            providerSession: providerSession.map {
+                ThreadActivityItemSupport.ProviderSession(
+                    status: $0.status,
+                    model: $0.model,
+                    cwd: $0.cwd ?? ""
+                )
+            },
+            providerThread: providerThread.map {
+                ThreadActivityItemSupport.ProviderThread(
+                    providerInstanceID: $0.providerInstanceId,
+                    status: $0.status
+                )
+            },
+            providerTurn: item.base.providerTurnId
+                .flatMap { providerTurns[$0] }
+                .map { ThreadActivityItemSupport.ProviderTurn(status: $0.status) },
+            runtimeRequest: requestID
+                .flatMap { runtimeRequests[$0] }
+                .map {
+                    ThreadActivityItemSupport.RuntimeRequest(
+                        status: $0.status,
+                        responseCapabilityType: $0.responseCapability?.type ?? ""
+                    )
+                },
+            checkpoint: checkpoint.map {
+                ThreadActivityItemSupport.Checkpoint(
+                    id: $0.id,
+                    scopeID: $0.scopeId,
+                    status: $0.status
+                )
+            },
+            subagent: subagent.map {
+                ThreadActivityItemSupport.Subagent(
+                    origin: $0.origin,
+                    status: $0.status,
+                    progress: $0.progress,
+                    result: $0.result
+                )
+            },
+            contextHandoff: contextHandoff.map {
+                ThreadActivityItemSupport.ContextHandoff(status: $0.status)
+            },
+            contextTransfer: contextTransfer.map { transfer in
+                ThreadActivityItemSupport.ContextTransfer(
+                    type: transfer.type,
+                    status: transfer.status,
+                    // A pending transfer has no resolution yet, and a resolution
+                    // this build cannot name has no strategy to show.
+                    resolution: transfer.resolution?.strategy.map {
+                        ThreadActivityItemSupport.ContextTransfer.Resolution(strategy: $0)
+                    }
+                )
+            }
+        )
+    }
+
+    private static func index<Row: Identifiable>(
+        _ rows: [Row]
+    ) -> [String: Row] where Row.ID == String {
+        Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+}
+
 private struct BootstrapSubmissionSignature: Equatable {
     let projectID: String
     let prompt: String
@@ -4707,6 +5101,7 @@ private enum NativeFeatureClientError: LocalizedError {
     case deviceSessionNotFound
     case missingScope(String)
     case tooManyAttachments
+    case crossEnvironmentMerge
 
     var errorDescription: String? {
         switch self {
@@ -4722,6 +5117,8 @@ private enum NativeFeatureClientError: LocalizedError {
         case .deviceSessionNotFound: "That device session is no longer active."
         case .missingScope: "This connection does not have permission to manage devices."
         case .tooManyAttachments: "You can attach up to 8 images per message."
+        case .crossEnvironmentMerge:
+            "These threads are on different environments and cannot be merged."
         }
     }
 }

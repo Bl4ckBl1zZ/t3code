@@ -380,6 +380,133 @@ public actor T3Client {
         try await dispatch(OrchestrationCommands.rename(threadID: threadID, title: title))
     }
 
+    @discardableResult
+    public func regenerateTitle(
+        threadID: String,
+        regenerate: Bool = true,
+        commandID: String = UUID().uuidString
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.regenerateTitle(
+                threadID: threadID,
+                regenerate: regenerate,
+                commandID: commandID
+            )
+        )
+    }
+
+    /// Generates the thread's handoff document.
+    ///
+    /// An RPC rather than a dispatched command: it computes and returns a value
+    /// instead of mutating the thread, and the server may spend an AI call on
+    /// the summary before answering.
+    public func handoffScript(threadID: String) async throws -> HandoffScriptResult {
+        try await rpc.request(
+            RPCMethod.generateHandoffScript.rawValue,
+            payload: .object(["threadId": .string(threadID)]),
+            as: HandoffScriptResult.self
+        )
+    }
+
+    @discardableResult
+    public func mergeBack(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String,
+        commandID: String = UUID().uuidString
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.mergeBack(
+                sourceThreadID: sourceThreadID,
+                targetThreadID: targetThreadID,
+                runID: runID,
+                commandID: commandID
+            )
+        )
+    }
+
+    /// Detaches every named provider session, one command each.
+    ///
+    /// Each detach derives its command id from the shared gesture id, so a retry
+    /// of the whole gesture is deduplicated per session instead of colliding on
+    /// a single receipt. Dispatches run in sequence: they mutate one thread's
+    /// session set, and a partial failure should stop rather than race ahead.
+    public func detachProviderSessions(
+        threadID: String,
+        providerSessionIDs: [String],
+        reason: String? = nil,
+        commandID: String = UUID().uuidString
+    ) async throws {
+        for providerSessionID in providerSessionIDs {
+            _ = try await dispatch(
+                OrchestrationCommands.detachProviderSession(
+                    threadID: threadID,
+                    providerSessionID: providerSessionID,
+                    reason: reason,
+                    commandID: OrchestrationCommands.detachCommandID(
+                        commandID: commandID,
+                        providerSessionID: providerSessionID
+                    )
+                )
+            )
+        }
+    }
+
+    @discardableResult
+    public func reorderQueuedRun(
+        threadID: String,
+        runID: String,
+        beforeRunID: String?
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.reorderQueuedRun(
+                threadID: threadID,
+                runID: runID,
+                beforeRunID: beforeRunID
+            )
+        )
+    }
+
+    @discardableResult
+    public func promoteQueuedRun(
+        threadID: String,
+        queuedRunID: String,
+        targetRunID: String
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.promoteQueuedRun(
+                threadID: threadID,
+                queuedRunID: queuedRunID,
+                targetRunID: targetRunID
+            )
+        )
+    }
+
+    @discardableResult
+    public func cancelQueuedRun(
+        threadID: String,
+        runID: String
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.cancelQueuedRun(threadID: threadID, runID: runID)
+        )
+    }
+
+    @discardableResult
+    public func editQueuedRun(
+        threadID: String,
+        runID: String,
+        text: String
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.editQueuedRun(
+                threadID: threadID,
+                runID: runID,
+                text: text
+            )
+        )
+    }
+
     /// Interrupts a specific run. V2 has no separate turn identity, and
     /// `run.interrupt` requires the run, so callers resolve the active run
     /// before asking.
@@ -1288,6 +1415,7 @@ public enum RPCMethod: String, Sendable {
     case serverGetConfig = "server.getConfig"
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"
+    case generateHandoffScript = "orchestration.generateHandoffScript"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
@@ -1363,6 +1491,24 @@ public enum MessageDispatchMode: Equatable, Sendable {
 public struct ThreadLaunchResult: Decodable, Equatable, Sendable {
     public let threadId: String
     public let resumed: Bool
+}
+
+/// `orchestration.generateHandoffScript`'s reply.
+public struct HandoffScriptResult: Decodable, Equatable, Sendable {
+    public let script: String
+    /// False when the summary came from the deterministic fallback rather than
+    /// the AI generator. The document is usable either way.
+    public let aiGenerated: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case script, aiGenerated
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        script = try container.decode(String.self, forKey: .script)
+        aiGenerated = try container.decodeIfPresent(Bool.self, forKey: .aiGenerated) ?? false
+    }
 }
 
 /// Builders for this fork's orchestration V2 command union
@@ -1675,6 +1821,141 @@ public enum OrchestrationCommands {
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "reason": .string("user"),
+        ])
+    }
+
+    /// Title regeneration is a thread metadata field too: `true` starts an async
+    /// regeneration, `false` abandons one already running. The new title arrives
+    /// on the thread stream rather than in this command's reply.
+    public static func regenerateTitle(
+        threadID: String,
+        regenerate: Bool = true,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        updateMetadata(
+            threadID: threadID,
+            commandID: commandID,
+            fields: ["regenerateTitle": .bool(regenerate)]
+        )
+    }
+
+    /// `thread.merge_back`. The mirror of `thread.fork`: it folds a fork's work
+    /// back into the thread it came from, naming the run to merge at.
+    ///
+    /// `createdAt` is optional on this command and deliberately omitted, as it
+    /// is in `client-runtime`: the server stamps the merge, and a phone's clock
+    /// is the least trustworthy one in the system.
+    public static func mergeBack(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("thread.merge_back"),
+            "commandId": .string(commandID),
+            "createdBy": .string(createdBy),
+            "creationSource": .string(creationSource),
+            "sourceThreadId": .string(sourceThreadID),
+            "targetThreadId": .string(targetThreadID),
+            "sourcePoint": .object([
+                "type": .string("run"),
+                "runId": .string(runID),
+            ]),
+        ])
+    }
+
+    /// `provider-session.detach`. Stopping a thread's session is not one
+    /// command: each provider session backing the thread is detached
+    /// individually, so the caller iterates the projection's sessions.
+    public static func detachProviderSession(
+        threadID: String,
+        providerSessionID: String,
+        reason: String? = nil,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        var value: [String: JSONValue] = [
+            "type": .string("provider-session.detach"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "providerSessionId": .string(providerSessionID),
+        ]
+        if let reason = trimmed(reason) { value["reason"] = .string(reason) }
+        return .object(value)
+    }
+
+    /// Command id for one session's detach inside a single "stop session"
+    /// gesture. Deriving it from the gesture's id keeps a retry idempotent while
+    /// keeping the per-session commands distinct — sharing one id would make the
+    /// server's receipt dedupe swallow every detach after the first.
+    public static func detachCommandID(
+        commandID: String,
+        providerSessionID: String
+    ) -> String {
+        "\(commandID):detach:\(providerSessionID)"
+    }
+
+    /// `queued-run.reorder`. A nil `beforeRunID` moves the run to the end of the
+    /// queue, which is why the key is always present rather than omitted.
+    public static func reorderQueuedRun(
+        threadID: String,
+        runID: String,
+        beforeRunID: String?,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("queued-run.reorder"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "runId": .string(runID),
+            "beforeRunId": beforeRunID.map(JSONValue.string) ?? .null,
+        ])
+    }
+
+    /// `queued-message.promote-to-steer`. Turns a message waiting behind the
+    /// active run into a steer of that run.
+    public static func promoteQueuedRun(
+        threadID: String,
+        queuedRunID: String,
+        targetRunID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("queued-message.promote-to-steer"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "queuedRunId": .string(queuedRunID),
+            "targetRunId": .string(targetRunID),
+        ])
+    }
+
+    public static func cancelQueuedRun(
+        threadID: String,
+        runID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("queued-run.cancel"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "runId": .string(runID),
+        ])
+    }
+
+    /// `queued-run.edit`. `text` is a plain string on the wire, not a trimmed
+    /// non-empty one, so an emptied draft is the caller's call to reject.
+    public static func editQueuedRun(
+        threadID: String,
+        runID: String,
+        text: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("queued-run.edit"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "runId": .string(runID),
+            "text": .string(text),
         ])
     }
 

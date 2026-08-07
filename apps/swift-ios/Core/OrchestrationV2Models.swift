@@ -137,6 +137,178 @@ public struct OrchestrationV2ProviderRetry: Codable, Equatable, Sendable {
     public let retryDelayMs: Int?
 }
 
+/// One declared phase of a workflow script.
+///
+/// `index` is the phase's position in the script's own declaration order, which
+/// is *not* necessarily execution order — a script may skip a phase or revisit
+/// one — so progress is keyed off the title reported as current rather than off
+/// a monotonic walk of these.
+public struct OrchestrationV2WorkflowPhase: Codable, Equatable, Sendable {
+    public let index: Int
+    public let title: String
+    public let detail: String?
+
+    public init(index: Int, title: String, detail: String? = nil) {
+        self.index = index
+        self.title = title
+        self.detail = detail
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case index, title, detail
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        index = try container.decodeIfPresent(Int.self, forKey: .index) ?? 0
+        title = try container.decode(String.self, forKey: .title)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
+    }
+}
+
+/// Workflow-shaped progress for a subagent that runs a script rather than a
+/// single prompt. Absent on ordinary subagents, which is the common case.
+public struct OrchestrationV2WorkflowProgress: Codable, Equatable, Sendable {
+    public let name: String?
+    public let description: String?
+    public let phases: [OrchestrationV2WorkflowPhase]
+    /// Title of the phase most recently entered.
+    public let currentPhase: String?
+    /// Agents spawned so far by this workflow; drives the fan-out count.
+    public let spawnedCount: Int?
+
+    public init(
+        name: String? = nil,
+        description: String? = nil,
+        phases: [OrchestrationV2WorkflowPhase] = [],
+        currentPhase: String? = nil,
+        spawnedCount: Int? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.phases = phases
+        self.currentPhase = currentPhase
+        self.spawnedCount = spawnedCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, description, phases, currentPhase, spawnedCount
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        phases = try container.decodeIfPresent(
+            [OrchestrationV2WorkflowPhase].self, forKey: .phases
+        ) ?? []
+        currentPhase = try container.decodeIfPresent(String.self, forKey: .currentPhase)
+        spawnedCount = try container.decodeIfPresent(Int.self, forKey: .spawnedCount)
+    }
+}
+
+/// Cumulative token rollup for one subagent task.
+///
+/// Every field past `totalTokens` is optional because no driver reports the
+/// full set: a missing field means "not reported", which is not the same as
+/// zero and must not be rendered as such.
+public struct OrchestrationV2TaskUsage: Codable, Equatable, Sendable {
+    public let totalTokens: Int
+    public let inputTokens: Int?
+    public let cachedInputTokens: Int?
+    public let outputTokens: Int?
+    public let reasoningOutputTokens: Int?
+    public let toolUses: Int?
+    public let durationMs: Int?
+
+    public init(
+        totalTokens: Int,
+        inputTokens: Int? = nil,
+        cachedInputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        reasoningOutputTokens: Int? = nil,
+        toolUses: Int? = nil,
+        durationMs: Int? = nil
+    ) {
+        self.totalTokens = totalTokens
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+        self.reasoningOutputTokens = reasoningOutputTokens
+        self.toolUses = toolUses
+        self.durationMs = durationMs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case totalTokens, inputTokens, cachedInputTokens, outputTokens
+        case reasoningOutputTokens, toolUses, durationMs
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        totalTokens = try container.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
+        inputTokens = try container.decodeIfPresent(Int.self, forKey: .inputTokens)
+        cachedInputTokens = try container.decodeIfPresent(Int.self, forKey: .cachedInputTokens)
+        outputTokens = try container.decodeIfPresent(Int.self, forKey: .outputTokens)
+        reasoningOutputTokens = try container.decodeIfPresent(
+            Int.self, forKey: .reasoningOutputTokens
+        )
+        toolUses = try container.decodeIfPresent(Int.self, forKey: .toolUses)
+        durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
+    }
+}
+
+/// The turn-shaped half of `OrchestrationV2ProviderCapabilities`, narrowed to
+/// the steering and queueing flags the composer and the queue control read.
+///
+/// Every flag defaults to `false`: a driver descriptor written before one of
+/// these existed means the client has no evidence of the capability, and
+/// offering a steer the provider silently drops is worse than not offering it.
+public struct OrchestrationV2TurnCapabilities: Codable, Equatable, Sendable {
+    public let supportsActiveSteering: Bool
+    public let supportsSteeringByInterruptRestart: Bool
+    public let supportsQueuedMessages: Bool
+
+    public init(
+        supportsActiveSteering: Bool = false,
+        supportsSteeringByInterruptRestart: Bool = false,
+        supportsQueuedMessages: Bool = false
+    ) {
+        self.supportsActiveSteering = supportsActiveSteering
+        self.supportsSteeringByInterruptRestart = supportsSteeringByInterruptRestart
+        self.supportsQueuedMessages = supportsQueuedMessages
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case supportsActiveSteering, supportsSteeringByInterruptRestart, supportsQueuedMessages
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        supportsActiveSteering = try container.decodeIfPresent(
+            Bool.self, forKey: .supportsActiveSteering
+        ) ?? false
+        supportsSteeringByInterruptRestart = try container.decodeIfPresent(
+            Bool.self, forKey: .supportsSteeringByInterruptRestart
+        ) ?? false
+        supportsQueuedMessages = try container.decodeIfPresent(
+            Bool.self, forKey: .supportsQueuedMessages
+        ) ?? false
+    }
+}
+
+/// The provider capability descriptor, narrowed to the `turns` group.
+///
+/// The contract carries eleven groups; the rest are modeled when a feature
+/// needs them. Unmodeled groups decode away rather than failing.
+public struct OrchestrationV2ProviderCapabilities: Codable, Equatable, Sendable {
+    public let turns: OrchestrationV2TurnCapabilities?
+
+    public init(turns: OrchestrationV2TurnCapabilities? = nil) {
+        self.turns = turns
+    }
+}
+
 /// `fork.source` and `thread.forkedFrom` share this shape.
 public enum OrchestrationV2ForkSource: Codable, Equatable, Sendable {
     case run(threadID: String, runID: String)
@@ -712,17 +884,29 @@ public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Iden
     public let status: String
     public let model: String?
     public let cwd: String?
+    /// What the driver behind this session can actually do. Absent means the
+    /// server predates the descriptor, which reads as "no capability evidence"
+    /// rather than as a denial-by-default at every call site.
+    public let capabilities: OrchestrationV2ProviderCapabilities?
 }
 
 public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let providerInstanceId: String
     public let providerSessionId: String?
+    /// The app thread this provider thread belongs to. Null while a provider
+    /// thread exists without an owning app thread (a subagent's own thread, or
+    /// one recovered from the provider before it was adopted).
+    public let appThreadId: String?
     public let status: String
 }
 
 public struct OrchestrationV2ProviderTurn: Codable, Equatable, Sendable, Identifiable {
     public let id: String
+    /// The run attempt this turn belongs to. This is the only join from a
+    /// provider turn back to the run that asked for it, so steering and queue
+    /// state cannot be resolved without it.
+    public let runAttemptId: String?
     public let status: String
 }
 
@@ -747,10 +931,24 @@ public struct OrchestrationV2Checkpoint: Codable, Equatable, Sendable, Identifia
 
 public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiable {
     public let id: String
+    /// The thread that owns this subagent row — the parent half of every
+    /// subagent edge in the relationship graph.
+    public let threadId: String
+    /// The subagent's own thread, when the driver exposes one. Null for drivers
+    /// that run subagents without addressable threads; the relationship surfaces
+    /// use it both as the navigation target and as the orb seed, so a subagent
+    /// without it renders but cannot be opened.
+    public let childThreadId: String?
+    /// The driver's own label for the task, used verbatim as the row title.
+    public let title: String?
     public let origin: String
     public let status: String
     public let progress: String?
     public let result: String?
+    /// Observability annotations. Absent means "this driver does not report it",
+    /// which clients render as nothing rather than as a zero.
+    public let workflow: OrchestrationV2WorkflowProgress?
+    public let usage: OrchestrationV2TaskUsage?
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {
@@ -766,19 +964,91 @@ public struct OrchestrationV2TransferResolution: Codable, Equatable, Sendable {
 public struct OrchestrationV2ContextTransfer: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let type: String
+    /// The two ends of the transfer edge. Without them a transfer row knows it
+    /// happened but not between which threads, which is the whole of what the
+    /// lineage graph draws.
+    public let sourceThreadId: String
+    public let targetThreadId: String
     public let status: String
     public let resolution: OrchestrationV2TransferResolution?
 }
 
-/// A run, narrowed to what drives the thread header. The projection carries far
-/// more per run; the rest is modeled when a feature needs it.
+/// A run, narrowed to what drives the thread header and the queue control. The
+/// projection carries far more per run; the rest is modeled when a feature
+/// needs it.
 public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let ordinal: Int
     public let status: String
+    /// The provider instance and model the run executed on. A handoff item
+    /// persisted before models were stamped carries only instance ids, and this
+    /// is what lets the timeline recover the model it handed off from.
+    public let providerInstanceId: String?
+    public let modelSelection: ModelSelection?
+    /// The provider thread the run executes against. Null before the run has
+    /// been assigned one.
+    public let providerThreadId: String?
+    /// The user message that asked for this run. This is what lets a queued run
+    /// be rendered as the message the user typed rather than as a bare ordinal.
+    /// Non-null in the contract, so it decodes as required — same as `id`.
+    public let userMessageId: String
+    /// The attempt currently owning the run. Null between attempts — a run that
+    /// was interrupted and not yet restarted has none.
+    public let activeAttemptId: String?
+    /// Explicit position in the thread's queue when the server assigned one.
+    /// Absent on runs that were never queued; callers fall back to `ordinal`.
+    public let queuePosition: Int?
     public let requestedAt: OrchestrationV2Timestamp
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?
+}
+
+/// A conversation message row.
+///
+/// Distinct from the `user_message` / `assistant_message` turn items: those are
+/// transcript entries scoped to a run, while these are the thread's message
+/// table, which is what a queued run's `userMessageId` resolves against and
+/// what survives a timeline clear.
+public struct OrchestrationV2ConversationMessage: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let threadId: String
+    public let runId: String?
+    public let nodeId: String?
+    public let role: String
+    public let text: String
+    public let attachments: [ChatAttachment]
+    public let streaming: Bool
+    /// Only messages carry the creation fields on this table; a message written
+    /// by the scheduler is what distinguishes an automated turn from a typed one.
+    public let createdBy: String?
+    public let creationSource: String?
+    public let createdAt: OrchestrationV2Timestamp
+    public let updatedAt: OrchestrationV2Timestamp
+
+    private enum CodingKeys: String, CodingKey {
+        case id, threadId, runId, nodeId, role, text, attachments, streaming
+        case createdBy, creationSource, createdAt, updatedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        threadId = try container.decode(String.self, forKey: .threadId)
+        runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        nodeId = try container.decodeIfPresent(String.self, forKey: .nodeId)
+        role = try container.decode(String.self, forKey: .role)
+        // A message with no text is a legitimate attachments-only send, so an
+        // absent body degrades to empty rather than failing the projection.
+        text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
+        attachments = try container.decodeIfPresent(
+            [ChatAttachment].self, forKey: .attachments
+        ) ?? []
+        streaming = try container.decodeIfPresent(Bool.self, forKey: .streaming) ?? false
+        createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy)
+        creationSource = try container.decodeIfPresent(String.self, forKey: .creationSource)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+    }
 }
 
 public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
@@ -794,6 +1064,9 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     public let checkpoints: [OrchestrationV2Checkpoint]
     public let contextHandoffs: [OrchestrationV2ContextHandoff]
     public let contextTransfers: [OrchestrationV2ContextTransfer]
+    /// The thread's message table. Turn items carry the transcript; this is what
+    /// a run's `userMessageId` resolves against.
+    public let messages: [OrchestrationV2ConversationMessage]
     public let turnItems: [OrchestrationV2TurnItem]
     public let visibleTurnItems: [OrchestrationV2ProjectedTurnItem]
     /// Number of older visible items omitted when the snapshot was windowed.
@@ -830,6 +1103,9 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
         contextTransfers = try container.decodeIfPresent(
             [OrchestrationV2ContextTransfer].self, forKey: .contextTransfers
         ) ?? []
+        messages = try container.decodeIfPresent(
+            [OrchestrationV2ConversationMessage].self, forKey: .messages
+        ) ?? []
         turnItems = try container.decodeIfPresent([OrchestrationV2TurnItem].self, forKey: .turnItems) ?? []
         visibleTurnItems = try container.decodeIfPresent(
             [OrchestrationV2ProjectedTurnItem].self, forKey: .visibleTurnItems
@@ -858,6 +1134,7 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
         checkpoints: [OrchestrationV2Checkpoint] = [],
         contextHandoffs: [OrchestrationV2ContextHandoff] = [],
         contextTransfers: [OrchestrationV2ContextTransfer] = [],
+        messages: [OrchestrationV2ConversationMessage] = [],
         turnItems: [OrchestrationV2TurnItem],
         visibleTurnItems: [OrchestrationV2ProjectedTurnItem],
         truncatedVisibleItemCount: Int?,
@@ -875,6 +1152,7 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
         self.checkpoints = checkpoints
         self.contextHandoffs = contextHandoffs
         self.contextTransfers = contextTransfers
+        self.messages = messages
         self.turnItems = turnItems
         self.visibleTurnItems = visibleTurnItems
         self.truncatedVisibleItemCount = truncatedVisibleItemCount
@@ -884,6 +1162,7 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     public func replacing(
         thread: OrchestrationV2AppThread? = nil,
         runs: [OrchestrationV2Run]? = nil,
+        messages: [OrchestrationV2ConversationMessage]? = nil,
         turnItems: [OrchestrationV2TurnItem]? = nil,
         visibleTurnItems: [OrchestrationV2ProjectedTurnItem]? = nil
     ) -> OrchestrationV2ThreadProjection {
@@ -900,6 +1179,7 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
             checkpoints: checkpoints,
             contextHandoffs: contextHandoffs,
             contextTransfers: contextTransfers,
+            messages: messages ?? self.messages,
             turnItems: turnItems ?? self.turnItems,
             visibleTurnItems: visibleTurnItems ?? self.visibleTurnItems,
             truncatedVisibleItemCount: truncatedVisibleItemCount,

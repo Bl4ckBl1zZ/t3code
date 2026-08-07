@@ -66,17 +66,51 @@ enum NativeWorkspaceMapper {
         )
     }
 
+    /// Lossless read of `VcsStatusResult` into the feature-layer status.
+    ///
+    /// Everything the wire carries is carried through. The flags in particular:
+    /// `hasWorkingTreeChanges`, `hasUpstream`, `isDefaultRef` and
+    /// `hasPrimaryRemote` used to be dropped here, which is why the thread
+    /// details sheet had to reconstruct them — and why its `isDefaultRef` guess
+    /// (always false) meant the "you are committing to the default branch"
+    /// confirmation could never fire.
+    ///
+    /// Two things stay unset because the contract does not report them, not
+    /// because the mapping is lossy:
+    ///
+    /// - `upstream` — `VcsStatusResult` reports `hasUpstream` but not the
+    ///   upstream ref name. The driver resolves `branch.upstream` internally and
+    ///   drops it before the boundary (GitVcsDriverCore's `statusDetails`), so
+    ///   there is nothing to map.
+    /// - per-file `state` / `isStaged` — `workingTree.files` is
+    ///   `{ path, insertions, deletions }`. The driver parses git's porcelain XY
+    ///   codes only to decide *that* a path changed, and the numstat it scores
+    ///   the lines from is `git diff HEAD`, which folds index and working tree
+    ///   together. Neither the change kind nor staged-ness survives to the wire,
+    ///   and both are underivable from what does: an added file and a
+    ///   modified-only-with-additions file are the same `n/0`, and a 0/0 entry is
+    ///   an untracked file or a binary one with no way to tell which. So every
+    ///   file is reported `.modified` and unstaged, deliberately, until the
+    ///   contract carries the code.
     static func sourceControl(_ status: VCSStatus) -> FeatureSourceControlStatus {
         FeatureSourceControlStatus(
             isRepository: status.isRepo,
             branch: status.refName,
+            hasUpstream: status.hasUpstream,
+            isDefaultRef: status.isDefaultRef,
+            hasPrimaryRemote: status.hasPrimaryRemote,
             aheadCount: status.aheadCount,
             behindCount: status.behindCount,
+            hasWorkingTreeChanges: status.hasWorkingTreeChanges,
+            insertions: status.workingTree.insertions,
+            deletions: status.workingTree.deletions,
             files: status.workingTree.files.map {
                 FeatureSourceControlFile(
                     path: $0.path,
                     state: .modified,
-                    isStaged: false
+                    isStaged: false,
+                    insertions: $0.insertions,
+                    deletions: $0.deletions
                 )
             },
             pullRequest: status.pr.map {

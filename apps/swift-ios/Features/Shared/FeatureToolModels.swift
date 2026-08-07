@@ -803,13 +803,40 @@ public enum FeatureSourceControlFileState: String, Sendable, Codable {
 public struct FeatureSourceControlFile: Identifiable, Sendable, Equatable, Hashable, Codable {
     public var id: String { path }
     public var path: String
+    /// What happened to the file.
+    ///
+    /// `VcsStatusResult.workingTree.files` reports only `path`, `insertions` and
+    /// `deletions` — the server parses git's porcelain XY codes to decide *that*
+    /// a file changed and then discards them (GitVcsDriverCore's
+    /// `parsePorcelainPath`). So this cannot be read off the status wire today:
+    /// the mapper reports `.modified` for every file, and a real value needs the
+    /// contract to carry the code. `insertions`/`deletions` below are the part
+    /// that is real.
     public var state: FeatureSourceControlFileState
+    /// Whether the change is in the index.
+    ///
+    /// Also absent from the status contract: the server's numstat is
+    /// `git diff HEAD`, which sums staged and unstaged changes into one entry
+    /// per path with no way to tell them apart.
     public var isStaged: Bool
+    /// Lines added in this file's working-tree change. Zero is meaningful: a
+    /// file git listed as changed but that `git diff HEAD --numstat` did not
+    /// score (an untracked file, or a binary one) reports 0/0.
+    public var insertions: Int
+    public var deletions: Int
 
-    public init(path: String, state: FeatureSourceControlFileState, isStaged: Bool) {
+    public init(
+        path: String,
+        state: FeatureSourceControlFileState,
+        isStaged: Bool,
+        insertions: Int = 0,
+        deletions: Int = 0
+    ) {
         self.path = path
         self.state = state
         self.isStaged = isStaged
+        self.insertions = insertions
+        self.deletions = deletions
     }
 }
 
@@ -836,22 +863,62 @@ public enum FeatureSourceControlAction: String, CaseIterable, Sendable, Codable 
     case commitPushAndCreatePullRequest
 }
 
+/// The branch state every git surface reads, in the shape
+/// `packages/contracts`' `VcsStatusResult` reports it.
+///
+/// The flags below used to be dropped on the way in, which left every consumer
+/// reconstructing them: a synced branch could be offered "Push & create PR", and
+/// the confirmation that stops a commit landing on the default branch could
+/// never fire because nothing downstream knew it was the default branch. They
+/// are carried now, so no consumer has to guess.
 public struct FeatureSourceControlStatus: Sendable, Equatable, Codable {
     public var isRepository: Bool
     public var branch: String?
+    /// The upstream *ref name*, which `VcsStatusResult` does not carry — the
+    /// driver resolves `branch.upstream` and then reports only `hasUpstream`.
+    /// Left nil by the wire mapping; use `hasUpstream` to ask whether one
+    /// exists.
     public var upstream: String?
+    /// Whether the branch tracks an upstream at all. Distinct from `aheadCount
+    /// > 0 || behindCount > 0`: a branch level with its upstream has both counts
+    /// at zero and is still tracked, and a branch with no upstream still reports
+    /// an ahead count measured against the default branch.
+    public var hasUpstream: Bool
+    /// Whether the checkout is the repository's default branch. What the commit
+    /// confirmation keys off.
+    public var isDefaultRef: Bool
+    /// Whether the repository has a primary remote. Push and pull-request
+    /// actions are meaningless without one.
+    public var hasPrimaryRemote: Bool
     public var aheadCount: Int
     public var behindCount: Int
+    /// The server's own verdict on the working tree. Not the same as
+    /// `!files.isEmpty`: git can report a dirty tree whose per-file numstat is
+    /// empty (mode-only changes, ignored-but-listed paths).
+    public var hasWorkingTreeChanges: Bool
+    /// Working-tree line totals across all changed files.
+    public var insertions: Int
+    public var deletions: Int
     public var files: [FeatureSourceControlFile]
     public var pullRequest: FeaturePullRequest?
     public var isBusy: Bool
 
+    /// `hasWorkingTreeChanges` and `hasUpstream` default to `nil` rather than to
+    /// a literal so a hand-built status stays self-consistent: omitting them
+    /// derives them from the files and counts that were supplied, instead of
+    /// silently claiming a clean tree next to a list of changed files.
     public init(
         isRepository: Bool = true,
         branch: String? = nil,
         upstream: String? = nil,
+        hasUpstream: Bool? = nil,
+        isDefaultRef: Bool = false,
+        hasPrimaryRemote: Bool = true,
         aheadCount: Int = 0,
         behindCount: Int = 0,
+        hasWorkingTreeChanges: Bool? = nil,
+        insertions: Int = 0,
+        deletions: Int = 0,
         files: [FeatureSourceControlFile] = [],
         pullRequest: FeaturePullRequest? = nil,
         isBusy: Bool = false
@@ -859,8 +926,15 @@ public struct FeatureSourceControlStatus: Sendable, Equatable, Codable {
         self.isRepository = isRepository
         self.branch = branch
         self.upstream = upstream
+        self.hasUpstream = hasUpstream
+            ?? (upstream != nil || aheadCount > 0 || behindCount > 0)
+        self.isDefaultRef = isDefaultRef
+        self.hasPrimaryRemote = hasPrimaryRemote
         self.aheadCount = aheadCount
         self.behindCount = behindCount
+        self.hasWorkingTreeChanges = hasWorkingTreeChanges ?? !files.isEmpty
+        self.insertions = insertions
+        self.deletions = deletions
         self.files = files
         self.pullRequest = pullRequest
         self.isBusy = isBusy
@@ -869,7 +943,7 @@ public struct FeatureSourceControlStatus: Sendable, Equatable, Codable {
     public var availableActions: [FeatureSourceControlAction] {
         guard isRepository, !isBusy else { return [] }
         var actions: [FeatureSourceControlAction] = []
-        if !files.isEmpty {
+        if hasWorkingTreeChanges || !files.isEmpty {
             actions.append(.commit)
             actions.append(.commitAndPush)
             if pullRequest == nil {

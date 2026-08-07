@@ -63,6 +63,17 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var path: String
     public var threadCount: Int
     public var defaultSelection: FeatureSelection?
+    /// The project's configured scripts, verbatim from `OrchestrationProject`.
+    /// The details sheet lists them as run rows and names ports after the script
+    /// that opened them, so a port row without these degrades to "Port 5173".
+    public var scripts: [ProjectScript]
+    /// `previewUrl` from the project's checked-in `t3.json`.
+    ///
+    /// Unlike a script's own `previewUrl`, this one is *pinned*: it is the user
+    /// saying "this project lives here", not evidence that anything is
+    /// listening, so the Ports section lists it from the moment a thread opens
+    /// and keeps listing it after the server stops.
+    public var previewUrl: String?
 
     public init(
         id: String,
@@ -71,7 +82,9 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         name: String,
         path: String,
         threadCount: Int = 0,
-        defaultSelection: FeatureSelection? = nil
+        defaultSelection: FeatureSelection? = nil,
+        scripts: [ProjectScript] = [],
+        previewUrl: String? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -80,6 +93,23 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.path = path
         self.threadCount = threadCount
         self.defaultSelection = defaultSelection
+        self.scripts = scripts
+        self.previewUrl = previewUrl
+    }
+
+    /// `ProjectScript` is a Core wire type and is deliberately not `Hashable`,
+    /// so hashing folds in the script identities rather than the whole rows.
+    /// Equality still compares every field, which is all `Hashable` requires.
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(wireID)
+        hasher.combine(environmentID)
+        hasher.combine(name)
+        hasher.combine(path)
+        hasher.combine(threadCount)
+        hasher.combine(defaultSelection)
+        hasher.combine(previewUrl)
+        for script in scripts { hasher.combine(script.id) }
     }
 }
 
@@ -146,6 +176,20 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var snoozedAt: Date?
     public var pinnedAt: Date?
     public var supportsPinning: Bool?
+    /// `main` marks the thread the T3 Work inbox pins to the top as the current
+    /// main line of work. Absent means an ordinary thread. The inbox's Main
+    /// section does not exist without this.
+    public var workInboxRole: String?
+    /// `fork`, `subagent`, or nil for a root thread. Subagent threads are
+    /// excluded from both workspaces: they are steps inside their parent, not
+    /// work of their own.
+    public var relationshipToParent: String?
+    /// A title regeneration is in flight, so the row shimmers its title instead
+    /// of showing a stale one that is about to be replaced.
+    public var isRegeneratingTitle: Bool
+    /// Whether the environment can regenerate a title at all. `nil` means an
+    /// older cached descriptor that never reported the capability.
+    public var supportsTitleRegeneration: Bool?
     public var attentionAt: Date?
     public var workingStartedAt: Date?
     public var latestTurnCompletedAt: Date?
@@ -178,6 +222,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
         supportsPinning: Bool? = nil,
+        workInboxRole: String? = nil,
+        relationshipToParent: String? = nil,
+        isRegeneratingTitle: Bool = false,
+        supportsTitleRegeneration: Bool? = nil,
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
@@ -209,6 +257,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
         self.supportsPinning = supportsPinning
+        self.workInboxRole = workInboxRole
+        self.relationshipToParent = relationshipToParent
+        self.isRegeneratingTitle = isRegeneratingTitle
+        self.supportsTitleRegeneration = supportsTitleRegeneration
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
@@ -220,6 +272,19 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// when their server supports pinning. Always keep an existing pin reversible.
     public var canTogglePin: Bool {
         pinnedAt != nil || supportsPinning != false
+    }
+
+    /// As with pinning, an absent capability means "this descriptor predates the
+    /// flag", not "the server cannot do it" — and a regeneration already in
+    /// flight is proof that it can.
+    public var canRegenerateTitle: Bool {
+        isRegeneratingTitle || supportsTitleRegeneration != false
+    }
+
+    /// Subagent threads are steps inside their parent's timeline, not work of
+    /// their own, so neither workspace lists them as a row.
+    public var isSubagentThread: Bool {
+        relationshipToParent == "subagent"
     }
 }
 
@@ -482,18 +547,72 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     public var userInputs: [FeatureUserInput]
     public var page: FeatureThreadPage?
 
+    // MARK: Projection passthrough
+    //
+    // `messages` is the flattened transcript: one rendered row per turn item,
+    // which is all the plain message list needs. Every richer timeline surface —
+    // the work log, the lifecycle dividers, the activity inspector, the
+    // relationship rows — reads the projection itself, so the detail carries it
+    // alongside rather than making those surfaces refetch it.
+    //
+    // These four are deliberately outside `CodingKeys`: `LifecycleTimelineRun`
+    // and `ThreadActivityItemSupport` are presentation value types with no wire
+    // form, and a detail is never persisted — it is rebuilt from the projection
+    // on every snapshot.
+
+    /// The projection's visible turn items, in position order.
+    public var timelineItems: [OrchestrationV2ProjectedTurnItem] = []
+    /// The thread's runs, narrowed to what handoff rows read to recover which
+    /// model was speaking before the handoff.
+    public var timelineRuns: [LifecycleTimelineRun] = []
+    /// The relational rows that enrich one item, keyed by
+    /// ``OrchestrationV2ProjectedTurnItem/id``.
+    public var itemSupport: [String: ThreadActivityItemSupport] = [:]
+    /// Subagent id to the *feature-scoped* id of the thread it spawned.
+    ///
+    /// The raw child id is already on the `subagent` turn item; what a surface
+    /// cannot derive on its own is the environment scope that makes it routable,
+    /// which is the whole reason this map exists. Covers the subagents with a
+    /// row in `timelineItems`, which is exactly the set a timeline row can be
+    /// tapped from.
+    public var subagentChildThreadIDs: [String: String] = [:]
+
     public init(
         thread: FeatureThread,
         messages: [FeatureMessage] = [],
         approvals: [FeatureApproval] = [],
         userInputs: [FeatureUserInput] = [],
-        page: FeatureThreadPage? = nil
+        page: FeatureThreadPage? = nil,
+        timelineItems: [OrchestrationV2ProjectedTurnItem] = [],
+        timelineRuns: [LifecycleTimelineRun] = [],
+        itemSupport: [String: ThreadActivityItemSupport] = [:],
+        subagentChildThreadIDs: [String: String] = [:]
     ) {
         self.thread = thread
         self.messages = messages
         self.approvals = approvals
         self.userInputs = userInputs
         self.page = page
+        self.timelineItems = timelineItems
+        self.timelineRuns = timelineRuns
+        self.itemSupport = itemSupport
+        self.subagentChildThreadIDs = subagentChildThreadIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case thread
+        case messages
+        case approvals
+        case userInputs
+        case page
+    }
+
+    /// The relational support for one projected row, or the empty value when the
+    /// projection carried nothing to join against.
+    public func support(
+        for item: OrchestrationV2ProjectedTurnItem
+    ) -> ThreadActivityItemSupport {
+        itemSupport[item.id] ?? .empty
     }
 }
 
