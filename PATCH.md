@@ -43,6 +43,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Worker stack and verifies the public relay plus its PostgreSQL dependency through `/health`.
 - Uses Cloudflare Worker logs for initial relay diagnostics, with no Axiom account or ingest tokens
   required.
+- Carries a native SwiftUI iOS client at `apps/swift-ios`, vendored from upstream PR #5178
+  (`t3code/rebuild-mobile-app-swift`, head `7b8bb94d5`) while that PR is still open and marked
+  `DO NOT MERGE`. It is being migrated to replace the React Native client entirely: the fork ships
+  iOS only, with no Android target. Consequences for every sync: upstream changes under
+  `apps/swift-ios` merge normally, but the app is being re-targeted from upstream's V1 thread
+  contracts onto the fork's orchestration V2, so upstream edits to its transport, `Core/Models.swift`,
+  or `App/NativeFeatureClient.swift` resolve to the fork. Once `apps/mobile` is deleted, upstream
+  changes under that path resolve to deletion.
 - Uses the fork's iOS identifiers: `com.t3code.dev`, `com.t3code.dev.widgets`,
   `com.t3code.dev.sharing`, and `group.com.bl4ckbl1zz.t3code.dev`, supplied through the fork's iOS
   build variables. Local development signing uses the APNs sandbox; TestFlight exports use

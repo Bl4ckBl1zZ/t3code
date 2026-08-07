@@ -39,6 +39,9 @@ export default defineConfig({
       "**/routeTree.gen.ts",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
+      // Xcode owns this tree: rewriting project.pbxproj, entitlements, or asset
+      // catalog Contents.json would fight the IDE rather than tidy anything.
+      "apps/swift-ios/**",
       "apps/web/public/mockServiceWorker.js",
       "apps/web/src/lib/vendor/qrcodegen.ts",
       "apps/mobile/uniwind-types.d.ts",
@@ -66,6 +69,7 @@ export default defineConfig({
       "**/routeTree.gen.ts",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
+      "apps/swift-ios/**",
       "apps/mobile/uniwind-types.d.ts",
     ],
     plugins: ["eslint", "oxc", "react", "unicorn", "typescript"],
