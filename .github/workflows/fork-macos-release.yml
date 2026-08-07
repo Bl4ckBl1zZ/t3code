@@ -1,4 +1,4 @@
-name: Fork macOS ARM64 release
+name: Fork release (macOS arm64, Windows arm64/x64)
 
 on:
   push:
@@ -15,12 +15,36 @@ permissions:
   contents: write
 
 concurrency:
-  group: fork-macos-arm64-release
+  group: fork-release
   cancel-in-progress: true
 
 jobs:
-  build:
+  version:
+    name: Resolve fork release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - id: release
+        name: Resolve fork release version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED_VERSION:-0.1.${GITHUB_RUN_NUMBER}}"
+          version="${version#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=fork-v$version" >> "$GITHUB_OUTPUT"
+
+  build_macos:
     name: Build downloadable macOS ARM64 app
+    needs: [version]
     # GitHub-hosted Apple Silicon runner; cold VMs rely on the vp and Rust caches below.
     runs-on: macos-15
     timeout-minutes: 90
@@ -55,22 +79,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: native/resource-monitor
-
-      - id: release
-        name: Resolve fork release version
-        shell: bash
-        env:
-          REQUESTED_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          version="${REQUESTED_VERSION:-0.1.${GITHUB_RUN_NUMBER}}"
-          version="${version#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release version: $version" >&2
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=fork-v$version" >> "$GITHUB_OUTPUT"
 
       - name: Configure required macOS signing
         shell: bash
@@ -127,7 +135,7 @@ jobs:
             --platform mac \
             --target dmg \
             --arch arm64 \
-            --build-version "${{ steps.release.outputs.version }}" \
+            --build-version "${{ needs.version.outputs.version }}" \
             --output-dir release-publish \
             --signed \
             --verbose
@@ -220,9 +228,200 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: t3-code-macos-arm64-${{ steps.release.outputs.version }}
+          name: fork-macos-arm64-${{ needs.version.outputs.version }}
           path: release-publish/*
           if-no-files-found: error
+
+  # Windows installers are deliberately unsigned: the fork has no Azure Trusted
+  # Signing credentials, so users get a SmartScreen warning on first run. This
+  # job must never block the macOS release, hence the tolerant publish gate below.
+  build_windows:
+    name: Build downloadable Windows ${{ matrix.arch }} app
+    needs: [version]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    environment:
+      name: production
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2025
+            rust_target: x86_64-pc-windows-msvc
+            spectre_component: Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre
+          - arch: arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            spectre_component: Microsoft.VisualStudio.Component.VC.Tools.ARM64.Spectre
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+      T3CODE_RELAY_URL: https://${{ vars.RELAY_DOMAIN }}
+      T3CODE_DESKTOP_APP_ID: com.t3code.dev
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/resource-monitor
+
+      - name: Install Spectre-mitigated MSVC libs
+        shell: pwsh
+        env:
+          SPECTRE_COMPONENT: ${{ matrix.spectre_component }}
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            $env:SPECTRE_COMPONENT, "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
+
+      # No --wsl-prebuild here (that needs a Linux runner per arch), so these
+      # builds ship without a bundled WSL node-pty. The WSL backend then reports
+      # "WSL support is missing from this T3 Code build" instead of starting.
+      - name: Build ${{ matrix.arch }} NSIS installer (unsigned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          vp run dist:desktop:artifact \
+            --platform win \
+            --target nsis \
+            --arch "${{ matrix.arch }}" \
+            --build-version "${{ needs.version.outputs.version }}" \
+            --output-dir release-publish \
+            --verbose
+
+      - name: Verify installer was produced
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="$(find release-publish -maxdepth 1 -name '*.exe' -print -quit)"
+          if [[ -z "$exe" ]]; then
+            echo "No Windows installer was produced." >&2
+            exit 1
+          fi
+          echo "Built (unsigned): $exe"
+
+      # Both arches emit the same channel manifest name ("latest.yml"), so suffix
+      # them per arch and let the publish job merge the pair into one manifest.
+      - name: Suffix updater manifests per arch
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for manifest in release-publish/*.yml; do
+            mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
+          done
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-windows-${{ matrix.arch }}-${{ needs.version.outputs.version }}
+          path: release-publish/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish fork release
+    needs: [version, build_macos, build_windows]
+    # A failed Windows leg must not withhold the macOS release that already
+    # works, so gate on macOS only and publish whatever Windows artifacts exist.
+    if: ${{ !cancelled() && needs.build_macos.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: fork-*
+          merge-multiple: true
+          path: release-publish
+
+      - name: Merge Windows updater manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          for x64_manifest in release-publish/*-win-x64.yml; do
+            if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
+              continue
+            fi
+
+            arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
+            output_manifest="${x64_manifest/-win-x64.yml/.yml}"
+            if [[ -f "$arm64_manifest" ]]; then
+              node scripts/merge-update-manifests.ts --platform win \
+                "$arm64_manifest" \
+                "$x64_manifest" \
+                "$output_manifest"
+              rm -f "$arm64_manifest" "$x64_manifest"
+            else
+              echo "No arm64 counterpart for $x64_manifest; publishing x64 alone." >&2
+              mv "$x64_manifest" "$output_manifest"
+            fi
+          done
+
+          # Whatever arm64 manifests are left had no x64 counterpart (a failed or
+          # skipped x64 leg), so promote them to the canonical channel name.
+          for arm64_manifest in release-publish/*-win-arm64.yml; do
+            if [[ "$(basename "$arm64_manifest")" == builder-debug-* ]]; then
+              continue
+            fi
+            output_manifest="${arm64_manifest/-win-arm64.yml/.yml}"
+            echo "No x64 counterpart for $arm64_manifest; publishing arm64 alone." >&2
+            mv "$arm64_manifest" "$output_manifest"
+          done
+
+      - name: Summarize release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Publishing these assets:"
+          ls -1 release-publish
 
       - name: Publish fork release for in-app updates
         shell: bash
@@ -237,8 +436,8 @@ jobs:
             exit 1
           fi
 
-          tag="${{ steps.release.outputs.tag }}"
-          title="T3 Code Fork ${{ steps.release.outputs.version }}"
+          tag="${{ needs.version.outputs.tag }}"
+          title="T3 Code Fork ${{ needs.version.outputs.version }}"
           publish_release() {
             if gh release view "$tag" >/dev/null 2>&1; then
               gh release edit "$tag" \
