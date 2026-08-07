@@ -139,33 +139,6 @@ export function buildAgentsPanelModel(
   };
 }
 
-/**
- * Phase progress as a "3/7" style pair. Returns null when the script declared
- * no phases, so the caller omits the indicator rather than rendering "0/0".
- *
- * Position is resolved by title rather than by assuming the current phase is
- * the furthest one reached: a script may revisit an earlier phase, and showing
- * progress running backwards is more honest than pinning it at the maximum.
- */
-export function workflowPhaseProgress(
-  workflow: OrchestrationV2WorkflowProgress | undefined,
-): { readonly current: number; readonly total: number } | null {
-  if (workflow === undefined || workflow.phases.length === 0) return null;
-  const total = workflow.phases.length;
-  if (workflow.currentPhase === undefined) return { current: 0, total };
-  const index = workflow.phases.findIndex((phase) => phase.title === workflow.currentPhase);
-  // An unrecognized current phase means the script emitted a phase it never
-  // declared; count it as started rather than dropping the indicator.
-  return { current: index === -1 ? 1 : index + 1, total };
-}
-
-/** Compact token count: 1_234 -> "1.2k". Exact below 1000. */
-export function formatTokenCount(tokens: number): string {
-  if (tokens < 1000) return String(tokens);
-  if (tokens < 1_000_000) {
-    const thousands = tokens / 1000;
-    return `${thousands < 10 ? thousands.toFixed(1) : Math.round(thousands)}k`;
-  }
-  const millions = tokens / 1_000_000;
-  return `${millions < 10 ? millions.toFixed(1) : Math.round(millions)}M`;
-}
+// Phase/token presentation is shared with mobile so both surfaces report the
+// same numbers; see @t3tools/shared/workflowObservability.
+export { formatTokenCount, workflowPhaseProgress } from "@t3tools/shared/workflowObservability";

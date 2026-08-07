@@ -8,7 +8,12 @@ import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2Subagent,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+} from "@t3tools/contracts";
 import { copySorted } from "@t3tools/shared/Array";
 import type { SFSymbol } from "expo-symbols";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -155,6 +160,19 @@ export function useThreadRelationshipRows(props: {
     else visibleRows.push(row);
   }
 
+  // Relationship rows are keyed by thread, but workflow progress and usage
+  // live on the subagent record. Index by childThreadId so a row can annotate
+  // itself without threading the whole subagent list through the banner.
+  const subagentByChildThreadId = useMemo(() => {
+    const index = new Map<string, OrchestrationV2Subagent>();
+    for (const subagent of projection?.subagents ?? []) {
+      if (subagent.childThreadId !== null) {
+        index.set(subagent.childThreadId, subagent);
+      }
+    }
+    return index;
+  }, [projection]);
+
   return {
     archivedRows,
     canDetach,
@@ -163,6 +181,7 @@ export function useThreadRelationshipRows(props: {
     latestMergeBackRun,
     mergeTargetThreadId,
     rows,
+    subagentByChildThreadId,
     visibleRows,
   };
 }
