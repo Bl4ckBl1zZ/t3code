@@ -51,6 +51,15 @@ const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
+// `git worktree remove` unlinks the whole tree, so the budget scales with the
+// worktree's file count, not with repository size. A monorepo worktree with
+// installed dependencies is routinely ~270k files and takes ~15s warm; a cold
+// cache or build output (target/, Pods/, dist/) pushes it far past that.
+// Timing out here is worse than waiting: the spawned git is killed mid-unlink
+// and leaves a half-deleted directory behind.
+const WORKTREE_REMOVE_TIMEOUT_MS = 5 * 60_000;
+const WORKTREE_LIST_TIMEOUT_MS = 30_000;
+const WORKTREE_PRUNE_TIMEOUT_MS = 30_000;
 
 const STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN = Duration.seconds(30);
 const STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN = Duration.minutes(15);
@@ -235,6 +244,13 @@ function paginateBranches(input: {
     nextCursor,
     totalCount,
   };
+}
+
+// Marks a branch as one we created to back a worktree, so removing that
+// worktree may also drop the branch. A worktree opened on a branch the user
+// already had carries no marker and keeps its branch.
+function worktreeOwnedBranchConfigKey(refName: string): string {
+  return `branch.${refName}.t3-worktree-owned`;
 }
 
 function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
@@ -2753,6 +2769,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       fallbackErrorDetail: "git worktree add failed",
     });
 
+    if (input.newRefName) {
+      yield* runGit(
+        "GitVcsDriver.createWorktree.markOwnedBranch",
+        input.cwd,
+        ["config", worktreeOwnedBranchConfigKey(input.newRefName), "true"],
+        true,
+      );
+    }
+
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
@@ -2867,18 +2892,105 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       input.branch,
     ]);
 
+  // Resolves the branch a worktree has checked out. Must run before removal:
+  // once the worktree is gone it no longer appears in `git worktree list` and
+  // the branch it held can no longer be recovered.
+  const resolveWorktreeBranch = Effect.fn("resolveWorktreeBranch")(function* (
+    cwd: string,
+    worktreePath: string,
+  ) {
+    const listed = yield* executeGit(
+      "GitVcsDriver.removeWorktree.resolveBranch",
+      cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      {
+        timeoutMs: WORKTREE_LIST_TIMEOUT_MS,
+        allowNonZeroExit: true,
+        maxOutputBytes: 16 * 1024 * 1024,
+      },
+    );
+    if (listed.exitCode !== 0) {
+      return null;
+    }
+    // Git reports worktrees by their real path, so a caller-supplied path that
+    // traverses a symlink (`/var` -> `/private/var` on macOS) never matches a
+    // plain string compare. Resolve both sides before comparing.
+    const canonicalize = (candidate: string) =>
+      fileSystem.realPath(candidate).pipe(
+        Effect.orElseSucceed(() => candidate),
+        Effect.map((resolved) => path.normalize(path.resolve(resolved))),
+      );
+    const target = yield* canonicalize(worktreePath);
+    for (const [branchName, listedPath] of parseWorktreeBranchPaths(listed.stdout)) {
+      if ((yield* canonicalize(listedPath)) === target) {
+        return branchName;
+      }
+    }
+    return null;
+  });
+
+  // A failed or killed `git worktree remove` leaves the .git/worktrees admin
+  // entry pointing at a directory that is now partially or fully gone. Prune
+  // so the registry does not keep reporting a worktree nobody can use.
+  const pruneWorktrees = (cwd: string) =>
+    executeGit("GitVcsDriver.removeWorktree.prune", cwd, ["worktree", "prune"], {
+      timeoutMs: WORKTREE_PRUNE_TIMEOUT_MS,
+      allowNonZeroExit: true,
+    }).pipe(Effect.asVoid, Effect.ignore);
+
+  // Drops the branch that backed a removed worktree, but only when we created
+  // it (see worktreeOwnedBranchConfigKey) and only with `-d`, never `-D`: Git's
+  // own merged-check is the safety policy, so unmerged work is never discarded.
+  // Best-effort — a kept branch must not fail the removal that already
+  // succeeded. Git clears `branch.<name>.*` config itself on a successful
+  // delete, so the marker needs no explicit cleanup.
+  const deleteOwnedWorktreeBranch = Effect.fn("deleteOwnedWorktreeBranch")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const marker = yield* executeGit(
+      "GitVcsDriver.removeWorktree.readOwnedBranch",
+      cwd,
+      ["config", "--get", worktreeOwnedBranchConfigKey(refName)],
+      { timeoutMs: 5_000, allowNonZeroExit: true },
+    );
+    if (marker.exitCode !== 0 || marker.stdout.trim() !== "true") {
+      return;
+    }
+
+    const deleted = yield* executeGit(
+      "GitVcsDriver.removeWorktree.deleteOwnedBranch",
+      cwd,
+      ["branch", "-d", "--", refName],
+      { timeoutMs: 10_000, allowNonZeroExit: true },
+    );
+    if (deleted.exitCode !== 0) {
+      yield* Effect.logInfo(
+        `GitVcsDriver.removeWorktree: kept branch ${refName} after removing its worktree; git declined to delete it (likely unmerged work).`,
+      );
+    }
+  });
+
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
+    const ownedBranch = yield* resolveWorktreeBranch(input.cwd, input.path).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+
     const args = ["worktree", "remove"];
     if (input.force) {
       args.push("--force");
     }
     args.push(input.path);
     yield* executeGit("GitVcsDriver.removeWorktree", input.cwd, args, {
-      timeoutMs: 15_000,
+      timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS,
       fallbackErrorDetail: "git worktree remove failed",
-    });
+    }).pipe(Effect.tapError(() => pruneWorktrees(input.cwd)));
+
+    if (ownedBranch !== null) {
+      yield* deleteOwnedWorktreeBranch(input.cwd, ownedBranch);
+    }
   });
 
   const deleteLocalBranch: GitVcsDriver.GitVcsDriver["Service"]["deleteLocalBranch"] = Effect.fn(
