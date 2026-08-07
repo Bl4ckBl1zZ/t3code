@@ -13,7 +13,11 @@ Pod::Spec.new do |s|
   s.platforms = { :ios => '16.1' }
   s.source = { :path => '.' }
   s.source_files = 'ios/**/*.{h,m,mm,swift}'
-  s.vendored_frameworks = 'Vendor/libghostty/GhosttyKit.xcframework'
+  # Moved to native/libghostty so apps/swift-ios can link it without depending
+  # on this app being present. The React Native iOS build is deprecated and no
+  # pipeline runs it; this path is kept pointing at the new location so the pod
+  # still resolves for anyone reproducing a legacy build.
+  s.vendored_frameworks = '../../../../native/libghostty/GhosttyKit.xcframework'
   s.frameworks = 'IOSurface', 'Metal', 'MetalKit', 'QuartzCore', 'UIKit'
   s.libraries = 'c++', 'z'
   s.swift_version = '5.9'

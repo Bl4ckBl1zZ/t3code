@@ -995,7 +995,7 @@
 		C4000000000000000000000F /* T3CodeWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = T3CodeWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C40000000000000000000010 /* T3CodeShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = T3CodeShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C40000000000000000000011 /* ExtensionContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionContractTests.swift; sourceTree = "<group>"; };
-		D40000000000000000000001 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = ../mobile/modules/t3-terminal/Vendor/libghostty/GhosttyKit.xcframework; sourceTree = "<group>"; };
+		D40000000000000000000001 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = ../../native/libghostty/GhosttyKit.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 	};
 	rootObject = A90000000000000000000001 /* Project object */;
