@@ -51,39 +51,51 @@ final class NativeContractExpansionTests: XCTestCase {
         XCTAssertEqual(revokeBody, ["sessionId": "session-2"])
     }
 
-    func testImageAttachmentBuildsExactTurnUploadShape() throws {
-        let image = try UploadChatImageAttachment(
+    /// Composer uploads are the payload of `assets.persistChatAttachments`,
+    /// which exchanges them for stored attachments a turn can reference. Each
+    /// kind keeps its own discriminant: flattening a PDF to `image` was what
+    /// made documents unsendable.
+    func testComposerUploadsBuildTheExactPersistShape() throws {
+        let image = try UploadChatAttachment(
             data: Data([0x89, 0x50, 0x4e, 0x47]),
             name: "screenshot.png",
-            mimeType: "image/png"
+            mimeType: "image/png",
+            kind: .image
         )
-        let command = try OrchestrationCommands.sendTurn(
-            threadID: "thread-1",
-            text: "What is in this image?",
-            runtimeMode: .fullAccess,
-            model: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
-            attachments: [image],
-            commandID: "command-1",
-            messageID: "message-1",
-            createdAt: "2026-07-30T12:00:00.000Z"
-        )
-
-        guard case let .array(attachments)? = command["message"]?["attachments"] else {
-            return XCTFail("Expected an attachment array")
-        }
-        let attachment = try XCTUnwrap(attachments.first)
-        XCTAssertEqual(attachment["type"]?.stringValue, "image")
-        XCTAssertEqual(attachment["name"]?.stringValue, "screenshot.png")
-        XCTAssertEqual(attachment["mimeType"]?.stringValue, "image/png")
-        guard case let .number(sizeBytes)? = attachment["sizeBytes"] else {
+        XCTAssertEqual(image.jsonValue["type"]?.stringValue, "image")
+        XCTAssertEqual(image.jsonValue["name"]?.stringValue, "screenshot.png")
+        XCTAssertEqual(image.jsonValue["mimeType"]?.stringValue, "image/png")
+        guard case let .number(sizeBytes)? = image.jsonValue["sizeBytes"] else {
             return XCTFail("Expected numeric attachment size")
         }
         XCTAssertEqual(sizeBytes, 4)
         XCTAssertEqual(
-            attachment["dataUrl"]?.stringValue,
+            image.jsonValue["dataUrl"]?.stringValue,
             "data:image/png;base64,iVBORw=="
         )
-        XCTAssertEqual(command["modelSelection"]?["instanceId"]?.stringValue, "codex")
+        XCTAssertEqual(
+            RPCMethod.assetsPersistChatAttachments.rawValue,
+            "assets.persistChatAttachments"
+        )
+
+        let document = try UploadChatAttachment(
+            data: Data([0x25, 0x50, 0x44, 0x46]),
+            name: "spec.pdf",
+            mimeType: "application/pdf",
+            kind: ComposerAttachments.classify(
+                mimeType: "application/pdf",
+                name: "spec.pdf"
+            )
+        )
+        XCTAssertEqual(document.jsonValue["type"]?.stringValue, "pdf")
+
+        let video = try UploadChatAttachment(
+            data: Data([0x00, 0x01]),
+            name: "clip.mp4",
+            mimeType: "video/mp4",
+            kind: ComposerAttachments.classify(mimeType: "video/mp4", name: "clip.mp4")
+        )
+        XCTAssertEqual(video.jsonValue["type"]?.stringValue, "video")
     }
 
     func testImageAttachmentRejectsOversizedInput() {

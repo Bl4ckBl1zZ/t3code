@@ -835,8 +835,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 },
                 attachments: uploads,
                 commandID: pending.identity.commandID,
-                messageID: pending.identity.messageID,
-                createdAt: pending.identity.createdAt
+                messageID: pending.identity.messageID
             )
         } catch {
             // A connection can disappear after the server accepted the command
@@ -849,8 +848,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 projectID: route.wireID,
                 text: prompt,
                 model: model,
-                runtimeMode: runtime,
-                interactionMode: interaction,
                 attachments: uploads
             )
             guard recovered else {
@@ -914,9 +911,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         projectID: String,
         text: String,
         model: ModelSelection,
-        runtimeMode: RuntimeMode,
-        interactionMode: InteractionMode,
-        attachments: [UploadChatImageAttachment]
+        attachments: [UploadChatAttachment]
     ) async throws -> Bool {
         guard let snapshot = try? await client.threadSnapshot(id: pending.threadID) else {
             return false
@@ -934,13 +929,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             _ = try await client.sendTurn(
                 threadID: pending.threadID,
                 text: text,
-                runtimeMode: runtimeMode,
-                interactionMode: interactionMode,
                 model: model,
                 attachments: attachments,
                 commandID: pending.identity.commandID,
-                messageID: pending.identity.messageID,
-                createdAt: pending.identity.createdAt
+                messageID: pending.identity.messageID
             )
         } catch {
             guard await messageWasCommitted(
@@ -1297,13 +1289,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             _ = try await client.sendTurn(
                 threadID: submissionIdentity?.threadID ?? route.wireID,
                 text: text,
-                runtimeMode: runtimeMode,
-                interactionMode: interactionMode,
                 model: model,
                 attachments: uploads,
                 commandID: pending.identity.commandID,
-                messageID: pending.identity.messageID,
-                createdAt: pending.identity.createdAt
+                messageID: pending.identity.messageID
             )
         } catch {
             guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
@@ -1345,11 +1334,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func cancelTurn(threadID: String) async throws {
         let route = try threadRoute(for: threadID)
-        // V2 interrupts the active run; there is no separate turn identity.
-        let turnID = shellsByEnvironmentID[route.environmentID]?.threads
+        // V2 interrupts a run, and names it: there is no separate turn identity
+        // and no "interrupt whatever is running" form. The shell carries the
+        // active run for a live thread; a stale shell falls back to the
+        // projection before giving up, because interrupting nothing is silence
+        // where the user asked for a stop.
+        var resolved = shellsByEnvironmentID[route.environmentID]?.threads
             .first(where: { $0.id == route.wireID })?
             .activeRunId
-        _ = try await route.client.interrupt(threadID: route.wireID, turnID: turnID)
+        if resolved == nil {
+            resolved = try? await route.client
+                .threadSnapshot(id: route.wireID)
+                .projection
+                .activeRunID
+        }
+        guard let runID = resolved else { return }
+        _ = try await route.client.interrupt(threadID: route.wireID, runID: runID)
         try? await refresh(client: route.client)
     }
 
@@ -4343,17 +4343,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return activity ?? parseValidDate(updatedAt)
     }
 
+    /// The kind is classified rather than assumed: the contract has separate
+    /// `pdf` and `video` attachment branches with their own size caps, and
+    /// forcing everything through the image branch rejected every document the
+    /// picker could hand back.
     private func makeUploadAttachments(
         _ attachments: [FeatureUploadAttachment]
-    ) throws -> [UploadChatImageAttachment] {
+    ) throws -> [UploadChatAttachment] {
         guard attachments.count <= 8 else {
             throw NativeFeatureClientError.tooManyAttachments
         }
         return try attachments.map {
-            try UploadChatImageAttachment(
+            try UploadChatAttachment(
                 data: $0.data,
                 name: $0.name,
-                mimeType: $0.mimeType
+                mimeType: $0.mimeType,
+                kind: ComposerAttachments.classify(mimeType: $0.mimeType, name: $0.name)
             )
         }
     }
@@ -4531,6 +4536,18 @@ enum NativeThreadDetailReducer {
 }
 
 extension OrchestrationV2ThreadProjection {
+    /// The run `run.interrupt` should target: the newest run that has not
+    /// finished. Mirrors the run statuses the server treats as active when it
+    /// decides how to dispatch a message.
+    var activeRunID: String? {
+        runs.last {
+            $0.status == "preparing"
+                || $0.status == "starting"
+                || $0.status == "running"
+                || $0.status == "waiting"
+        }?.id
+    }
+
     /// Replaces an item in place, preserving transcript order. An item that is
     /// not in the visible window is still recorded so a later full projection
     /// agrees with what was streamed.

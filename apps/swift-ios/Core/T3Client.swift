@@ -194,31 +194,68 @@ public actor T3Client {
         }
     }
 
+    /// Sends a message on an existing thread.
+    ///
+    /// `runtimeMode`/`interactionMode` are deliberately absent: this fork's
+    /// `message.dispatch` carries neither. Changing a thread's mode is a
+    /// separate `thread.runtime-mode.set` / `thread.interaction-mode.set`
+    /// command, so folding a mode into the send would be dropped on the floor.
     @discardableResult
     public func sendTurn(
         threadID: String,
         text: String,
-        runtimeMode: RuntimeMode,
-        interactionMode: InteractionMode = .default,
         model: ModelSelection? = nil,
-        attachments: [UploadChatImageAttachment] = [],
+        attachments: [UploadChatAttachment] = [],
+        dispatchMode: MessageDispatchMode = .startImmediately,
         commandID: String = UUID().uuidString,
-        messageID: String = UUID().uuidString,
-        createdAt: String = OrchestrationCommands.now()
+        messageID: String = UUID().uuidString
     ) async throws -> DispatchResult {
-        try await dispatch(
+        let persisted = try await persistAttachments(
+            threadID: threadID,
+            messageID: messageID,
+            attachments: attachments
+        )
+        return try await dispatch(
             try OrchestrationCommands.sendTurn(
                 threadID: threadID,
                 text: text,
-                runtimeMode: runtimeMode,
-                interactionMode: interactionMode,
                 model: model,
-                attachments: attachments,
+                attachments: persisted,
+                dispatchMode: dispatchMode,
                 commandID: commandID,
-                messageID: messageID,
-                createdAt: createdAt
+                messageID: messageID
             )
         )
+    }
+
+    /// Writes composer uploads into the server's attachment store and returns
+    /// the persisted `ChatAttachment` values.
+    ///
+    /// `message.dispatch` and `orchestration.launchThread` both take persisted
+    /// attachments — an `id`, no bytes — so inline `dataUrl` uploads have to be
+    /// exchanged for stored ones first. This mirrors what `client-runtime` does
+    /// before either call.
+    public func persistAttachments(
+        threadID: String,
+        messageID: String,
+        attachments: [UploadChatAttachment]
+    ) async throws -> [JSONValue] {
+        guard !attachments.isEmpty else { return [] }
+        let result = try await rpc.request(
+            RPCMethod.assetsPersistChatAttachments.rawValue,
+            payload: .object([
+                "threadId": .string(threadID),
+                "messageId": .string(messageID),
+                "attachments": .array(attachments.map(\.jsonValue)),
+            ]),
+            as: JSONValue.self
+        )
+        guard case let .array(persisted)? = result["attachments"] else {
+            throw RPCError.protocolViolation(
+                "assets.persistChatAttachments did not return an attachment list."
+            )
+        }
+        return persisted
     }
 
     @discardableResult
@@ -246,8 +283,12 @@ public actor T3Client {
         )
     }
 
-    /// Creates a thread and starts its first turn through the server-supported
-    /// message-first bootstrap path.
+    /// Creates a thread and starts its first turn.
+    ///
+    /// This is `orchestration.launchThread` rather than a dispatched command:
+    /// creating the thread, provisioning its workspace and dispatching the
+    /// first message is one server-side operation in this fork, and its input
+    /// is not a member of the command union.
     @discardableResult
     public func createThreadAndSend(
         threadID: String = UUID().uuidString,
@@ -260,13 +301,19 @@ public actor T3Client {
         branch: String? = nil,
         worktreePath: String? = nil,
         worktreePreparation: ThreadWorktreePreparation? = nil,
-        attachments: [UploadChatImageAttachment] = [],
+        prepareWorkspace: Bool? = nil,
+        attachments: [UploadChatAttachment] = [],
         commandID: String = UUID().uuidString,
-        messageID: String = UUID().uuidString,
-        createdAt: String = OrchestrationCommands.now()
-    ) async throws -> DispatchResult {
-        try await dispatchOverWebSocket(
-            try OrchestrationCommands.createThreadAndSend(
+        messageID: String = UUID().uuidString
+    ) async throws -> ThreadLaunchResult {
+        let persisted = try await persistAttachments(
+            threadID: threadID,
+            messageID: messageID,
+            attachments: attachments
+        )
+        return try await rpc.request(
+            RPCMethod.launchThread.rawValue,
+            payload: try OrchestrationCommands.createThreadAndSend(
                 threadID: threadID,
                 projectID: projectID,
                 title: title,
@@ -277,11 +324,12 @@ public actor T3Client {
                 branch: branch,
                 worktreePath: worktreePath,
                 worktreePreparation: worktreePreparation,
-                attachments: attachments,
+                prepareWorkspace: prepareWorkspace,
+                attachments: persisted,
                 commandID: commandID,
-                messageID: messageID,
-                createdAt: createdAt
-            )
+                messageID: messageID
+            ),
+            as: ThreadLaunchResult.self
         )
     }
 
@@ -293,6 +341,9 @@ public actor T3Client {
         )
     }
 
+    /// `project.create` is a `ProjectMutation`, not an orchestration command:
+    /// it travels over `projects.mutate` and answers with the created project
+    /// rather than a dispatch sequence.
     @discardableResult
     public func createProject(
         projectID: String = UUID().uuidString,
@@ -300,15 +351,17 @@ public actor T3Client {
         workspaceRoot: String,
         defaultModel: ModelSelection? = nil,
         createWorkspaceRootIfMissing: Bool = false
-    ) async throws -> DispatchResult {
-        try await dispatch(
-            try OrchestrationCommands.createProject(
+    ) async throws -> JSONValue {
+        try await rpc.request(
+            RPCMethod.projectsMutate.rawValue,
+            payload: try OrchestrationCommands.createProject(
                 projectID: projectID,
                 title: title,
                 workspaceRoot: workspaceRoot,
                 defaultModel: defaultModel,
                 createWorkspaceRootIfMissing: createWorkspaceRootIfMissing
-            )
+            ),
+            as: JSONValue.self
         )
     }
 
@@ -327,10 +380,21 @@ public actor T3Client {
         try await dispatch(OrchestrationCommands.rename(threadID: threadID, title: title))
     }
 
+    /// Interrupts a specific run. V2 has no separate turn identity, and
+    /// `run.interrupt` requires the run, so callers resolve the active run
+    /// before asking.
     @discardableResult
-    public func interrupt(threadID: String, turnID: String? = nil) async throws -> DispatchResult {
+    public func interrupt(
+        threadID: String,
+        runID: String,
+        reason: String? = nil
+    ) async throws -> DispatchResult {
         try await dispatch(
-            OrchestrationCommands.interrupt(threadID: threadID, turnID: turnID)
+            OrchestrationCommands.interrupt(
+                threadID: threadID,
+                runID: runID,
+                reason: reason
+            )
         )
     }
 
@@ -1223,15 +1287,18 @@ public enum RPCMethod: String, Sendable {
     case serverProbe = "server.probe"
     case serverGetConfig = "server.getConfig"
     case dispatchCommand = "orchestration.dispatchCommand"
+    case launchThread = "orchestration.launchThread"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
+    case projectsMutate = "projects.mutate"
     case projectsListEntries = "projects.listEntries"
     case projectsSearchEntries = "projects.searchEntries"
     case projectsReadFile = "projects.readFile"
     case projectsWriteFile = "projects.writeFile"
     case filesystemBrowse = "filesystem.browse"
     case assetsCreateURL = "assets.createUrl"
+    case assetsPersistChatAttachments = "assets.persistChatAttachments"
     case subscribeServerConfig
     case serverDiscoverSourceControl = "server.discoverSourceControl"
     case subscribeVCSStatus = "subscribeVcsStatus"
@@ -1260,7 +1327,59 @@ public enum RPCMethod: String, Sendable {
     case subscribeTerminalMetadata
 }
 
+/// How a dispatched message should meet an already-running turn.
+///
+/// The server resolves `start_immediately` to a queued message when a run is
+/// active, so it is the safe default for a client that has not looked at the
+/// projection. `steerActive`/`restartActive` are rejected unless the named run
+/// is genuinely running, so only callers holding a live projection should send
+/// them.
+public enum MessageDispatchMode: Equatable, Sendable {
+    case startImmediately
+    case queueAfterActive
+    case deferStart
+    case steerActive(runID: String)
+    case restartActive(runID: String)
+
+    var jsonValue: JSONValue {
+        switch self {
+        case .startImmediately:
+            .object(["type": .string("start_immediately")])
+        case .queueAfterActive:
+            .object(["type": .string("queue_after_active")])
+        case .deferStart:
+            .object(["type": .string("defer_start")])
+        case let .steerActive(runID):
+            .object(["type": .string("steer_active"), "targetRunId": .string(runID)])
+        case let .restartActive(runID):
+            .object(["type": .string("restart_active"), "targetRunId": .string(runID)])
+        }
+    }
+}
+
+/// `orchestration.launchThread`'s reply. The full result also carries the new
+/// thread's projection; this decodes only the identity so a projection the
+/// Swift models cannot yet parse never turns an accepted launch into a failure.
+public struct ThreadLaunchResult: Decodable, Equatable, Sendable {
+    public let threadId: String
+    public let resumed: Bool
+}
+
+/// Builders for this fork's orchestration V2 command union
+/// (`packages/contracts/src/orchestrationV2.ts`).
+///
+/// Every builder is pure so the emitted JSON can be asserted against the
+/// contract in tests, and every one takes its `commandId` so a retry after an
+/// ambiguous failure is deduplicated by the server's command receipts instead
+/// of enqueuing the work twice.
 public enum OrchestrationCommands {
+    /// `OrchestrationV2CreationSource`. Everything this client originates is a
+    /// phone action, and the server defaults the field to `web` when it is
+    /// missing, so it is spelled out on every command that accepts it.
+    public static let creationSource = "mobile"
+    /// `OrchestrationV2Actor`. Commands from this client are user intent.
+    public static let createdBy = "user"
+
     public static func createThread(
         threadID: String = UUID().uuidString,
         projectID: String,
@@ -1276,26 +1395,29 @@ public enum OrchestrationCommands {
         .object([
             "type": .string("thread.create"),
             "commandId": .string(commandID),
+            "createdBy": .string(createdBy),
+            "creationSource": .string(creationSource),
             "threadId": .string(threadID),
             "projectId": .string(projectID),
             "title": .string(title),
             "modelSelection": try .encode(model),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),
-            "branch": branch.map(JSONValue.string) ?? .null,
-            "worktreePath": worktreePath.map(JSONValue.string) ?? .null,
+            "branch": trimmedOrNull(branch),
+            "worktreePath": trimmedOrNull(worktreePath),
             "createdAt": .string(createdAt),
         ])
     }
 
+    /// A `ProjectMutation`, not an orchestration command: it is dispatched
+    /// through `projects.mutate` and carries no `createdAt`.
     public static func createProject(
         projectID: String = UUID().uuidString,
         title: String,
         workspaceRoot: String,
         defaultModel: ModelSelection? = nil,
         createWorkspaceRootIfMissing: Bool = false,
-        commandID: String = UUID().uuidString,
-        createdAt: String = now()
+        commandID: String = UUID().uuidString
     ) throws -> JSONValue {
         var value: [String: JSONValue] = [
             "type": .string("project.create"),
@@ -1304,7 +1426,6 @@ public enum OrchestrationCommands {
             "title": .string(title),
             "workspaceRoot": .string(workspaceRoot),
             "createWorkspaceRootIfMissing": .bool(createWorkspaceRootIfMissing),
-            "createdAt": .string(createdAt),
         ]
         if let defaultModel {
             value["defaultModelSelection"] = try JSONValue.encode(defaultModel)
@@ -1314,30 +1435,27 @@ public enum OrchestrationCommands {
         return .object(value)
     }
 
+    /// `message.dispatch`. `attachments` are already-persisted `ChatAttachment`
+    /// values; see `T3Client.persistAttachments`.
     public static func sendTurn(
         threadID: String,
         text: String,
-        runtimeMode: RuntimeMode,
-        interactionMode: InteractionMode = .default,
         model: ModelSelection? = nil,
-        attachments: [UploadChatImageAttachment] = [],
+        attachments: [JSONValue] = [],
+        dispatchMode: MessageDispatchMode = .startImmediately,
         commandID: String = UUID().uuidString,
-        messageID: String = UUID().uuidString,
-        createdAt: String = now()
+        messageID: String = UUID().uuidString
     ) throws -> JSONValue {
         var command: [String: JSONValue] = [
-            "type": .string("thread.turn.start"),
+            "type": .string("message.dispatch"),
             "commandId": .string(commandID),
+            "createdBy": .string(createdBy),
+            "creationSource": .string(creationSource),
             "threadId": .string(threadID),
-            "message": .object([
-                "messageId": .string(messageID),
-                "role": .string("user"),
-                "text": .string(text),
-                "attachments": .array(attachments.map(\.jsonValue)),
-            ]),
-            "runtimeMode": .string(runtimeMode.rawValue),
-            "interactionMode": .string(interactionMode.rawValue),
-            "createdAt": .string(createdAt),
+            "messageId": .string(messageID),
+            "text": .string(text),
+            "attachments": .array(attachments),
+            "dispatchMode": dispatchMode.jsonValue,
         ]
         if let model {
             command["modelSelection"] = try .encode(model)
@@ -1345,6 +1463,10 @@ public enum OrchestrationCommands {
         return .object(command)
     }
 
+    /// Input for `orchestration.launchThread` — deliberately without a `type`,
+    /// because this is an RPC payload rather than a member of the command
+    /// union. Thread creation, workspace provisioning and the first message are
+    /// one server-side operation here.
     public static func createThreadAndSend(
         threadID: String = UUID().uuidString,
         projectID: String,
@@ -1356,52 +1478,71 @@ public enum OrchestrationCommands {
         branch: String? = nil,
         worktreePath: String? = nil,
         worktreePreparation: ThreadWorktreePreparation? = nil,
-        attachments: [UploadChatImageAttachment] = [],
+        prepareWorkspace: Bool? = nil,
+        attachments: [JSONValue] = [],
         commandID: String = UUID().uuidString,
-        messageID: String = UUID().uuidString,
-        createdAt: String = now()
+        messageID: String = UUID().uuidString
     ) throws -> JSONValue {
-        var create: [String: JSONValue] = [
+        var input: [String: JSONValue] = [
+            "commandId": .string(commandID),
+            "creationSource": .string(creationSource),
+            "threadId": .string(threadID),
             "projectId": .string(projectID),
             "title": .string(title),
             "modelSelection": try .encode(model),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),
-            "branch": branch.map(JSONValue.string) ?? .null,
-            "worktreePath": worktreePath.map(JSONValue.string) ?? .null,
-            "createdAt": .string(createdAt),
-        ]
-        create["createdAt"] = .string(createdAt)
-        var bootstrap: [String: JSONValue] = ["createThread": .object(create)]
-        if let worktreePreparation {
-            var prepareWorktree: [String: JSONValue] = [
-                "projectCwd": .string(worktreePreparation.projectCwd),
-                "baseBranch": .string(worktreePreparation.baseBranch),
-                "branch": .string(worktreePreparation.branch),
-            ]
-            if worktreePreparation.startFromOrigin {
-                prepareWorktree["startFromOrigin"] = .bool(true)
-            }
-            bootstrap["prepareWorktree"] = .object(prepareWorktree)
-            bootstrap["runSetupScript"] = .bool(true)
-        }
-        return .object([
-            "type": .string("thread.turn.start"),
-            "commandId": .string(commandID),
-            "threadId": .string(threadID),
-            "message": .object([
+            "workspaceStrategy": workspaceStrategy(
+                branch: branch,
+                worktreePath: worktreePath,
+                worktreePreparation: worktreePreparation
+            ),
+            "initialMessage": .object([
                 "messageId": .string(messageID),
-                "role": .string("user"),
                 "text": .string(text),
-                "attachments": .array(attachments.map(\.jsonValue)),
+                "attachments": .array(attachments),
             ]),
-            "modelSelection": try .encode(model),
-            "titleSeed": .string(title),
-            "runtimeMode": .string(runtimeMode.rawValue),
-            "interactionMode": .string(interactionMode.rawValue),
-            "bootstrap": .object(bootstrap),
-            "createdAt": .string(createdAt),
-        ])
+        ]
+        // Only projectless conversation providers opt out; leaving the key off
+        // keeps the server's "prepare the workspace" default.
+        if let prepareWorkspace {
+            input["prepareWorkspace"] = .bool(prepareWorkspace)
+        }
+        return .object(input)
+    }
+
+    /// `OrchestrationV2ThreadLaunchWorkspaceStrategy`. A worktree launch names
+    /// only the base ref and the branch to create: the server picks the path,
+    /// which is why a draft's `worktreePath` must not travel with it.
+    static func workspaceStrategy(
+        branch: String?,
+        worktreePath: String?,
+        worktreePreparation: ThreadWorktreePreparation?
+    ) -> JSONValue {
+        if let worktreePreparation {
+            var strategy: [String: JSONValue] = [
+                "type": .string("worktree"),
+                "baseRef": .string(worktreePreparation.baseBranch),
+            ]
+            if let created = trimmed(worktreePreparation.branch) {
+                strategy["branch"] = .string(created)
+            }
+            if worktreePreparation.startFromOrigin {
+                strategy["startFromOrigin"] = .bool(true)
+            }
+            return .object(strategy)
+        }
+        if let existing = trimmed(worktreePath) {
+            var strategy: [String: JSONValue] = [
+                "type": .string("existing_worktree"),
+                "worktreePath": .string(existing),
+            ]
+            if let branch = trimmed(branch) { strategy["branch"] = .string(branch) }
+            return .object(strategy)
+        }
+        var strategy: [String: JSONValue] = ["type": .string("root")]
+        if let branch = trimmed(branch) { strategy["branch"] = .string(branch) }
+        return .object(strategy)
     }
 
     public static func archive(
@@ -1428,44 +1569,59 @@ public enum OrchestrationCommands {
         title: String,
         commandID: String = UUID().uuidString
     ) -> JSONValue {
-        .object([
-            "type": .string("thread.meta.update"),
+        updateMetadata(
+            threadID: threadID,
+            commandID: commandID,
+            fields: ["title": .string(title)]
+        )
+    }
+
+    /// `thread.metadata.update` carries every optional thread field; absent
+    /// keys are left alone, so each caller sends only what it changes.
+    public static func updateMetadata(
+        threadID: String,
+        commandID: String = UUID().uuidString,
+        fields: [String: JSONValue]
+    ) -> JSONValue {
+        var value: [String: JSONValue] = [
+            "type": .string("thread.metadata.update"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
-            "title": .string(title),
-        ])
+        ]
+        for (key, field) in fields { value[key] = field }
+        return .object(value)
     }
 
     public static func interrupt(
         threadID: String,
-        turnID: String?,
-        commandID: String = UUID().uuidString,
-        createdAt: String = now()
+        runID: String,
+        reason: String? = nil,
+        commandID: String = UUID().uuidString
     ) -> JSONValue {
         var value: [String: JSONValue] = [
-            "type": .string("thread.turn.interrupt"),
+            "type": .string("run.interrupt"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
-            "createdAt": .string(createdAt),
+            "runId": .string(runID),
         ]
-        if let turnID { value["turnId"] = .string(turnID) }
+        if let reason { value["reason"] = .string(reason) }
         return .object(value)
     }
 
+    /// Approvals and user-input answers are the same command in V2: a response
+    /// to a runtime request, distinguished by which optional field it carries.
     public static func respondToApproval(
         threadID: String,
         requestID: String,
         decision: String,
-        commandID: String = UUID().uuidString,
-        createdAt: String = now()
+        commandID: String = UUID().uuidString
     ) -> JSONValue {
         .object([
-            "type": .string("thread.approval.respond"),
+            "type": .string("runtime-request.respond"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "requestId": .string(requestID),
             "decision": .string(decision),
-            "createdAt": .string(createdAt),
         ])
     }
 
@@ -1473,16 +1629,14 @@ public enum OrchestrationCommands {
         threadID: String,
         requestID: String,
         answers: [String: JSONValue],
-        commandID: String = UUID().uuidString,
-        createdAt: String = now()
+        commandID: String = UUID().uuidString
     ) -> JSONValue {
         .object([
-            "type": .string("thread.user-input.respond"),
+            "type": .string("runtime-request.respond"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "requestId": .string(requestID),
             "answers": .object(answers),
-            "createdAt": .string(createdAt),
         ])
     }
 
@@ -1524,45 +1678,42 @@ public enum OrchestrationCommands {
         ])
     }
 
+    /// Pinning is a thread metadata field, not a command of its own.
     public static func pin(
         threadID: String,
         pinned: Bool,
         commandID: String = UUID().uuidString
     ) -> JSONValue {
-        basic(
-            type: pinned ? "thread.pin" : "thread.unpin",
+        updateMetadata(
             threadID: threadID,
-            commandID: commandID
+            commandID: commandID,
+            fields: ["pinned": .bool(pinned)]
         )
     }
 
     public static func setRuntimeMode(
         threadID: String,
         mode: RuntimeMode,
-        commandID: String = UUID().uuidString,
-        createdAt: String = now()
+        commandID: String = UUID().uuidString
     ) -> JSONValue {
         .object([
             "type": .string("thread.runtime-mode.set"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "runtimeMode": .string(mode.rawValue),
-            "createdAt": .string(createdAt),
         ])
     }
 
     public static func setInteractionMode(
         threadID: String,
         mode: InteractionMode,
-        commandID: String = UUID().uuidString,
-        createdAt: String = now()
+        commandID: String = UUID().uuidString
     ) -> JSONValue {
         .object([
             "type": .string("thread.interaction-mode.set"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "interactionMode": .string(mode.rawValue),
-            "createdAt": .string(createdAt),
         ])
     }
 
@@ -1572,6 +1723,18 @@ public enum OrchestrationCommands {
             "commandId": .string(commandID),
             "threadId": .string(threadID),
         ])
+    }
+
+    /// The contract's nullable string fields are `TrimmedNonEmptyString | null`,
+    /// so a blank value has to travel as `null` rather than `""`.
+    private static func trimmedOrNull(_ value: String?) -> JSONValue {
+        trimmed(value).map(JSONValue.string) ?? .null
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let compact = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return compact.isEmpty ? nil : compact
     }
 
     public static func now() -> String {

@@ -135,7 +135,7 @@ final class TransportReliabilityTests: XCTestCase {
         )
     }
 
-    func testBootstrapUsesCanonicalWebSocketRPCDispatch() async throws {
+    func testBootstrapUsesTheThreadLaunchRPC() async throws {
         let environment = Environment(
             id: "environment-1",
             label: "Studio",
@@ -172,23 +172,24 @@ final class TransportReliabilityTests: XCTestCase {
             model: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
             runtimeMode: .fullAccess,
             commandID: "stable-command",
-            messageID: "stable-message",
-            createdAt: "2026-07-30T12:00:00.000Z"
+            messageID: "stable-message"
         )
         await client.disconnect()
 
-        XCTAssertEqual(result.sequence, 42)
+        XCTAssertEqual(result.threadId, "thread-first-send")
+        XCTAssertFalse(result.resumed)
         let requests = await connection.requests()
         XCTAssertEqual(requests.count, 1)
-        XCTAssertEqual(requests.first?["tag"]?.stringValue, "orchestration.dispatchCommand")
-        XCTAssertEqual(
-            requests.first?["payload"]?["bootstrap"]?["createThread"]?["projectId"]?.stringValue,
-            "project-1"
-        )
+        XCTAssertEqual(requests.first?["tag"]?.stringValue, "orchestration.launchThread")
+        XCTAssertEqual(requests.first?["payload"]?["projectId"]?.stringValue, "project-1")
         XCTAssertEqual(requests.first?["payload"]?["commandId"]?.stringValue, "stable-command")
         XCTAssertEqual(
-            requests.first?["payload"]?["message"]?["messageId"]?.stringValue,
+            requests.first?["payload"]?["initialMessage"]?["messageId"]?.stringValue,
             "stable-message"
+        )
+        XCTAssertEqual(
+            requests.first?["payload"]?["workspaceStrategy"]?["type"]?.stringValue,
+            "root"
         )
 
         let httpRequests = await transport.requests
@@ -259,7 +260,7 @@ final class TransportReliabilityTests: XCTestCase {
             JSONValue.self,
             from: try XCTUnwrap(dispatchRequests.first?.httpBody)
         )
-        XCTAssertEqual(command["type"]?.stringValue, "thread.meta.update")
+        XCTAssertEqual(command["type"]?.stringValue, "thread.metadata.update")
     }
 
     /// Set `T3_SWIFT_WS_DEFLATE_ECHO_URL` to a WebSocket endpoint that rejects
@@ -456,12 +457,22 @@ private actor RecordingWebSocketConnection: WebSocketConnection {
         let request = try JSONDecoder.t3.decode(JSONValue.self, from: data)
         recordedRequests.append(request)
         guard case let .number(rawID) = request["id"] else { return }
+        // launchThread answers with the launched thread; every other RPC here
+        // is a dispatched command, which answers with a sequence.
+        let value: JSONValue = if request["tag"]?.stringValue == RPCMethod.launchThread.rawValue {
+            .object([
+                "threadId": request["payload"]?["threadId"] ?? .string("thread"),
+                "resumed": .bool(false),
+            ])
+        } else {
+            .object(["sequence": .number(42)])
+        }
         let response = JSONValue.object([
             "_tag": .string("Exit"),
             "requestId": .number(rawID),
             "exit": .object([
                 "_tag": .string("Success"),
-                "value": .object(["sequence": .number(42)]),
+                "value": value,
             ]),
         ])
         enqueue(try JSONEncoder.t3.encode(response))
