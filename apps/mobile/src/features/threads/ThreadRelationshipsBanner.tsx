@@ -7,6 +7,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, View } from "react-nat
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AgentOrb } from "../../components/AgentOrb";
+import { AgentWorkflowProgress } from "./AgentWorkflowProgress";
 import { AppText as Text } from "../../components/AppText";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { threadEnvironment } from "../../state/threads";
@@ -31,6 +32,7 @@ export function ThreadRelationshipsBanner(props: {
     latestMergeBackRun,
     mergeTargetThreadId,
     rows,
+    subagentByChildThreadId,
     visibleRows,
   } = useThreadRelationshipRows(props);
   const [visible, setVisible] = useState(false);
@@ -114,6 +116,12 @@ export function ThreadRelationshipsBanner(props: {
           <Text className="font-t3-medium text-sm text-foreground" numberOfLines={1}>
             {node?.thread?.title ?? threadId}
           </Text>
+          {edge.kind === "subagent" ? (
+            <AgentWorkflowProgress
+              workflow={subagentByChildThreadId.get(threadId)?.workflow}
+              usage={subagentByChildThreadId.get(threadId)?.usage}
+            />
+          ) : null}
         </View>
         {availability ? (
           <Text className="text-2xs text-foreground-muted">{availability}</Text>

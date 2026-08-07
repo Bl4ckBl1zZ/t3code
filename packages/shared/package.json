@@ -15,6 +15,10 @@
       "types": "./src/orchestrationV2Window.ts",
       "import": "./src/orchestrationV2Window.ts"
     },
+    "./workflowObservability": {
+      "types": "./src/workflowObservability.ts",
+      "import": "./src/workflowObservability.ts"
+    },
     "./changedFilesPreview": {
       "types": "./src/changedFilesPreview.ts",
       "import": "./src/changedFilesPreview.ts"

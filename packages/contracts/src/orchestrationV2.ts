@@ -240,6 +240,13 @@ export const OrchestrationV2SubagentCapabilities = Schema.Struct({
   canWaitForSubagents: Schema.Boolean,
   canCloseSubagents: Schema.Boolean,
   canForkSubagentThread: Schema.Boolean,
+  // Observability reporting. Optional so a driver descriptor written before
+  // these existed still decodes; absent reads as false at every call site.
+  // The UI needs the distinction between "reports nothing" and "reports zero"
+  // to decide whether to render an empty state or omit the affordance.
+  reportsWorkflowPhases: Schema.optional(Schema.Boolean),
+  reportsTaskUsage: Schema.optional(Schema.Boolean),
+  exposesWorkflowScript: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2SubagentCapabilities = typeof OrchestrationV2SubagentCapabilities.Type;
 
@@ -448,6 +455,144 @@ export const OrchestrationV2ExecutionNode = Schema.Struct({
 });
 export type OrchestrationV2ExecutionNode = typeof OrchestrationV2ExecutionNode.Type;
 
+/**
+ * Per-task usage rollup for the Agents surface. Drivers report this
+ * differently — Claude emits per-activation deltas, Codex emits cumulative
+ * totals — so accumulation is the ingestor's job (see recordSubagentUsage);
+ * by the time a rollup reaches a client it is always cumulative for the task.
+ *
+ * Every field past `totalTokens` is optional because no driver reports the
+ * full set: a missing field means "not reported", which is not the same as
+ * zero and must not be rendered as such.
+ */
+export const OrchestrationV2TaskUsage = Schema.Struct({
+  totalTokens: NonNegativeInt,
+  inputTokens: Schema.optional(NonNegativeInt),
+  cachedInputTokens: Schema.optional(NonNegativeInt),
+  outputTokens: Schema.optional(NonNegativeInt),
+  reasoningOutputTokens: Schema.optional(NonNegativeInt),
+  toolUses: Schema.optional(NonNegativeInt),
+  durationMs: Schema.optional(NonNegativeInt),
+});
+export type OrchestrationV2TaskUsage = typeof OrchestrationV2TaskUsage.Type;
+
+/**
+ * One declared phase of a workflow script. `index` is the phase's position in
+ * the script's own declaration order, which is NOT necessarily execution
+ * order: a script may skip phases or revisit one, so clients key progress off
+ * the phase title reported as current rather than assuming a monotonic walk.
+ */
+export const OrchestrationV2WorkflowPhase = Schema.Struct({
+  index: NonNegativeInt,
+  title: TrimmedNonEmptyString,
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2WorkflowPhase = typeof OrchestrationV2WorkflowPhase.Type;
+
+/**
+ * Handles for inspecting a workflow run after (or during) execution. All
+ * optional: a plain subagent has none of them, and a workflow may expose only
+ * some depending on how far it got before failing.
+ *
+ * `sessionUrl` is restricted to http/https at the emitting adapter — it is
+ * rendered as a link, so a `file:`/`javascript:` value would be an injection
+ * vector. `scriptPath` is a hint only; the server re-validates containment
+ * before reading it (readWorkflowScript).
+ */
+export const OrchestrationV2RunHandles = Schema.Struct({
+  runId: Schema.optional(TrimmedNonEmptyString),
+  scriptPath: Schema.optional(TrimmedNonEmptyString),
+  transcriptDir: Schema.optional(TrimmedNonEmptyString),
+  sessionUrl: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2RunHandles = typeof OrchestrationV2RunHandles.Type;
+
+/**
+ * Workflow-shaped progress for a task that runs a script rather than a single
+ * prompt. `phases` is the script's declared `meta.phases`; `currentPhase` is
+ * the title most recently entered. Absent on ordinary subagents.
+ */
+export const OrchestrationV2WorkflowProgress = Schema.Struct({
+  name: Schema.optional(TrimmedNonEmptyString),
+  description: Schema.optional(TrimmedNonEmptyString),
+  phases: Schema.Array(OrchestrationV2WorkflowPhase),
+  currentPhase: Schema.optional(TrimmedNonEmptyString),
+  /** Agents spawned so far by this workflow; drives the fan-out count. */
+  spawnedCount: Schema.optional(NonNegativeInt),
+});
+export type OrchestrationV2WorkflowProgress = typeof OrchestrationV2WorkflowProgress.Type;
+
+/**
+ * Agent-vs-background classification for the Agents roster.
+ *
+ * "background" is work that is not a delegated agent: watch loops (Monitor
+ * tools), and shells that outlive the turn that started them. They belong on
+ * the Agents surface because the user needs to know something is still
+ * running, but they are not roster agents and must not be counted as fan-out.
+ */
+export const OrchestrationV2AgentKind = Schema.Literals(["agent", "background"]);
+export type OrchestrationV2AgentKind = typeof OrchestrationV2AgentKind.Type;
+
+/**
+ * Task types that are watch loops rather than agents. A shell that outlives
+ * its turn is in practice a watch loop, so it classifies the same way.
+ */
+export const V2_BACKGROUND_TASK_TYPES: ReadonlySet<string> = new Set([
+  "monitor",
+  "monitor_mcp",
+  "local_bash",
+  "shell",
+  "background_shell",
+]);
+
+/** Bookkeeping task types that are neither agents nor watch loops. */
+export const V2_INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
+
+/**
+ * Classify a task for the Agents roster.
+ *
+ * Deliberately a denylist. Driver task-type vocabularies drift (subagent,
+ * local_agent, local_workflow, task, …) and an allowlist silently drops real
+ * agents the moment a driver introduces a new name — the failure is invisible
+ * because a missing agent looks identical to "no agent ran". A denylist fails
+ * the safe way: an unrecognized type shows up as an agent.
+ *
+ * Nested tasks (`hasParentTask`) are agent-internal background work UNLESS
+ * they are themselves agent-flavored, because a nested agent can outlive its
+ * parent and has to stay in the roster on its own.
+ */
+export function classifyV2AgentKind(input: {
+  readonly taskType?: string | undefined;
+  readonly hasParentTask?: boolean | undefined;
+}): OrchestrationV2AgentKind {
+  const { taskType, hasParentTask } = input;
+  const nonAgentType =
+    taskType !== undefined &&
+    (V2_BACKGROUND_TASK_TYPES.has(taskType) || V2_INERT_TASK_TYPES.has(taskType));
+  if (hasParentTask === true) {
+    return taskType === undefined || nonAgentType ? "background" : "agent";
+  }
+  return nonAgentType ? "background" : "agent";
+}
+
+/**
+ * Only http/https survive. Anything else (file:, javascript:, data:) is
+ * dropped rather than escaped: these are rendered as links, and there is no
+ * legitimate non-http session URL to preserve.
+ */
+export function sanitizeV2SessionUrl(raw: string | null | undefined): string | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  return parsed.protocol === "http:" || parsed.protocol === "https:" ? trimmed : undefined;
+}
+
 export const OrchestrationV2Subagent = Schema.Struct({
   id: NodeId,
   threadId: ThreadId,
@@ -480,6 +625,18 @@ export const OrchestrationV2Subagent = Schema.Struct({
   ]),
   progress: Schema.optional(Schema.String),
   result: Schema.NullOr(Schema.String),
+  // Observability annotations. All optional so existing persisted rows and
+  // adapters that never emit them decode unchanged — absent means "this
+  // driver does not report it", which clients render as nothing rather than
+  // as a zero.
+  //
+  // `taskType` is the driver's own label, kept verbatim for display and for
+  // reclassification if classifyV2AgentKind's denylist later learns a name.
+  taskType: Schema.optional(TrimmedNonEmptyString),
+  agentKind: Schema.optional(OrchestrationV2AgentKind),
+  usage: Schema.optional(OrchestrationV2TaskUsage),
+  workflow: Schema.optional(OrchestrationV2WorkflowProgress),
+  runHandles: Schema.optional(OrchestrationV2RunHandles),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   updatedAt: Schema.DateTimeUtc,
@@ -2327,6 +2484,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getThreadProjection: "orchestration.getThreadProjection",
   launchThread: "orchestration.launchThread",
   generateHandoffScript: "orchestration.generateHandoffScript",
+  getWorkflowScript: "orchestration.getWorkflowScript",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -2570,12 +2728,57 @@ export class OrchestrationV2GenerateHandoffScriptError extends Schema.TaggedErro
   },
 ) {}
 
+/**
+ * Every failure mode of readWorkflowScript is a distinct tagged reason rather
+ * than a generic message, because the client renders them differently: a
+ * containment rejection is a bug or an attack and says so, while "not-found"
+ * is the ordinary case of a script whose run was cleaned up.
+ */
+export const OrchestrationV2WorkflowScriptFailureReason = Schema.Literals([
+  "invalid-path",
+  "root-unavailable",
+  "not-found",
+  "outside-root",
+  "not-js",
+  "not-regular-file",
+  "changed-during-read",
+  "read-failed",
+]);
+export type OrchestrationV2WorkflowScriptFailureReason =
+  typeof OrchestrationV2WorkflowScriptFailureReason.Type;
+
+export class OrchestrationV2GetWorkflowScriptError extends Schema.TaggedErrorClass<OrchestrationV2GetWorkflowScriptError>()(
+  "OrchestrationV2GetWorkflowScriptError",
+  {
+    reason: OrchestrationV2WorkflowScriptFailureReason,
+    scriptPath: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export const OrchestrationV2GetWorkflowScriptInput = Schema.Struct({
+  scriptPath: TrimmedNonEmptyString,
+});
+export type OrchestrationV2GetWorkflowScriptInput =
+  typeof OrchestrationV2GetWorkflowScriptInput.Type;
+
+export const OrchestrationV2GetWorkflowScriptResult = Schema.Struct({
+  /** The realpath actually read, which may differ from the requested hint. */
+  scriptPath: Schema.String,
+  contents: Schema.String,
+  /** True when the file exceeded the read cap and `contents` is a prefix. */
+  truncated: Schema.Boolean,
+});
+export type OrchestrationV2GetWorkflowScriptResult =
+  typeof OrchestrationV2GetWorkflowScriptResult.Type;
+
 export const OrchestrationV2RpcError = Schema.Union([
   OrchestrationV2GenerateHandoffScriptError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2ThreadLaunchError,
+  OrchestrationV2GetWorkflowScriptError,
 ]);
 export type OrchestrationV2RpcError = typeof OrchestrationV2RpcError.Type;
 
@@ -2607,6 +2810,10 @@ export const OrchestrationV2RpcSchemas = {
   generateHandoffScript: {
     input: OrchestrationV2GenerateHandoffScriptInput,
     output: OrchestrationV2GenerateHandoffScriptResult,
+  },
+  getWorkflowScript: {
+    input: OrchestrationV2GetWorkflowScriptInput,
+    output: OrchestrationV2GetWorkflowScriptResult,
   },
   subscribeArchivedShell: {
     input: Schema.Struct({}),

@@ -36,6 +36,10 @@ import {
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  type OrchestrationV2RunHandles,
+  type OrchestrationV2TaskUsage,
+  type OrchestrationV2WorkflowProgress,
+  classifyV2AgentKind,
   type OrchestrationV2TurnItem,
   type OrchestrationV2WebSearchResult,
   orchestrationV2TurnItemStatusIsTerminal,
@@ -125,6 +129,12 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
+import { mergeSubagentUsage, usageReportingForDriver } from "../SubagentUsage.ts";
+import {
+  claudeRunHandlesFromMessage,
+  claudeTaskUsageFromMessage,
+  claudeWorkflowProgressFromMessage,
+} from "./ClaudeWorkflowSignals.ts";
 
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 export const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
@@ -197,6 +207,9 @@ export const ClaudeProviderCapabilitiesV2 = {
     canWaitForSubagents: false,
     canCloseSubagents: false,
     canForkSubagentThread: false,
+    reportsWorkflowPhases: true,
+    reportsTaskUsage: true,
+    exposesWorkflowScript: true,
   },
   context: {
     acceptsSystemContext: true,
@@ -2887,6 +2900,12 @@ export function makeClaudeAdapterV2(
             "running" | "completed" | "failed" | "cancelled"
           >;
           readonly reopen?: boolean;
+          // Observability annotations lifted from the SDK message. Optional
+          // throughout: most task messages carry none of them.
+          readonly taskType?: string | undefined;
+          readonly usage?: OrchestrationV2TaskUsage | undefined;
+          readonly workflow?: OrchestrationV2WorkflowProgress | undefined;
+          readonly runHandles?: OrchestrationV2RunHandles | undefined;
         }) {
           // The session registry lets a wake-replay turn (fresh context maps)
           // hydrate a subagent that was created by an earlier, settled turn.
@@ -3003,6 +3022,34 @@ export function makeClaudeAdapterV2(
             ...(input.title === undefined ? {} : { title: input.title }),
             ...(input.progress === undefined ? {} : { progress: input.progress }),
             ...(input.result === undefined ? {} : { result: input.result }),
+            // Observability annotations are sticky: task_progress and
+            // task_notification rarely repeat the workflow metadata that
+            // task_started carried, so an absent field must leave the prior
+            // value alone rather than clear it.
+            ...(input.taskType === undefined
+              ? {}
+              : {
+                  taskType: input.taskType,
+                  // Claude nests workflow fan-out under a parent task, which is
+                  // the linkage classifyV2AgentKind needs to demote internal
+                  // shells without demoting nested agents.
+                  agentKind: classifyV2AgentKind({
+                    taskType: input.taskType,
+                    hasParentTask: input.toolUseId !== undefined,
+                  }),
+                }),
+            ...(input.workflow === undefined ? {} : { workflow: input.workflow }),
+            ...(input.runHandles === undefined ? {} : { runHandles: input.runHandles }),
+            // Claude reports per-activation deltas, so the rollup accumulates.
+            ...(input.usage === undefined
+              ? {}
+              : {
+                  usage: mergeSubagentUsage(
+                    priorTask?.usage,
+                    input.usage,
+                    usageReportingForDriver(CLAUDE_PROVIDER),
+                  ),
+                }),
             completedAt: input.status === "running" ? null : now,
             updatedAt: now,
           } satisfies OrchestrationV2Subagent;
@@ -3959,6 +4006,10 @@ export function makeClaudeAdapterV2(
                 title: message.description,
                 status: "running",
                 reopen: true,
+                taskType: claudeTaskTypeFromSdkMessage(message) ?? undefined,
+                workflow: claudeWorkflowProgressFromMessage(message),
+                runHandles: claudeRunHandlesFromMessage(message),
+                usage: claudeTaskUsageFromMessage(message),
               });
             }
           }
@@ -3979,6 +4030,11 @@ export function makeClaudeAdapterV2(
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 progress,
                 status: "running",
+                // Phase transitions arrive as progress, so this is the update
+                // that actually advances the workflow indicator.
+                workflow: claudeWorkflowProgressFromMessage(message),
+                runHandles: claudeRunHandlesFromMessage(message),
+                usage: claudeTaskUsageFromMessage(message),
               });
             }
           }
@@ -3999,6 +4055,10 @@ export function makeClaudeAdapterV2(
                     : message.status === "stopped"
                       ? "cancelled"
                       : "failed",
+                // The terminal message carries the final usage totals.
+                workflow: claudeWorkflowProgressFromMessage(message),
+                runHandles: claudeRunHandlesFromMessage(message),
+                usage: claudeTaskUsageFromMessage(message),
               });
             }
           }
