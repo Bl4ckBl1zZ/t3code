@@ -13,6 +13,7 @@ import {
   buildProviderDriverMap,
   isMobileWorkspaceThread,
   mobileProviderInstanceKey,
+  resolveDraftWorkspaceMode,
   resolveHermesConversationTarget,
 } from "./mobileWorkspace";
 
@@ -243,5 +244,27 @@ describe("mobile workspace routing", () => {
         requiredEnvironmentId: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("draft workspace mode", () => {
+  it("keeps Work conversations on the current checkout even when the server defaults to worktree", () => {
+    // The Work composer hides the Workspace pill, so a worktree mode could
+    // never get a base branch and would leave the send button disabled.
+    expect(resolveDraftWorkspaceMode({ isWorkConversation: true, requestedMode: "worktree" })).toBe(
+      "local",
+    );
+    expect(resolveDraftWorkspaceMode({ isWorkConversation: true, requestedMode: "local" })).toBe(
+      "local",
+    );
+  });
+
+  it("honours the requested mode for project tasks", () => {
+    expect(
+      resolveDraftWorkspaceMode({ isWorkConversation: false, requestedMode: "worktree" }),
+    ).toBe("worktree");
+    expect(resolveDraftWorkspaceMode({ isWorkConversation: false, requestedMode: "local" })).toBe(
+      "local",
+    );
   });
 });

@@ -122,6 +122,21 @@ export function canPinMobileWorkThread(input: {
   );
 }
 
+/**
+ * A T3 Work conversation routes through a backing project that exists only to
+ * own the thread: the Work composer hides the Workspace pill and the launch
+ * path sends `prepareWorkspace: false`, so there is no way to pick a base
+ * branch and the server rejects a worktree strategy outright. Honouring a
+ * server-configured `worktree` default there would leave the composer's send
+ * gate permanently disabled, so Work always resolves to the current checkout.
+ */
+export function resolveDraftWorkspaceMode(input: {
+  readonly isWorkConversation: boolean;
+  readonly requestedMode: "local" | "worktree";
+}): "local" | "worktree" {
+  return input.isWorkConversation ? "local" : input.requestedMode;
+}
+
 export interface HermesConversationTarget {
   readonly project: EnvironmentProject;
   readonly modelSelection: ModelSelection;
