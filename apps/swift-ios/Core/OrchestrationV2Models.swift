@@ -685,6 +685,91 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
 /// The thread projection. Only the collections this client reads are modeled;
 /// unmodeled keys decode away harmlessly, which keeps the client from breaking
 /// when the server grows the projection.
+// MARK: - Relational tables
+//
+// The projection carries these alongside the turn items. They are narrowed to
+// the fields the client reads: the activity inspector resolves an item's
+// supporting rows through them, which is what turns "a tool call failed" into
+// "attempt 2 of 3 failed because the provider session ended".
+
+public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let runId: String
+    public let attemptOrdinal: Int
+    public let status: String
+    public let reason: String?
+}
+
+public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let kind: String
+    public let status: String
+    public let runtimeRequestId: String?
+}
+
+public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let status: String
+    public let model: String?
+    public let cwd: String?
+}
+
+public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let providerInstanceId: String
+    public let providerSessionId: String?
+    public let status: String
+}
+
+public struct OrchestrationV2ProviderTurn: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let status: String
+}
+
+public struct OrchestrationV2ResponseCapability: Codable, Equatable, Sendable {
+    public let type: String
+    public let reason: String?
+}
+
+public struct OrchestrationV2RuntimeRequest: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let kind: String
+    public let status: String
+    public let responseCapability: OrchestrationV2ResponseCapability?
+}
+
+public struct OrchestrationV2Checkpoint: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let scopeId: String
+    public let status: String
+    public let files: [OrchestrationV2CheckpointFileSummary]
+}
+
+public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let origin: String
+    public let status: String
+    public let progress: String?
+    public let result: String?
+}
+
+public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let transferId: String?
+    public let status: String
+}
+
+public struct OrchestrationV2TransferResolution: Codable, Equatable, Sendable {
+    public let strategy: String?
+}
+
+public struct OrchestrationV2ContextTransfer: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let type: String
+    public let status: String
+    public let resolution: OrchestrationV2TransferResolution?
+}
+
 /// A run, narrowed to what drives the thread header. The projection carries far
 /// more per run; the rest is modeled when a feature needs it.
 public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
@@ -699,6 +784,16 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
 public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     public let thread: OrchestrationV2AppThread
     public let runs: [OrchestrationV2Run]
+    public let attempts: [OrchestrationV2RunAttempt]
+    public let nodes: [OrchestrationV2ExecutionNode]
+    public let subagents: [OrchestrationV2Subagent]
+    public let providerSessions: [OrchestrationV2ProviderSession]
+    public let providerThreads: [OrchestrationV2ProviderThread]
+    public let providerTurns: [OrchestrationV2ProviderTurn]
+    public let runtimeRequests: [OrchestrationV2RuntimeRequest]
+    public let checkpoints: [OrchestrationV2Checkpoint]
+    public let contextHandoffs: [OrchestrationV2ContextHandoff]
+    public let contextTransfers: [OrchestrationV2ContextTransfer]
     public let turnItems: [OrchestrationV2TurnItem]
     public let visibleTurnItems: [OrchestrationV2ProjectedTurnItem]
     /// Number of older visible items omitted when the snapshot was windowed.
@@ -711,6 +806,30 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         thread = try container.decode(OrchestrationV2AppThread.self, forKey: .thread)
         runs = try container.decodeIfPresent([OrchestrationV2Run].self, forKey: .runs) ?? []
+        attempts = try container.decodeIfPresent([OrchestrationV2RunAttempt].self, forKey: .attempts) ?? []
+        nodes = try container.decodeIfPresent([OrchestrationV2ExecutionNode].self, forKey: .nodes) ?? []
+        subagents = try container.decodeIfPresent([OrchestrationV2Subagent].self, forKey: .subagents) ?? []
+        providerSessions = try container.decodeIfPresent(
+            [OrchestrationV2ProviderSession].self, forKey: .providerSessions
+        ) ?? []
+        providerThreads = try container.decodeIfPresent(
+            [OrchestrationV2ProviderThread].self, forKey: .providerThreads
+        ) ?? []
+        providerTurns = try container.decodeIfPresent(
+            [OrchestrationV2ProviderTurn].self, forKey: .providerTurns
+        ) ?? []
+        runtimeRequests = try container.decodeIfPresent(
+            [OrchestrationV2RuntimeRequest].self, forKey: .runtimeRequests
+        ) ?? []
+        checkpoints = try container.decodeIfPresent(
+            [OrchestrationV2Checkpoint].self, forKey: .checkpoints
+        ) ?? []
+        contextHandoffs = try container.decodeIfPresent(
+            [OrchestrationV2ContextHandoff].self, forKey: .contextHandoffs
+        ) ?? []
+        contextTransfers = try container.decodeIfPresent(
+            [OrchestrationV2ContextTransfer].self, forKey: .contextTransfers
+        ) ?? []
         turnItems = try container.decodeIfPresent([OrchestrationV2TurnItem].self, forKey: .turnItems) ?? []
         visibleTurnItems = try container.decodeIfPresent(
             [OrchestrationV2ProjectedTurnItem].self, forKey: .visibleTurnItems
@@ -729,6 +848,16 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     public init(
         thread: OrchestrationV2AppThread,
         runs: [OrchestrationV2Run],
+        attempts: [OrchestrationV2RunAttempt] = [],
+        nodes: [OrchestrationV2ExecutionNode] = [],
+        subagents: [OrchestrationV2Subagent] = [],
+        providerSessions: [OrchestrationV2ProviderSession] = [],
+        providerThreads: [OrchestrationV2ProviderThread] = [],
+        providerTurns: [OrchestrationV2ProviderTurn] = [],
+        runtimeRequests: [OrchestrationV2RuntimeRequest] = [],
+        checkpoints: [OrchestrationV2Checkpoint] = [],
+        contextHandoffs: [OrchestrationV2ContextHandoff] = [],
+        contextTransfers: [OrchestrationV2ContextTransfer] = [],
         turnItems: [OrchestrationV2TurnItem],
         visibleTurnItems: [OrchestrationV2ProjectedTurnItem],
         truncatedVisibleItemCount: Int?,
@@ -736,6 +865,16 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     ) {
         self.thread = thread
         self.runs = runs
+        self.attempts = attempts
+        self.nodes = nodes
+        self.subagents = subagents
+        self.providerSessions = providerSessions
+        self.providerThreads = providerThreads
+        self.providerTurns = providerTurns
+        self.runtimeRequests = runtimeRequests
+        self.checkpoints = checkpoints
+        self.contextHandoffs = contextHandoffs
+        self.contextTransfers = contextTransfers
         self.turnItems = turnItems
         self.visibleTurnItems = visibleTurnItems
         self.truncatedVisibleItemCount = truncatedVisibleItemCount
@@ -751,6 +890,16 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
         OrchestrationV2ThreadProjection(
             thread: thread ?? self.thread,
             runs: runs ?? self.runs,
+            attempts: attempts,
+            nodes: nodes,
+            subagents: subagents,
+            providerSessions: providerSessions,
+            providerThreads: providerThreads,
+            providerTurns: providerTurns,
+            runtimeRequests: runtimeRequests,
+            checkpoints: checkpoints,
+            contextHandoffs: contextHandoffs,
+            contextTransfers: contextTransfers,
             turnItems: turnItems ?? self.turnItems,
             visibleTurnItems: visibleTurnItems ?? self.visibleTurnItems,
             truncatedVisibleItemCount: truncatedVisibleItemCount,

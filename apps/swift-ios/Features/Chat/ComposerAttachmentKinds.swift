@@ -138,41 +138,7 @@ public enum ComposerAttachments {
     }
 }
 
-/// Inline upload shape accepted by `thread.turn.start` for any attachment kind.
-///
-/// The image-only `UploadChatImageAttachment` in Core validates and encodes raw
-/// bytes; this one is the already-encoded value a composer draft reduces to.
-public struct UploadChatAttachment: Codable, Equatable, Sendable {
-    public let type: ComposerAttachmentKind
-    public let name: String
-    public let mimeType: String
-    public let sizeBytes: Int
-    public let dataUrl: String
-
-    public init(
-        type: ComposerAttachmentKind,
-        name: String,
-        mimeType: String,
-        sizeBytes: Int,
-        dataUrl: String
-    ) {
-        self.type = type
-        self.name = name
-        self.mimeType = mimeType
-        self.sizeBytes = sizeBytes
-        self.dataUrl = dataUrl
-    }
-
-    var jsonValue: JSONValue {
-        .object([
-            "type": .string(type.rawValue),
-            "name": .string(name),
-            "mimeType": .string(mimeType),
-            "sizeBytes": .number(Double(sizeBytes)),
-            "dataUrl": .string(dataUrl),
-        ])
-    }
-}
+// UploadChatAttachment lives in Core/Attachments.swift, beside the image form.
 
 /// Images carry a preview URI so the composer can show a thumbnail.
 public struct DraftComposerImageAttachment: Identifiable, Equatable, Sendable {
