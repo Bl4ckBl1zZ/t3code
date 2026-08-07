@@ -21,6 +21,10 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         label: "environment-data:orchestration-v2:generate-handoff-script",
         tag: ORCHESTRATION_V2_WS_METHODS.generateHandoffScript,
       }),
+      getWorkflowScript: createEnvironmentRpcCommand(runtime, {
+        label: "environment-data:orchestration-v2:get-workflow-script",
+        tag: ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
+      }),
       threadProjection: createEnvironmentRpcQueryAtomFamily(runtime, {
         label: "environment-data:orchestration-v2:thread-projection",
         tag: ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
