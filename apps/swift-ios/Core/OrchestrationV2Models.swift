@@ -211,6 +211,63 @@ public struct OrchestrationV2TurnItemBase: Codable, Equatable, Sendable {
     /// every other item type rather than optional-by-accident.
     public let createdBy: String?
     public let creationSource: String?
+    /// The status exactly as the server sent it.
+    ///
+    /// `status` collapses anything this build predates to `.unknown`, which is
+    /// what keeps a new server status from failing the decode. Surfaces that
+    /// *display* the status need the literal instead, or a user inspecting an
+    /// item would see "unknown" where the web and React Native clients show the
+    /// real value.
+    public let rawStatus: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, threadId, runId, nodeId, providerThreadId, providerTurnId
+        case nativeItemRef, parentItemId, ordinal, status, title
+        case startedAt, completedAt, updatedAt, createdBy, creationSource
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        threadId = try container.decode(String.self, forKey: .threadId)
+        runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        nodeId = try container.decodeIfPresent(String.self, forKey: .nodeId)
+        providerThreadId = try container.decodeIfPresent(String.self, forKey: .providerThreadId)
+        providerTurnId = try container.decodeIfPresent(String.self, forKey: .providerTurnId)
+        nativeItemRef = try container.decodeIfPresent(
+            OrchestrationV2ProviderRef.self, forKey: .nativeItemRef
+        )
+        parentItemId = try container.decodeIfPresent(String.self, forKey: .parentItemId)
+        ordinal = try container.decodeIfPresent(Int.self, forKey: .ordinal) ?? 0
+        rawStatus = try container.decode(String.self, forKey: .status)
+        status = OrchestrationV2TurnItemStatus(rawValue: rawStatus) ?? .unknown
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
+        completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy)
+        creationSource = try container.decodeIfPresent(String.self, forKey: .creationSource)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(threadId, forKey: .threadId)
+        try container.encode(runId, forKey: .runId)
+        try container.encode(nodeId, forKey: .nodeId)
+        try container.encode(providerThreadId, forKey: .providerThreadId)
+        try container.encode(providerTurnId, forKey: .providerTurnId)
+        try container.encodeIfPresent(nativeItemRef, forKey: .nativeItemRef)
+        try container.encode(parentItemId, forKey: .parentItemId)
+        try container.encode(ordinal, forKey: .ordinal)
+        try container.encode(rawStatus, forKey: .status)
+        try container.encode(title, forKey: .title)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encode(completedAt, forKey: .completedAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(createdBy, forKey: .createdBy)
+        try container.encodeIfPresent(creationSource, forKey: .creationSource)
+    }
 }
 
 /// Liveness metadata for a command that can outlive the tool call that launched

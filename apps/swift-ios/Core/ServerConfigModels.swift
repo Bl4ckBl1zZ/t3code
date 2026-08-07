@@ -151,6 +151,11 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let providers: [ServerProviderSnapshot]
     public let settings: ServerSettingsSnapshot?
+    /// The server's dedicated non-project workspace for projectless T3 Work
+    /// conversations. Matching it against a project's `workspaceRoot` is what
+    /// stops a Work launch attaching to an arbitrary project, so its absence
+    /// has to be distinguishable from an empty path.
+    public let t3WorkDirectory: String?
     /// Whether thread subscriptions honour `snapshotMaxVisibleItems` windowing.
     /// This fork's replacement for upstream's keyset `threadSnapshotPagination`.
     public let threadSnapshotWindow: Bool?
@@ -162,19 +167,21 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public init(
         providers: [ServerProviderSnapshot],
         settings: ServerSettingsSnapshot? = nil,
+        t3WorkDirectory: String? = nil,
         threadSnapshotWindow: Bool? = nil,
         threadResumeCompletionMarker: Bool? = nil,
         shellResumeCompletionMarker: Bool? = nil
     ) {
         self.providers = providers
         self.settings = settings
+        self.t3WorkDirectory = t3WorkDirectory
         self.threadSnapshotWindow = threadSnapshotWindow
         self.threadResumeCompletionMarker = threadResumeCompletionMarker
         self.shellResumeCompletionMarker = shellResumeCompletionMarker
     }
 
     private enum CodingKeys: String, CodingKey {
-        case providers, settings
+        case providers, settings, t3WorkDirectory
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
     }
 
@@ -185,6 +192,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             forKey: .providers
         ).compactMap(\.value)
         settings = try container.decodeIfPresent(ServerSettingsSnapshot.self, forKey: .settings)
+        t3WorkDirectory = try container.decodeIfPresent(String.self, forKey: .t3WorkDirectory)
         threadSnapshotWindow = try container.decodeIfPresent(
             Bool.self,
             forKey: .threadSnapshotWindow
@@ -203,6 +211,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providers, forKey: .providers)
         try container.encodeIfPresent(settings, forKey: .settings)
+        try container.encodeIfPresent(t3WorkDirectory, forKey: .t3WorkDirectory)
         try container.encodeIfPresent(threadSnapshotWindow, forKey: .threadSnapshotWindow)
         try container.encodeIfPresent(
             threadResumeCompletionMarker,
