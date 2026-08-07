@@ -14,7 +14,11 @@ export function isHtmlEmbedLanguage(language: string | null | undefined): boolea
 
 const EMBED_HEIGHT_MESSAGE_TYPE = "t3-html-embed:height";
 const INLINE_MIN_HEIGHT = 96;
-const INLINE_MAX_HEIGHT = 420;
+// Not a display cap: the inline WebView grows to the full reported content
+// height so nothing is ever clipped. This bound only keeps a runaway feedback
+// loop bounded — an embed sized in vh/% plus padding reports a taller body on
+// every resize, which would otherwise grow without limit.
+const INLINE_RUNAWAY_HEIGHT_LIMIT = 20000;
 const INLINE_DEFAULT_HEIGHT = 220;
 /** Streaming appends re-render markdown per token; only reload the WebView once the fence content is stable. */
 const SETTLE_DELAY_MS = 400;
@@ -111,7 +115,9 @@ export function HtmlEmbedView(props: { readonly html: string }) {
   const iconColor = String(useThemeColor("--color-icon-subtle"));
 
   const handleHeight = useCallback((height: number) => {
-    setInlineHeight(Math.min(INLINE_MAX_HEIGHT, Math.max(INLINE_MIN_HEIGHT, Math.ceil(height))));
+    setInlineHeight(
+      Math.min(INLINE_RUNAWAY_HEIGHT_LIMIT, Math.max(INLINE_MIN_HEIGHT, Math.ceil(height))),
+    );
   }, []);
 
   return (

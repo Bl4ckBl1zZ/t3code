@@ -13,7 +13,11 @@ export function isHtmlEmbedLanguage(language: string | null | undefined): boolea
 
 const EMBED_HEIGHT_MESSAGE_TYPE = "t3-html-embed:height";
 const INLINE_MIN_HEIGHT = 96;
-const INLINE_MAX_HEIGHT = 480;
+// Not a display cap: the inline frame grows to the full reported content height
+// so nothing is ever hidden behind a scrollbar. This bound only keeps a runaway
+// feedback loop bounded — an embed sized in vh/% plus padding reports a taller
+// body on every resize, which would otherwise grow without limit.
+const INLINE_RUNAWAY_HEIGHT_LIMIT = 20000;
 const INLINE_DEFAULT_HEIGHT = 220;
 /** Streaming appends re-render markdown per token; only reload the iframe once the fence content is stable. */
 const SETTLE_DELAY_MS = 400;
@@ -56,7 +60,7 @@ function useSettledValue<T>(value: T, delayMs: number): T {
 }
 
 function clampInlineHeight(height: number): number {
-  return Math.min(INLINE_MAX_HEIGHT, Math.max(INLINE_MIN_HEIGHT, Math.ceil(height)));
+  return Math.min(INLINE_RUNAWAY_HEIGHT_LIMIT, Math.max(INLINE_MIN_HEIGHT, Math.ceil(height)));
 }
 
 // A remount (virtualized row scrolling back in, error-boundary reset) rebuilds
@@ -68,11 +72,13 @@ function EmbedFrame({
   srcDoc,
   className,
   style,
+  scrolling,
   onHeight,
 }: {
   srcDoc: string;
   className: string;
   style?: React.CSSProperties;
+  scrolling?: "no" | undefined;
   onHeight?: ((height: number) => void) | undefined;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -100,6 +106,7 @@ function EmbedFrame({
       srcDoc={srcDoc}
       className={className}
       style={style}
+      scrolling={scrolling}
       loading="lazy"
     />
   );
@@ -287,6 +294,9 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
         onHeight={handleHeight}
         className="block w-full border-0 bg-transparent"
         style={{ height: inlineHeight }}
+        // The frame is sized to its content, so its own scrollbar would only
+        // ever show mid-resize; suppressing it keeps the block flush with chat.
+        scrolling="no"
       />
       {expanded ? <ExpandedEmbedDialog srcDoc={srcDoc} onClose={() => setExpanded(false)} /> : null}
     </div>
