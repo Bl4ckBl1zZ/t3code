@@ -66,6 +66,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "commandPalette.toggle",
   "filePicker.toggle",
   "projectSearch.toggle",
+  "themeEditor.toggle",
   "composer.stash",
   "chat.new",
   "chat.newLocal",

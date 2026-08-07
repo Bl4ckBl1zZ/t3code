@@ -18,6 +18,17 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   orchestration V2 rather than merged. The fork does not carry upstream's V1 subagent-observability
   bridge (`subagentRuntime`, `AgentsPanel`, `workflowScriptQuery`, `ThreadBackgroundLiveness`); its
   own subagent observability comes from orchestration V2's `SubagentProjection` and the V2 timeline.
+  It likewise does not carry upstream's keyset thread pagination (`turnLimit`/`beforeCursor`,
+  `threadDetailCursor`, `page` metadata, the `threadSnapshotPagination` capability), which reads V1
+  `projection_turns`; the fork windows cold loads with `maxVisibleItems` /
+  `truncatedVisibleItemCount` over the V2 projection instead (`threadSnapshotWindow`), and
+  `requestThreadFullHistory` is its load-more path.
+- Owns SQLite migration numbers 36 and up (orchestration V2, Hermes, scheduled tasks). Upstream
+  migrations that claim those numbers must be renumbered or dropped on sync — applying two different
+  migrations under one number would corrupt existing fork databases. Upstream's
+  `036_ProjectionThreadsPinned` and `037_ProjectionTurnsKeysetIndex` are dropped: they target the
+  retired V1 `projection_threads`/`projection_turns` tables, and the fork already implements thread
+  pinning in orchestration V2.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.

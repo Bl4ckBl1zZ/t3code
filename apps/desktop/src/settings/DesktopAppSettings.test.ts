@@ -300,7 +300,6 @@ describe("DesktopSettings", () => {
           );
 
           assert.deepEqual(yield* settings.load, {
-            autoUpdateEnabled: false,
             linuxPasswordStore: "auto",
             mainWindowBounds: null,
             mainWindowMaximized: false,
@@ -309,6 +308,7 @@ describe("DesktopSettings", () => {
             tailscaleServePort: 8443,
             updateChannel: "nightly",
             updateChannelConfiguredByUser: true,
+            autoUpdateEnabled: false,
             wslBackendEnabled: false,
             wslOnly: false,
             wslDistro: null,

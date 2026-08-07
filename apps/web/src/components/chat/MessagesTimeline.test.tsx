@@ -311,10 +311,34 @@ describe("MessagesTimeline", () => {
       resolveTimelineMinimapTopPercent,
     } = await import("./MessagesTimeline.logic");
 
-    expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(true);
-    expect(resolveTimelineIsAtEnd({ isNearEnd: false, isAtEnd: true })).toBe(false);
     expect(resolveTimelineIsAtEnd({ isAtEnd: true })).toBe(true);
     expect(resolveTimelineIsAtEnd(undefined)).toBeUndefined();
+    expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
+    // Within the re-arm band above the real content bottom.
+    expect(
+      resolveTimelineIsAtEnd({
+        isAtEnd: false,
+        contentLength: 1000,
+        scroll: 780,
+        scrollLength: 200,
+      }),
+    ).toBe(true);
+    // Reading history: far enough up that follow must stay disarmed.
+    expect(
+      resolveTimelineIsAtEnd({
+        isAtEnd: false,
+        contentLength: 1000,
+        scroll: 400,
+        scrollLength: 200,
+      }),
+    ).toBe(false);
+    // The composer overlay inset is excluded from the distance.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: false, contentLength: 1000, scroll: 700, scrollLength: 200 },
+        80,
+      ),
+    ).toBe(true);
 
     expect(resolveTimelineMinimapHeightStyle(5)).toBe("min(32px, calc(100vh - 18rem))");
     expect(resolveTimelineMinimapTopPercent(2, 5)).toBe(50);
