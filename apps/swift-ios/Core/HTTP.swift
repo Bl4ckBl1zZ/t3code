@@ -129,46 +129,44 @@ public actor EnvironmentAPI {
         for environment: Environment,
         timeoutInterval: TimeInterval? = nil
     ) async throws
-        -> OrchestrationShellSnapshot
+        -> OrchestrationV2ShellSnapshot
     {
         try await authorized(
             environment: environment,
             path: "/api/orchestration/shell",
             method: "GET",
             timeoutInterval: timeoutInterval,
-            as: OrchestrationShellSnapshot.self
+            as: OrchestrationV2ShellSnapshot.self
         )
     }
 
-    public func readModel(for environment: Environment) async throws -> OrchestrationReadModel {
-        try await authorized(
-            environment: environment,
-            path: "/api/orchestration/snapshot",
-            method: "GET",
-            as: OrchestrationReadModel.self
-        )
-    }
-
+    /// Loads a thread projection.
+    ///
+    /// `maxVisibleItems` windows the response to roughly the last N visible turn
+    /// items; the projection then reports what it dropped via
+    /// `truncatedVisibleItemCount`. Omit it to fetch the complete history, which
+    /// is how "load earlier" is served — the fork has no keyset cursor.
+    ///
+    /// Note the query key is `maxVisibleItems` here but `snapshotMaxVisibleItems`
+    /// on the WebSocket subscribe input; they are not interchangeable.
     public func threadSnapshot(
         id: String,
         environment: Environment,
-        turnLimit: Int? = nil,
-        beforeCursor: String? = nil
-    ) async throws -> OrchestrationThreadDetailSnapshot {
+        maxVisibleItems: Int? = nil
+    ) async throws -> OrchestrationV2ThreadDetailSnapshot {
         let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         var queryItems: [URLQueryItem] = []
-        if let turnLimit {
-            queryItems.append(URLQueryItem(name: "turnLimit", value: String(turnLimit)))
-        }
-        if let beforeCursor {
-            queryItems.append(URLQueryItem(name: "beforeCursor", value: beforeCursor))
+        if let maxVisibleItems {
+            queryItems.append(
+                URLQueryItem(name: "maxVisibleItems", value: String(maxVisibleItems))
+            )
         }
         return try await authorized(
             environment: environment,
             path: "/api/orchestration/threads/\(encodedID)",
             queryItems: queryItems,
             method: "GET",
-            as: OrchestrationThreadDetailSnapshot.self
+            as: OrchestrationV2ThreadDetailSnapshot.self
         )
     }
 

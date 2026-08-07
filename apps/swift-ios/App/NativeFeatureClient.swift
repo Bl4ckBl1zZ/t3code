@@ -16,8 +16,9 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureProjectCreationClient, FeatureWorkspaceAssetResolving, T3ConnectCapable
 {
-    private static let initialThreadUserTurnLimit = 10
-    private static let olderThreadPageUserTurnLimit = 20
+    /// Visible turn items requested on a cold load. The server reports what it
+    /// withheld, and "load earlier" refetches without a window.
+    private static let initialThreadVisibleItemLimit = 60
 
     private let runtime: EnvironmentRuntime
     let t3ConnectController: T3ConnectController
@@ -33,12 +34,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private var activeEnvironment: Environment?
     private var client: T3Client?
-    private var latestShell: OrchestrationShellSnapshot?
+    private var latestShell: OrchestrationV2ShellSnapshot?
     private var environmentClients: [String: T3Client] = [:]
-    private var shellsByEnvironmentID: [String: OrchestrationShellSnapshot] = [:]
+    private var shellsByEnvironmentID: [String: OrchestrationV2ShellSnapshot] = [:]
     private var archivedThreadsByEnvironmentID: [String: [FeatureThread]] = [:]
     private var archivedShellThreadsByEnvironmentID: [
-        String: [String: OrchestrationThreadShell]
+        String: [String: OrchestrationV2ThreadShell]
     ] = [:]
     private var projectEnvironmentIDs: [String: String] = [:]
     private var projectWireIDs: [String: String] = [:]
@@ -53,7 +54,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var activeThreadID: String?
     private var activeThreadEnvironmentID: String?
     private var latestDetails: [String: FeatureThreadDetail] = [:]
-    private var detailRenderCaches: [String: NativeDetailRenderCache] = [:]
     private var attachmentURLs: [AttachmentCacheKey: CachedAttachmentURL] = [:]
     private var pendingBootstrapSubmissions: [PendingBootstrapSubmission] = []
     private var pendingTurnSubmissions: [String: PendingTurnSubmission] = [:]
@@ -82,14 +82,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var detailRefreshPending = false
     private var detailRefreshGeneration = 0
     private var detailStreamGeneration = 0
-    private var pendingDetailRenderMutations = NativeDetailRenderMutations()
     private var environmentGeneration = 0
     private var lastShellEventAt: Date?
-    private var activeRawThread: OrchestrationThread?
+    private var activeRawThread: OrchestrationV2ThreadProjection?
     private var activeThreadSequence: Int?
     private var activeThreadPage: FeatureThreadPage?
     private var threadHistoryEpoch = 0
-    private var pendingOlderThreadPage: PendingOlderThreadPage?
 
     init(
         runtime: EnvironmentRuntime? = nil,
@@ -392,9 +390,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadSequence = nil
         activeThreadPage = nil
         threadHistoryEpoch &+= 1
-        pendingOlderThreadPage = nil
         latestDetails.removeAll()
-        detailRenderCaches.removeAll()
         attachmentURLs.removeAll()
         pendingBootstrapSubmissions.removeAll()
         pendingTurnSubmissions.removeAll()
@@ -925,14 +921,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard let snapshot = try? await client.threadSnapshot(id: pending.threadID) else {
             return false
         }
-        if snapshot.thread.messages.contains(where: {
-            $0.id == pending.identity.messageID
-        }) {
+        if snapshot.projection.containsUserMessage(id: pending.identity.messageID) {
             return true
         }
-        guard snapshot.thread.projectId == projectID,
-              snapshot.thread.deletedAt == nil,
-              snapshot.thread.messages.isEmpty else {
+        guard snapshot.projection.thread.projectId == projectID,
+              snapshot.projection.thread.deletedAt == nil,
+              !snapshot.projection.hasAnyUserMessage else {
             return false
         }
 
@@ -1062,12 +1056,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             $0.id == route.uiID
         }
         if let shell = shellsByEnvironmentID[route.environmentID] {
-            shellsByEnvironmentID[route.environmentID] = OrchestrationShellSnapshot(
-                snapshotSequence: shell.snapshotSequence,
-                projects: shell.projects,
-                threads: shell.threads.filter { $0.id != route.wireID },
-                updatedAt: shell.updatedAt
-            )
+            var updated = shell
+            updated.threads = shell.threads.filter { $0.id != route.wireID }
+            shellsByEnvironmentID[route.environmentID] = updated
         }
         provisionalThreadRoutes[route.uiID] = nil
         if activeThreadID == route.uiID {
@@ -1079,7 +1070,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             activeThreadEnvironmentID = nil
         }
         latestDetails[route.uiID] = nil
-        detailRenderCaches[route.uiID] = nil
         await emitCachedSnapshot(for: route.environmentID)
         try? await refresh(client: route.client, includeArchived: true)
     }
@@ -1097,14 +1087,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadEnvironmentID = environment.id
         threadHistoryEpoch &+= 1
         let historyEpoch = threadHistoryEpoch
-        pendingOlderThreadPage = nil
         activeThreadPage = nil
         let supportsPagination = serverConfigsByEnvironmentID[
             environment.id
-        ]?.threadSnapshotPagination == true
+        ]?.threadSnapshotWindow == true
         let snapshot = try await client.threadSnapshot(
             id: route.wireID,
-            turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
+            maxVisibleItems: supportsPagination ? Self.initialThreadVisibleItemLimit : nil
         )
         guard isKnownClient(client, environmentID: environment.id, generation: generation),
               threadHistoryEpoch == historyEpoch,
@@ -1112,13 +1101,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               activeThreadEnvironmentID == environment.id else {
             throw CancellationError()
         }
-        activeThreadPage = featurePage(snapshot.page)
+        activeThreadPage = featurePage(
+            truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
+        )
         let detail = mapDetail(
-            snapshot.thread,
+            snapshot.projection,
             environment: environment,
             page: activeThreadPage
         )
-        activeRawThread = snapshot.thread
+        activeRawThread = snapshot.projection
         activeThreadSequence = snapshot.snapshotSequence
         latestDetails[route.uiID] = detail
         scheduleAttachmentHydration(
@@ -1130,38 +1121,35 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         startDetailStream(
             route,
             after: snapshot.snapshotSequence,
-            turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
+            snapshotMaxVisibleItems: supportsPagination ? Self.initialThreadVisibleItemLimit : nil
         )
         return detail
     }
 
+    /// Loads the rest of the transcript.
+    ///
+    /// V2 has no keyset cursor: the initial load asks for a window and the
+    /// server reports how much it withheld, so "load earlier" is simply the same
+    /// request without a window. One fetch replaces the windowed projection with
+    /// the complete one, which is why there is no page-merge step here.
     func loadEarlierThreadTurns(id: String) async throws -> FeatureThreadDetail? {
         let route = try threadRoute(for: id)
         guard activeThreadID == route.uiID,
               activeThreadEnvironmentID == route.environmentID,
-              serverConfigsByEnvironmentID[
-                  route.environmentID
-              ]?.threadSnapshotPagination == true,
               var page = activeThreadPage,
               page.hasMore,
-              !page.isLoading,
-              let beforeCursor = page.beforeCursor else {
+              !page.isLoading else {
             return latestDetails[id]
         }
 
         let generation = environmentGeneration
         let epoch = threadHistoryEpoch
-        let loadedSequence = activeThreadSequence ?? 0
         page.isLoading = true
         activeThreadPage = page
         publishActivePageState(threadID: route.uiID)
 
         do {
-            let snapshot = try await route.client.threadSnapshot(
-                id: route.wireID,
-                turnLimit: Self.olderThreadPageUserTurnLimit,
-                beforeCursor: beforeCursor
-            )
+            let snapshot = try await route.client.threadSnapshot(id: route.wireID)
             guard isKnownClient(
                 route.client,
                 environmentID: route.environmentID,
@@ -1169,23 +1157,32 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ), activeThreadID == route.uiID else {
                 throw CancellationError()
             }
+            // A thread switch or a newer authoritative snapshot landed while the
+            // full history was in flight; adopting it now would rewind the view.
             guard threadHistoryEpoch == epoch,
-                  snapshot.snapshotSequence >= loadedSequence else {
+                  snapshot.snapshotSequence >= (activeThreadSequence ?? 0) else {
                 clearOlderThreadLoading(threadID: route.uiID)
                 return latestDetails[route.uiID]
             }
 
-            if let watermark = snapshot.page?.threadSequence,
-               watermark > (activeThreadSequence ?? 0) {
-                pendingOlderThreadPage = PendingOlderThreadPage(
-                    snapshot: snapshot,
-                    epoch: epoch,
-                    threadID: route.uiID,
-                    environmentID: route.environmentID
-                )
+            guard let environment = environmentClients[route.environmentID]?.environment else {
+                clearOlderThreadLoading(threadID: route.uiID)
                 return latestDetails[route.uiID]
             }
-            return mergeOlderThreadPage(snapshot, route: route)
+
+            activeThreadPage = featurePage(
+                truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
+            )
+            activeRawThread = snapshot.projection
+            activeThreadSequence = snapshot.snapshotSequence
+            let detail = mapDetail(
+                snapshot.projection,
+                environment: environment,
+                page: activeThreadPage
+            )
+            latestDetails[route.uiID] = detail
+            publish(detail, threadID: route.uiID)
+            return detail
         } catch {
             if activeThreadID == route.uiID, threadHistoryEpoch == epoch {
                 clearOlderThreadLoading(threadID: route.uiID)
@@ -1206,7 +1203,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadSequence = nil
         activeThreadPage = nil
         threadHistoryEpoch &+= 1
-        pendingOlderThreadPage = nil
     }
 
     func sendMessage(
@@ -1344,15 +1340,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard let snapshot = try? await client.threadSnapshot(id: threadID) else {
             return false
         }
-        return snapshot.thread.messages.contains { $0.id == messageID }
+        return snapshot.projection.containsUserMessage(id: messageID)
     }
 
     func cancelTurn(threadID: String) async throws {
         let route = try threadRoute(for: threadID)
+        // V2 interrupts the active run; there is no separate turn identity.
         let turnID = shellsByEnvironmentID[route.environmentID]?.threads
             .first(where: { $0.id == route.wireID })?
-            .latestTurn?
-            .turnId
+            .activeRunId
         _ = try await route.client.interrupt(threadID: route.wireID, turnID: turnID)
         try? await refresh(client: route.client)
     }
@@ -1922,53 +1918,26 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 if let liveThread = shell.threads.first(where: { $0.id == route.wireID }) {
                     archivedShellThreads[route.wireID] = liveThread
                 }
-                shellsByEnvironmentID[route.environmentID] = OrchestrationShellSnapshot(
-                    snapshotSequence: shell.snapshotSequence,
-                    projects: shell.projects,
-                    threads: shell.threads.filter { $0.id != route.wireID },
-                    updatedAt: shell.updatedAt
-                )
+                var updated = shell
+                updated.threads = shell.threads.filter { $0.id != route.wireID }
+                shellsByEnvironmentID[route.environmentID] = updated
             } else if let previouslyArchivedShell {
                 var threads = shell.threads.filter { $0.id != route.wireID }
                 threads.append(Self.unarchived(previouslyArchivedShell))
-                shellsByEnvironmentID[route.environmentID] = OrchestrationShellSnapshot(
-                    snapshotSequence: shell.snapshotSequence,
-                    projects: shell.projects,
-                    threads: threads,
-                    updatedAt: shell.updatedAt
-                )
+                var updated = shell
+                updated.threads = threads
+                shellsByEnvironmentID[route.environmentID] = updated
             }
         }
         archivedShellThreadsByEnvironmentID[route.environmentID] = archivedShellThreads
     }
 
     private static func unarchived(
-        _ thread: OrchestrationThreadShell
-    ) -> OrchestrationThreadShell {
-        OrchestrationThreadShell(
-            id: thread.id,
-            projectId: thread.projectId,
-            title: thread.title,
-            modelSelection: thread.modelSelection,
-            runtimeMode: thread.runtimeMode,
-            interactionMode: thread.interactionMode,
-            branch: thread.branch,
-            worktreePath: thread.worktreePath,
-            latestTurn: thread.latestTurn,
-            createdAt: thread.createdAt,
-            updatedAt: thread.updatedAt,
-            archivedAt: nil,
-            settledOverride: thread.settledOverride,
-            settledAt: thread.settledAt,
-            snoozedUntil: thread.snoozedUntil,
-            snoozedAt: thread.snoozedAt,
-            pinnedAt: thread.pinnedAt,
-            session: thread.session,
-            latestUserMessageAt: thread.latestUserMessageAt,
-            hasPendingApprovals: thread.hasPendingApprovals,
-            hasPendingUserInput: thread.hasPendingUserInput,
-            hasActionableProposedPlan: thread.hasActionableProposedPlan
-        )
+        _ thread: OrchestrationV2ThreadShell
+    ) -> OrchestrationV2ThreadShell {
+        var restored = thread
+        restored.archivedAt = nil
+        return restored
     }
 
     private func emitCachedSnapshot(for environmentID: String) async {
@@ -2132,7 +2101,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                             client: activeClient,
                             refreshActiveThread: true
                         )
-                    case .projectUpserted, .projectRemoved, .threadUpserted, .threadRemoved:
+                    case .projectUpdated, .projectRemoved, .threadUpdated, .threadRemoved:
                         await self.consume(delta: item, client: activeClient)
                     case .synchronized:
                         break
@@ -2238,7 +2207,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         let config = ServerConfigSnapshot(
                             providers: providers,
                             settings: previous?.settings,
-                            threadSnapshotPagination: previous?.threadSnapshotPagination
+                            threadSnapshotWindow: previous?.threadSnapshotWindow
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
@@ -2249,9 +2218,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         let config = ServerConfigSnapshot(
                             providers: providers,
                             settings: settings,
-                            threadSnapshotPagination: self.serverConfigsByEnvironmentID[
+                            threadSnapshotWindow: self.serverConfigsByEnvironmentID[
                                 activeClient.environment.id
-                            ]?.threadSnapshotPagination
+                            ]?.threadSnapshotWindow
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
@@ -2348,7 +2317,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     private func consume(
-        shell: OrchestrationShellSnapshot,
+        shell: OrchestrationV2ShellSnapshot,
         client: T3Client,
         refreshActiveThread: Bool
     ) async {
@@ -2366,7 +2335,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// state. The generation travels through the awaited snapshot publish so a
     /// task from a previous environment session cannot publish late results.
     private func consumeFallbackShell(
-        shell: OrchestrationShellSnapshot,
+        shell: OrchestrationV2ShellSnapshot,
         client: T3Client,
         generation: Int
     ) async {
@@ -2386,7 +2355,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         scheduleDetailRefresh(threadID: threadID, client: client)
     }
 
-    private func consume(delta: ShellStreamItem, client: T3Client) async {
+    private func consume(delta: OrchestrationV2ShellStreamItem, client: T3Client) async {
         guard let currentClient = self.client, currentClient === client else { return }
         guard let current = latestShell else {
             if let shell = try? await client.shellSnapshot() {
@@ -2398,13 +2367,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let sequence: Int
 
         switch delta {
-        case let .projectUpserted(nextSequence, _):
+        case let .projectUpdated(nextSequence, _):
             sequence = nextSequence
         case let .projectRemoved(nextSequence, _):
             sequence = nextSequence
-        case let .threadUpserted(nextSequence, _):
+        case let .threadUpdated(nextSequence, _, _):
             sequence = nextSequence
-        case let .threadRemoved(nextSequence, _):
+        case let .threadRemoved(nextSequence, _, _):
             sequence = nextSequence
         case .snapshot, .synchronized:
             return
@@ -2420,7 +2389,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         var shouldRefreshArchived = false
 
         switch delta {
-        case let .projectUpserted(_, project):
+        case let .projectUpdated(_, project):
             if let index = projects.firstIndex(where: { $0.id == project.id }) {
                 projects[index] = project
             } else {
@@ -2428,21 +2397,41 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
         case let .projectRemoved(_, projectID):
             projects.removeAll { $0.id == projectID }
-        case let .threadUpserted(_, thread):
+        case let .threadUpdated(_, location, thread):
             changedThreadID = activeEnvironment.map {
                 FeatureScopedID.thread(environmentID: $0.id, wireID: thread.id)
             }
-            if let environmentID = activeEnvironment?.id {
+            // V2 reports archiving as an update carrying `location: .archive`
+            // rather than as a removal, so the thread has to move between the
+            // two lists here or it would appear in both.
+            switch location {
+            case .active:
+                if let environmentID = activeEnvironment?.id {
+                    archivedThreadsByEnvironmentID[environmentID]?.removeAll {
+                        ($0.wireID ?? $0.id) == thread.id
+                    }
+                    archivedShellThreadsByEnvironmentID[environmentID]?[thread.id] = nil
+                }
+                if let index = threads.firstIndex(where: { $0.id == thread.id }) {
+                    threads[index] = thread
+                } else {
+                    threads.append(thread)
+                }
+            case .archive:
+                threads.removeAll { $0.id == thread.id }
+                if let environmentID = activeEnvironment?.id {
+                    archivedShellThreadsByEnvironmentID[environmentID, default: [:]][thread.id] =
+                        thread
+                }
+                shouldRefreshArchived = true
+            }
+        case let .threadRemoved(_, location, threadID):
+            if location == .archive, let environmentID = activeEnvironment?.id {
+                archivedShellThreadsByEnvironmentID[environmentID]?[threadID] = nil
                 archivedThreadsByEnvironmentID[environmentID]?.removeAll {
-                    ($0.wireID ?? $0.id) == thread.id
+                    ($0.wireID ?? $0.id) == threadID
                 }
             }
-            if let index = threads.firstIndex(where: { $0.id == thread.id }) {
-                threads[index] = thread
-            } else {
-                threads.append(thread)
-            }
-        case let .threadRemoved(_, threadID):
             let uiThreadID = activeEnvironment.map {
                 FeatureScopedID.thread(environmentID: $0.id, wireID: threadID)
             }
@@ -2451,7 +2440,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             threads.removeAll { $0.id == threadID }
             if let uiThreadID {
                 latestDetails[uiThreadID] = nil
-                detailRenderCaches[uiThreadID] = nil
             }
             if activeThreadID == uiThreadID {
                 resetDetailRefresh()
@@ -2462,18 +2450,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 activeThreadSequence = nil
                 activeThreadPage = nil
                 threadHistoryEpoch &+= 1
-                pendingOlderThreadPage = nil
             }
         case .snapshot, .synchronized:
             return
         }
 
-        let shell = OrchestrationShellSnapshot(
-            snapshotSequence: sequence,
-            projects: projects,
-            threads: threads,
-            updatedAt: current.updatedAt
-        )
+        var shell = current
+        shell.snapshotSequence = sequence
+        shell.projects = projects
+        shell.threads = threads
         latestShell = shell
         scheduleShellPublish(client)
         if shouldRefreshArchived, let environment = activeEnvironment {
@@ -2545,7 +2530,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func startDetailStream(
         _ route: NativeThreadRoute,
         after sequence: Int,
-        turnLimit: Int?
+        snapshotMaxVisibleItems: Int?
     ) {
         detailStreamGeneration &+= 1
         let streamGeneration = detailStreamGeneration
@@ -2555,7 +2540,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 for try await item in await route.client.threadEvents(
                     threadID: route.wireID,
                     after: sequence,
-                    turnLimit: turnLimit
+                    snapshotMaxVisibleItems: snapshotMaxVisibleItems
                 ) {
                     guard !Task.isCancelled,
                           let self,
@@ -2585,7 +2570,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     private func consumeDetailStreamItem(
-        _ item: ThreadStreamItem,
+        _ item: OrchestrationV2ThreadStreamItem,
         route: NativeThreadRoute
     ) {
         switch item {
@@ -2594,39 +2579,33 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         case let .snapshot(snapshot):
             guard snapshot.snapshotSequence > (activeThreadSequence ?? 0) else { return }
             threadHistoryEpoch &+= 1
-            pendingOlderThreadPage = nil
             activeThreadSequence = snapshot.snapshotSequence
-            activeRawThread = snapshot.thread
-            activeThreadPage = featurePage(snapshot.page)
-            scheduleRawDetailPublish(route: route, mutation: .full)
-        case let .event(event):
+            activeRawThread = snapshot.projection
+            activeThreadPage = featurePage(
+                truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
+            )
+            scheduleRawDetailPublish(route: route)
+        case let .event(sequence, event):
             guard let current = activeRawThread else {
                 scheduleDetailRefresh(threadID: route.uiID, client: route.client, force: true)
                 return
             }
             let reduction = NativeThreadDetailReducer.apply(event, to: current)
-            if reduction.sequence < 0 {
-                threadHistoryEpoch &+= 1
-                pendingOlderThreadPage = nil
-                activeRawThread = nil
-                discardPendingDetailPublish()
-                scheduleDetailRefresh(threadID: route.uiID, client: route.client, force: true)
-                return
-            }
-            guard reduction.sequence > (activeThreadSequence ?? 0) else { return }
+            // A negative sequence marks an event the reducer refuses to fold.
+            // Fall back to the frame's own sequence for ordering.
+            let effective = reduction.sequence < 0 ? sequence : reduction.sequence
             switch reduction.result {
-            case let .updated(thread):
-                activeThreadSequence = reduction.sequence
-                activeRawThread = thread
-                scheduleRawDetailPublish(route: route, mutation: reduction.renderMutation)
-                tryMergePendingOlderThreadPage(route: route)
+            case let .updated(projection):
+                guard effective > (activeThreadSequence ?? 0) else { return }
+                activeThreadSequence = effective
+                activeRawThread = projection
+                scheduleRawDetailPublish(route: route)
             case .unchanged:
-                activeThreadSequence = reduction.sequence
-                tryMergePendingOlderThreadPage(route: route)
+                guard effective > (activeThreadSequence ?? 0) else { return }
+                activeThreadSequence = effective
             case .refresh:
                 threadHistoryEpoch &+= 1
-                pendingOlderThreadPage = nil
-                activeThreadSequence = reduction.sequence
+                activeThreadSequence = effective
                 activeRawThread = nil
                 discardPendingDetailPublish()
                 scheduleDetailRefresh(threadID: route.uiID, client: route.client, force: true)
@@ -2634,11 +2613,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    private func scheduleRawDetailPublish(
-        route: NativeThreadRoute,
-        mutation: NativeDetailRenderMutation
-    ) {
-        pendingDetailRenderMutations.formUnion(mutation)
+    private func scheduleRawDetailPublish(route: NativeThreadRoute) {
         guard detailPublishTask == nil else { return }
         let streamGeneration = detailStreamGeneration
         detailPublishTask = Task { [weak self] in
@@ -2651,20 +2626,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                   let rawThread = self.activeRawThread else {
                 return
             }
-            let mutations = self.pendingDetailRenderMutations
-            self.pendingDetailRenderMutations = NativeDetailRenderMutations()
             let previousDetail = self.latestDetails[route.uiID]
             let detail = self.mapDetail(
                 rawThread,
                 environment: route.client.environment,
-                mutations: mutations,
                 page: self.activeThreadPage
             )
-            let delta = self.makeDetailDelta(
-                previous: previousDetail,
-                next: detail,
-                mutations: mutations
-            )
+            let delta = self.makeDetailDelta(previous: previousDetail, next: detail)
             self.publish(
                 detail,
                 threadID: route.uiID,
@@ -2754,7 +2722,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func discardPendingDetailPublish() {
         detailPublishTask?.cancel()
         detailPublishTask = nil
-        pendingDetailRenderMutations = NativeDetailRenderMutations()
     }
 
     private func loadEnvironmentShells(
@@ -3021,10 +2988,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let generation = environmentGeneration
         let supportsPagination = serverConfigsByEnvironmentID[
             environment.id
-        ]?.threadSnapshotPagination == true
+        ]?.threadSnapshotWindow == true
         let snapshot = try await client.threadSnapshot(
             id: route.wireID,
-            turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
+            maxVisibleItems: supportsPagination ? Self.initialThreadVisibleItemLimit : nil
         )
         guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
@@ -3032,15 +2999,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if activeThreadID == route.uiID {
             guard snapshot.snapshotSequence >= (activeThreadSequence ?? 0) else { return }
             threadHistoryEpoch &+= 1
-            pendingOlderThreadPage = nil
-            activeRawThread = snapshot.thread
+            activeRawThread = snapshot.projection
             activeThreadSequence = snapshot.snapshotSequence
-            activeThreadPage = featurePage(snapshot.page)
+            activeThreadPage = featurePage(
+                truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
+            )
         }
         let detail = mapDetail(
-            snapshot.thread,
+            snapshot.projection,
             environment: environment,
-            page: activeThreadID == route.uiID ? activeThreadPage : featurePage(snapshot.page)
+            page: activeThreadID == route.uiID
+                ? activeThreadPage
+                : featurePage(
+                    truncatedVisibleItemCount: snapshot.projection.truncatedVisibleItemCount
+                )
         )
         publish(detail, threadID: route.uiID)
         let hydrationBase = latestDetails[route.uiID] ?? detail
@@ -3055,11 +3027,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               hydrated != hydrationBase else {
             return
         }
-        publish(hydrated, threadID: route.uiID, synchronizeRenderedMessages: true)
+        publish(hydrated, threadID: route.uiID)
     }
 
     private func emitSnapshot(
-        _ shell: OrchestrationShellSnapshot,
+        _ shell: OrchestrationV2ShellSnapshot,
         environment sourceEnvironment: Environment? = nil,
         markSourceConnected: Bool = true,
         expectedGeneration: Int? = nil
@@ -3178,12 +3150,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ detail: FeatureThreadDetail,
         threadID: String,
         renderCacheIsSource: Bool = false,
-        synchronizeRenderedMessages: Bool = false,
         delta: FeatureDetailDelta? = nil
     ) {
         if renderCacheIsSource {
-            // Reducer-provided mutations already updated the authoritative
-            // cache. Avoid a prefix comparison across the entire transcript.
+            // The projection rebuild is already authoritative; skip the prefix
+            // comparison across the whole transcript.
             latestDetails[threadID] = detail
             if let delta {
                 continuation.yield(.detailDelta(detail, delta))
@@ -3197,60 +3168,43 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         } ?? detail
         guard latestDetails[threadID] != next else { return }
         latestDetails[threadID] = next
-        if let cache = detailRenderCaches[threadID] {
-            cache.approvals = next.approvals
-            cache.userInputs = next.userInputs
-            if synchronizeRenderedMessages {
-                for message in next.messages {
-                    if let index = cache.mergedIndexByID[message.id] {
-                        cache.mergedMessages[index] = message
-                    }
-                    if cache.messagesByID[message.id] != nil {
-                        cache.messagesByID[message.id] = message
-                    }
-                }
-            }
-        }
         continuation.yield(.detail(next))
     }
 
+    /// The row-level delta the recycled transcript uses to avoid rescanning.
+    ///
+    /// V1 derived this from reducer mutation hints. The V2 projection is
+    /// rebuilt wholesale, so the delta is computed by comparing the previous and
+    /// next details directly — same result, and it cannot disagree with what was
+    /// actually rendered.
     private func makeDetailDelta(
         previous: FeatureThreadDetail?,
-        next: FeatureThreadDetail,
-        mutations: NativeDetailRenderMutations
+        next: FeatureThreadDetail
     ) -> FeatureDetailDelta? {
-        guard !mutations.requiresFullRebuild,
-              let previous,
-              next.messages.count >= previous.messages.count else {
-            return nil
-        }
+        guard let previous else { return nil }
 
-        var changedIDs = Set(mutations.messages.map(\.id))
-        for activity in mutations.activities {
-            if activity.tone == "error" {
-                changedIDs.insert("activity-\(activity.id)")
-            } else if NativeWorkLogAccumulator.accepts(activity) {
-                changedIDs.insert("work-log-\(activity.turnId ?? "unscoped")")
-            }
-        }
-
-        guard let cache = detailRenderCaches[next.thread.id] else { return nil }
-        let changedMessages = changedIDs.compactMap { id in
-            cache.mergedIndexByID[id].map { cache.mergedMessages[$0] }
-        }
-        let appendedCount = next.messages.count - previous.messages.count
-        let appendedMessageIDs = appendedCount == 0
-            ? []
-            : next.messages.suffix(appendedCount).map(\.id)
-
-        // A newly rendered entity with an older timestamp can be inserted into
-        // history. That rare path takes one authoritative diff instead of
-        // applying an invalid append-only delta.
-        guard appendedMessageIDs.allSatisfy(changedIDs.contains) else { return nil }
-        return FeatureDetailDelta(
-            changedMessages: changedMessages,
-            appendedMessageIDs: appendedMessageIDs
+        let previousByID = Dictionary(
+            previous.messages.map { ($0.id, $0) },
+            uniquingKeysWith: { _, last in last }
         )
+        // A message that vanished means the transcript was restructured, not
+        // appended to; a full rebuild is the honest response.
+        let nextIDs = Set(next.messages.map(\.id))
+        guard previous.messages.allSatisfy({ nextIDs.contains($0.id) }) else { return nil }
+
+        var changed: [FeatureMessage] = []
+        var appended: [String] = []
+        for message in next.messages {
+            guard let existing = previousByID[message.id] else {
+                appended.append(message.id)
+                changed.append(message)
+                continue
+            }
+            if existing != message { changed.append(message) }
+        }
+
+        if changed.isEmpty, appended.isEmpty { return nil }
+        return FeatureDetailDelta(changedMessages: changed, appendedMessageIDs: appended)
     }
 
     private func mergedDetail(
@@ -3411,11 +3365,265 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    // MARK: - V2 projection mapping
+
+    /// Builds the whole detail from the projection.
+    ///
+    /// V1 kept an incremental cache because the transcript was assembled from
+    /// two unordered sources (`messages` plus `activities`) and every event had
+    /// to be folded in by hand. V2 hands over one ordered, already-windowed
+    /// `visibleTurnItems` list, so rebuilding costs O(window) and the diffable
+    /// collection view still updates only the rows whose identity or content
+    /// changed. `MarkdownRenderCache` — which is what actually protects scroll
+    /// performance — is keyed by message id and survives the rebuild.
+    private func mapDetail(
+        _ projection: OrchestrationV2ThreadProjection,
+        environment: Environment,
+        page: FeatureThreadPage? = nil
+    ) -> FeatureThreadDetail {
+        let threadID = FeatureScopedID.thread(
+            environmentID: environment.id,
+            wireID: projection.thread.id
+        )
+
+        var messages: [FeatureMessage] = []
+        var approvals: [FeatureApproval] = []
+        var userInputs: [FeatureUserInput] = []
+
+        for projected in projection.visibleTurnItems.sorted(by: { $0.position < $1.position }) {
+            let item = projected.item
+
+            switch item.payload {
+            case let .approvalRequest(requestID, requestKind, prompt):
+                // The item's own status is the authority on whether the request
+                // is still open; V1 had to pair requested/resolved activities.
+                guard !item.status.isTerminal else { break }
+                let uiID = FeatureScopedID.approval(
+                    environmentID: environment.id,
+                    wireID: requestID
+                )
+                approvalRoutes[uiID] = PendingRequestRoute(
+                    threadID: threadID,
+                    wireID: requestID
+                )
+                approvals.append(
+                    FeatureApproval(
+                        id: uiID,
+                        wireID: requestID,
+                        threadID: threadID,
+                        kind: mapApprovalKind(requestKind),
+                        title: item.base.title ?? approvalTitle(for: requestKind),
+                        detail: prompt ?? ""
+                    )
+                )
+
+            case let .userInputRequest(requestID, questions):
+                guard !item.status.isTerminal else { break }
+                let uiID = FeatureScopedID.input(
+                    environmentID: environment.id,
+                    wireID: requestID
+                )
+                inputRoutes[uiID] = PendingRequestRoute(
+                    threadID: threadID,
+                    wireID: requestID
+                )
+                userInputs.append(
+                    FeatureUserInput(
+                        id: uiID,
+                        wireID: requestID,
+                        threadID: threadID,
+                        questions: questions.map {
+                            FeatureInputQuestion(
+                                id: $0.id,
+                                header: $0.header,
+                                question: $0.question,
+                                options: $0.options.map {
+                                    FeatureInputOption(label: $0.label, detail: $0.description)
+                                }
+                            )
+                        }
+                    )
+                )
+
+            default:
+                if let message = mapTurnItem(item, environmentID: environment.id) {
+                    messages.append(message)
+                }
+            }
+        }
+
+        var mappedThread = mapThread(
+            projection.thread,
+            latestRun: projection.runs.max(by: { $0.ordinal < $1.ordinal }),
+            environment: environment
+        )
+        if !approvals.isEmpty {
+            mappedThread.state = .waitingForApproval
+        } else if !userInputs.isEmpty {
+            mappedThread.state = .waitingForInput
+        }
+
+        return FeatureThreadDetail(
+            thread: mappedThread,
+            messages: messages,
+            approvals: approvals,
+            userInputs: userInputs,
+            page: page
+        )
+    }
+
+    /// Renders one turn item as a transcript row.
+    ///
+    /// Returns nil only for items that are surfaced elsewhere in the UI. Every
+    /// other type produces a row — including ones this build has no dedicated
+    /// presentation for yet — because a silently dropped item reads to the user
+    /// as the agent having done nothing.
+    private func mapTurnItem(
+        _ item: OrchestrationV2TurnItem,
+        environmentID: String
+    ) -> FeatureMessage? {
+        let createdAt = parseDate(item.base.startedAt ?? item.base.updatedAt)
+
+        func message(
+            _ role: FeatureMessageRole,
+            _ text: String,
+            tool: String? = nil,
+            state: FeatureMessageState? = nil
+        ) -> FeatureMessage {
+            FeatureMessage(
+                id: item.id,
+                role: role,
+                text: text,
+                createdAt: createdAt,
+                state: state ?? (item.status.isTerminal ? .complete : .streaming),
+                toolName: tool
+            )
+        }
+
+        switch item.payload {
+        case let .userMessage(_, _, text, attachments):
+            return FeatureMessage(
+                id: item.id,
+                role: .user,
+                text: text,
+                createdAt: createdAt,
+                state: .complete,
+                attachments: attachments.map {
+                    FeatureMessageAttachment(
+                        id: $0.id,
+                        name: $0.name,
+                        mimeType: $0.mimeType,
+                        sizeBytes: $0.sizeBytes,
+                        url: cachedAttachmentURL(for: $0.id, environmentID: environmentID)
+                    )
+                }
+            )
+
+        case let .assistantMessage(_, text, streaming):
+            return message(.assistant, text, state: streaming ? .streaming : .complete)
+
+        case let .reasoning(text, streaming):
+            return message(.tool, text, tool: "Thinking", state: streaming ? .streaming : .complete)
+
+        case let .proposedPlan(_, markdown, streaming):
+            return message(.assistant, markdown, state: streaming ? .streaming : .complete)
+
+        case let .todoList(_, steps, explanation):
+            let rendered = steps.map { step in
+                let mark = switch step.status {
+                case "completed": "[x]"
+                case "running": "[~]"
+                default: "[ ]"
+                }
+                return "\(mark) \(step.text)"
+            }
+            let body = ([explanation].compactMap { $0 } + rendered).joined(separator: "\n")
+            return message(.tool, body, tool: "Plan")
+
+        case let .fileChange(fileName, additions, deletions, diffStr, _, _):
+            var header = fileName
+            if let additions, let deletions {
+                header += "  +\(additions) −\(deletions)"
+            }
+            return message(.tool, diffStr ?? header, tool: header)
+
+        case let .commandExecution(input, output, exitCode, liveness):
+            var label = input
+            if liveness.background == true { label = "background · \(label)" }
+            if let exitCode, exitCode != 0 { label += "  (exit \(exitCode))" }
+            return message(.tool, output ?? "", tool: label)
+
+        case let .fileSearch(pattern, results):
+            let body = (results ?? []).map(\.fileName).joined(separator: "\n")
+            return message(.tool, body, tool: "Search \(pattern ?? "")")
+
+        case let .webSearch(patterns, results):
+            let body = (results ?? []).map { $0.title ?? $0.url ?? "" }.joined(separator: "\n")
+            return message(.tool, body, tool: "Web search \((patterns ?? []).joined(separator: ", "))")
+
+        case let .error(failure, _):
+            return message(.system, failure.message, tool: failure.failureClass, state: .failed)
+
+        case let .compaction(_, summary, before, after):
+            var label = "Compacted history"
+            if let before, let after { label += " · \(before) → \(after) tokens" }
+            return message(.system, summary ?? "", tool: label)
+
+        case let .checkpoint(_, _, files):
+            let body = files
+                .map { "\($0.path)  +\($0.additions) −\($0.deletions)" }
+                .joined(separator: "\n")
+            return message(.tool, body, tool: "Checkpoint · \(files.count) files")
+
+        case let .checkpointRollback(_, _, restoredFileCount, rolledBackRunCount):
+            return message(
+                .system,
+                "Restored \(restoredFileCount) files, discarding \(rolledBackRunCount) runs.",
+                tool: "Rolled back"
+            )
+
+        case let .runInterruptRequest(text), let .runInterruptResult(text):
+            return message(.system, text, tool: "Interrupted")
+
+        case let .handoff(_, _, _, toModel, strategy, summary):
+            let label = toModel.map { "Handoff to \($0)" } ?? "Handoff"
+            return message(.system, summary ?? strategy, tool: label)
+
+        case let .fork(_, targetThreadID, _):
+            return message(.system, "", tool: "Forked to \(targetThreadID)")
+
+        case let .threadCreated(targetThreadID, _, _, targetModel):
+            return message(
+                .system, "", tool: "Started \(targetModel) in \(targetThreadID)"
+            )
+
+        case let .subagent(_, _, _, _, _, prompt, progress, result):
+            return message(.tool, result ?? progress ?? prompt, tool: "Subagent")
+
+        case let .dynamicTool(toolName, _, output):
+            return message(.tool, output?.stringValue ?? "", tool: toolName ?? "Tool")
+
+        case let .unknown(type):
+            // A type this build predates. Show that something happened rather
+            // than leaving a hole in the transcript.
+            return message(.system, "", tool: type.replacingOccurrences(of: "_", with: " "))
+
+        case .approvalRequest, .userInputRequest:
+            // Rendered as cards above the composer, not as transcript rows.
+            return nil
+        }
+    }
+
+    /// The detail's thread row. The projection's `AppThread` has no run status
+    /// of its own — that lives on the runs — so the header's working indicator
+    /// comes from the highest-ordinal run.
     private func mapThread(
-        _ thread: OrchestrationThreadShell,
+        _ thread: OrchestrationV2AppThread,
+        latestRun: OrchestrationV2Run?,
         environment: Environment
     ) -> FeatureThread {
-        FeatureThread(
+        let isRunning = latestRun.map { $0.completedAt == nil } ?? false
+        return FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -3430,16 +3638,94 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
-                latestTurn: thread.latestTurn,
-                session: thread.session,
-                hasApprovals: thread.hasPendingApprovals,
-                hasUserInput: thread.hasPendingUserInput
+                status: latestRun?.status ?? "idle",
+                pendingRequestKind: nil
             ),
             providerID: thread.modelSelection.instanceId,
-            providerName: threadProviderName(
-                session: thread.session,
-                modelSelection: thread.modelSelection
+            providerName: threadProviderName(modelSelection: thread.modelSelection),
+            modelID: thread.modelSelection.model,
+            modelOptions: mapOptionSelections(thread.modelSelection.options),
+            isArchived: thread.archivedAt != nil,
+            isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
+            keepsActive: thread.settledOverride == "active",
+            settledAt: thread.settledAt.map(parseDate),
+            lastActivityAt: lastActivityDate(
+                latestUserMessageAt: nil,
+                latestRunCompletedAt: latestRun?.completedAt,
+                updatedAt: thread.updatedAt
             ),
+            snoozedUntil: thread.snoozedUntil.map(parseDate),
+            snoozedAt: thread.snoozedAt.map(parseDate),
+            pinnedAt: thread.pinnedAt.map(parseDate),
+            supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            attentionAt: latestRun?.status == "failed"
+                ? parseDate(latestRun?.completedAt ?? thread.updatedAt)
+                : nil,
+            workingStartedAt: isRunning
+                ? parseDate(latestRun?.startedAt ?? latestRun?.requestedAt ?? thread.updatedAt)
+                : nil,
+            latestTurnCompletedAt: latestRun?.completedAt.map(parseDate),
+            runtimeMode: mapRuntimeMode(thread.runtimeMode),
+            interactionMode: mapInteractionMode(thread.interactionMode)
+        )
+    }
+
+    private func mapApprovalKind(_ requestKind: String) -> FeatureApprovalKind {
+        switch requestKind {
+        case "command": .command
+        case "file-read": .fileRead
+        case "file-change": .fileChange
+        default: .other
+        }
+    }
+
+    private func approvalTitle(for requestKind: String) -> String {
+        switch requestKind {
+        case "command": "Run a command?"
+        case "file-read": "Read a file?"
+        case "file-change": "Change a file?"
+        default: "Approve this action?"
+        }
+    }
+
+    /// V2 reports how much older history it withheld instead of handing back a
+    /// cursor, so "has more" is that count being non-zero.
+    private func featurePage(
+        truncatedVisibleItemCount: Int?,
+        isLoading: Bool = false
+    ) -> FeatureThreadPage? {
+        FeatureThreadPage(
+            beforeCursor: nil,
+            hasMore: (truncatedVisibleItemCount ?? 0) > 0,
+            isLoading: isLoading
+        )
+    }
+
+    private func mapThread(
+        _ thread: OrchestrationV2ThreadShell,
+        environment: Environment
+    ) -> FeatureThread {
+        FeatureThread(
+            id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
+            wireID: thread.id,
+            projectID: FeatureScopedID.project(
+                environmentID: environment.id,
+                wireID: thread.projectId
+            ),
+            environmentID: environment.id,
+            environmentName: environment.label,
+            title: thread.title,
+            preview: previewText(thread.latestVisibleMessage?.text),
+            branch: thread.branch,
+            worktreePath: thread.worktreePath,
+            createdAt: parseDate(thread.createdAt),
+            updatedAt: parseDate(thread.updatedAt),
+            state: mapThreadState(
+                status: thread.status,
+                pendingRequestKind: thread.pendingRuntimeRequest?.kind
+            ),
+            providerID: thread.modelSelection.instanceId,
+            providerName: threadProviderName(modelSelection: thread.modelSelection),
             modelID: thread.modelSelection.model,
             modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
@@ -3448,158 +3734,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             settledAt: thread.settledAt.map(parseDate),
             lastActivityAt: lastActivityDate(
                 latestUserMessageAt: thread.latestUserMessageAt,
-                latestTurn: thread.latestTurn
+                latestRunCompletedAt: thread.latestRunCompletedAt,
+                updatedAt: thread.updatedAt
             ),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
-            attentionAt: failureDate(
-                latestTurn: thread.latestTurn,
-                session: thread.session
-            ),
-            workingStartedAt: workingStartedAt(
-                latestTurn: thread.latestTurn,
-                session: thread.session
-            ),
-            latestTurnCompletedAt: thread.latestTurn?.completedAt.map(parseDate),
+            // A failed run is the only thing that earns an attention marker; a
+            // `lastError` on a run that recovered is history, not a call to act.
+            attentionAt: thread.status == "failed"
+                ? parseDate(thread.latestRunCompletedAt ?? thread.updatedAt)
+                : nil,
+            workingStartedAt: thread.activeRunId == nil
+                ? nil
+                : (thread.latestRunStartedAt ?? thread.latestRunRequestedAt).map(parseDate),
+            latestTurnCompletedAt: thread.latestRunCompletedAt.map(parseDate),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
         )
     }
 
-    private func mapThread(
-        _ thread: OrchestrationThread,
-        environment: Environment
-    ) -> FeatureThread {
-        FeatureThread(
-            id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
-            wireID: thread.id,
-            projectID: FeatureScopedID.project(
-                environmentID: environment.id,
-                wireID: thread.projectId
-            ),
-            environmentID: environment.id,
-            environmentName: environment.label,
-            title: thread.title,
-            preview: previewText(thread.messages.last?.text),
-            branch: thread.branch,
-            worktreePath: thread.worktreePath,
-            createdAt: parseDate(thread.createdAt),
-            updatedAt: parseDate(thread.updatedAt),
-            state: mapThreadState(
-                latestTurn: thread.latestTurn,
-                session: thread.session,
-                hasApprovals: false,
-                hasUserInput: false
-            ),
-            providerID: thread.modelSelection.instanceId,
-            providerName: threadProviderName(
-                session: thread.session,
-                modelSelection: thread.modelSelection
-            ),
-            modelID: thread.modelSelection.model,
-            modelOptions: mapOptionSelections(thread.modelSelection.options),
-            isArchived: thread.archivedAt != nil,
-            isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
-            keepsActive: thread.settledOverride == "active",
-            settledAt: thread.settledAt.map(parseDate),
-            lastActivityAt: lastActivityDate(
-                latestUserMessageAt: thread.messages.last(where: { $0.role == "user" })?.createdAt,
-                latestTurn: thread.latestTurn
-            ),
-            snoozedUntil: thread.snoozedUntil.map(parseDate),
-            snoozedAt: thread.snoozedAt.map(parseDate),
-            pinnedAt: thread.pinnedAt.map(parseDate),
-            supportsPinning: environment.descriptor?.capabilities.threadPinning,
-            attentionAt: failureDate(
-                latestTurn: thread.latestTurn,
-                session: thread.session
-            ),
-            workingStartedAt: workingStartedAt(
-                latestTurn: thread.latestTurn,
-                session: thread.session
-            ),
-            latestTurnCompletedAt: thread.latestTurn?.completedAt.map(parseDate),
-            runtimeMode: mapRuntimeMode(thread.runtimeMode),
-            interactionMode: mapInteractionMode(thread.interactionMode)
-        )
-    }
 
-    private func mapDetail(
-        _ thread: OrchestrationThread,
-        environment: Environment,
-        mutations: NativeDetailRenderMutations? = nil,
-        page: FeatureThreadPage? = nil
-    ) -> FeatureThreadDetail {
-        let threadID = FeatureScopedID.thread(
-            environmentID: environment.id,
-            wireID: thread.id
-        )
-        let cache = detailRenderCaches[threadID] ?? NativeDetailRenderCache()
-        detailRenderCaches[threadID] = cache
-
-        if !cache.isInitialized || mutations == nil || mutations?.requiresFullRebuild == true {
-            cache.messagesByID = thread.messages.reduce(into: [:]) { result, raw in
-                result[raw.id] = mapMessage(raw, environmentID: environment.id)
-            }
-            cache.approvals = pendingApprovals(thread, environment: environment)
-            cache.userInputs = pendingUserInputs(thread, environment: environment)
-            let errors = thread.activities.compactMap(mapErrorActivity)
-            let activityMessages = (errors + collapsedWorkLogs(thread.activities))
-                .sorted { $0.createdAt < $1.createdAt }
-            seedWorkLogs(thread.activities, cache: cache)
-            let messages = thread.messages.compactMap { cache.messagesByID[$0.id] }
-            cache.mergedMessages = (messages + activityMessages)
-                .sorted { $0.createdAt < $1.createdAt }
-            rebuildMergedIndexes(cache)
-            cache.isInitialized = true
-        } else if let mutations {
-            for message in mutations.messages {
-                let mapped = mapMessage(message, environmentID: environment.id)
-                cache.messagesByID[message.id] = mapped
-                upsertMergedMessage(mapped, cache: cache)
-            }
-            for activity in mutations.activities {
-                applyActivityMutation(
-                    activity,
-                    threadID: threadID,
-                    environment: environment,
-                    cache: cache
-                )
-            }
-        } else {
-            assertionFailure("Initialized detail caches require an incremental mutation")
-        }
-
-        var mappedThread = mapThread(thread, environment: environment)
-        mappedThread.state = mapThreadState(
-            latestTurn: thread.latestTurn,
-            session: thread.session,
-            hasApprovals: !cache.approvals.isEmpty,
-            hasUserInput: !cache.userInputs.isEmpty
-        )
-        return FeatureThreadDetail(
-            thread: mappedThread,
-            messages: cache.mergedMessages,
-            approvals: cache.approvals,
-            userInputs: cache.userInputs,
-            page: page
-        )
-    }
-
-    private func featurePage(
-        _ page: OrchestrationThreadDetailPage?,
-        isLoading: Bool = false
-    ) -> FeatureThreadPage? {
-        page.map {
-            FeatureThreadPage(
-                beforeCursor: $0.beforeCursor,
-                hasMore: $0.hasMore,
-                isLoading: isLoading
-            )
-        }
-    }
 
     private func publishActivePageState(threadID: String) {
         guard var detail = latestDetails[threadID] else { return }
@@ -3608,562 +3764,61 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     private func clearOlderThreadLoading(threadID: String) {
-        pendingOlderThreadPage = nil
         activeThreadPage?.isLoading = false
         publishActivePageState(threadID: threadID)
     }
 
-    private func tryMergePendingOlderThreadPage(route: NativeThreadRoute) {
-        guard let pending = pendingOlderThreadPage,
-              pending.threadID == route.uiID,
-              pending.environmentID == route.environmentID else { return }
-        guard pending.epoch == threadHistoryEpoch else {
-            clearOlderThreadLoading(threadID: route.uiID)
-            return
-        }
-        if let watermark = pending.snapshot.page?.threadSequence,
-           watermark > (activeThreadSequence ?? 0) {
-            return
-        }
-        pendingOlderThreadPage = nil
-        _ = mergeOlderThreadPage(pending.snapshot, route: route)
-    }
 
     @discardableResult
-    private func mergeOlderThreadPage(
-        _ snapshot: OrchestrationThreadDetailSnapshot,
-        route: NativeThreadRoute
-    ) -> FeatureThreadDetail? {
-        guard activeThreadID == route.uiID,
-              let loadedThread = activeRawThread,
-              let currentDetail = latestDetails[route.uiID] else {
-            clearOlderThreadLoading(threadID: route.uiID)
-            return latestDetails[route.uiID]
-        }
 
-        let mergedThread = mergingOlderHistory(snapshot.thread, into: loadedThread)
-        let olderMessages = renderedHistoryMessages(
-            snapshot.thread,
-            environmentID: route.environmentID
-        )
-        let loadedMessageIDs = Set(currentDetail.messages.map(\.id))
-        let mergedMessages = (
-            olderMessages.filter { !loadedMessageIDs.contains($0.id) }
-                + currentDetail.messages
-        ).sorted { $0.createdAt < $1.createdAt }
 
-        activeRawThread = mergedThread
-        activeThreadPage = featurePage(snapshot.page)
 
-        if let cache = detailRenderCaches[route.uiID] {
-            for rawMessage in snapshot.thread.messages where cache.messagesByID[rawMessage.id] == nil {
-                cache.messagesByID[rawMessage.id] = mapMessage(
-                    rawMessage,
-                    environmentID: route.environmentID
-                )
-            }
-            cache.mergedMessages = mergedMessages
-            rebuildMergedIndexes(cache)
-        }
 
-        let detail = FeatureThreadDetail(
-            thread: currentDetail.thread,
-            messages: mergedMessages,
-            approvals: currentDetail.approvals,
-            userInputs: currentDetail.userInputs,
-            page: activeThreadPage
-        )
-        publish(detail, threadID: route.uiID, renderCacheIsSource: true)
-        scheduleAttachmentHydration(
-            in: detail,
-            threadID: route.uiID,
-            client: route.client,
-            environmentID: route.environmentID
-        )
-        return detail
-    }
 
-    private func renderedHistoryMessages(
-        _ thread: OrchestrationThread,
-        environmentID: String
-    ) -> [FeatureMessage] {
-        let messages = thread.messages.map {
-            mapMessage($0, environmentID: environmentID)
-        }
-        let activities = thread.activities.compactMap(mapErrorActivity)
-            + collapsedWorkLogs(thread.activities)
-        return (messages + activities).sorted { $0.createdAt < $1.createdAt }
-    }
 
-    private func mergingOlderHistory(
-        _ older: OrchestrationThread,
-        into loaded: OrchestrationThread
-    ) -> OrchestrationThread {
-        func prependByID<Element: Identifiable>(
-            _ olderRows: [Element],
-            _ loadedRows: [Element]
-        ) -> [Element] where Element.ID: Hashable {
-            let loadedIDs = Set(loadedRows.map(\.id))
-            return olderRows.filter { !loadedIDs.contains($0.id) } + loadedRows
-        }
 
-        let loadedCheckpointTurns = Set(loaded.checkpoints.map(\.turnId))
-        return OrchestrationThread(
-            id: loaded.id,
-            projectId: loaded.projectId,
-            title: loaded.title,
-            modelSelection: loaded.modelSelection,
-            runtimeMode: loaded.runtimeMode,
-            interactionMode: loaded.interactionMode,
-            branch: loaded.branch,
-            worktreePath: loaded.worktreePath,
-            latestTurn: loaded.latestTurn,
-            createdAt: loaded.createdAt,
-            updatedAt: loaded.updatedAt,
-            archivedAt: loaded.archivedAt,
-            settledOverride: loaded.settledOverride,
-            settledAt: loaded.settledAt,
-            snoozedUntil: loaded.snoozedUntil,
-            snoozedAt: loaded.snoozedAt,
-            pinnedAt: loaded.pinnedAt,
-            deletedAt: loaded.deletedAt,
-            messages: prependByID(older.messages, loaded.messages),
-            activities: prependByID(older.activities, loaded.activities),
-            checkpoints: older.checkpoints.filter {
-                !loadedCheckpointTurns.contains($0.turnId)
-            } + loaded.checkpoints,
-            session: loaded.session
-        )
-    }
 
-    private func rebuildMergedIndexes(_ cache: NativeDetailRenderCache) {
-        cache.mergedIndexByID = cache.mergedMessages.enumerated().reduce(into: [:]) {
-            $0[$1.element.id] = $1.offset
-        }
-    }
 
-    /// Known stream events are chronological, so new render entities land at
-    /// the tail and existing streaming/work-log entities patch in constant time.
-    private func upsertMergedMessage(
-        _ message: FeatureMessage,
-        cache: NativeDetailRenderCache
-    ) {
-        if let index = cache.mergedIndexByID[message.id] {
-            cache.mergedMessages[index] = message
-            return
-        }
-        if let last = cache.mergedMessages.last, last.createdAt > message.createdAt {
-            // Out-of-order events are rare; preserve correctness while keeping
-            // the normal append path independent of transcript size.
-            cache.mergedMessages.append(message)
-            cache.mergedMessages.sort { $0.createdAt < $1.createdAt }
-            rebuildMergedIndexes(cache)
-            return
-        }
-        cache.mergedIndexByID[message.id] = cache.mergedMessages.count
-        cache.mergedMessages.append(message)
-    }
 
-    private func applyActivityMutation(
-        _ activity: OrchestrationActivity,
-        threadID: String,
-        environment: Environment,
-        cache: NativeDetailRenderCache
-    ) {
-        applyApprovalActivity(
-            activity,
-            threadID: threadID,
-            environment: environment,
-            cache: cache
-        )
-        applyUserInputActivity(
-            activity,
-            threadID: threadID,
-            environment: environment,
-            cache: cache
-        )
-        if let error = mapErrorActivity(activity) {
-            upsertMergedMessage(error, cache: cache)
-        }
-        guard NativeWorkLogAccumulator.accepts(activity),
-              cache.workLogActivityIDs.insert(activity.id).inserted else {
-            return
-        }
-        let groupID = activity.turnId ?? "unscoped"
-        var accumulator = cache.workLogsByGroupID[groupID] ?? NativeWorkLogAccumulator()
-        accumulator.append(
-            activity,
-            preview: previewText(activity.payload["detail"]?.stringValue),
-            createdAt: parseDate(activity.createdAt)
-        )
-        cache.workLogsByGroupID[groupID] = accumulator
-        let message = accumulator.message(groupID: groupID)
-        upsertMergedMessage(message, cache: cache)
-    }
 
-    /// Decorate-sort so each timestamp is parsed once (via the memoized date
-    /// cache) instead of inside an O(n log n) comparator. Raw string order is
-    /// not safe here: the wire can mix fractional and non-fractional ISO8601
-    /// representations, which sort lexicographically wrong. Ties keep wire
-    /// order so a request and its resolution never swap.
-    private func sortedByCreation(
-        _ activities: [OrchestrationActivity]
-    ) -> [OrchestrationActivity] {
-        activities.enumerated()
-            .map { (index: $0.offset, date: parseDate($0.element.createdAt), activity: $0.element) }
-            .sorted { lhs, rhs in
-                lhs.date != rhs.date ? lhs.date < rhs.date : lhs.index < rhs.index
-            }
-            .map(\.activity)
-    }
 
-    private func seedWorkLogs(
-        _ activities: [OrchestrationActivity],
-        cache: NativeDetailRenderCache
-    ) {
-        cache.workLogsByGroupID.removeAll(keepingCapacity: true)
-        cache.workLogActivityIDs.removeAll(keepingCapacity: true)
-        for activity in sortedByCreation(activities)
-        where NativeWorkLogAccumulator.accepts(activity) {
-            cache.workLogActivityIDs.insert(activity.id)
-            let groupID = activity.turnId ?? "unscoped"
-            var accumulator = cache.workLogsByGroupID[groupID] ?? NativeWorkLogAccumulator()
-            accumulator.append(
-                activity,
-                preview: previewText(activity.payload["detail"]?.stringValue),
-                createdAt: parseDate(activity.createdAt)
-            )
-            cache.workLogsByGroupID[groupID] = accumulator
-        }
-    }
 
-    private func applyApprovalActivity(
-        _ activity: OrchestrationActivity,
-        threadID: String,
-        environment: Environment,
-        cache: NativeDetailRenderCache
-    ) {
-        guard let requestID = activity.payload["requestId"]?.stringValue else { return }
-        let uiRequestID = FeatureScopedID.approval(
-            environmentID: environment.id,
-            wireID: requestID
-        )
-        switch activity.kind {
-        case "approval.requested":
-            let kind: FeatureApprovalKind = switch activity.payload["requestKind"]?.stringValue {
-            case "command": .command
-            case "file-read": .fileRead
-            case "file-change": .fileChange
-            default: .other
-            }
-            let approval = FeatureApproval(
-                id: uiRequestID,
-                wireID: requestID,
-                threadID: threadID,
-                kind: kind,
-                title: activity.summary,
-                detail: activity.payload["detail"]?.stringValue ?? activity.summary
-            )
-            cache.approvals.removeAll { $0.id == uiRequestID }
-            cache.approvals.append(approval)
-            cache.approvals.sort { $0.id < $1.id }
-            approvalRoutes[uiRequestID] = PendingRequestRoute(
-                threadID: threadID,
-                wireID: requestID
-            )
-        case "approval.resolved":
-            cache.approvals.removeAll { $0.id == uiRequestID }
-            approvalRoutes[uiRequestID] = nil
-        case "provider.approval.respond.failed":
-            let detail = activity.payload["detail"]?.stringValue?.lowercased() ?? ""
-            guard detail.contains("stale") || detail.contains("unknown") else { return }
-            cache.approvals.removeAll { $0.id == uiRequestID }
-            approvalRoutes[uiRequestID] = nil
-        default:
-            return
-        }
-    }
 
-    private func applyUserInputActivity(
-        _ activity: OrchestrationActivity,
-        threadID: String,
-        environment: Environment,
-        cache: NativeDetailRenderCache
-    ) {
-        guard let requestID = activity.payload["requestId"]?.stringValue else { return }
-        let uiRequestID = FeatureScopedID.input(
-            environmentID: environment.id,
-            wireID: requestID
-        )
-        switch activity.kind {
-        case "user-input.requested":
-            guard let questions = parseInputQuestions(activity.payload), !questions.isEmpty else {
-                return
-            }
-            let request = FeatureUserInput(
-                id: uiRequestID,
-                wireID: requestID,
-                threadID: threadID,
-                questions: questions
-            )
-            cache.userInputs.removeAll { $0.id == uiRequestID }
-            cache.userInputs.append(request)
-            cache.userInputs.sort { $0.id < $1.id }
-            inputRoutes[uiRequestID] = PendingRequestRoute(
-                threadID: threadID,
-                wireID: requestID
-            )
-        case "user-input.resolved":
-            cache.userInputs.removeAll { $0.id == uiRequestID }
-            inputRoutes[uiRequestID] = nil
-        case "provider.user-input.respond.failed":
-            let detail = activity.payload["detail"]?.stringValue?.lowercased() ?? ""
-            guard detail.contains("stale") || detail.contains("unknown") else { return }
-            cache.userInputs.removeAll { $0.id == uiRequestID }
-            inputRoutes[uiRequestID] = nil
-        default:
-            return
-        }
-    }
 
-    private func mapMessage(
-        _ message: OrchestrationMessage,
-        environmentID: String
-    ) -> FeatureMessage {
-        FeatureMessage(
-            id: message.id,
-            role: mapRole(message.role),
-            text: message.text,
-            createdAt: parseDate(message.createdAt),
-            state: message.streaming ? .streaming : .complete,
-            attachments: (message.attachments ?? []).map {
-                FeatureMessageAttachment(
-                    id: $0.id,
-                    name: $0.name,
-                    mimeType: $0.mimeType,
-                    sizeBytes: $0.sizeBytes,
-                    url: cachedAttachmentURL(for: $0.id, environmentID: environmentID)
-                )
-            }
-        )
-    }
 
-    private func mapErrorActivity(_ activity: OrchestrationActivity) -> FeatureMessage? {
-        guard activity.tone == "error" else { return nil }
-        let detail = activity.payload["detail"]?.stringValue
-        let text = detail.map { "\(activity.summary)\n\($0)" } ?? activity.summary
-        return FeatureMessage(
-            id: "activity-\(activity.id)",
-            role: .system,
-            text: text,
-            createdAt: parseDate(activity.createdAt),
-            state: .complete,
-            toolName: activity.kind
-        )
-    }
-
-    /// Lifecycle updates can number in the thousands on a long turn. Keep the
-    /// primary transcript message-sized while preserving a bounded, expandable
-    /// summary for each turn.
-    private func collapsedWorkLogs(
-        _ activities: [OrchestrationActivity]
-    ) -> [FeatureMessage] {
-        let terminalKinds = Set(["tool.completed", "task.completed", "turn.plan.updated"])
-        let completed = activities.filter {
-            $0.tone != "error" && terminalKinds.contains($0.kind)
-        }
-        let groups = Dictionary(grouping: completed) { activity in
-            activity.turnId ?? "unscoped"
-        }
-
-        return groups.values.compactMap { unsorted in
-            let group = unsorted.sorted { $0.createdAt < $1.createdAt }
-            guard let first = group.first else { return nil }
-            let visible = group.suffix(40)
-            var lines: [String] = []
-            let hiddenCount = group.count - visible.count
-            if hiddenCount > 0 {
-                lines.append("\(hiddenCount) earlier updates hidden")
-            }
-            lines.append(
-                contentsOf: visible.map { activity in
-                    let detail = previewText(activity.payload["detail"]?.stringValue)
-                    return "• \(detail ?? activity.summary)"
-                }
-            )
-            return FeatureMessage(
-                id: "work-log-\(first.turnId ?? "unscoped")",
-                role: .tool,
-                text: lines.joined(separator: "\n"),
-                createdAt: parseDate(first.createdAt),
-                state: .complete,
-                toolName: "Work log · \(group.count)"
-            )
-        }
-    }
-
-    private func pendingApprovals(
-        _ thread: OrchestrationThread,
-        environment: Environment
-    ) -> [FeatureApproval] {
-        var open: [String: FeatureApproval] = [:]
-        let threadID = FeatureScopedID.thread(
-            environmentID: environment.id,
-            wireID: thread.id
-        )
-        for activity in sortedByCreation(thread.activities) {
-            let requestID = activity.payload["requestId"]?.stringValue
-            let uiRequestID = requestID.map {
-                FeatureScopedID.approval(environmentID: environment.id, wireID: $0)
-            }
-            if activity.kind == "approval.requested", let requestID {
-                let requestKind = activity.payload["requestKind"]?.stringValue
-                let kind: FeatureApprovalKind = switch requestKind {
-                case "command": .command
-                case "file-read": .fileRead
-                case "file-change": .fileChange
-                default: .other
-                }
-                let detail = activity.payload["detail"]?.stringValue ?? activity.summary
-                let uiRequestID = FeatureScopedID.approval(
-                    environmentID: environment.id,
-                    wireID: requestID
-                )
-                open[uiRequestID] = FeatureApproval(
-                    id: uiRequestID,
-                    wireID: requestID,
-                    threadID: threadID,
-                    kind: kind,
-                    title: activity.summary,
-                    detail: detail
-                )
-                approvalRoutes[uiRequestID] = PendingRequestRoute(
-                    threadID: threadID,
-                    wireID: requestID
-                )
-            } else if activity.kind == "approval.resolved", let uiRequestID {
-                open[uiRequestID] = nil
-                approvalRoutes[uiRequestID] = nil
-            } else if activity.kind == "provider.approval.respond.failed", let uiRequestID {
-                let detail = activity.payload["detail"]?.stringValue?.lowercased() ?? ""
-                if detail.contains("stale") || detail.contains("unknown") {
-                    open[uiRequestID] = nil
-                    approvalRoutes[uiRequestID] = nil
-                }
-            }
-        }
-        return open.values.sorted { $0.id < $1.id }
-    }
-
-    private func pendingUserInputs(
-        _ thread: OrchestrationThread,
-        environment: Environment
-    ) -> [FeatureUserInput] {
-        var open: [String: FeatureUserInput] = [:]
-        let threadID = FeatureScopedID.thread(
-            environmentID: environment.id,
-            wireID: thread.id
-        )
-        for activity in sortedByCreation(thread.activities) {
-            let requestID = activity.payload["requestId"]?.stringValue
-            let uiRequestID = requestID.map {
-                FeatureScopedID.input(environmentID: environment.id, wireID: $0)
-            }
-            if activity.kind == "user-input.requested",
-               let requestID,
-               let questions = parseInputQuestions(activity.payload),
-               !questions.isEmpty {
-                let uiRequestID = FeatureScopedID.input(
-                    environmentID: environment.id,
-                    wireID: requestID
-                )
-                open[uiRequestID] = FeatureUserInput(
-                    id: uiRequestID,
-                    wireID: requestID,
-                    threadID: threadID,
-                    questions: questions
-                )
-                inputRoutes[uiRequestID] = PendingRequestRoute(
-                    threadID: threadID,
-                    wireID: requestID
-                )
-            } else if activity.kind == "user-input.resolved", let uiRequestID {
-                open[uiRequestID] = nil
-                inputRoutes[uiRequestID] = nil
-            } else if activity.kind == "provider.user-input.respond.failed", let uiRequestID {
-                let detail = activity.payload["detail"]?.stringValue?.lowercased() ?? ""
-                if detail.contains("stale") || detail.contains("unknown") {
-                    open[uiRequestID] = nil
-                    inputRoutes[uiRequestID] = nil
-                }
-            }
-        }
-        return open.values.sorted { $0.id < $1.id }
-    }
-
-    private func parseInputQuestions(_ payload: JSONValue) -> [FeatureInputQuestion]? {
-        guard case let .array(rawQuestions)? = payload["questions"] else { return nil }
-        return rawQuestions.compactMap { rawQuestion in
-            guard case let .object(question) = rawQuestion,
-                  let id = question["id"]?.stringValue,
-                  let header = question["header"]?.stringValue,
-                  let text = question["question"]?.stringValue else {
-                return nil
-            }
-            let options: [FeatureInputOption]
-            if case let .array(rawOptions)? = question["options"] {
-                options = rawOptions.compactMap { rawOption in
-                    guard case let .object(option) = rawOption,
-                          let label = option["label"]?.stringValue else {
-                        return nil
-                    }
-                    return FeatureInputOption(
-                        label: label,
-                        detail: option["description"]?.stringValue ?? ""
-                    )
-                }
-            } else {
-                options = []
-            }
-            let allowsMultiple: Bool
-            if case let .bool(value)? = question["multiSelect"] {
-                allowsMultiple = value
-            } else {
-                allowsMultiple = false
-            }
-            return FeatureInputQuestion(
-                id: id,
-                header: header,
-                question: text,
-                options: options,
-                allowsMultiple: allowsMultiple
-            )
-        }
-    }
-
+    /// Maps a V2 run status plus any pending runtime request onto the state the
+    /// UI renders.
+    ///
+    /// A pending request outranks the run status: a run sitting in `running`
+    /// while it blocks on an approval is, to the person looking at it, waiting
+    /// on them.
     private func mapThreadState(
-        latestTurn: OrchestrationLatestTurn?,
-        session: OrchestrationSession?,
-        hasApprovals: Bool,
-        hasUserInput: Bool
+        status: String,
+        pendingRequestKind: String?
     ) -> FeatureThreadState {
-        if hasApprovals { return .waitingForApproval }
-        if hasUserInput { return .waitingForInput }
-        if session?.status == "starting" { return .queued }
-        if session?.status == "running" || latestTurn?.state == "running" { return .working }
-        if session?.status == "error" || latestTurn?.state == "error" { return .failed }
-        if latestTurn?.state == "completed" { return .completed }
-        return .idle
-    }
+        switch pendingRequestKind {
+        case "user_input":
+            return .waitingForInput
+        case "command", "file-read", "file-change", "dynamic_tool_call":
+            return .waitingForApproval
+        // `auth_refresh` blocks the run but has no approval card behind it, so
+        // showing "waiting for approval" would point at nothing. Fall through to
+        // the run status instead.
+        default:
+            break
+        }
 
-    private func mapRole(_ role: String) -> FeatureMessageRole {
-        switch role {
-        case "user": .user
-        case "assistant": .assistant
-        case "system": .system
-        default: .tool
+        switch status {
+        case "preparing", "queued", "starting": return .queued
+        case "running", "waiting": return .working
+        case "failed": return .failed
+        case "completed": return .completed
+        // `interrupted`, `cancelled`, and `rolled_back` all mean the run stopped
+        // without finishing its work, which reads as idle rather than as failure.
+        default: return .idle
         }
     }
+
 
     private func isSettled(_ override: String?, settledAt: String?) -> Bool {
         if override == "active" { return false }
@@ -4205,7 +3860,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private func mapProviders(
         environmentID: String,
-        shell: OrchestrationShellSnapshot,
+        shell: OrchestrationV2ShellSnapshot,
         config: ServerConfigSnapshot?
     ) -> [FeatureProvider] {
         if let providers = config?.providers, !providers.isEmpty {
@@ -4276,7 +3931,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// Without a server config the catalog is inferred from selections in the
     /// shell, which is cheap enough to rebuild per publish.
     private func mapShellFallbackProviders(
-        _ shell: OrchestrationShellSnapshot
+        _ shell: OrchestrationV2ShellSnapshot
     ) -> [FeatureProvider] {
         var modelsByProvider: [String: Set<String>] = [:]
         for selection in shell.projects.compactMap(\.defaultModelSelection)
@@ -4328,7 +3983,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ selection: FeatureSelection?,
         projectID: String,
         environmentID: String,
-        shell: OrchestrationShellSnapshot?
+        shell: OrchestrationV2ShellSnapshot?
     ) -> ModelSelection {
         if let selection {
             return coreModelSelection(selection)
@@ -4351,7 +4006,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func fallbackModelSelection(
         environmentID: String,
         projectID: String?,
-        shell: OrchestrationShellSnapshot?
+        shell: OrchestrationV2ShellSnapshot?
     ) -> ModelSelection {
         let config = serverConfigsByEnvironmentID[environmentID]
         let appSelection = loadSettings().defaultSelection
@@ -4508,15 +4163,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    private func threadProviderName(
-        session: OrchestrationSession?,
-        modelSelection: ModelSelection
-    ) -> String {
-        if let name = session?.providerName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !name.isEmpty {
-            return name
-        }
-        let providerID = session?.providerInstanceId ?? modelSelection.instanceId
+    /// V2 has no provider session on the thread, so the display name comes from
+    /// the model selection's instance and the server's provider catalog.
+    private func threadProviderName(modelSelection: ModelSelection) -> String {
+        let providerID = modelSelection.instanceId
         if let provider = latestServerConfig?.providers.first(where: {
             $0.instanceId == providerID
         }) {
@@ -4587,8 +4237,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
             self.publish(
                 hydrated,
-                threadID: threadID,
-                synchronizeRenderedMessages: true
+                threadID: threadID
             )
             self.finishAttachmentHydration(threadID: threadID, workID: workID)
         }
@@ -4680,57 +4329,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return hydrated
     }
 
+    /// Latest real activity. `updatedAt` is the floor rather than a candidate:
+    /// it moves for bookkeeping writes like a visit watermark, so preferring it
+    /// would make untouched threads drift to the top of the list.
     private func lastActivityDate(
         latestUserMessageAt: String?,
-        latestTurn: OrchestrationLatestTurn?
+        latestRunCompletedAt: String?,
+        updatedAt: String
     ) -> Date? {
-        [
-            latestUserMessageAt,
-            latestTurn?.requestedAt,
-            latestTurn?.startedAt,
-            latestTurn?.completedAt,
-        ]
-        .compactMap { $0.flatMap(parseValidDate) }
-        .max()
-    }
-
-    private func failureDate(
-        latestTurn: OrchestrationLatestTurn?,
-        session: OrchestrationSession?
-    ) -> Date? {
-        guard session?.status == "error" || latestTurn?.state == "error" else {
-            return nil
-        }
-        return [
-            session?.updatedAt,
-            latestTurn?.completedAt,
-            latestTurn?.startedAt,
-            latestTurn?.requestedAt,
-        ]
-        .compactMap { $0.flatMap(parseValidDate) }
-        .max()
-    }
-
-    private func workingStartedAt(
-        latestTurn: OrchestrationLatestTurn?,
-        session: OrchestrationSession?
-    ) -> Date? {
-        guard session?.status == "starting"
-                || session?.status == "running"
-                || latestTurn?.state == "running" else {
-            return nil
-        }
-        let candidates: [String?]
-        if let latestTurn, latestTurn.completedAt == nil {
-            candidates = [
-                latestTurn.startedAt,
-                latestTurn.requestedAt,
-                session?.updatedAt,
-            ]
-        } else {
-            candidates = [session?.updatedAt]
-        }
-        return candidates.lazy.compactMap { $0.flatMap(self.parseValidDate) }.first
+        let activity = [latestUserMessageAt, latestRunCompletedAt]
+            .compactMap { $0.flatMap(parseValidDate) }
+            .max()
+        return activity ?? parseValidDate(updatedAt)
     }
 
     private func makeUploadAttachments(
@@ -4824,453 +4434,150 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private static let dateFormatter = ISO8601DateFormatter()
 }
 
-enum NativeDetailRenderMutation: Equatable {
-    case full
-    case message(OrchestrationMessage)
-    case activity(OrchestrationActivity)
-    case metadata
-    case none
-}
 
-struct NativeDetailRenderMutations {
-    private(set) var requiresFullRebuild = false
-    private(set) var messages: [OrchestrationMessage] = []
-    private(set) var activities: [OrchestrationActivity] = []
 
-    mutating func formUnion(_ mutation: NativeDetailRenderMutation) {
-        guard !requiresFullRebuild else { return }
-        switch mutation {
-        case .full:
-            requiresFullRebuild = true
-            messages.removeAll(keepingCapacity: true)
-            activities.removeAll(keepingCapacity: true)
-        case let .message(message):
-            if let index = messages.firstIndex(where: { $0.id == message.id }) {
-                messages[index] = message
-            } else {
-                messages.append(message)
-            }
-        case let .activity(activity):
-            if let index = activities.firstIndex(where: { $0.id == activity.id }) {
-                activities[index] = activity
-            } else {
-                activities.append(activity)
-            }
-        case .metadata, .none:
-            break
-        }
-    }
-}
 
-private final class NativeDetailRenderCache {
-    var isInitialized = false
-    var messagesByID: [String: FeatureMessage] = [:]
-    var mergedMessages: [FeatureMessage] = []
-    var mergedIndexByID: [String: Int] = [:]
-    var workLogsByGroupID: [String: NativeWorkLogAccumulator] = [:]
-    var workLogActivityIDs: Set<String> = []
-    var approvals: [FeatureApproval] = []
-    var userInputs: [FeatureUserInput] = []
-}
-
-private struct NativeWorkLogAccumulator {
-    private static let terminalKinds = Set([
-        "tool.completed", "task.completed", "turn.plan.updated",
-    ])
-
-    private(set) var count = 0
-    private var visibleLines: [String] = []
-    private var createdAt = Date.distantPast
-
-    static func accepts(_ activity: OrchestrationActivity) -> Bool {
-        activity.tone != "error" && terminalKinds.contains(activity.kind)
-    }
-
-    mutating func append(
-        _ activity: OrchestrationActivity,
-        preview: String?,
-        createdAt: Date
-    ) {
-        if count == 0 {
-            self.createdAt = createdAt
-        }
-        count += 1
-        visibleLines.append("• \(preview ?? activity.summary)")
-        if visibleLines.count > 40 {
-            visibleLines.removeFirst(visibleLines.count - 40)
-        }
-    }
-
-    func message(groupID: String) -> FeatureMessage {
-        var lines: [String] = []
-        if count > visibleLines.count {
-            lines.append("\(count - visibleLines.count) earlier updates hidden")
-        }
-        lines.append(contentsOf: visibleLines)
-        return FeatureMessage(
-            id: "work-log-\(groupID)",
-            role: .tool,
-            text: lines.joined(separator: "\n"),
-            createdAt: createdAt,
-            state: .complete,
-            toolName: "Work log · \(count)"
-        )
-    }
-}
-
+/// Outcome of folding one live event into the cached projection.
 enum NativeThreadDetailReductionResult: Equatable {
-    case updated(OrchestrationThread)
+    case updated(OrchestrationV2ThreadProjection)
     case unchanged
+    /// The event changed structure this reducer does not model. Ask the server
+    /// for an authoritative projection rather than guessing.
     case refresh
 }
 
 struct NativeThreadDetailReduction: Equatable {
     let sequence: Int
     let result: NativeThreadDetailReductionResult
-    let renderMutation: NativeDetailRenderMutation
-
-    init(
-        sequence: Int,
-        result: NativeThreadDetailReductionResult,
-        renderMutation: NativeDetailRenderMutation = .metadata
-    ) {
-        self.sequence = sequence
-        self.result = result
-        self.renderMutation = renderMutation
-    }
 }
 
-/// Swift counterpart to client-runtime's thread reducer for the detail event
-/// subset sent by `subscribeThread`. Destructive and forward-unknown events
-/// deliberately request an authoritative snapshot.
+/// Folds `subscribeThread` events into the cached V2 projection.
+///
+/// Only the high-frequency events are reduced in place: an assistant message
+/// streaming a long answer emits many `turn-item.updated` events per second, and
+/// refetching the projection for each would make the transcript stutter.
+/// Everything else — structural changes, rollbacks, anything unrecognized —
+/// takes the authoritative-refresh path, which is cheap because it is rare and
+/// always correct.
 enum NativeThreadDetailReducer {
     static func apply(
         _ event: JSONValue,
-        to thread: OrchestrationThread
+        to projection: OrchestrationV2ThreadProjection
     ) -> NativeThreadDetailReduction {
         guard case let .object(object) = event,
               let type = object["type"]?.stringValue,
-              let occurredAt = object["occurredAt"]?.stringValue,
               let sequence = intValue(object["sequence"]),
-              let payload = object["payload"],
-              payload["threadId"]?.stringValue == thread.id else {
-            return NativeThreadDetailReduction(
-                sequence: -1,
-                result: .refresh,
-                renderMutation: .full
-            )
+              let payload = object["payload"] else {
+            return NativeThreadDetailReduction(sequence: -1, result: .refresh)
         }
 
-        let result: NativeThreadDetailReductionResult
-        var renderMutation = NativeDetailRenderMutation.metadata
         switch type {
-        case "thread.message-sent":
-            result = reduceMessage(
-                payload: payload,
-                occurredAt: occurredAt,
-                thread: thread,
-                renderMutation: &renderMutation
+        case "turn-item.updated":
+            guard let item = decode(OrchestrationV2TurnItem.self, from: payload),
+                  item.base.threadId == projection.thread.id else {
+                return NativeThreadDetailReduction(sequence: -1, result: .refresh)
+            }
+            return NativeThreadDetailReduction(
+                sequence: sequence,
+                result: .updated(projection.upserting(item))
             )
-        case "thread.activity-appended":
-            result = reduceActivity(
-                payload: payload,
-                occurredAt: occurredAt,
-                thread: thread,
-                renderMutation: &renderMutation
+
+        case "run.created", "run.updated":
+            guard let run = decode(OrchestrationV2Run.self, from: payload) else {
+                return NativeThreadDetailReduction(sequence: -1, result: .refresh)
+            }
+            return NativeThreadDetailReduction(
+                sequence: sequence,
+                result: .updated(projection.upserting(run))
             )
-        case "thread.session-set":
-            result = reduceSession(payload: payload, occurredAt: occurredAt, thread: thread)
-        case "thread.turn-diff-completed":
-            result = reduceTurnDiff(payload: payload, occurredAt: occurredAt, thread: thread)
-        case "thread.proposed-plan-upserted":
-            // Proposed plans are not rendered by the native detail model yet.
-            result = .unchanged
-            renderMutation = .none
-        case "thread.reverted":
-            result = .refresh
-            renderMutation = .full
+
+        case "thread.created",
+             "thread.archived", "thread.unarchived", "thread.deleted",
+             "thread.settled", "thread.unsettled",
+             "thread.snoozed", "thread.unsnoozed",
+             "thread.visited", "thread.marked-unread",
+             "thread.metadata-updated", "thread.runtime-mode-updated",
+             "thread.interaction-mode-updated", "thread.model-selection-updated",
+             "thread.provider-switched":
+            guard let thread = decode(OrchestrationV2AppThread.self, from: payload),
+                  thread.id == projection.thread.id else {
+                return NativeThreadDetailReduction(sequence: -1, result: .refresh)
+            }
+            return NativeThreadDetailReduction(
+                sequence: sequence,
+                result: .updated(projection.replacingThread(thread))
+            )
+
         default:
-            result = .refresh
-            renderMutation = .full
+            // Checkpoint rollbacks drop whole runs out of the projection, plan
+            // and handoff updates restructure it, and an unrecognized type is by
+            // definition unmodeled. All three need the server's version.
+            return NativeThreadDetailReduction(sequence: -1, result: .refresh)
         }
-        return NativeThreadDetailReduction(
-            sequence: sequence,
-            result: result,
-            renderMutation: renderMutation
-        )
     }
 
-    private static func reduceMessage(
-        payload: JSONValue,
-        occurredAt: String,
-        thread: OrchestrationThread,
-        renderMutation: inout NativeDetailRenderMutation
-    ) -> NativeThreadDetailReductionResult {
-        guard let id = payload["messageId"]?.stringValue,
-              let role = payload["role"]?.stringValue,
-              let text = payload["text"]?.stringValue,
-              let streaming = boolValue(payload["streaming"]),
-              let createdAt = payload["createdAt"]?.stringValue,
-              let updatedAt = payload["updatedAt"]?.stringValue else {
-            return .refresh
-        }
-        let turnID = payload["turnId"]?.stringValue
-        let attachments: [ChatAttachment]?
-        if let rawAttachments = payload["attachments"], rawAttachments != .null {
-            guard let decoded = try? rawAttachments.decode([ChatAttachment].self) else {
-                return .refresh
-            }
-            attachments = decoded
-        } else {
-            attachments = nil
-        }
-
-        var messages = thread.messages
-        let existingIndex = messages.last?.id == id
-            ? messages.indices.last
-            : messages.firstIndex(where: { $0.id == id })
-        if let index = existingIndex {
-            let existing = messages[index]
-            messages[index] = OrchestrationMessage(
-                id: existing.id,
-                role: existing.role,
-                text: streaming ? existing.text + text : (text.isEmpty ? existing.text : text),
-                attachments: attachments ?? existing.attachments,
-                turnId: turnID,
-                streaming: streaming,
-                createdAt: existing.createdAt,
-                updatedAt: streaming ? existing.updatedAt : updatedAt
-            )
-            renderMutation = .message(messages[index])
-        } else {
-            let message = OrchestrationMessage(
-                id: id,
-                role: role,
-                text: text,
-                attachments: attachments,
-                turnId: turnID,
-                streaming: streaming,
-                createdAt: createdAt,
-                updatedAt: updatedAt
-            )
-            messages.append(message)
-            renderMutation = .message(message)
-        }
-
-        var latestTurn = thread.latestTurn
-        var checkpoints = thread.checkpoints
-        if role == "assistant", let turnID,
-           latestTurn == nil || latestTurn?.turnId == turnID {
-            let turnStillRunning = thread.session?.status == "running"
-                && thread.session?.activeTurnId == turnID
-            let settlesTurn = !streaming && !turnStillRunning
-            let previous = latestTurn?.turnId == turnID ? latestTurn : nil
-            let state = settlesTurn
-                ? (previous?.state == "interrupted" || previous?.state == "error"
-                    ? previous!.state
-                    : "completed")
-                : "running"
-            latestTurn = OrchestrationLatestTurn(
-                turnId: turnID,
-                state: state,
-                requestedAt: previous?.requestedAt ?? createdAt,
-                startedAt: previous?.startedAt ?? createdAt,
-                completedAt: settlesTurn ? updatedAt : previous?.completedAt,
-                assistantMessageId: id
-            )
-            checkpoints = checkpoints.map { checkpoint in
-                guard checkpoint.turnId == turnID,
-                      checkpoint.assistantMessageId == nil else { return checkpoint }
-                return CheckpointSummary(
-                    turnId: checkpoint.turnId,
-                    checkpointTurnCount: checkpoint.checkpointTurnCount,
-                    checkpointRef: checkpoint.checkpointRef,
-                    status: checkpoint.status,
-                    files: checkpoint.files,
-                    assistantMessageId: id,
-                    completedAt: checkpoint.completedAt
-                )
-            }
-        }
-        return .updated(
-            replacing(
-                thread,
-                messages: messages,
-                checkpoints: checkpoints,
-                latestTurn: latestTurn,
-                updatedAt: occurredAt
-            )
-        )
-    }
-
-    private static func reduceActivity(
-        payload: JSONValue,
-        occurredAt: String,
-        thread: OrchestrationThread,
-        renderMutation: inout NativeDetailRenderMutation
-    ) -> NativeThreadDetailReductionResult {
-        guard let raw = payload["activity"],
-              let activity = try? raw.decode(OrchestrationActivity.self) else {
-            return .refresh
-        }
-        renderMutation = .activity(activity)
-        return .updated(
-            // The render cache owns the event tail. Keeping the authoritative
-            // snapshot array shared avoids copying tens of thousands of old
-            // activities for each append; a resnapshot rebuilds after recovery.
-            replacing(thread, updatedAt: occurredAt)
-        )
-    }
-
-    private static func reduceSession(
-        payload: JSONValue,
-        occurredAt: String,
-        thread: OrchestrationThread
-    ) -> NativeThreadDetailReductionResult {
-        guard let raw = payload["session"],
-              let session = try? raw.decode(OrchestrationSession.self) else {
-            return .refresh
-        }
-        var latestTurn = thread.latestTurn
-        if session.status == "running", let activeTurnID = session.activeTurnId {
-            let previous = latestTurn?.turnId == activeTurnID ? latestTurn : nil
-            latestTurn = OrchestrationLatestTurn(
-                turnId: activeTurnID,
-                state: "running",
-                requestedAt: previous?.requestedAt ?? session.updatedAt,
-                startedAt: previous?.startedAt ?? session.updatedAt,
-                completedAt: nil,
-                assistantMessageId: previous?.assistantMessageId
-            )
-        } else if latestTurn?.state == "running",
-                  let settledState = settledTurnState(session.status),
-                  let current = latestTurn {
-            latestTurn = OrchestrationLatestTurn(
-                turnId: current.turnId,
-                state: settledState,
-                requestedAt: current.requestedAt,
-                startedAt: current.startedAt,
-                completedAt: session.updatedAt,
-                assistantMessageId: current.assistantMessageId
-            )
-        }
-        return .updated(
-            replacing(
-                thread,
-                latestTurn: latestTurn,
-                session: session,
-                updatedAt: occurredAt
-            )
-        )
-    }
-
-    private static func reduceTurnDiff(
-        payload: JSONValue,
-        occurredAt: String,
-        thread: OrchestrationThread
-    ) -> NativeThreadDetailReductionResult {
-        guard let turnID = payload["turnId"]?.stringValue,
-              let turnCount = intValue(payload["checkpointTurnCount"]),
-              let checkpointRef = payload["checkpointRef"]?.stringValue,
-              let status = payload["status"]?.stringValue,
-              let completedAt = payload["completedAt"]?.stringValue,
-              let rawFiles = payload["files"],
-              let files = try? rawFiles.decode([CheckpointFile].self) else {
-            return .refresh
-        }
-        let assistantMessageID = payload["assistantMessageId"]?.stringValue
-        let checkpoint = CheckpointSummary(
-            turnId: turnID,
-            checkpointTurnCount: turnCount,
-            checkpointRef: checkpointRef,
-            status: status,
-            files: files,
-            assistantMessageId: assistantMessageID,
-            completedAt: completedAt
-        )
-        if let existing = thread.checkpoints.first(where: { $0.turnId == turnID }),
-           existing.status != "missing", status == "missing" {
-            return .unchanged
-        }
-        var checkpoints = thread.checkpoints.filter { $0.turnId != turnID }
-        checkpoints.append(checkpoint)
-        checkpoints.sort { $0.checkpointTurnCount < $1.checkpointTurnCount }
-
-        var latestTurn = thread.latestTurn
-        let stillRunning = thread.session?.status == "running"
-            && thread.session?.activeTurnId == turnID
-        if !stillRunning, latestTurn == nil || latestTurn?.turnId == turnID {
-            latestTurn = OrchestrationLatestTurn(
-                turnId: turnID,
-                state: status == "error" ? "error" : "completed",
-                requestedAt: latestTurn?.requestedAt ?? completedAt,
-                startedAt: latestTurn?.startedAt ?? completedAt,
-                completedAt: completedAt,
-                assistantMessageId: assistantMessageID
-            )
-        }
-        return .updated(
-            replacing(
-                thread,
-                checkpoints: checkpoints,
-                latestTurn: latestTurn,
-                updatedAt: occurredAt
-            )
-        )
-    }
-
-    private static func replacing(
-        _ thread: OrchestrationThread,
-        messages: [OrchestrationMessage]? = nil,
-        activities: [OrchestrationActivity]? = nil,
-        checkpoints: [CheckpointSummary]? = nil,
-        latestTurn: OrchestrationLatestTurn? = nil,
-        session: OrchestrationSession? = nil,
-        updatedAt: String
-    ) -> OrchestrationThread {
-        OrchestrationThread(
-            id: thread.id,
-            projectId: thread.projectId,
-            title: thread.title,
-            modelSelection: thread.modelSelection,
-            runtimeMode: thread.runtimeMode,
-            interactionMode: thread.interactionMode,
-            branch: thread.branch,
-            worktreePath: thread.worktreePath,
-            latestTurn: latestTurn ?? thread.latestTurn,
-            createdAt: thread.createdAt,
-            updatedAt: updatedAt,
-            archivedAt: thread.archivedAt,
-            settledOverride: thread.settledOverride,
-            settledAt: thread.settledAt,
-            snoozedUntil: thread.snoozedUntil,
-            snoozedAt: thread.snoozedAt,
-            pinnedAt: thread.pinnedAt,
-            deletedAt: thread.deletedAt,
-            messages: messages ?? thread.messages,
-            activities: activities ?? thread.activities,
-            checkpoints: checkpoints ?? thread.checkpoints,
-            session: session ?? thread.session
-        )
-    }
-
-    private static func settledTurnState(_ status: String) -> String? {
-        switch status {
-        case "idle", "ready": "completed"
-        case "error": "error"
-        case "interrupted", "stopped": "interrupted"
-        default: nil
-        }
+    private static func decode<T: Decodable>(_: T.Type, from value: JSONValue) -> T? {
+        guard let data = try? JSONEncoder.t3.encode(value) else { return nil }
+        return try? JSONDecoder.t3.decode(T.self, from: data)
     }
 
     private static func intValue(_ value: JSONValue?) -> Int? {
-        guard case let .number(number)? = value else { return nil }
-        return Int(exactly: number)
+        switch value {
+        case let .integer(integer): Int(exactly: integer)
+        case let .number(number): Int(exactly: number)
+        default: nil
+        }
+    }
+}
+
+extension OrchestrationV2ThreadProjection {
+    /// Replaces an item in place, preserving transcript order. An item that is
+    /// not in the visible window is still recorded so a later full projection
+    /// agrees with what was streamed.
+    func upserting(_ item: OrchestrationV2TurnItem) -> OrchestrationV2ThreadProjection {
+        var items = turnItems
+        if let index = items.firstIndex(where: { $0.id == item.id }) {
+            items[index] = item
+        } else {
+            items.append(item)
+        }
+
+        var visible = visibleTurnItems
+        if let index = visible.firstIndex(where: { $0.sourceItemId == item.id }) {
+            visible[index] = OrchestrationV2ProjectedTurnItem(
+                position: visible[index].position,
+                visibility: visible[index].visibility,
+                sourceThreadId: visible[index].sourceThreadId,
+                sourceItemId: visible[index].sourceItemId,
+                item: item
+            )
+        } else {
+            visible.append(
+                OrchestrationV2ProjectedTurnItem(
+                    position: (visible.map(\.position).max() ?? -1) + 1,
+                    visibility: .local,
+                    sourceThreadId: item.base.threadId,
+                    sourceItemId: item.id,
+                    item: item
+                )
+            )
+        }
+
+        return replacing(turnItems: items, visibleTurnItems: visible)
     }
 
-    private static func boolValue(_ value: JSONValue?) -> Bool? {
-        guard case let .bool(boolean)? = value else { return nil }
-        return boolean
+    func upserting(_ run: OrchestrationV2Run) -> OrchestrationV2ThreadProjection {
+        var updated = runs
+        if let index = updated.firstIndex(where: { $0.id == run.id }) {
+            updated[index] = run
+        } else {
+            updated.append(run)
+        }
+        return replacing(runs: updated)
+    }
+
+    func replacingThread(_ thread: OrchestrationV2AppThread) -> OrchestrationV2ThreadProjection {
+        replacing(thread: thread)
     }
 }
 
@@ -5287,7 +4594,7 @@ private struct CachedAttachmentURL {
 private struct EnvironmentShellLoad: Sendable {
     let environment: Environment
     let client: T3Client
-    let shell: OrchestrationShellSnapshot?
+    let shell: OrchestrationV2ShellSnapshot?
     let config: ServerConfigSnapshot?
 }
 
@@ -5303,12 +4610,6 @@ private struct NativeProjectRoute {
     let client: T3Client
 }
 
-private struct PendingOlderThreadPage {
-    let snapshot: OrchestrationThreadDetailSnapshot
-    let epoch: Int
-    let threadID: String
-    let environmentID: String
-}
 
 private struct NativeThreadRoute {
     let uiID: String

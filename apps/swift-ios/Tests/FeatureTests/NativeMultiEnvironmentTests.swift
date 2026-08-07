@@ -303,19 +303,14 @@ final class NativeMultiEnvironmentTests: XCTestCase {
             repositoryIdentity: nil,
             defaultModelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
             scripts: [],
-            createdAt: current.updatedAt,
-            updatedAt: current.updatedAt,
+            createdAt: V2Fixture.timestamp,
+            updatedAt: V2Fixture.timestamp,
             deletedAt: nil
         )
-        await fixture.transport.setShell(
-            OrchestrationShellSnapshot(
-                snapshotSequence: current.snapshotSequence + 1,
-                projects: current.projects + [addedProject],
-                threads: current.threads,
-                updatedAt: current.updatedAt
-            ),
-            host: "one.example"
-        )
+        var next = current
+        next.snapshotSequence = current.snapshotSequence + 1
+        next.projects = current.projects + [addedProject]
+        await fixture.transport.setShell(next, host: "one.example")
         let events = fixture.client.events()
         var iterator = events.makeAsyncIterator()
         var refreshed: FeatureSnapshot?
@@ -527,13 +522,13 @@ private struct MultiEnvironmentFixture {
 }
 
 private actor MultiEnvironmentHTTPTransport: HTTPTransport {
-    private let shells: [String: OrchestrationShellSnapshot]
+    private let shells: [String: OrchestrationV2ShellSnapshot]
     private var shellData: [String: Data]
     private var reachableHosts: Set<String>
     private var shellReadsEnabledHosts: Set<String>
     private var dispatched: [MultiEnvironmentDispatchRecord] = []
 
-    init(shells: [String: OrchestrationShellSnapshot]) {
+    init(shells: [String: OrchestrationV2ShellSnapshot]) {
         self.shells = shells
         shellData = shells.mapValues { try! JSONEncoder.t3.encode($0) }
         reachableHosts = Set(shells.keys)
@@ -556,7 +551,7 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
         }
     }
 
-    func setShell(_ shell: OrchestrationShellSnapshot, host: String) {
+    func setShell(_ shell: OrchestrationV2ShellSnapshot, host: String) {
         shellData[host] = try! JSONEncoder.t3.encode(shell)
     }
 
@@ -635,84 +630,78 @@ private func multiEnvironmentShell(
     title: String,
     providerID: String = "codex",
     modelID: String = "gpt-5.6-sol"
-) -> OrchestrationShellSnapshot {
-    let timestamp = "2026-07-31T12:00:00.000Z"
-    let model = ModelSelection(instanceId: providerID, model: modelID)
-    return OrchestrationShellSnapshot(
-        snapshotSequence: 1,
-        projects: [
-            OrchestrationProject(
-                id: projectID,
-                title: title,
-                workspaceRoot: "/work/\(projectID)",
-                repositoryIdentity: nil,
-                defaultModelSelection: model,
-                scripts: [],
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                deletedAt: nil
-            ),
-        ],
-        threads: [
-            OrchestrationThreadShell(
-                id: threadID,
-                projectId: projectID,
-                title: title,
-                modelSelection: model,
-                runtimeMode: .fullAccess,
-                interactionMode: .default,
-                branch: "feat/multi-device",
-                worktreePath: nil,
-                latestTurn: nil,
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                archivedAt: nil,
-                settledOverride: nil,
-                settledAt: nil,
-                snoozedUntil: nil,
-                snoozedAt: nil,
-                pinnedAt: nil,
-                session: nil,
-                latestUserMessageAt: nil,
-                hasPendingApprovals: false,
-                hasPendingUserInput: false,
-                hasActionableProposedPlan: false
-            ),
-        ],
-        updatedAt: timestamp
+) -> OrchestrationV2ShellSnapshot {
+    var project = V2Fixture.project(
+        id: projectID,
+        title: title,
+        workspaceRoot: "/work/" + projectID
+    )
+    project = OrchestrationProject(
+        id: project.id,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+        repositoryIdentity: nil,
+        defaultModelSelection: ModelSelection(instanceId: providerID, model: modelID),
+        scripts: [],
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        deletedAt: nil
+    )
+    return V2Fixture.shellSnapshot(
+        projects: [project],
+        threads: [V2Fixture.threadShell(id: threadID, projectID: projectID, title: title)]
     )
 }
 
 private func multiEnvironmentDetail(
     projectID: String,
     threadID: String
-) -> OrchestrationThreadDetailSnapshot {
+) -> OrchestrationV2ThreadDetailSnapshot {
     let timestamp = "2026-07-31T12:00:00.000Z"
-    return OrchestrationThreadDetailSnapshot(
+    return OrchestrationV2ThreadDetailSnapshot(
         snapshotSequence: 2,
-        thread: OrchestrationThread(
-            id: threadID,
-            projectId: projectID,
-            title: threadID,
-            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
-            runtimeMode: .fullAccess,
-            interactionMode: .default,
-            branch: "feat/multi-device",
-            worktreePath: nil,
-            latestTurn: nil,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            archivedAt: nil,
-            settledOverride: nil,
-            settledAt: nil,
-            snoozedUntil: nil,
-            snoozedAt: nil,
-            pinnedAt: nil,
-            deletedAt: nil,
-            messages: [],
-            activities: [],
-            checkpoints: [],
-            session: nil
+        projection: OrchestrationV2ThreadProjection(
+            thread: OrchestrationV2AppThread(
+                id: threadID,
+                projectId: projectID,
+                createdBy: "user",
+                creationSource: "mobile",
+                title: threadID,
+                titleRevision: nil,
+                titleOrigin: nil,
+                providerInstanceId: "codex",
+                modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
+                runtimeMode: .fullAccess,
+                interactionMode: .default,
+                branch: "feat/multi-device",
+                worktreePath: nil,
+                activeProviderThreadId: nil,
+                historyOrigin: nil,
+                lineage: OrchestrationV2AppThreadLineage(
+                    parentThreadId: nil,
+                    relationshipToParent: nil,
+                    rootThreadId: threadID
+                ),
+                forkedFrom: nil,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                archivedAt: nil,
+                settledOverride: nil,
+                settledAt: nil,
+                pinnedAt: nil,
+                workInboxRole: nil,
+                timelineClearedAt: nil,
+                snoozedUntil: nil,
+                snoozedAt: nil,
+                lastVisitedAt: nil,
+                titleRegeneration: nil,
+                deletedAt: nil
+            ),
+            runs: [],
+            turnItems: [],
+            visibleTurnItems: [],
+            truncatedVisibleItemCount: nil,
+            updatedAt: timestamp
         )
     )
 }

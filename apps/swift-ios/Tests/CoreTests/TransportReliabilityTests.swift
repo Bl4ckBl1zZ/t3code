@@ -79,7 +79,7 @@ final class TransportReliabilityTests: XCTestCase {
         XCTAssertEqual(request.timeoutInterval, 6)
     }
 
-    func testThreadSnapshotSendsPaginationWindowAndDecodesCursor() async throws {
+    func testThreadSnapshotSendsVisibleItemWindowAndDecodesWithheldCount() async throws {
         let environment = Environment(
             id: "environment-1",
             label: "Studio",
@@ -90,15 +90,9 @@ final class TransportReliabilityTests: XCTestCase {
             environment.id: EnvironmentCredential(accessToken: "access-token"),
         ])
         let body = try JSONEncoder.t3.encode(
-            OrchestrationThreadDetailSnapshot(
+            OrchestrationV2ThreadDetailSnapshot(
                 snapshotSequence: 42,
-                thread: paginationThreadFixture(),
-                page: OrchestrationThreadDetailPage(
-                    beforeCursor: "next-cursor",
-                    hasMore: true,
-                    snapshotSequence: 42,
-                    threadSequence: 40
-                )
+                projection: windowedProjectionFixture(truncatedVisibleItemCount: 40)
             )
         )
         let transport = RecordingHTTPTransport { request in
@@ -109,12 +103,11 @@ final class TransportReliabilityTests: XCTestCase {
         let snapshot = try await api.threadSnapshot(
             id: "thread-1",
             environment: environment,
-            turnLimit: 20,
-            beforeCursor: "current-cursor"
+            maxVisibleItems: 20
         )
 
-        XCTAssertEqual(snapshot.page?.beforeCursor, "next-cursor")
-        XCTAssertEqual(snapshot.page?.threadSequence, 40)
+        XCTAssertEqual(snapshot.projection.truncatedVisibleItemCount, 40)
+        XCTAssertTrue(snapshot.projection.hasOlderItems)
         let requests = await transport.requests
         let request = try XCTUnwrap(requests.first)
         let query = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
@@ -123,7 +116,7 @@ final class TransportReliabilityTests: XCTestCase {
             Dictionary(uniqueKeysWithValues: (query ?? []).compactMap { item in
                 item.value.map { (item.name, $0) }
             }),
-            ["turnLimit": "20", "beforeCursor": "current-cursor"]
+            ["maxVisibleItems": "20"]
         )
     }
 
@@ -363,30 +356,51 @@ final class TransportReliabilityTests: XCTestCase {
 
 }
 
-private func paginationThreadFixture() -> OrchestrationThread {
-    OrchestrationThread(
-        id: "thread-1",
-        projectId: "project-1",
-        title: "Long native thread",
-        modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
-        runtimeMode: .fullAccess,
-        interactionMode: .default,
-        branch: "main",
-        worktreePath: nil,
-        latestTurn: nil,
-        createdAt: "2026-08-06T12:00:00.000Z",
-        updatedAt: "2026-08-06T12:00:00.000Z",
-        archivedAt: nil,
-        settledOverride: nil,
-        settledAt: nil,
-        snoozedUntil: nil,
-        snoozedAt: nil,
-        pinnedAt: nil,
-        deletedAt: nil,
-        messages: [],
-        activities: [],
-        checkpoints: [],
-        session: nil
+private func windowedProjectionFixture(
+    truncatedVisibleItemCount: Int
+) -> OrchestrationV2ThreadProjection {
+    OrchestrationV2ThreadProjection(
+        thread: OrchestrationV2AppThread(
+            id: "thread-1",
+            projectId: "project-1",
+            createdBy: "user",
+            creationSource: "mobile",
+            title: "Long native thread",
+            titleRevision: nil,
+            titleOrigin: nil,
+            providerInstanceId: "codex",
+            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
+            runtimeMode: .fullAccess,
+            interactionMode: .default,
+            branch: "main",
+            worktreePath: nil,
+            activeProviderThreadId: nil,
+            historyOrigin: nil,
+            lineage: OrchestrationV2AppThreadLineage(
+                parentThreadId: nil,
+                relationshipToParent: nil,
+                rootThreadId: "thread-1"
+            ),
+            forkedFrom: nil,
+            createdAt: "2026-08-06T12:00:00.000Z",
+            updatedAt: "2026-08-06T12:00:00.000Z",
+            archivedAt: nil,
+            settledOverride: nil,
+            settledAt: nil,
+            pinnedAt: nil,
+            workInboxRole: nil,
+            timelineClearedAt: nil,
+            snoozedUntil: nil,
+            snoozedAt: nil,
+            lastVisitedAt: nil,
+            titleRegeneration: nil,
+            deletedAt: nil
+        ),
+        runs: [],
+        turnItems: [],
+        visibleTurnItems: [],
+        truncatedVisibleItemCount: truncatedVisibleItemCount,
+        updatedAt: "2026-08-06T12:00:00.000Z"
     )
 }
 

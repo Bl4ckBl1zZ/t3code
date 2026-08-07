@@ -369,7 +369,7 @@ private actor ConcurrentBootstrapHTTPTransport: HTTPTransport {
     private let shellData: Data
     private var acceptsShellReads = true
 
-    init(shell: OrchestrationShellSnapshot) {
+    init(shell: OrchestrationV2ShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
     }
 
@@ -394,51 +394,14 @@ private actor ConcurrentBootstrapHTTPTransport: HTTPTransport {
     }
 }
 
-private func retryShellSnapshot() -> OrchestrationShellSnapshot {
-    let timestamp = "2026-07-30T12:00:00.000Z"
-    let model = ModelSelection(instanceId: "codex", model: "gpt-5.4")
-    return OrchestrationShellSnapshot(
-        snapshotSequence: 1,
+private func retryShellSnapshot() -> OrchestrationV2ShellSnapshot {
+    V2Fixture.shellSnapshot(
         projects: [
-            OrchestrationProject(
-                id: "project-1",
-                title: "T3 Code",
-                workspaceRoot: "/work/t3",
-                repositoryIdentity: nil,
-                defaultModelSelection: model,
-                scripts: [],
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                deletedAt: nil
-            ),
+            V2Fixture.project(id: "project-1", title: "T3 Code", workspaceRoot: "/work/t3"),
         ],
         threads: [
-            OrchestrationThreadShell(
-                id: "thread-existing",
-                projectId: "project-1",
-                title: "Existing",
-                modelSelection: model,
-                runtimeMode: .approvalRequired,
-                interactionMode: .plan,
-                branch: nil,
-                worktreePath: nil,
-                latestTurn: nil,
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                archivedAt: nil,
-                settledOverride: nil,
-                settledAt: nil,
-                snoozedUntil: nil,
-                snoozedAt: nil,
-                pinnedAt: nil,
-                session: nil,
-                latestUserMessageAt: nil,
-                hasPendingApprovals: false,
-                hasPendingUserInput: false,
-                hasActionableProposedPlan: false
-            ),
-        ],
-        updatedAt: timestamp
+            V2Fixture.threadShell(id: "thread-existing", title: "Existing"),
+        ]
     )
 }
 
@@ -446,7 +409,7 @@ private actor RetryIdentityHTTPTransport: HTTPTransport {
     private let shellData: Data
     private var commands: [JSONValue] = []
 
-    init(shell: OrchestrationShellSnapshot) {
+    init(shell: OrchestrationV2ShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
     }
 
@@ -495,7 +458,7 @@ private actor PartialBootstrapHTTPTransport: HTTPTransport {
     private let shellData: Data
     private var commands: [JSONValue] = []
 
-    init(shell: OrchestrationShellSnapshot) {
+    init(shell: OrchestrationV2ShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
     }
 
@@ -693,34 +656,9 @@ private func retryConfigResponse(for request: JSONValue) throws -> Data? {
     )
 }
 
-private func retryEmptyThreadDetail(id: String) -> OrchestrationThreadDetailSnapshot {
-    let timestamp = "2026-07-30T12:00:00.000Z"
-    return OrchestrationThreadDetailSnapshot(
-        snapshotSequence: 2,
-        thread: OrchestrationThread(
-            id: id,
-            projectId: "project-1",
-            title: "Recover the first turn",
-            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
-            runtimeMode: .fullAccess,
-            interactionMode: .default,
-            branch: nil,
-            worktreePath: nil,
-            latestTurn: nil,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            archivedAt: nil,
-            settledOverride: nil,
-            settledAt: nil,
-            snoozedUntil: nil,
-            snoozedAt: nil,
-            pinnedAt: nil,
-            deletedAt: nil,
-            messages: [],
-            activities: [],
-            checkpoints: [],
-            session: nil
-        )
+private func retryEmptyThreadDetail(id: String) -> OrchestrationV2ThreadDetailSnapshot {
+    V2Fixture.detailSnapshot(
+        thread: V2Fixture.appThread(id: id, title: "Recover the first turn")
     )
 }
 

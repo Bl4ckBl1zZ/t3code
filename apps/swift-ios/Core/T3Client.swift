@@ -55,34 +55,31 @@ public actor T3Client {
 
     public func shellSnapshot(
         timeoutInterval: TimeInterval? = nil
-    ) async throws -> OrchestrationShellSnapshot {
+    ) async throws -> OrchestrationV2ShellSnapshot {
         try await api.shellSnapshot(
             for: environment,
             timeoutInterval: timeoutInterval
         )
     }
 
-    public func readModel() async throws -> OrchestrationReadModel {
-        try await api.readModel(for: environment)
-    }
-
-    public func archivedShellSnapshot() async throws -> OrchestrationShellSnapshot {
+    /// The archived snapshot is the shell snapshot without an `archivedThreads`
+    /// list — its `threads` *are* the archived ones — so the same type decodes
+    /// both.
+    public func archivedShellSnapshot() async throws -> OrchestrationV2ShellSnapshot {
         try await rpc.request(
             RPCMethod.getArchivedShellSnapshot.rawValue,
-            as: OrchestrationShellSnapshot.self
+            as: OrchestrationV2ShellSnapshot.self
         )
     }
 
     public func threadSnapshot(
         id: String,
-        turnLimit: Int? = nil,
-        beforeCursor: String? = nil
-    ) async throws -> OrchestrationThreadDetailSnapshot {
+        maxVisibleItems: Int? = nil
+    ) async throws -> OrchestrationV2ThreadDetailSnapshot {
         try await api.threadSnapshot(
             id: id,
             environment: environment,
-            turnLimit: turnLimit,
-            beforeCursor: beforeCursor
+            maxVisibleItems: maxVisibleItems
         )
     }
 
@@ -124,7 +121,7 @@ public actor T3Client {
     /// transient network loss naturally reconnects without replaying commands.
     public func pollShell(
         every interval: Duration = .seconds(2)
-    ) -> AsyncThrowingStream<OrchestrationShellSnapshot, Error> {
+    ) -> AsyncThrowingStream<OrchestrationV2ShellSnapshot, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 var lastSequence: Int?
@@ -151,31 +148,35 @@ public actor T3Client {
 
     public func shellEvents(
         after sequence: Int? = nil
-    ) async -> AsyncThrowingStream<ShellStreamItem, Error> {
+    ) async -> AsyncThrowingStream<OrchestrationV2ShellStreamItem, Error> {
         var payload: [String: JSONValue] = ["requestCompletionMarker": .bool(true)]
         if let sequence { payload["afterSequence"] = .number(Double(sequence)) }
         return await rpc.subscribe(
             RPCMethod.subscribeShell.rawValue,
             payload: .object(payload),
-            as: ShellStreamItem.self
+            as: OrchestrationV2ShellStreamItem.self
         )
     }
 
+    /// `snapshotMaxVisibleItems` bounds any snapshot frame this subscription
+    /// sends. The HTTP snapshot endpoint spells the same idea `maxVisibleItems`.
     public func threadEvents(
         threadID: String,
         after sequence: Int? = nil,
-        turnLimit: Int? = nil
-    ) async -> AsyncThrowingStream<ThreadStreamItem, Error> {
+        snapshotMaxVisibleItems: Int? = nil
+    ) async -> AsyncThrowingStream<OrchestrationV2ThreadStreamItem, Error> {
         var payload: [String: JSONValue] = [
             "threadId": .string(threadID),
             "requestCompletionMarker": .bool(true),
         ]
         if let sequence { payload["afterSequence"] = .number(Double(sequence)) }
-        if let turnLimit { payload["turnLimit"] = .number(Double(turnLimit)) }
+        if let snapshotMaxVisibleItems {
+            payload["snapshotMaxVisibleItems"] = .number(Double(snapshotMaxVisibleItems))
+        }
         return await rpc.subscribe(
             RPCMethod.subscribeThread.rawValue,
             payload: .object(payload),
-            as: ThreadStreamItem.self
+            as: OrchestrationV2ThreadStreamItem.self
         )
     }
 

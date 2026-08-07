@@ -151,20 +151,31 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let providers: [ServerProviderSnapshot]
     public let settings: ServerSettingsSnapshot?
-    public let threadSnapshotPagination: Bool?
+    /// Whether thread subscriptions honour `snapshotMaxVisibleItems` windowing.
+    /// This fork's replacement for upstream's keyset `threadSnapshotPagination`.
+    public let threadSnapshotWindow: Bool?
+    /// Whether thread subscriptions can emit a catch-up completion marker.
+    public let threadResumeCompletionMarker: Bool?
+    /// Whether shell subscriptions can emit a catch-up completion marker.
+    public let shellResumeCompletionMarker: Bool?
 
     public init(
         providers: [ServerProviderSnapshot],
         settings: ServerSettingsSnapshot? = nil,
-        threadSnapshotPagination: Bool? = nil
+        threadSnapshotWindow: Bool? = nil,
+        threadResumeCompletionMarker: Bool? = nil,
+        shellResumeCompletionMarker: Bool? = nil
     ) {
         self.providers = providers
         self.settings = settings
-        self.threadSnapshotPagination = threadSnapshotPagination
+        self.threadSnapshotWindow = threadSnapshotWindow
+        self.threadResumeCompletionMarker = threadResumeCompletionMarker
+        self.shellResumeCompletionMarker = shellResumeCompletionMarker
     }
 
     private enum CodingKeys: String, CodingKey {
-        case providers, settings, threadSnapshotPagination
+        case providers, settings
+        case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
     }
 
     public init(from decoder: any Decoder) throws {
@@ -174,9 +185,17 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             forKey: .providers
         ).compactMap(\.value)
         settings = try container.decodeIfPresent(ServerSettingsSnapshot.self, forKey: .settings)
-        threadSnapshotPagination = try container.decodeIfPresent(
+        threadSnapshotWindow = try container.decodeIfPresent(
             Bool.self,
-            forKey: .threadSnapshotPagination
+            forKey: .threadSnapshotWindow
+        )
+        threadResumeCompletionMarker = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .threadResumeCompletionMarker
+        )
+        shellResumeCompletionMarker = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .shellResumeCompletionMarker
         )
     }
 
@@ -184,9 +203,14 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providers, forKey: .providers)
         try container.encodeIfPresent(settings, forKey: .settings)
+        try container.encodeIfPresent(threadSnapshotWindow, forKey: .threadSnapshotWindow)
         try container.encodeIfPresent(
-            threadSnapshotPagination,
-            forKey: .threadSnapshotPagination
+            threadResumeCompletionMarker,
+            forKey: .threadResumeCompletionMarker
+        )
+        try container.encodeIfPresent(
+            shellResumeCompletionMarker,
+            forKey: .shellResumeCompletionMarker
         )
     }
 }

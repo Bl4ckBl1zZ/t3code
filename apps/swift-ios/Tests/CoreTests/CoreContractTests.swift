@@ -46,39 +46,43 @@ final class CoreContractTests: XCTestCase {
                 "createdAt": "2026-07-30T12:00:00.000Z",
                 "updatedAt": "2026-07-30T12:00:00.000Z"
               }],
+              "schemaVersion": 1,
               "threads": [],
-              "updatedAt": "2026-07-30T12:00:00.000Z"
+              "archivedThreads": []
             }
             """.utf8
         )
 
-        let snapshot = try JSONDecoder.t3.decode(OrchestrationShellSnapshot.self, from: data)
+        let snapshot = try JSONDecoder.t3.decode(OrchestrationV2ShellSnapshot.self, from: data)
         XCTAssertEqual(snapshot.snapshotSequence, 7)
         XCTAssertEqual(snapshot.projects.first?.defaultModelSelection?.instanceId, "codex")
         XCTAssertNil(snapshot.projects.first?.deletedAt)
+        XCTAssertTrue(snapshot.archivedThreads.isEmpty)
     }
 
-    func testThreadPageMetadataDecodesCurrentWireShape() throws {
-        let page = try JSONDecoder.t3.decode(
-            OrchestrationThreadDetailPage.self,
+    /// This fork windows cold loads instead of paginating them, so the snapshot
+    /// reports how many older visible items it withheld rather than handing back
+    /// a cursor.
+    func testThreadSnapshotReportsWithheldHistory() throws {
+        let snapshot = try JSONDecoder.t3.decode(
+            OrchestrationV2ThreadDetailSnapshot.self,
             from: Data(
-                #"{"beforeCursor":"opaque-cursor","hasMore":true,"snapshotSequence":42,"threadSequence":39}"#.utf8
+                #"{"snapshotSequence":42,"projection":{"thread":{"id":"t","projectId":"p","createdBy":"user","creationSource":"web","title":"T","providerInstanceId":"codex","modelSelection":{"instanceId":"codex","model":"m"},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"activeProviderThreadId":null,"lineage":{"parentThreadId":null,"relationshipToParent":null,"rootThreadId":"t"},"forkedFrom":null,"createdAt":"2026-07-30T12:00:00.000Z","updatedAt":"2026-07-30T12:00:00.000Z","archivedAt":null,"settledOverride":null,"settledAt":null,"lastVisitedAt":null,"deletedAt":null},"runs":[],"turnItems":[],"visibleTurnItems":[],"truncatedVisibleItemCount":12,"updatedAt":"2026-07-30T12:00:00.000Z"}}"#.utf8
             )
         )
 
-        XCTAssertEqual(page.beforeCursor, "opaque-cursor")
-        XCTAssertTrue(page.hasMore)
-        XCTAssertEqual(page.snapshotSequence, 42)
-        XCTAssertEqual(page.threadSequence, 39)
+        XCTAssertEqual(snapshot.snapshotSequence, 42)
+        XCTAssertEqual(snapshot.projection.truncatedVisibleItemCount, 12)
+        XCTAssertTrue(snapshot.projection.hasOlderItems)
     }
 
-    func testServerConfigAdvertisesThreadSnapshotPagination() throws {
+    func testServerConfigAdvertisesThreadSnapshotWindowing() throws {
         let config = try JSONDecoder.t3.decode(
             ServerConfigSnapshot.self,
-            from: Data(#"{"providers":[],"threadSnapshotPagination":true}"#.utf8)
+            from: Data(#"{"providers":[],"threadSnapshotWindow":true}"#.utf8)
         )
 
-        XCTAssertEqual(config.threadSnapshotPagination, true)
+        XCTAssertEqual(config.threadSnapshotWindow, true)
     }
 
     func testCommandBuildersMatchOrchestrationContract() throws {

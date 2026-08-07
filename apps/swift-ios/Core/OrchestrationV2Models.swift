@@ -547,6 +547,20 @@ public struct OrchestrationV2ProjectedTurnItem: Codable, Equatable, Sendable, Id
     public let sourceItemId: String
     public let item: OrchestrationV2TurnItem
 
+    public init(
+        position: Int,
+        visibility: OrchestrationV2TurnItemVisibility,
+        sourceThreadId: String,
+        sourceItemId: String,
+        item: OrchestrationV2TurnItem
+    ) {
+        self.position = position
+        self.visibility = visibility
+        self.sourceThreadId = sourceThreadId
+        self.sourceItemId = sourceItemId
+        self.item = item
+    }
+
     /// Inherited items repeat their source id across threads, so identity has to
     /// include the source thread to stay unique inside one projection.
     public var id: String { "\(sourceThreadId)/\(sourceItemId)" }
@@ -605,8 +619,20 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
 /// The thread projection. Only the collections this client reads are modeled;
 /// unmodeled keys decode away harmlessly, which keeps the client from breaking
 /// when the server grows the projection.
+/// A run, narrowed to what drives the thread header. The projection carries far
+/// more per run; the rest is modeled when a feature needs it.
+public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let ordinal: Int
+    public let status: String
+    public let requestedAt: OrchestrationV2Timestamp
+    public let startedAt: OrchestrationV2Timestamp?
+    public let completedAt: OrchestrationV2Timestamp?
+}
+
 public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     public let thread: OrchestrationV2AppThread
+    public let runs: [OrchestrationV2Run]
     public let turnItems: [OrchestrationV2TurnItem]
     public let visibleTurnItems: [OrchestrationV2ProjectedTurnItem]
     /// Number of older visible items omitted when the snapshot was windowed.
@@ -618,6 +644,7 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         thread = try container.decode(OrchestrationV2AppThread.self, forKey: .thread)
+        runs = try container.decodeIfPresent([OrchestrationV2Run].self, forKey: .runs) ?? []
         turnItems = try container.decodeIfPresent([OrchestrationV2TurnItem].self, forKey: .turnItems) ?? []
         visibleTurnItems = try container.decodeIfPresent(
             [OrchestrationV2ProjectedTurnItem].self, forKey: .visibleTurnItems
@@ -629,11 +656,204 @@ public struct OrchestrationV2ThreadProjection: Codable, Equatable, Sendable {
     }
 
     public var hasOlderItems: Bool { (truncatedVisibleItemCount ?? 0) > 0 }
+
+    /// Memberwise copy-with. The type has a custom `init(from:)`, which
+    /// suppresses the synthesized memberwise initializer, and the live-event
+    /// reducer needs to produce modified copies.
+    public init(
+        thread: OrchestrationV2AppThread,
+        runs: [OrchestrationV2Run],
+        turnItems: [OrchestrationV2TurnItem],
+        visibleTurnItems: [OrchestrationV2ProjectedTurnItem],
+        truncatedVisibleItemCount: Int?,
+        updatedAt: OrchestrationV2Timestamp
+    ) {
+        self.thread = thread
+        self.runs = runs
+        self.turnItems = turnItems
+        self.visibleTurnItems = visibleTurnItems
+        self.truncatedVisibleItemCount = truncatedVisibleItemCount
+        self.updatedAt = updatedAt
+    }
+
+    public func replacing(
+        thread: OrchestrationV2AppThread? = nil,
+        runs: [OrchestrationV2Run]? = nil,
+        turnItems: [OrchestrationV2TurnItem]? = nil,
+        visibleTurnItems: [OrchestrationV2ProjectedTurnItem]? = nil
+    ) -> OrchestrationV2ThreadProjection {
+        OrchestrationV2ThreadProjection(
+            thread: thread ?? self.thread,
+            runs: runs ?? self.runs,
+            turnItems: turnItems ?? self.turnItems,
+            visibleTurnItems: visibleTurnItems ?? self.visibleTurnItems,
+            truncatedVisibleItemCount: truncatedVisibleItemCount,
+            updatedAt: updatedAt
+        )
+    }
 }
 
 public struct OrchestrationV2ThreadDetailSnapshot: Codable, Equatable, Sendable {
     public let snapshotSequence: Int
     public let projection: OrchestrationV2ThreadProjection
+}
+
+// MARK: - Shell
+
+public struct OrchestrationV2PendingRuntimeRequestSummary: Codable, Equatable, Sendable {
+    public let id: String
+    public let kind: String
+    public let createdAt: OrchestrationV2Timestamp
+}
+
+public struct OrchestrationV2LatestVisibleMessageSummary: Codable, Equatable, Sendable {
+    public let id: String
+    public let role: String
+    public let text: String
+    public let updatedAt: OrchestrationV2Timestamp
+}
+
+/// The home list's per-thread row. V2 replaced V1's `latestTurn` / `session` /
+/// `hasPendingApprovals` / `hasPendingUserInput` with a run status, a single
+/// pending runtime request, and precomputed counts.
+public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var projectId: String
+    public var createdBy: String
+    public var creationSource: String
+    public var title: String
+    public var titleRevision: Int?
+    public var titleOrigin: String?
+    public var providerInstanceId: String
+    public var modelSelection: ModelSelection
+    public var runtimeMode: RuntimeMode
+    public var interactionMode: InteractionMode
+    public var branch: String?
+    public var worktreePath: String?
+    public var lineage: OrchestrationV2AppThreadLineage
+    public var forkedFrom: OrchestrationV2ForkSource?
+    public var activeProviderThreadId: String?
+    public var historyOrigin: String?
+    public var latestRunId: String?
+    public var latestRunRequestedAt: OrchestrationV2Timestamp?
+    public var latestRunStartedAt: OrchestrationV2Timestamp?
+    public var latestRunCompletedAt: OrchestrationV2Timestamp?
+    public var activeRunId: String?
+    /// `idle` or a run status.
+    public var status: String
+    public var lastError: String?
+    public var pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary?
+    public var latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary?
+    public var latestUserMessageAt: OrchestrationV2Timestamp?
+    public var hasActionableProposedPlan: Bool
+    /// Background commands still running. Deliberately never persisted server
+    /// side, so it is absent rather than zero on a cached read.
+    public var backgroundProcessCount: Int?
+    public var itemCount: Int
+    public var visibleItemCount: Int
+    public var createdAt: OrchestrationV2Timestamp
+    public var updatedAt: OrchestrationV2Timestamp
+    public var archivedAt: OrchestrationV2Timestamp?
+    public var settledOverride: String?
+    public var settledAt: OrchestrationV2Timestamp?
+    public var pinnedAt: OrchestrationV2Timestamp?
+    public var workInboxRole: String?
+    public var timelineClearedAt: OrchestrationV2Timestamp?
+    public var snoozedUntil: OrchestrationV2Timestamp?
+    public var snoozedAt: OrchestrationV2Timestamp?
+    /// Absent on servers predating server-side visited tracking; clients fall
+    /// back to local visited state when it is nil.
+    public var lastVisitedAt: OrchestrationV2Timestamp?
+    public var titleRegeneration: OrchestrationV2TitleRegeneration?
+    public var deletedAt: OrchestrationV2Timestamp?
+}
+
+public struct OrchestrationV2ShellSnapshot: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var snapshotSequence: Int
+    public var projects: [OrchestrationProject]
+    public var threads: [OrchestrationV2ThreadShell]
+    public var archivedThreads: [OrchestrationV2ThreadShell]
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        snapshotSequence = try container.decode(Int.self, forKey: .snapshotSequence)
+        projects = try container.decodeIfPresent([OrchestrationProject].self, forKey: .projects) ?? []
+        threads = try container.decodeIfPresent([OrchestrationV2ThreadShell].self, forKey: .threads) ?? []
+        archivedThreads = try container.decodeIfPresent(
+            [OrchestrationV2ThreadShell].self, forKey: .archivedThreads
+        ) ?? []
+    }
+}
+
+/// Live shell subscription frames.
+///
+/// V2 renamed every granular frame (`project-upserted` became `project.updated`,
+/// and so on) and added a `location` telling the client whether a thread belongs
+/// to the active list or the archive.
+public enum OrchestrationV2ShellStreamItem: Decodable, Sendable {
+    case synchronized
+    case snapshot(OrchestrationV2ShellSnapshot)
+    case projectUpdated(sequence: Int, project: OrchestrationProject)
+    case projectRemoved(sequence: Int, projectID: String)
+    case threadUpdated(sequence: Int, location: Location, thread: OrchestrationV2ThreadShell)
+    case threadRemoved(sequence: Int, location: Location, threadID: String)
+
+    public enum Location: String, Decodable, Sendable {
+        case active
+        case archive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, sequence, snapshot, project, projectId, thread, threadId, location
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+
+        func location() throws -> Location {
+            try container.decodeIfPresent(Location.self, forKey: .location) ?? .active
+        }
+
+        switch kind {
+        case "synchronized":
+            self = .synchronized
+        case "snapshot":
+            self = .snapshot(
+                try container.decode(OrchestrationV2ShellSnapshot.self, forKey: .snapshot)
+            )
+        case "project.updated":
+            self = .projectUpdated(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                project: try container.decode(OrchestrationProject.self, forKey: .project)
+            )
+        case "project.removed":
+            self = .projectRemoved(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                projectID: try container.decode(String.self, forKey: .projectId)
+            )
+        case "thread.updated":
+            self = .threadUpdated(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                location: try location(),
+                thread: try container.decode(OrchestrationV2ThreadShell.self, forKey: .thread)
+            )
+        case "thread.removed":
+            self = .threadRemoved(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                location: try location(),
+                threadID: try container.decode(String.self, forKey: .threadId)
+            )
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unknown shell stream item \(kind)"
+            )
+        }
+    }
 }
 
 /// Live thread subscription frames.
@@ -676,6 +896,27 @@ public enum OrchestrationV2ThreadStreamItem: Decodable, Sendable {
                 in: container,
                 debugDescription: "Unknown thread stream item \(kind)"
             )
+        }
+    }
+}
+
+public extension OrchestrationV2ThreadProjection {
+    /// Whether the projection already contains a given user message.
+    ///
+    /// Outbox reconciliation asks this to decide whether an optimistic send was
+    /// committed, so it matches on the message id the client generated rather
+    /// than on the turn item id the server assigned.
+    func containsUserMessage(id: String) -> Bool {
+        turnItems.contains { item in
+            guard case let .userMessage(messageID, _, _, _) = item.payload else { return false }
+            return messageID == id
+        }
+    }
+
+    var hasAnyUserMessage: Bool {
+        turnItems.contains { item in
+            if case .userMessage = item.payload { return true }
+            return false
         }
     }
 }

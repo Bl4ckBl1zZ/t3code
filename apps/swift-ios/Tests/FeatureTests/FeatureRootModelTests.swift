@@ -954,147 +954,110 @@ struct FeatureRootModelTests {
     }
 
     @Test
-    func detailReducerAppendsStreamingTailAndExposesRenderMutation() {
-        let startedAt = "2026-07-31T20:00:00Z"
-        let message = OrchestrationMessage(
-            id: "message-1",
-            role: "assistant",
-            text: "Hel",
-            attachments: nil,
-            turnId: "turn-1",
-            streaming: true,
-            createdAt: startedAt,
-            updatedAt: startedAt
-        )
-        let thread = orchestrationThread(messages: [message])
+    func detailReducerFoldsStreamingTurnItemsInPlace() throws {
+        // Streaming an answer emits many turn-item.updated events per second.
+        // Folding them in place is what keeps the transcript from stuttering.
+        let projection = v2Projection(items: [v2AssistantItem(id: "item-1", text: "Hel")])
         let event = orchestrationEvent(
-            type: "thread.message-sent",
+            type: "turn-item.updated",
             sequence: 12,
-            payload: [
-                "threadId": .string(thread.id),
-                "messageId": .string(message.id),
-                "role": .string("assistant"),
-                "text": .string("lo"),
-                "turnId": .string("turn-1"),
-                "streaming": .bool(true),
-                "createdAt": .string(startedAt),
-                "updatedAt": .string("2026-07-31T20:00:01Z"),
-            ]
+            payload: v2AssistantItemJSON(id: "item-1", text: "Hello")
         )
 
-        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+        let reduction = NativeThreadDetailReducer.apply(event, to: projection)
 
         #expect(reduction.sequence == 12)
         guard case let .updated(updated) = reduction.result else {
-            Issue.record("Expected a streaming message update")
+            Issue.record("Expected a streaming turn item update")
             return
         }
-        #expect(updated.messages[0].text == "Hello")
-        #expect(updated.messages[0].updatedAt == startedAt)
-        guard case let .message(rendered) = reduction.renderMutation else {
-            Issue.record("Expected a message-only render mutation")
+        #expect(updated.turnItems.count == 1)
+        guard case let .assistantMessage(_, text, _) = updated.turnItems[0].payload else {
+            Issue.record("Expected an assistant message")
             return
         }
-        #expect(rendered.text == "Hello")
+        #expect(text == "Hello")
+        // The visible window has to track the same edit, or the row the user is
+        // watching would freeze mid-sentence.
+        guard case let .assistantMessage(_, visibleText, _) =
+            updated.visibleTurnItems[0].item.payload
+        else {
+            Issue.record("Expected the visible item to update too")
+            return
+        }
+        #expect(visibleText == "Hello")
     }
 
     @Test
-    func detailReducerBindsCheckpointThatArrivedBeforeAssistantMessage() {
-        let checkpoint = CheckpointSummary(
-            turnId: "turn-1",
-            checkpointTurnCount: 1,
-            checkpointRef: "refs/t3/checkpoint-1",
-            status: "completed",
-            files: [],
-            assistantMessageId: nil,
-            completedAt: "2026-07-31T20:00:01Z"
-        )
-        let thread = orchestrationThread(checkpoints: [checkpoint])
+    func detailReducerAppendsTurnItemsThatArriveMidStream() {
+        let projection = v2Projection(items: [v2AssistantItem(id: "item-1", text: "One")])
         let event = orchestrationEvent(
-            type: "thread.message-sent",
-            sequence: 12,
-            payload: [
-                "threadId": .string(thread.id),
-                "messageId": .string("assistant-1"),
-                "role": .string("assistant"),
-                "text": .string("Done"),
-                "turnId": .string("turn-1"),
-                "streaming": .bool(false),
-                "createdAt": .string("2026-07-31T20:00:00Z"),
-                "updatedAt": .string("2026-07-31T20:00:02Z"),
-            ]
+            type: "turn-item.updated",
+            sequence: 13,
+            payload: v2AssistantItemJSON(id: "item-2", text: "Two")
         )
 
-        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+        let reduction = NativeThreadDetailReducer.apply(event, to: projection)
 
         guard case let .updated(updated) = reduction.result else {
-            Issue.record("Expected an assistant message update")
+            Issue.record("Expected an appended turn item")
             return
         }
-        #expect(updated.checkpoints.first?.assistantMessageId == "assistant-1")
+        #expect(updated.turnItems.count == 2)
+        #expect(updated.visibleTurnItems.count == 2)
+        #expect(updated.visibleTurnItems.last?.position == 1)
     }
 
     @Test
-    func activityReducerKeepsLargeSnapshotHistorySharedAndExposesOnlyTheTail() throws {
-        let historical = (0..<1_000).map { (index: Int) in
-            OrchestrationActivity(
-                id: "history-\(index)",
-                tone: "info",
-                kind: "tool.completed",
-                summary: "Historical work",
-                payload: .object([:]),
-                turnId: "turn-1",
-                sequence: index,
-                createdAt: "2026-07-31T20:00:00Z"
-            )
-        }
-        let appended = OrchestrationActivity(
-            id: "activity-new",
-            tone: "info",
-            kind: "tool.completed",
-            summary: "New work",
-            payload: .object([:]),
-            turnId: "turn-1",
-            sequence: historical.count,
-            createdAt: "2026-07-31T20:00:01Z"
-        )
-        let thread = orchestrationThread(activities: historical)
+    func detailReducerTracksRunStatusForTheHeader() {
+        let projection = v2Projection(items: [])
         let event = orchestrationEvent(
-            type: "thread.activity-appended",
-            sequence: 1_001,
-            payload: [
-                "threadId": .string(thread.id),
-                "activity": try JSONValue.encode(appended),
-            ]
+            type: "run.updated",
+            sequence: 20,
+            payload: .object([
+                "id": .string("run-1"),
+                "threadId": .string("thread-v2"),
+                "ordinal": .number(1),
+                "status": .string("running"),
+                "requestedAt": .string("2026-07-31T20:00:00.000Z"),
+                "startedAt": .string("2026-07-31T20:00:01.000Z"),
+                "completedAt": .null,
+            ])
         )
 
-        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+        let reduction = NativeThreadDetailReducer.apply(event, to: projection)
 
         guard case let .updated(updated) = reduction.result else {
-            Issue.record("Expected an activity update")
+            Issue.record("Expected a run update")
             return
         }
-        #expect(updated.activities.count == historical.count)
-        guard case let .activity(rendered) = reduction.renderMutation else {
-            Issue.record("Expected an activity-tail render mutation")
-            return
-        }
-        #expect(rendered == appended)
+        #expect(updated.runs.first?.status == "running")
     }
 
     @Test
-    func destructiveDetailEventRequestsAuthoritativeSnapshot() {
-        let thread = orchestrationThread()
+    func structuralEventsRequestAnAuthoritativeSnapshot() {
+        // A rollback drops whole runs out of the projection. Guessing at the
+        // result would leave the transcript showing discarded work.
+        let projection = v2Projection(items: [])
         let event = orchestrationEvent(
-            type: "thread.reverted",
+            type: "checkpoint.rollback-requested",
             sequence: 3,
-            payload: ["threadId": .string(thread.id)]
+            payload: .object(["threadId": .string("thread-v2")])
         )
 
-        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+        #expect(NativeThreadDetailReducer.apply(event, to: projection).result == .refresh)
+    }
 
-        #expect(reduction.result == .refresh)
-        #expect(reduction.renderMutation == .full)
+    @Test
+    func unknownEventTypesRequestAnAuthoritativeSnapshotRatherThanBeingDropped() {
+        let projection = v2Projection(items: [])
+        let event = orchestrationEvent(
+            type: "quantum.entangled",
+            sequence: 4,
+            payload: .object(["threadId": .string("thread-v2")])
+        )
+
+        #expect(NativeThreadDetailReducer.apply(event, to: projection).result == .refresh)
     }
 }
 
@@ -1112,44 +1075,97 @@ private func testRootModel(client: FeatureClientStub) -> FeatureRootModel {
 private func orchestrationEvent(
     type: String,
     sequence: Int,
-    payload: [String: JSONValue]
+    payload: JSONValue
 ) -> JSONValue {
     .object([
         "type": .string(type),
         "sequence": .number(Double(sequence)),
-        "occurredAt": .string("2026-07-31T20:00:02Z"),
-        "payload": .object(payload),
+        "occurredAt": .string("2026-07-31T20:00:02.000Z"),
+        "payload": payload,
     ])
 }
 
-private func orchestrationThread(
-    messages: [OrchestrationMessage] = [],
-    activities: [OrchestrationActivity] = [],
-    checkpoints: [CheckpointSummary] = []
-) -> OrchestrationThread {
-    OrchestrationThread(
-        id: "thread-1",
-        projectId: "project-1",
-        title: "Native detail stream",
-        modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
-        runtimeMode: .fullAccess,
-        interactionMode: .default,
-        branch: "main",
-        worktreePath: "/native",
-        latestTurn: nil,
-        createdAt: "2026-07-31T20:00:00Z",
-        updatedAt: "2026-07-31T20:00:00Z",
-        archivedAt: nil,
-        settledOverride: nil,
-        settledAt: nil,
-        snoozedUntil: nil,
-        snoozedAt: nil,
-        pinnedAt: nil,
-        deletedAt: nil,
-        messages: messages,
-        activities: activities,
-        checkpoints: checkpoints,
-        session: nil
+private func v2AssistantItemJSON(id: String, text: String) -> JSONValue {
+    .object([
+        "id": .string(id),
+        "threadId": .string("thread-v2"),
+        "runId": .string("run-1"),
+        "nodeId": .null,
+        "providerThreadId": .null,
+        "providerTurnId": .null,
+        "nativeItemRef": .null,
+        "parentItemId": .null,
+        "ordinal": .number(0),
+        "status": .string("running"),
+        "title": .null,
+        "startedAt": .string("2026-07-31T20:00:00.000Z"),
+        "completedAt": .null,
+        "updatedAt": .string("2026-07-31T20:00:01.000Z"),
+        "type": .string("assistant_message"),
+        "messageId": .string("message-" + id),
+        "text": .string(text),
+        "streaming": .bool(true),
+    ])
+}
+
+private func v2AssistantItem(id: String, text: String) -> OrchestrationV2TurnItem {
+    let data = try! JSONEncoder.t3.encode(v2AssistantItemJSON(id: id, text: text))
+    return try! JSONDecoder.t3.decode(OrchestrationV2TurnItem.self, from: data)
+}
+
+private func v2Projection(
+    items: [OrchestrationV2TurnItem]
+) -> OrchestrationV2ThreadProjection {
+    OrchestrationV2ThreadProjection(
+        thread: OrchestrationV2AppThread(
+            id: "thread-v2",
+            projectId: "project-1",
+            createdBy: "user",
+            creationSource: "mobile",
+            title: "Native detail stream",
+            titleRevision: nil,
+            titleOrigin: nil,
+            providerInstanceId: "codex",
+            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
+            runtimeMode: .fullAccess,
+            interactionMode: .default,
+            branch: "main",
+            worktreePath: "/native",
+            activeProviderThreadId: nil,
+            historyOrigin: nil,
+            lineage: OrchestrationV2AppThreadLineage(
+                parentThreadId: nil,
+                relationshipToParent: nil,
+                rootThreadId: "thread-v2"
+            ),
+            forkedFrom: nil,
+            createdAt: "2026-07-31T20:00:00.000Z",
+            updatedAt: "2026-07-31T20:00:00.000Z",
+            archivedAt: nil,
+            settledOverride: nil,
+            settledAt: nil,
+            pinnedAt: nil,
+            workInboxRole: nil,
+            timelineClearedAt: nil,
+            snoozedUntil: nil,
+            snoozedAt: nil,
+            lastVisitedAt: nil,
+            titleRegeneration: nil,
+            deletedAt: nil
+        ),
+        runs: [],
+        turnItems: items,
+        visibleTurnItems: items.enumerated().map { index, item in
+            OrchestrationV2ProjectedTurnItem(
+                position: index,
+                visibility: .local,
+                sourceThreadId: "thread-v2",
+                sourceItemId: item.id,
+                item: item
+            )
+        },
+        truncatedVisibleItemCount: nil,
+        updatedAt: "2026-07-31T20:00:00.000Z"
     )
 }
 
