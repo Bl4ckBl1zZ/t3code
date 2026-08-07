@@ -11,8 +11,12 @@ The mobile client is the **native SwiftUI app in `apps/swift-ios`**. It has no
 JavaScript runtime: there is no Metro, no Expo, no dev client, and no bundler to
 keep alive between runs. Every change requires a rebuild.
 
-`apps/mobile` is the retired React Native client. It has no build pipeline and
-is being removed — do not build, run, or verify against it.
+`apps/mobile` is the React Native client, still maintained in parallel for iOS
+and Android. Choose the client the change actually touches: they share contracts
+but nothing else, so verifying one proves nothing about the other. The React
+Native workflow (Metro, Expo dev client,
+`apps/mobile/ios/T3CodeDev.xcworkspace`) is unchanged — see git history for this
+file prior to the SwiftUI rewrite if you need it.
 
 ## Build and run
 

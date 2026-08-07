@@ -28,9 +28,12 @@ T3 Code has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
 **Desktop** is the main surface most users install first. It's a full Electron app that bundles the server runner as well. The desktop app can also be used as the host server, allowing remote connections from app.t3.codes or the mobile app.
 
-**Mobile** is a native SwiftUI iOS app in `apps/swift-ios`, available on the App Store. It connects to any T3 Code server to control work remotely. There is no Android client.
+**Mobile** ships as two clients, maintained in parallel:
 
-`apps/mobile` is the retired React Native client. It is being removed; do not add features to it. It has no build pipeline and its iOS identity now belongs to the SwiftUI app.
+- `apps/swift-ios` — the native SwiftUI iOS app. This is what TestFlight and the App Store record `com.t3code.dev` now build from.
+- `apps/mobile` — the React Native client for iOS and Android.
+
+Treat them as distinct clients. UI, navigation, persistence, and build changes in one do not reach the other, and both speak `packages/contracts` directly — a schema change has to land in both. The SwiftUI client mirrors those contracts by hand with no codegen, so a contract change compiles clean there and fails at runtime; `node scripts/generate-swift-contract-fixtures.ts` plus its CI `--check` is what catches that.
 
 ## A note from Theo
 
