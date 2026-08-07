@@ -264,6 +264,16 @@ public final class T3ConnectController {
         try await relay.registerLiveActivity(registration, clerkToken: token)
     }
 
+    /// A relay token for callers outside this type.
+    ///
+    /// Everything that mints a token has to come through here: the session
+    /// coalesces concurrent mints and owns the rate-limit backoff, and a caller
+    /// that reaches ClerkKit directly sits outside both.
+    public func relayToken() async throws -> String {
+        guard let auth else { throw T3ConnectAuthError.noSession }
+        return try await loadedRelayToken(auth)
+    }
+
     private func loadedRelayToken(_ auth: T3ConnectClerkSession) async throws -> String {
         if !auth.isLoaded {
             try await auth.refresh()

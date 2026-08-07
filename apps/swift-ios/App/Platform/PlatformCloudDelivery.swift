@@ -83,6 +83,88 @@ enum PlatformCloudDeliveryRegistrationFactory {
     }
 }
 
+/// Picks the single Live Activity whose push-token updates this device observes.
+///
+/// The relay tracks exactly one card per device, so one managed subscription
+/// suffices. `Activity<Attributes>.activities` hands back a *fresh* value-type
+/// wrapper on every call, which makes per-instance dedupe (a `WeakSet`, an
+/// `ObjectIdentifier` set) worse than useless: it re-attaches a listener on
+/// every poll and never recognizes an already-observed activity. Key off the
+/// stable activity id and replace the previous subscription instead.
+///
+/// Ported from `remoteRegistration.ts`'s `activityPushTokenSubscription`.
+enum PlatformActivityTokenSubscription {
+    struct Plan: Equatable, Sendable {
+        /// The one activity to observe, or nil when there is no card.
+        var observe: String?
+        /// True when the listener has to be torn down and re-attached because
+        /// the primary card changed (or disappeared).
+        var replacesSubscription: Bool
+        /// Cards beyond the primary. The relay can only address one, so these
+        /// are ended rather than observed.
+        var redundant: [String]
+    }
+
+    static func plan(activityIDs: [String], observing current: String?) -> Plan {
+        let primary = activityIDs.first
+        return Plan(
+            observe: primary,
+            replacesSubscription: primary != current,
+            redundant: Array(activityIDs.dropFirst())
+        )
+    }
+}
+
+/// Activity push tokens the relay recently accepted, by acceptance time.
+///
+/// Registration runs on sign-in, every foreground, and every connection update,
+/// which arrive in bursts and spammed identical requests. But it is not a pure
+/// no-op: the relay replays the current aggregate to this device on every
+/// accepted registration, and that replay repairs drifted or orphaned
+/// activities. So dedupe only within a short window — bursts collapse to one
+/// request, while a foreground after real time away still triggers a replay.
+enum PlatformActivityTokenRegistry {
+    static let reregisterInterval: TimeInterval = 60
+    static let maximumEntries = 8
+
+    /// Drops expired entries and bounds what is left to the newest few, so the
+    /// persisted registry cannot grow without limit across token rotations.
+    static func pruned(
+        _ entries: [String: TimeInterval],
+        now: TimeInterval
+    ) -> [String: TimeInterval] {
+        let live = entries.filter { now - $0.value < reregisterInterval }
+        guard live.count > maximumEntries else { return live }
+        return Dictionary(
+            uniqueKeysWithValues: live
+                .sorted { $0.value > $1.value }
+                .prefix(maximumEntries)
+                .map { ($0.key, $0.value) }
+        )
+    }
+
+    /// True when this fingerprint was accepted recently enough that re-sending
+    /// it would only cost a round trip.
+    static func isFresh(
+        _ entries: [String: TimeInterval],
+        fingerprint: String,
+        now: TimeInterval
+    ) -> Bool {
+        guard let acceptedAt = entries[fingerprint] else { return false }
+        return now - acceptedAt < reregisterInterval
+    }
+
+    static func recording(
+        _ entries: [String: TimeInterval],
+        fingerprint: String,
+        now: TimeInterval
+    ) -> [String: TimeInterval] {
+        var next = pruned(entries, now: now)
+        next[fingerprint] = now
+        return pruned(next, now: now)
+    }
+}
+
 /// Keeps the relay's device record aligned with this installation. Token values
 /// only travel over DPoP-authenticated relay requests; local success caches store
 /// SHA-256 fingerprints rather than reusable push credentials.
@@ -101,7 +183,9 @@ final class PlatformCloudDeliveryCoordinator {
     private var observerTasks: [Task<Void, Never>] = []
     private var pushToStartTask: Task<Void, Never>?
     private var activityUpdatesTask: Task<Void, Never>?
-    private var activityTokenTasks: [String: Task<Void, Never>] = [:]
+    /// Exactly one managed token subscription, plus the id it belongs to.
+    private var activityTokenTask: Task<Void, Never>?
+    private var observedActivityID: String?
     private var pendingActivityTokens: Set<String> = []
     private var retryTask: Task<Void, Never>?
 
@@ -126,7 +210,7 @@ final class PlatformCloudDeliveryCoordinator {
         activityUpdatesTask?.cancel()
         retryTask?.cancel()
         observerTasks.forEach { $0.cancel() }
-        activityTokenTasks.values.forEach { $0.cancel() }
+        activityTokenTask?.cancel()
     }
 
     func install(controller: T3ConnectController) {
@@ -145,6 +229,21 @@ final class PlatformCloudDeliveryCoordinator {
                 }
             })
         }
+        // Foregrounding is the full local reconciliation: the card is repainted
+        // from the aggregate the app already holds, and the activity token is
+        // re-registered so the relay replays the authoritative state to this
+        // device. Both repair drift that accumulated while pushes could not be
+        // delivered, without waiting for the next snapshot revision.
+        observerTasks.append(Task { @MainActor [weak self] in
+            for await _ in NotificationCenter.default.notifications(
+                named: UIApplication.didBecomeActiveNotification
+            ) {
+                guard !Task.isCancelled, let self else { return }
+                PlatformAgentAwarenessCoordinator.shared.repaintLiveActivity()
+                refreshActivityTokenObservers()
+                requestRegistration()
+            }
+        })
         observerTasks.append(Task { @MainActor [weak self] in
             for await _ in NotificationCenter.default.notifications(named: .t3ConnectSessionChanged) {
                 guard !Task.isCancelled, let self else { return }
@@ -189,27 +288,45 @@ final class PlatformCloudDeliveryCoordinator {
 
     private func refreshActivityTokenObservers() {
         let activities = Activity<LiveActivityAttributes>.activities
-        let currentIDs = Set(activities.map(\.id))
-        for id in Array(activityTokenTasks.keys) where !currentIDs.contains(id) {
-            activityTokenTasks.removeValue(forKey: id)?.cancel()
-        }
+        let plan = PlatformActivityTokenSubscription.plan(
+            activityIDs: activities.map(\.id),
+            observing: observedActivityID
+        )
 
+        // A token already minted for any live card is still worth registering,
+        // even for a card we are about to drop the subscription for.
         for activity in activities {
             if let token = activity.pushToken?.hexadecimalString {
                 pendingActivityTokens.insert(token)
             }
-            guard activityTokenTasks[activity.id] == nil else { continue }
-            activityTokenTasks[activity.id] = Task { @MainActor [weak self] in
-                for await token in activity.pushTokenUpdates {
-                    guard !Task.isCancelled else { return }
-                    self?.pendingActivityTokens.insert(token.hexadecimalString)
-                    self?.requestRegistration()
-                }
+        }
+
+        guard plan.replacesSubscription else { return }
+        activityTokenTask?.cancel()
+        activityTokenTask = nil
+        observedActivityID = plan.observe
+        guard let primary = activities.first else { return }
+        activityTokenTask = Task { @MainActor [weak self] in
+            for await token in primary.pushTokenUpdates {
+                guard !Task.isCancelled else { return }
+                self?.pendingActivityTokens.insert(token.hexadecimalString)
+                self?.requestRegistration()
             }
         }
     }
 
+    /// End of an active rate-limit window, if one is open. A pending retry
+    /// inside this window must survive `requestRegistration()`, or the
+    /// notification traffic that drives registration would cancel the backoff
+    /// and reopen the storm it exists to stop.
+    private var rateLimitedUntil: Date?
+
     private func requestRegistration() {
+        if let rateLimitedUntil, rateLimitedUntil > Date() {
+            needsRegistration = true
+            return
+        }
+        rateLimitedUntil = nil
         retryTask?.cancel()
         retryTask = nil
         needsRegistration = true
@@ -260,15 +377,25 @@ final class PlatformCloudDeliveryCoordinator {
 
             guard let accountID = controller.account?.id else { return }
             let now = Date.now.timeIntervalSince1970
-            var completed = (defaults.dictionary(forKey: activityFingerprintKey) ?? [:])
-                .compactMapValues { ($0 as? NSNumber)?.doubleValue }
-                .filter { now - $0.value < healingInterval }
+            // Expired acceptances are pruned on every pass, so a device that
+            // rotates activity tokens for weeks never accumulates a registry it
+            // has to scan — and an entry that ages out lets the next foreground
+            // re-register, which is what makes the relay replay the aggregate.
+            var completed = PlatformActivityTokenRegistry.pruned(
+                (defaults.dictionary(forKey: activityFingerprintKey) ?? [:])
+                    .compactMapValues { ($0 as? NSNumber)?.doubleValue },
+                now: now
+            )
             for token in Array(pendingActivityTokens) {
                 let tokenFingerprint = Self.fingerprint(
                     "\(deviceID)|\(token)",
                     accountID: accountID
                 )
-                guard completed[tokenFingerprint] == nil else {
+                guard !PlatformActivityTokenRegistry.isFresh(
+                    completed,
+                    fingerprint: tokenFingerprint,
+                    now: now
+                ) else {
                     pendingActivityTokens.remove(token)
                     continue
                 }
@@ -282,18 +409,25 @@ final class PlatformCloudDeliveryCoordinator {
                     needsRegistration = true
                     return
                 }
-                completed[tokenFingerprint] = now
+                completed = PlatformActivityTokenRegistry.recording(
+                    completed,
+                    fingerprint: tokenFingerprint,
+                    now: now
+                )
                 pendingActivityTokens.remove(token)
             }
-            let bounded = completed.sorted { $0.value > $1.value }.prefix(8)
-            defaults.set(
-                Dictionary(uniqueKeysWithValues: bounded.map { ($0.key, $0.value) }),
-                forKey: activityFingerprintKey
-            )
+            defaults.set(completed, forKey: activityFingerprintKey)
             scheduleRetry(after: healingInterval)
         } catch is CancellationError {
             return
-        } catch is T3ConnectAuthError {
+        } catch let error as T3ConnectAuthError {
+            // A rate-limit window is the one auth failure worth retrying on a
+            // timer: it clears on its own. Every other auth failure waits for an
+            // account, network, foreground, or token event.
+            if let retryAfter = error.retryAfter {
+                rateLimitedUntil = Date().addingTimeInterval(retryAfter)
+                scheduleRetry(after: retryAfter + 1)
+            }
             return
         } catch let error as T3ConnectRelayError {
             guard case .invalidConfiguration = error else {

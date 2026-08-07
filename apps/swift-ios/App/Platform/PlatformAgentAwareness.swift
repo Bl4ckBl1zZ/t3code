@@ -8,6 +8,71 @@ extension Notification.Name {
     )
 }
 
+/// Ported from the `AgentAwarenessOperation` literal union in
+/// apps/mobile/src/features/agent-awareness/remoteRegistration.ts, narrowed to
+/// the operations this client actually performs. Naming the operation is what
+/// makes an ActivityKit failure diagnosable at all: every one of them surfaces
+/// as the same opaque `ActivityKit` error otherwise.
+enum PlatformAgentAwarenessOperation: String, Hashable, Sendable {
+    case listActiveLiveActivities = "list-active-live-activities"
+    case primeLiveActivity = "prime-live-activity"
+    /// The foreground reconciliation: the app already holds the authoritative
+    /// aggregate, so the card must not depend on a push round-trip — nor on its
+    /// push token being healthy — to stop showing stale state.
+    case repaintLiveActivity = "repaint-live-activity"
+    case endLiveActivity = "end-live-activity"
+    case readLiveActivityPushToken = "read-live-activity-push-token"
+    case registerLiveActivityPushToken = "register-live-activity-push-token"
+}
+
+struct PlatformAgentAwarenessOperationError: LocalizedError {
+    let operation: PlatformAgentAwarenessOperation
+    let underlying: Error?
+
+    init(operation: PlatformAgentAwarenessOperation, underlying: Error? = nil) {
+        self.operation = operation
+        self.underlying = underlying
+    }
+
+    var errorDescription: String? {
+        "Agent awareness operation \(operation.rawValue) failed."
+    }
+}
+
+/// When the lock-screen card was last armed or primed locally.
+///
+/// A just-armed card may see an empty relay aggregate before the environment's
+/// first publish lands; ending it in that window would kill the card the user
+/// just created. Mirrors the relay's freshly-armed grace.
+@MainActor
+enum PlatformLiveActivityArming {
+    nonisolated static let gracePeriod: TimeInterval = 2 * 60
+
+    private(set) static var armedAt: Date?
+
+    static func markArmed(at date: Date = .now) {
+        armedAt = date
+    }
+
+    /// The card is gone (ended, or never existed), so the next empty aggregate
+    /// has nothing to protect.
+    static func forget() {
+        armedAt = nil
+    }
+
+    /// An aggregate with nothing active normally ends the card. Within the
+    /// grace it must not: the relay simply has not published this device's first
+    /// row yet.
+    nonisolated static func shouldEndForEmptyAggregate(
+        armedAt: Date?,
+        now: Date,
+        gracePeriod: TimeInterval = PlatformLiveActivityArming.gracePeriod
+    ) -> Bool {
+        guard let armedAt else { return true }
+        return now.timeIntervalSince(armedAt) >= gracePeriod
+    }
+}
+
 enum PlatformAgentAwarenessProjection {
     static let terminalVisibilityWindow: TimeInterval = 15 * 60
     static let maximumRows = 5
@@ -178,13 +243,20 @@ final class PlatformAgentAwarenessCoordinator {
         let signature: Signature
         let aggregate: T3RelayAgentActivityAggregateState
         let enabled: Bool
-        let now: Date
+        var now: Date
+        var operation: PlatformAgentAwarenessOperation = .primeLiveActivity
     }
 
     private var activityUpdateTask: Task<Void, Never>?
     private var lastSignature: Signature?
     private var inFlightSignature: Signature?
     private var synchronizationGeneration = 0
+    /// The most recent authoritative projection, kept so a foreground repaint
+    /// has something to re-apply without waiting for the next snapshot revision.
+    private var lastSynchronization: Synchronization?
+    /// Surfaced for diagnostics and tests; ActivityKit failures are otherwise
+    /// invisible because every path here deliberately swallows them.
+    private(set) var lastOperationError: PlatformAgentAwarenessOperationError?
 
     init(
         updateLiveActivity: @escaping @MainActor (
@@ -224,6 +296,7 @@ final class PlatformAgentAwarenessCoordinator {
             enabled: liveActivitiesEnabled,
             now: now
         )
+        lastSynchronization = synchronization
         if signature == lastSignature {
             if inFlightSignature != nil {
                 activityUpdateTask?.cancel()
@@ -245,6 +318,23 @@ final class PlatformAgentAwarenessCoordinator {
         schedule(synchronization)
     }
 
+    /// Re-applies the last authoritative projection to the card.
+    ///
+    /// Content normally arrives via APNs, but a foregrounded app already holds
+    /// the aggregate, so the card must not depend on a push round-trip — nor on
+    /// its push token being healthy — to stop showing stale state. Deliberately
+    /// bypasses the signature dedupe: repainting an *unchanged* aggregate is the
+    /// entire point, and that is exactly what `synchronize` skips.
+    func repaintLiveActivity() {
+        guard var synchronization = lastSynchronization else { return }
+        synchronization.operation = .repaintLiveActivity
+        // A fresh clock, so the repainted content carries a live stale date
+        // rather than the one the original projection was scheduled with.
+        synchronization.now = .now
+        lastSignature = nil
+        schedule(synchronization)
+    }
+
     /// Account sign-out invalidates the cached account-scoped projection before
     /// removing its activity. Only a later snapshot may publish new content.
     func resetAndResynchronizeLiveActivity() {
@@ -253,6 +343,8 @@ final class PlatformAgentAwarenessCoordinator {
         let generation = synchronizationGeneration
         lastSignature = nil
         inFlightSignature = nil
+        lastSynchronization = nil
+        PlatformLiveActivityArming.forget()
         try? T3TaskWidgetSnapshotStore.save(.empty)
         WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
         activityUpdateTask = Task { @MainActor [weak self] in
@@ -282,6 +374,7 @@ final class PlatformAgentAwarenessCoordinator {
                 lastSignature = synchronization.signature
                 inFlightSignature = nil
                 activityUpdateTask = nil
+                lastOperationError = nil
             } catch {
                 guard synchronizationGeneration == generation,
                       inFlightSignature == synchronization.signature else { return }
@@ -289,6 +382,12 @@ final class PlatformAgentAwarenessCoordinator {
                 // snapshot retries a failed or cancelled ActivityKit operation.
                 inFlightSignature = nil
                 activityUpdateTask = nil
+                if !(error is CancellationError) {
+                    lastOperationError = PlatformAgentAwarenessOperationError(
+                        operation: synchronization.operation,
+                        underlying: error
+                    )
+                }
             }
         }
     }
@@ -305,6 +404,7 @@ final class PlatformAgentAwarenessCoordinator {
             for activity in activities {
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
+            PlatformLiveActivityArming.forget()
             try Task.checkCancellation()
             notifyActivityChanged()
             return
@@ -317,12 +417,27 @@ final class PlatformAgentAwarenessCoordinator {
         )
 
         if aggregate.activeCount == 0 {
+            guard PlatformLiveActivityArming.shouldEndForEmptyAggregate(
+                armedAt: PlatformLiveActivityArming.armedAt,
+                now: now
+            ) else {
+                // Freshly armed: the projection has nothing active yet only
+                // because the environment's first publish has not landed.
+                // Repaint rather than killing the card the user just created.
+                for activity in activities {
+                    await activity.update(content)
+                }
+                try Task.checkCancellation()
+                notifyActivityChanged()
+                return
+            }
             for activity in activities {
                 await activity.end(
                     content,
                     dismissalPolicy: .after(now.addingTimeInterval(5 * 60))
                 )
             }
+            PlatformLiveActivityArming.forget()
             try Task.checkCancellation()
             notifyActivityChanged()
             return
@@ -330,6 +445,9 @@ final class PlatformAgentAwarenessCoordinator {
 
         if let primary = activities.first {
             await primary.update(content)
+            // The relay tracks exactly one card per device; if concurrent
+            // arming ever produced extras, end them so only one keeps
+            // receiving updates.
             for duplicate in activities.dropFirst() {
                 await duplicate.end(nil, dismissalPolicy: .immediate)
             }
@@ -339,6 +457,7 @@ final class PlatformAgentAwarenessCoordinator {
                 content: content,
                 pushType: .token
             )
+            PlatformLiveActivityArming.markArmed(at: now)
         }
         try Task.checkCancellation()
         notifyActivityChanged()
@@ -348,6 +467,7 @@ final class PlatformAgentAwarenessCoordinator {
         for activity in Activity<LiveActivityAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
+        PlatformLiveActivityArming.forget()
         notifyActivityChanged()
     }
 

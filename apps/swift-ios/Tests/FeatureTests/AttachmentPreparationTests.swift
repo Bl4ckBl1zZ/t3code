@@ -16,13 +16,14 @@ struct AttachmentPreparationTests {
 
         #expect(state.isPreparing)
         #expect(state.pendingItemCount == 3)
-        #expect(state.statusLabel == "Preparing 3 images…")
+        // Documents share the strip with images, so the label names neither.
+        #expect(state.statusLabel == "Preparing 3 attachments…")
 
         state.finish(first)
 
         #expect(state.isPreparing)
         #expect(state.pendingItemCount == 1)
-        #expect(state.statusLabel == "Preparing image…")
+        #expect(state.statusLabel == "Preparing attachment…")
 
         state.finish(second)
 

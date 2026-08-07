@@ -20,7 +20,7 @@ struct FeatureAttachmentPreparationState: Equatable {
     }
 
     var statusLabel: String {
-        pendingItemCount == 1 ? "Preparing image…" : "Preparing \(pendingItemCount) images…"
+        pendingItemCount == 1 ? "Preparing attachment…" : "Preparing \(pendingItemCount) attachments…"
     }
 
     @discardableResult
@@ -45,12 +45,15 @@ struct FeatureImageAttachmentPicker: View {
     @Binding var attachments: [FeatureDraftAttachment]
     @Binding var preparationState: FeatureAttachmentPreparationState
     let maximumCount: Int
+    /// Whether the selected model accepts *images*. Documents are read off disk
+    /// by the agent rather than sent to the vision endpoint, so they stay
+    /// available on a text-only model.
     let isEnabled: Bool
 
     @State private var isAttachmentSourcePresented = false
     @State private var isPhotoLibraryPresented = false
     @State private var isCameraPresented = false
-    @State private var isFileImporterPresented = false
+    @State private var isDocumentPickerPresented = false
     @State private var sourcePresentationTask: Task<Void, Never>?
     @State private var errorMessage: String?
 
@@ -82,10 +85,11 @@ struct FeatureImageAttachmentPicker: View {
         .accessibilityLabel(attachmentAccessibilityLabel)
         .accessibilityIdentifier("image-attachment-picker")
         .accessibilityHint(attachmentAccessibilityHint)
-        .confirmationDialog("Add image", isPresented: $isAttachmentSourcePresented) {
+        .confirmationDialog("Add attachment", isPresented: $isAttachmentSourcePresented) {
             Button("Photo Library") { present(.photoLibrary) }
+                .disabled(!isEnabled)
             Button("Camera") { present(.camera) }
-                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                .disabled(!isEnabled || !UIImagePickerController.isSourceTypeAvailable(.camera))
             Button("Files") { present(.files) }
             Button("Cancel", role: .cancel) {}
         }
@@ -107,14 +111,19 @@ struct FeatureImageAttachmentPicker: View {
             )
             .ignoresSafeArea()
         }
-        .fileImporter(
-            isPresented: $isFileImporterPresented,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true,
-            onCompletion: loadFiles
-        )
+        .fullScreenCover(isPresented: $isDocumentPickerPresented) {
+            FeatureDocumentPicker(
+                maximumCount: max(1, remainingCount),
+                onSelect: { urls in
+                    isDocumentPickerPresented = false
+                    loadFiles(urls)
+                },
+                onCancel: { isDocumentPickerPresented = false }
+            )
+            .ignoresSafeArea()
+        }
         .alert(
-            "Couldn’t add image",
+            "Couldn’t add attachment",
             isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -133,8 +142,10 @@ struct FeatureImageAttachmentPicker: View {
         max(0, maximumCount - attachments.count)
     }
 
+    /// Documents do not need a vision-capable model, so the picker opens even
+    /// when images are refused; only the photo sources are withheld.
     private var canAdd: Bool {
-        isEnabled && !preparationState.isPreparing && remainingCount > 0
+        !preparationState.isPreparing && remainingCount > 0
     }
 
     private var attachmentAccessibilityLabel: String {
@@ -144,9 +155,9 @@ struct FeatureImageAttachmentPicker: View {
     }
 
     private var attachmentAccessibilityHint: String {
-        if !isEnabled { return "The selected model does not accept images" }
         if remainingCount == 0 { return "Remove an attachment before adding another" }
-        return "Choose a photo, take a photo, or browse image files"
+        if !isEnabled { return "Attach a document; the selected model does not accept images" }
+        return "Choose a photo, take a photo, or browse files"
     }
 
     private func present(_ source: Source) {
@@ -164,7 +175,7 @@ struct FeatureImageAttachmentPicker: View {
             case .camera:
                 isCameraPresented = true
             case .files:
-                isFileImporterPresented = true
+                isDocumentPickerPresented = true
             }
         }
     }
@@ -208,30 +219,40 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func loadFiles(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-        case .success(let urls):
-            guard !urls.isEmpty, canAdd else { return }
-            let operation = preparationState.begin(itemCount: min(urls.count, remainingCount))
+    /// Everything the document browser can hand back — PDFs, video, plain files
+    /// and images alike. An image picked here is re-encoded through the image
+    /// path so it keeps its thumbnail and its tighter cap; everything else is
+    /// attached verbatim, because re-encoding a PDF would corrupt it.
+    private func loadFiles(_ urls: [URL]) {
+        guard !urls.isEmpty, canAdd else { return }
+        let operation = preparationState.begin(itemCount: min(urls.count, remainingCount))
 
-            Task {
-                defer { preparationState.finish(operation) }
-                for url in urls.prefix(remainingCount) {
-                    do {
-                        let data = try await Task.detached(priority: .userInitiated) {
-                            let hasAccess = url.startAccessingSecurityScopedResource()
-                            defer {
-                                if hasAccess { url.stopAccessingSecurityScopedResource() }
-                            }
-                            return try Data(contentsOf: url, options: .mappedIfSafe)
-                        }.value
-                        try await appendImage(data)
-                    } catch {
-                        errorMessage = error.localizedDescription
-                        break
+        Task {
+            defer { preparationState.finish(operation) }
+            for url in urls.prefix(remainingCount) {
+                do {
+                    let attachment = try await Task.detached(priority: .userInitiated) {
+                        // Files handed over by the document browser live outside
+                        // the app container and are only readable inside a
+                        // security-scoped access window.
+                        let hasAccess = url.startAccessingSecurityScopedResource()
+                        defer {
+                            if hasAccess { url.stopAccessingSecurityScopedResource() }
+                        }
+                        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                        return try FeatureDocumentProcessor.attachment(from: data, url: url)
+                    }.value
+                    if ComposerAttachments.classify(
+                        mimeType: attachment.mimeType,
+                        name: attachment.filename
+                    ) == .image, isEnabled {
+                        try await appendImage(attachment.data)
+                    } else {
+                        attachments.append(attachment)
                     }
+                } catch {
+                    errorMessage = error.localizedDescription
+                    break
                 }
             }
         }
@@ -243,6 +264,68 @@ struct FeatureImageAttachmentPicker: View {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
         attachments.append(attachment)
+    }
+}
+
+/// The system document browser.
+///
+/// Ported from `pickComposerDocuments` in apps/mobile/src/lib/composerDocuments.ts:
+/// the type filter is deliberately unrestricted so PDFs, video and arbitrary
+/// documents share one affordance. The server validates the MIME against the
+/// contract, so a second allowlist here could only drift from it.
+private struct FeatureDocumentPicker: UIViewControllerRepresentable {
+    let maximumCount: Int
+    let onSelect: ([URL]) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(maximumCount: maximumCount, onSelect: onSelect, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        // `asCopy` puts a readable copy in the app's temporary directory, which
+        // is what makes the bytes available after the picker is dismissed.
+        let controller = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.item],
+            asCopy: true
+        )
+        controller.allowsMultipleSelection = maximumCount > 1
+        controller.shouldShowFileExtensions = true
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        private let maximumCount: Int
+        private let onSelect: ([URL]) -> Void
+        private let onCancel: () -> Void
+
+        init(
+            maximumCount: Int,
+            onSelect: @escaping ([URL]) -> Void,
+            onCancel: @escaping () -> Void
+        ) {
+            self.maximumCount = maximumCount
+            self.onSelect = onSelect
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(
+            _ controller: UIDocumentPickerViewController,
+            didPickDocumentsAt urls: [URL]
+        ) {
+            guard !urls.isEmpty else {
+                onCancel()
+                return
+            }
+            onSelect(Array(urls.prefix(maximumCount)))
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
     }
 }
 
@@ -353,7 +436,7 @@ struct FeatureAttachmentStrip: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
                     ForEach(attachments) { attachment in
-                        FeatureAttachmentThumbnail(attachment: attachment) {
+                        FeatureAttachmentChip(attachment: attachment) {
                             attachments.removeAll { $0.id == attachment.id }
                         }
                     }
@@ -361,26 +444,61 @@ struct FeatureAttachmentStrip: View {
                 .padding(.horizontal, 1)
             }
             .scrollIndicators(.hidden)
-            .accessibilityLabel("\(attachments.count) image attachments")
+            .accessibilityLabel("\(attachments.count) attachments")
         }
     }
 }
 
-private struct FeatureAttachmentThumbnail: View {
+/// SF Symbols for the attachment kinds, ported from `symbolForAttachment` in
+/// apps/mobile/src/components/MessageAttachmentCard.tsx. Shared by the composer
+/// strip and any sent-attachment card so one file reads the same in both places.
+enum FeatureAttachmentGlyph {
+    static func systemImage(mimeType: String, name: String = "") -> String {
+        switch ComposerAttachments.classify(mimeType: mimeType, name: name) {
+        case .image: return "photo"
+        case .pdf: return "doc.richtext"
+        case .video: return "film"
+        case .file: break
+        }
+        let resolved = mimeType.lowercased()
+        if resolved.hasPrefix("audio/") { return "waveform" }
+        if resolved.contains("zip") || resolved.contains("tar") { return "doc.zipper" }
+        return "doc"
+    }
+}
+
+/// One pending attachment.
+///
+/// Images render their thumbnail; PDFs, video and generic files get a tile
+/// carrying the kind glyph and the file name, sized like an image so the strip
+/// keeps one rhythm. Handing a PDF to the image path is what left the composer
+/// showing a placeholder that never resolved.
+private struct FeatureAttachmentChip: View {
     let attachment: FeatureDraftAttachment
     let onRemove: () -> Void
     @State private var image: UIImage?
 
+    private var kind: ComposerAttachmentKind {
+        ComposerAttachments.classify(
+            mimeType: attachment.mimeType,
+            name: attachment.filename
+        )
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Group {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
+                if kind == .image {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "photo")
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
                 } else {
-                    Image(systemName: "photo")
-                        .foregroundStyle(T3Colors.textSecondary)
+                    documentTile
                 }
             }
             .frame(width: 58, height: 58)
@@ -404,12 +522,34 @@ private struct FeatureAttachmentThumbnail: View {
         }
         .padding(.top, 11)
         .padding(.trailing, 11)
+        .accessibilityIdentifier("composer-attachment-\(kind.rawValue)")
         .task(id: attachment.id) {
+            guard kind == .image else { return }
             let data = attachment.thumbnailData ?? attachment.data
             image = await Task.detached(priority: .utility) {
                 UIImage(data: data)
             }.value
         }
+    }
+
+    private var documentTile: some View {
+        VStack(spacing: 3) {
+            Image(
+                systemName: FeatureAttachmentGlyph.systemImage(
+                    mimeType: attachment.mimeType,
+                    name: attachment.filename
+                )
+            )
+            .font(.system(size: 17, weight: .medium))
+            Text(attachment.filename)
+                .font(.system(size: 9, weight: .medium))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .truncationMode(.middle)
+        }
+        .foregroundStyle(T3Colors.textSecondary)
+        .padding(.horizontal, 5)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -525,6 +665,53 @@ enum FeatureImageAttachmentError: LocalizedError {
             "That photo could not be prepared."
         case .tooLarge:
             "Images must be smaller than 10 MB."
+        }
+    }
+}
+
+/// Turns a picked file into a draft attachment without re-encoding it.
+///
+/// The size cap comes from the classified kind rather than a single constant:
+/// the contract gives PDFs, video and generic files 20 MB while images keep the
+/// tighter 10 MB limit, and validating here means a rejection is a picker error
+/// instead of a failed turn.
+enum FeatureDocumentProcessor {
+    static func attachment(from data: Data, url: URL) throws -> FeatureDraftAttachment {
+        let name = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
+        let mimeType = resolveMIMEType(for: url, name: name)
+        let kind = ComposerAttachments.classify(mimeType: mimeType, name: name)
+        guard !data.isEmpty else { throw FeatureDocumentAttachmentError.empty(name: name) }
+        let maximumBytes = ComposerAttachments.maximumBytes(for: kind)
+        guard data.count <= maximumBytes else {
+            throw FeatureDocumentAttachmentError.tooLarge(
+                name: name,
+                maximumBytes: maximumBytes
+            )
+        }
+        return FeatureDraftAttachment(data: data, filename: name, mimeType: mimeType)
+    }
+
+    /// The document browser hands back a URL and nothing else, so the type comes
+    /// from the extension. The shared classifier's table is the fallback so a
+    /// type UniformTypeIdentifiers does not know still lands where web puts it.
+    static func resolveMIMEType(for url: URL, name: String) -> String {
+        if let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType {
+            return mimeType
+        }
+        return ComposerAttachments.inferMIMEType(fromFileName: name) ?? "application/octet-stream"
+    }
+}
+
+enum FeatureDocumentAttachmentError: LocalizedError, Equatable {
+    case empty(name: String)
+    case tooLarge(name: String, maximumBytes: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case let .empty(name):
+            "‘\(name)’ is empty."
+        case let .tooLarge(name, maximumBytes):
+            "‘\(name)’ is larger than \(maximumBytes / (1_024 * 1_024)) MB."
         }
     }
 }

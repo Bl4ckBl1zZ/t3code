@@ -10,20 +10,34 @@ struct FeatureComposerPowerFeatures {
     var skills: [FeatureProviderSkill]
     var pathSearchScopeID: String
     var searchPaths: PathSearch?
+    /// Overrides the app-wide Voice Input capability. Left nil in production —
+    /// the composer resolves `FeatureVoiceCapability.current` — and set in tests
+    /// and previews that need a stub transcriber.
+    var voice: (any FeatureVoiceTranscribing)?
 
     init(
         slashCommands: [FeatureProviderSlashCommand] = [],
         skills: [FeatureProviderSkill] = [],
         pathSearchScopeID: String = "",
-        searchPaths: PathSearch? = nil
+        searchPaths: PathSearch? = nil,
+        voice: (any FeatureVoiceTranscribing)? = nil
     ) {
         self.slashCommands = slashCommands
         self.skills = skills
         self.pathSearchScopeID = pathSearchScopeID
         self.searchPaths = searchPaths
+        self.voice = voice
     }
 
     static let disabled = FeatureComposerPowerFeatures()
+
+    /// Which composer a voice recording belongs to. A transcript that lands
+    /// after the composer has moved on is stashed under this key and inserted
+    /// when the same conversation is active again, so the scope id doubles as
+    /// the composer's identity.
+    var voiceComposerIdentity: String {
+        pathSearchScopeID.isEmpty ? "composer" : pathSearchScopeID
+    }
 }
 
 public struct FeatureProviderSlashCommand: Identifiable, Sendable, Equatable, Hashable, Codable {

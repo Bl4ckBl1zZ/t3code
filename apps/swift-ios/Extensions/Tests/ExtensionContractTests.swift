@@ -42,4 +42,66 @@ final class ExtensionContractTests: XCTestCase {
         let state = LiveActivityAttributes.ContentState(name: "Other", props: "{}")
         XCTAssertNil(state.aggregate)
     }
+
+    /// The counts the OS offers and the count the app accepts live in two files
+    /// and drift silently: iOS would hand the extension nine movies and the
+    /// ninth would vanish with no explanation.
+    func testShareActivationRulesMatchWhatTheInboxAccepts() throws {
+        let rule = try Self.shareActivationRule()
+
+        XCTAssertEqual(rule["NSExtensionActivationDictionaryVersion"] as? Int, 2)
+        XCTAssertEqual(rule["NSExtensionActivationSupportsText"] as? Bool, true)
+        XCTAssertEqual(rule["NSExtensionActivationSupportsWebURLWithMaxCount"] as? Int, 1)
+        for key in [
+            "NSExtensionActivationSupportsImageWithMaxCount",
+            "NSExtensionActivationSupportsMovieWithMaxCount",
+            "NSExtensionActivationSupportsFileWithMaxCount",
+        ] {
+            XCTAssertEqual(
+                rule[key] as? Int,
+                T3IncomingShareStore.maximumAttachmentCount,
+                "\(key) must match the inbox's attachment cap"
+            )
+        }
+    }
+
+    /// The share extension is a separate module and cannot see
+    /// `ComposerAttachments`, so its restated caps are pinned here — the same
+    /// way the app group identifier is pinned across its three homes.
+    func testInboxByteCapsMatchTheSharedComposerRules() {
+        XCTAssertEqual(
+            T3IncomingShareStore.maximumImageBytes,
+            ComposerAttachments.maximumImageBytes
+        )
+        XCTAssertEqual(
+            T3IncomingShareStore.maximumFileBytes,
+            ComposerAttachments.maximumFileBytes
+        )
+        XCTAssertEqual(
+            T3IncomingShareStore.maximumBytes(isImage: true),
+            ComposerAttachments.maximumBytes(for: .image)
+        )
+        XCTAssertEqual(
+            T3IncomingShareStore.maximumBytes(isImage: false),
+            ComposerAttachments.maximumBytes(for: .video)
+        )
+    }
+
+    /// Reads the source-tree plist rather than a bundled copy: the extension's
+    /// Info.plist is consumed by the build, not shipped into the test bundle.
+    private static func shareActivationRule() throws -> [String: Any] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Share/Info.plist")
+        let plist = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(
+                from: Data(contentsOf: url),
+                format: nil
+            ) as? [String: Any]
+        )
+        let extensionEntry = try XCTUnwrap(plist["NSExtension"] as? [String: Any])
+        let attributes = try XCTUnwrap(extensionEntry["NSExtensionAttributes"] as? [String: Any])
+        return try XCTUnwrap(attributes["NSExtensionActivationRule"] as? [String: Any])
+    }
 }

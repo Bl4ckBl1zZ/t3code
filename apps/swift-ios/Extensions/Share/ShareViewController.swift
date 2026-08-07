@@ -15,7 +15,7 @@ final class T3ShareViewController: UIViewController {
                 return try await Task.detached {
                     try T3IncomingShareStore.write(
                         textFragments: payload.textFragments,
-                        images: payload.images,
+                        attachments: payload.attachments,
                         warnings: payload.warnings
                     )
                 }.value
@@ -47,7 +47,7 @@ struct T3ShareExtensionView: View {
     enum Phase: Equatable {
         case ready
         case saving
-        case saved(imageCount: Int)
+        case saved(attachmentCount: Int)
         case failed(message: String)
     }
 
@@ -127,13 +127,13 @@ struct T3ShareExtensionView: View {
     private var message: String {
         switch phase {
         case .ready:
-            "Text, links, and up to eight images will be waiting in the native composer."
+            "Text, links, and up to eight files will be waiting in the native composer."
         case .saving:
             "Keeping a durable copy so nothing gets lost."
-        case let .saved(imageCount):
-            imageCount == 0
+        case let .saved(attachmentCount):
+            attachmentCount == 0
                 ? "Open T3 Code to choose a project and send it."
-                : "Saved \(imageCount) image\(imageCount == 1 ? "" : "s"). Open T3 Code to choose a project."
+                : "Saved \(attachmentCount) file\(attachmentCount == 1 ? "" : "s"). Open T3 Code to choose a project."
         case let .failed(message):
             message
         }
@@ -172,7 +172,7 @@ struct T3ShareExtensionView: View {
             Task {
                 do {
                     let envelope = try await save()
-                    phase = .saved(imageCount: envelope.images.count)
+                    phase = .saved(attachmentCount: envelope.attachments.count)
                 } catch {
                     phase = .failed(
                         message: (error as? LocalizedError)?.errorDescription

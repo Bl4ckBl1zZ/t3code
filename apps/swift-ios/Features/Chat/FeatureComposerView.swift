@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct FeatureComposerView: View {
     @State private var isManuallyExpanded = false
@@ -6,6 +7,12 @@ struct FeatureComposerView: View {
     @State private var pathEntries: [FeatureComposerPathEntry] = []
     @State private var isPathSearchLoading = false
     @State private var pathSearchError: String?
+    /// App-wide rather than per-composer: a dictation started here has to
+    /// survive navigating away, which is the whole point of the transcript
+    /// stash. The caret tracker stays per-composer because it follows this
+    /// view's own text input.
+    private let voice = VoiceComposerCoordinator.shared
+    @State private var caret = VoiceComposerCaret()
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
@@ -86,6 +93,18 @@ struct FeatureComposerView: View {
                     }
                 }
             }
+            // Sits outside the composer's clip shape on purpose: the slide-up
+            // cancel target floats above the send button and an overlay inside
+            // the rounded surface would be cut off exactly where it matters.
+            .overlay(alignment: .bottomTrailing) {
+                VoiceCancelTarget(
+                    holdActive: voice.holdActive,
+                    cancelArmed: voice.cancelArmed,
+                    progress: voice.cancelProgress
+                )
+                .padding(.trailing, 13)
+                .padding(.bottom, 62)
+            }
             .padding(.horizontal, 12)
             .padding(.top, 12)
             .padding(.bottom, 10)
@@ -112,6 +131,67 @@ struct FeatureComposerView: View {
             .task(id: pathSearchRequest) {
                 await updatePathSearch()
             }
+            .onAppear {
+                caret.startTracking()
+                attachVoice()
+            }
+            .onDisappear {
+                caret.stopTracking()
+                voice.detach(identity: powerFeatures.voiceComposerIdentity)
+            }
+            .onChange(of: powerFeatures.voiceComposerIdentity) { attachVoice() }
+            .onChange(of: voice.state) { voice.surfaceFailureAlert() }
+            .alert(
+                voice.alert?.title ?? "",
+                isPresented: Binding(
+                    get: { voice.alert != nil },
+                    set: { if !$0 { voice.alert = nil } }
+                ),
+                presenting: voice.alert
+            ) { alert in
+                voiceAlertActions(alert)
+            } message: { alert in
+                Text(alert.message)
+            }
+    }
+
+    /// Points the shared coordinator at this composer. Reading and writing the
+    /// draft goes through the binding rather than a snapshot, because a
+    /// transcript can land long after the recording started.
+    private func attachVoice() {
+        voice.attach(
+            identity: powerFeatures.voiceComposerIdentity,
+            capability: powerFeatures.voice ?? FeatureVoiceCapability.current,
+            readDraft: { text },
+            writeDraft: { text = $0 },
+            readRange: { caret.range(in: $0) },
+            moveCaret: { offset in
+                focused.wrappedValue = true
+                caret.moveCaret(to: offset)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func voiceAlertActions(_ alert: VoiceComposerAlert) -> some View {
+        switch alert.kind {
+        case .notice:
+            Button("OK", role: .cancel) {}
+        case .permissionBlocked:
+            Button("Cancel", role: .cancel) {}
+            Button("Open Settings") {
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                UIApplication.shared.open(url)
+            }
+        case .permissionRetry:
+            Button("Cancel", role: .cancel) {}
+            // Retrying a retryable permission failure restarts the whole flow,
+            // matching web.
+            Button("Try again") { voice.retry() }
+        case .failureRetry:
+            Button("Discard", role: .cancel) { voice.cancelRecording() }
+            Button("Retry") { voice.retry() }
+        }
     }
 
     private var composerSurface: some View {
@@ -203,7 +283,7 @@ struct FeatureComposerView: View {
                 .padding(.bottom, 7)
                 .frame(minHeight: 62, alignment: .top)
 
-            if !attachments.isEmpty, !imagesAllowed {
+            if imageAttachmentCount > 0, !imagesAllowed {
                 Label("Choose a model that accepts images", systemImage: "exclamationmark.circle")
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.warning)
@@ -221,6 +301,8 @@ struct FeatureComposerView: View {
                     .padding(.bottom, 4)
                     .accessibilityIdentifier("attachment-preparing")
             }
+
+            VoiceRecordingBar(voice: voice)
 
             composerFooter
         }
@@ -258,7 +340,26 @@ struct FeatureComposerView: View {
         .padding(.bottom, 8)
     }
 
+    /// The send affordance doubles as the record button wherever Voice Input is
+    /// reachable: tap sends (or starts hands-free dictation when the draft is
+    /// empty), hold dictates. The agent-stop button keeps the slot only while
+    /// nothing voice-related is in flight, so a recording is always stoppable
+    /// from the control that started it.
+    @ViewBuilder
     private var submitButton: some View {
+        if voice.isAvailable, !(showsStop && !voice.state.isBusy) {
+            VoiceComboButton(
+                voice: voice,
+                canSend: canSend,
+                isSending: isSending,
+                onSend: performPrimaryAction
+            )
+        } else {
+            plainSubmitButton
+        }
+    }
+
+    private var plainSubmitButton: some View {
         Button(action: performPrimaryAction) {
             Group {
                 if isSending {
@@ -294,6 +395,9 @@ struct FeatureComposerView: View {
             || !textIsEmpty
             || !attachments.isEmpty
             || attachmentPreparation.isPreparing
+            // A collapsed composer has nowhere to show the level meter or the
+            // countdown, so recording expands it.
+            || voice.state.isBusy
     }
 
     private var showsStop: Bool {
@@ -315,8 +419,15 @@ struct FeatureComposerView: View {
             attachmentCount: attachments.count,
             imagesAllowed: imagesAllowed,
             isSending: isSending,
-            preparationState: attachmentPreparation
+            preparationState: attachmentPreparation,
+            imageAttachmentCount: imageAttachmentCount
         )
+    }
+
+    private var imageAttachmentCount: Int {
+        attachments.filter {
+            ComposerAttachments.classify(mimeType: $0.mimeType, name: $0.filename) == .image
+        }.count
     }
 
     private var imagesAllowed: Bool {
@@ -450,19 +561,24 @@ private struct FeatureComposerPathSearchRequest: Hashable {
 }
 
 enum FeatureComposerSubmissionEligibility {
+    /// `imageAttachmentCount` defaults to every attachment: only images need a
+    /// vision-capable model, while PDFs, video and generic files are read off
+    /// disk by the agent and send on any model.
     static func canSend(
         text: String,
         attachmentCount: Int,
         imagesAllowed: Bool,
         isSending: Bool,
-        preparationState: FeatureAttachmentPreparationState
+        preparationState: FeatureAttachmentPreparationState,
+        imageAttachmentCount: Int? = nil
     ) -> Bool {
         let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasAttachments = attachmentCount > 0
+        let hasImages = (imageAttachmentCount ?? attachmentCount) > 0
         return !isSending
             && !preparationState.isPreparing
             && (hasText || hasAttachments)
-            && (!hasAttachments || imagesAllowed)
+            && (!hasImages || imagesAllowed)
     }
 }
 

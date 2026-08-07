@@ -3,16 +3,16 @@ import UniformTypeIdentifiers
 
 struct T3LoadedSharePayload: Sendable {
     var textFragments: [String]
-    var images: [T3PendingShareImage]
+    var attachments: [T3PendingShareAttachment]
     var warnings: [String]
 }
 
 enum T3SharePayloadLoader {
     static func load(from inputItems: [Any]) async -> T3LoadedSharePayload {
         var textFragments: [String] = []
-        var images: [T3PendingShareImage] = []
-        var skippedOversizedImage = false
-        var skippedExcessImage = false
+        var attachments: [T3PendingShareAttachment] = []
+        var warnings: [String] = []
+        var skippedExcess = false
 
         for case let item as NSExtensionItem in inputItems {
             if let attributedText = item.attributedContentText?.string {
@@ -20,78 +20,83 @@ enum T3SharePayloadLoader {
             }
 
             for provider in item.attachments ?? [] {
-                if let imageType = provider.registeredTypeIdentifiers.first(where: {
-                    UTType($0)?.conforms(to: .image) == true
-                }) {
-                    guard images.count < T3IncomingShareStore.maximumImageCount else {
-                        skippedExcessImage = true
+                switch T3SharedAttachmentTypes.selection(
+                    forRegisteredTypeIdentifiers: provider.registeredTypeIdentifiers
+                ) {
+                case let .attachment(typeIdentifier, isImage):
+                    guard attachments.count < T3IncomingShareStore.maximumAttachmentCount else {
+                        skippedExcess = true
                         continue
                     }
                     do {
-                        let staged = try await loadStagedImage(
+                        let staged = try await loadStagedAttachment(
                             from: provider,
-                            typeIdentifier: imageType
+                            typeIdentifier: typeIdentifier,
+                            isImage: isImage
                         )
-                        images.append(
-                            T3PendingShareImage(
+                        attachments.append(
+                            T3PendingShareAttachment(
                                 stagedFileURL: staged.url,
                                 byteCount: staged.byteCount,
                                 suggestedName: provider.suggestedName,
-                                typeIdentifier: imageType
+                                typeIdentifier: typeIdentifier,
+                                mimeType: T3SharedAttachmentTypes.mimeType(
+                                    forTypeIdentifier: typeIdentifier
+                                ),
+                                isImage: isImage
                             )
                         )
-                    } catch T3SharePayloadLoaderError.imageTooLarge {
-                        skippedOversizedImage = true
+                    } catch let error as T3SharePayloadLoaderError {
+                        warnings.append(
+                            error.warning(
+                                name: provider.suggestedName ?? "Shared file",
+                                isImage: isImage
+                            )
+                        )
                     } catch {
-                        // An image provider is terminal even if it also vends a
+                        // A file provider is terminal even when it also vends a
                         // URL or text representation. Falling through would
                         // silently turn a rejected attachment into other input.
                     }
-                    continue
-                }
 
-                if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-                   let value = try? await loadItem(
-                       from: provider,
-                       typeIdentifier: UTType.url.identifier
-                   ),
-                   let urlText = urlString(from: value)
-                {
-                    textFragments.append(urlText)
-                    continue
-                }
+                case let .webURL(typeIdentifier):
+                    if let value = try? await loadItem(
+                        from: provider,
+                        typeIdentifier: typeIdentifier
+                    ), let urlText = urlString(from: value) {
+                        textFragments.append(urlText)
+                    }
 
-                if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
-                   let value = try? await loadItem(
-                       from: provider,
-                       typeIdentifier: UTType.plainText.identifier
-                   ),
-                   let text = textString(from: value)
-                {
-                    textFragments.append(text)
+                case let .plainText(typeIdentifier):
+                    if let value = try? await loadItem(
+                        from: provider,
+                        typeIdentifier: typeIdentifier
+                    ), let text = textString(from: value) {
+                        textFragments.append(text)
+                    }
+
+                case .none:
+                    continue
                 }
             }
         }
 
-        var warnings: [String] = []
-        if skippedOversizedImage {
-            warnings.append("One shared image exceeded the 10 MB attachment limit.")
-        }
-        if skippedExcessImage {
+        if skippedExcess {
             warnings.append(
-                "Only the first \(T3IncomingShareStore.maximumImageCount) shared images were attached."
+                "Only the first \(T3IncomingShareStore.maximumAttachmentCount) shared files were attached."
             )
         }
         return T3LoadedSharePayload(
             textFragments: textFragments,
-            images: images,
+            attachments: attachments,
             warnings: warnings
         )
     }
 
-    private static func loadStagedImage(
+    private static func loadStagedAttachment(
         from provider: NSItemProvider,
-        typeIdentifier: String
+        typeIdentifier: String,
+        isImage: Bool
     ) async throws -> (url: URL, byteCount: Int) {
         try await withCheckedThrowingContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
@@ -99,7 +104,9 @@ enum T3SharePayloadLoader {
                     guard let url else {
                         throw error ?? CocoaError(.fileReadUnknown)
                     }
-                    continuation.resume(returning: try stageImage(from: url))
+                    continuation.resume(
+                        returning: try stage(from: url, isImage: isImage)
+                    )
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -107,11 +114,21 @@ enum T3SharePayloadLoader {
         }
     }
 
-    /// The provider-owned URL expires when its callback returns. Stream it to
-    /// an extension-owned temporary file while enforcing the byte limit, so a
+    /// The provider-owned URL expires when its callback returns. Stream it to an
+    /// extension-owned temporary file while enforcing the byte limit, so a
     /// malicious or enormous provider never has to be materialized in memory.
-    private static func stageImage(from sourceURL: URL) throws -> (url: URL, byteCount: Int) {
+    private static func stage(from sourceURL: URL, isImage: Bool) throws -> (url: URL, byteCount: Int) {
         let fileManager = FileManager.default
+        let maximumBytes = T3IncomingShareStore.maximumBytes(isImage: isImage)
+
+        // Pre-read rejection: a 4 GB movie is refused off its declared size,
+        // before a single byte is copied. Widening past images made this the
+        // difference between a warning and an extension the OS jetsams.
+        if let declared = try? sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+            guard declared > 0 else { throw T3SharePayloadLoaderError.empty }
+            guard declared <= maximumBytes else { throw T3SharePayloadLoaderError.tooLarge }
+        }
+
         let stagingDirectory = fileManager.temporaryDirectory.appending(
             path: "T3CodeShareStaging",
             directoryHint: .isDirectory
@@ -140,12 +157,15 @@ enum T3SharePayloadLoader {
             while let chunk = try source.read(upToCount: 64 * 1_024), !chunk.isEmpty {
                 try Task.checkCancellation()
                 byteCount += chunk.count
-                guard byteCount <= T3IncomingShareStore.maximumImageBytes else {
-                    throw T3SharePayloadLoaderError.imageTooLarge
+                // Providers that report no size (or lie about it) are still
+                // bounded, so the declared-size check above is an optimization
+                // rather than the guarantee.
+                guard byteCount <= maximumBytes else {
+                    throw T3SharePayloadLoaderError.tooLarge
                 }
                 try destination.write(contentsOf: chunk)
             }
-            guard byteCount > 0 else { throw CocoaError(.fileReadCorruptFile) }
+            guard byteCount > 0 else { throw T3SharePayloadLoaderError.empty }
             return (stagedURL, byteCount)
         } catch {
             try? fileManager.removeItem(at: stagedURL)
@@ -189,6 +209,17 @@ enum T3SharePayloadLoader {
     }
 }
 
-private enum T3SharePayloadLoaderError: Error {
-    case imageTooLarge
+enum T3SharePayloadLoaderError: Error {
+    case tooLarge
+    case empty
+
+    func warning(name: String, isImage: Bool) -> String {
+        let displayName = T3IncomingShareStore.safeFileName(name, fallback: "Shared file")
+        return switch self {
+        case .tooLarge:
+            T3IncomingShareStore.overLimitWarning(name: displayName, isImage: isImage)
+        case .empty:
+            T3IncomingShareStore.emptyWarning(name: displayName)
+        }
+    }
 }

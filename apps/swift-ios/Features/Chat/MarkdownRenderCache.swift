@@ -128,6 +128,10 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     case blockquote([MarkdownRenderedBlock])
     case table(MarkdownRenderedTable)
     case codeBlock(language: String?, code: String)
+    /// Carried through unrendered: the embed's document is assembled on the
+    /// main actor from the current colour scheme, which this render task does
+    /// not know and must not capture.
+    case htmlEmbed(String)
     case thematicBreak
 }
 
@@ -362,6 +366,9 @@ final class MarkdownRenderCache: @unchecked Sendable {
 
             case let .codeBlock(language, code):
                 rendered = .codeBlock(language: language, code: code)
+
+            case let .htmlEmbed(html):
+                rendered = .htmlEmbed(html)
 
             case .thematicBreak:
                 rendered = .thematicBreak

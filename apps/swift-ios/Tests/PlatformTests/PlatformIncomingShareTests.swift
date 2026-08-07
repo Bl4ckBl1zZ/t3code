@@ -30,7 +30,7 @@ struct PlatformIncomingShareTests {
         let imageID = try #require(UUID(uuidString: "12345678-1234-1234-1234-123456789abc"))
         let envelope = Self.envelope(
             text: "Shared context",
-            images: [Self.image(id: imageID.uuidString)]
+            attachments: [Self.attachment(id: imageID.uuidString)]
         )
         let project = Self.project()
         let expectedKey = FeatureComposerDraftStore.newTaskKey(project: project)
@@ -38,8 +38,8 @@ struct PlatformIncomingShareTests {
         let pipeline = PlatformIncomingSharePipeline(
             source: PlatformIncomingShareSource(
                 loadAll: { [envelope] },
-                data: { image in
-                    await recorder.record("read:\(image.id)")
+                data: { shared in
+                    await recorder.record("read:\(shared.id)")
                     return Data([0xCA, 0xFE])
                 },
                 remove: { id in await recorder.record("remove:\(id)") }
@@ -68,7 +68,7 @@ struct PlatformIncomingShareTests {
             }
         )
 
-        let merged = try await pipeline.importEnvelope(envelope, into: project)
+        let merged = try await pipeline.importEnvelope(envelope, into: project).draft
         let captured = await recorder.capturedDraft
         let events = await recorder.events
 
@@ -116,7 +116,7 @@ struct PlatformIncomingShareTests {
     func imageFailureDoesNotPersistOrRemoveTheEnvelope() async {
         let recorder = IncomingShareTestRecorder()
         let envelope = Self.envelope(
-            images: [Self.image(id: UUID().uuidString)]
+            attachments: [Self.attachment(id: UUID().uuidString)]
         )
         let pipeline = PlatformIncomingSharePipeline(
             source: PlatformIncomingShareSource(
@@ -156,9 +156,9 @@ struct PlatformIncomingShareTests {
             attachments: (0..<7).map { Self.attachment(id: UUID(), value: UInt8($0)) }
         )
         let envelope = Self.envelope(
-            images: [
-                Self.image(id: UUID().uuidString),
-                Self.image(id: UUID().uuidString),
+            attachments: [
+                Self.attachment(id: UUID().uuidString),
+                Self.attachment(id: UUID().uuidString),
             ]
         )
         let pipeline = PlatformIncomingSharePipeline(
@@ -259,23 +259,24 @@ struct PlatformIncomingShareTests {
 
     private static func envelope(
         text: String = "",
-        images: [T3IncomingShareImage] = []
+        attachments: [T3IncomingShareAttachment] = []
     ) -> T3IncomingShareEnvelope {
         T3IncomingShareEnvelope(
             schemaVersion: T3IncomingShareEnvelope.schemaVersion,
             id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             createdAt: Date(timeIntervalSince1970: 100),
             text: text,
-            images: images,
+            attachments: attachments,
             warnings: []
         )
     }
 
-    private static func image(id: String) -> T3IncomingShareImage {
-        T3IncomingShareImage(
+    private static func attachment(id: String) -> T3IncomingShareAttachment {
+        T3IncomingShareAttachment(
             id: id,
             fileName: "reference.png",
             typeIdentifier: "public.png",
+            mimeType: "image/png",
             relativePath: "image.png",
             byteCount: 2
         )

@@ -12,7 +12,11 @@
 			<dict>
 				<key>NSExtensionActivationDictionaryVersion</key>
 				<integer>2</integer>
+				<key>NSExtensionActivationSupportsFileWithMaxCount</key>
+				<integer>8</integer>
 				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
+				<integer>8</integer>
+				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
 				<integer>8</integer>
 				<key>NSExtensionActivationSupportsText</key>
 				<true/>

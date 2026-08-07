@@ -244,6 +244,9 @@ private struct MarkdownBlockView: View, Equatable {
         case let .codeBlock(language, code):
             MarkdownCodeBlockView(language: language, code: code)
 
+        case let .htmlEmbed(html):
+            HtmlEmbedView(html: html)
+
         case .thematicBreak:
             Rectangle()
                 .fill(T3Colors.separator)

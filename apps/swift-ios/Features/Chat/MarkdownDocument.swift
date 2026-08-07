@@ -26,6 +26,10 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     case blockquote(MarkdownDocument)
     case table(MarkdownTable)
     case codeBlock(language: String?, code: String)
+    /// A `t3-html` fence, which renders as a live sandboxed embed rather than
+    /// as source. The block carries the fence body verbatim; assembling the
+    /// document around it belongs to `HtmlEmbed`.
+    case htmlEmbed(String)
     case thematicBreak
 }
 
@@ -130,7 +134,14 @@ private struct MarkdownBlockParser {
             index += 1
         }
 
-        return .codeBlock(language: opening.language, code: codeLines.joined(separator: "\n"))
+        let code = codeLines.joined(separator: "\n")
+        // Exactly one language becomes an embed. `html`, `svg`, and everything
+        // else stay code blocks, so an agent cannot get markup executed by
+        // labelling a fence with a language the renderer happens to know.
+        if HtmlEmbed.isEmbedLanguage(opening.language) {
+            return .htmlEmbed(code)
+        }
+        return .codeBlock(language: opening.language, code: code)
     }
 
     private mutating func parseBlockquote() -> MarkdownBlock {

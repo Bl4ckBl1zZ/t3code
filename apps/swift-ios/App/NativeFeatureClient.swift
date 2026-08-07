@@ -136,6 +136,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let pair = AsyncStream<FeatureEvent>.makeStream()
         stream = pair.stream
         continuation = pair.continuation
+        // Voice Input is account state on the relay, not environment state, so
+        // the composer cannot reach it through a thread's environment. Publish
+        // the capability once here; the registry holds it weakly.
+        FeatureVoiceCapability.register(self)
     }
 
     deinit {
@@ -5530,7 +5534,7 @@ extension NativeFeatureClient: FeatureScheduledTaskManaging {
 /// bearer the environment list uses (`packages/contracts/src/relay.ts`), and no
 /// paired T3 server can answer for them. That is why these calls do not go
 /// through `T3Client` the way automations do.
-extension NativeFeatureClient: FeatureVoiceSettingsManaging {
+extension NativeFeatureClient: FeatureVoiceTranscribing {
     /// Reads report an unreachable integration as `.unavailable` rather than
     /// throwing, so a build without relay configuration or an account that is
     /// signed out renders the disconnected state instead of an error.
@@ -5583,6 +5587,15 @@ extension NativeFeatureClient: FeatureVoiceSettingsManaging {
         return try await relay.listOpenRouterModels(capability: "audio")
     }
 
+    /// Ephemeral: the audio is uploaded, transcribed, optionally cleaned up by a
+    /// second model, and discarded. Nothing about the recording is persisted,
+    /// which is why it is a plain request/response rather than a job.
+    func transcribeVoice(
+        _ request: VoiceTranscriptionRequest
+    ) async throws -> VoiceTranscriptionResponse {
+        try await requireVoiceRelay().transcribeVoice(request)
+    }
+
     private func requireVoiceRelay() throws -> NativeVoiceRelayClient {
         guard let relay = voiceRelay() else {
             throw T3ConnectRelayError.invalidConfiguration(
@@ -5602,16 +5615,10 @@ extension NativeFeatureClient: FeatureVoiceSettingsManaging {
             baseURL: configuration.relayHTTPURL,
             transport: URLSessionHTTPTransport()
         ) { @MainActor in
-            // Minted per call rather than cached: ClerkKit already caches the
-            // template token and knows when it has to be refreshed, and a copy
-            // here could only go stale.
-            guard let clerk = controller.clerk else { throw T3ConnectAuthError.noSession }
-            if !clerk.isLoaded { _ = try await clerk.refreshClient() }
-            let token = try await clerk.auth.getToken(
-                .init(template: configuration.clerkJWTTemplate, expirationBuffer: 20)
-            )
-            guard let token, !token.isEmpty else { throw T3ConnectAuthError.noSession }
-            return token
+            // Routed through the controller rather than ClerkKit directly: the
+            // session coalesces concurrent mints and owns the rate-limit
+            // backoff, and minting here would sit outside both.
+            try await controller.relayToken()
         }
     }
 }
@@ -5692,6 +5699,66 @@ struct NativeVoiceRelayClient: Sendable {
         ).feature
     }
 
+    /// The audio travels inline as base64 on a plain JSON POST — there is no
+    /// upload endpoint for it — so the 12 MB contract cap is enforced before the
+    /// request is built rather than discovered as a rejection.
+    ///
+    /// Failures decode as `RelayVoiceInputError` rather than going through the
+    /// generic error path: the composer branches on the machine-readable code
+    /// (no speech, rate limited, needs credit) and a flattened message would
+    /// make every provider refusal read the same.
+    func transcribeVoice(
+        _ request: VoiceTranscriptionRequest
+    ) async throws -> VoiceTranscriptionResponse {
+        guard request.audio.data.count <= VoiceInputLimits.maximumAudioBytes else {
+            throw VoiceInputError(code: .audioTooLarge)
+        }
+        var urlRequest = URLRequest(
+            url: try url(path: ["v1", "client", "voice", "transcriptions"])
+        )
+        urlRequest.httpMethod = "POST"
+        urlRequest.httpBody = try JSONEncoder.t3.encode(request)
+        urlRequest.setValue(
+            "Bearer \(try await bearerToken())",
+            forHTTPHeaderField: "Authorization"
+        )
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await transport.data(
+            for: HTTPRequestPolicy.prepare(urlRequest)
+        )
+        guard (200..<300).contains(response.statusCode) else {
+            throw Self.voiceError(from: data)
+                ?? T3ConnectRelayError.response(
+                    status: response.statusCode,
+                    message: "Voice transcription failed.",
+                    traceID: nil
+                )
+        }
+        do {
+            return try JSONDecoder.t3.decode(VoiceTranscriptionResponse.self, from: data)
+        } catch {
+            throw T3ConnectRelayError.invalidResponse
+        }
+    }
+
+    /// `RelayVoiceInputError` from packages/contracts/src/relay.ts. An
+    /// unrecognized code stays nil so the caller falls back to the generic relay
+    /// error rather than inventing a category.
+    static func voiceError(from data: Data) -> VoiceInputError? {
+        guard let body = try? JSONDecoder.t3.decode(RelayVoiceErrorBody.self, from: data),
+              let code = body.code.flatMap(VoiceInputErrorCode.init(rawValue:)) else {
+            return nil
+        }
+        return VoiceInputError(code: code, message: body.detail)
+    }
+
+    struct RelayVoiceErrorBody: Decodable, Sendable {
+        let code: String?
+        /// Sanitized upstream provider error text, when one was returned.
+        let detail: String?
+    }
+
     func listOpenRouterModels(capability: String) async throws -> [OpenRouterModelOption] {
         try await send(
             path: ["v1", "client", "integrations", "openrouter", "models"],
@@ -5732,13 +5799,7 @@ struct NativeVoiceRelayClient: Sendable {
         return .object(payload)
     }
 
-    private func send<Result: Decodable & Sendable>(
-        path: [String],
-        method: String,
-        queryItems: [URLQueryItem] = [],
-        body: Data? = nil,
-        as type: Result.Type
-    ) async throws -> Result {
+    private func url(path: [String], queryItems: [URLQueryItem] = []) throws -> URL {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
         components?.query = nil
         components?.fragment = nil
@@ -5749,7 +5810,17 @@ struct NativeVoiceRelayClient: Sendable {
                 "The T3 Connect relay URL is invalid."
             )
         }
-        var request = URLRequest(url: url)
+        return url
+    }
+
+    private func send<Result: Decodable & Sendable>(
+        path: [String],
+        method: String,
+        queryItems: [URLQueryItem] = [],
+        body: Data? = nil,
+        as type: Result.Type
+    ) async throws -> Result {
+        var request = URLRequest(url: try url(path: path, queryItems: queryItems))
         request.httpMethod = method
         request.httpBody = body
         request.setValue("Bearer \(try await bearerToken())", forHTTPHeaderField: "Authorization")
