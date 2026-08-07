@@ -121,6 +121,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const branchToolbarProps = {
     environmentId: props.environmentId,
     threadId: props.threadId,
+    showGitControls: props.isGitRepo,
     ...(props.draftId ? { draftId: props.draftId } : {}),
     onEnvModeChange: props.onEnvModeChange,
     startFromOrigin: props.startFromOrigin,

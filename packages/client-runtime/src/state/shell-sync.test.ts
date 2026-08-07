@@ -239,25 +239,29 @@ describe("environment shell synchronization", () => {
     }),
   );
 
-  it.effect("refreshes the authoritative shell snapshot when the app becomes active", () =>
+  it.effect("resubscribes from the in-memory shell cursor when the app becomes active", () =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
       const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
       const loaderCalls = yield* Ref.make(0);
-      const subscriptionCount = yield* Ref.make(0);
+      const capturedAfterSequences = yield* Ref.make<ReadonlyArray<number | undefined>>([]);
       const client = {
-        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input: {
+          readonly afterSequence?: number;
+        }) =>
           Stream.unwrap(
-            Ref.update(subscriptionCount, (count) => count + 1).pipe(
-              Effect.as(Stream.fromQueue(events)),
-            ),
+            Ref.update(capturedAfterSequences, (captured) => [
+              ...captured,
+              input.afterSequence,
+            ]).pipe(Effect.as(Stream.fromQueue(events))),
           ),
       } as unknown as WsRpcProtocolClient;
       const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+      const activeSession = yield* SubscriptionRef.make(Option.some(session(client)));
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
         target: TARGET,
         state: supervisorState,
-        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        session: activeSession,
         prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
         connect: Effect.void,
         disconnect: Effect.void,
@@ -295,54 +299,62 @@ describe("environment shell synchronization", () => {
         ),
       );
 
-      yield* SubscriptionRef.changes(shellState).pipe(
-        Stream.filter(
-          (value) =>
-            value.status === "synchronizing" &&
-            Option.isSome(value.snapshot) &&
-            value.snapshot.value.snapshotSequence === 10,
-        ),
-        Stream.runHead,
-      );
+      // A new session starts from an authoritative HTTP snapshot.
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(capturedAfterSequences)).length >= 1) break;
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10]);
       yield* Queue.offer(events, { kind: "synchronized" });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter((value) => value.status === "live"),
         Stream.runHead,
       );
 
-      yield* Queue.offer(wakeups, "application-active");
+      // A newer snapshot arrives on the stream and advances the cursor.
+      yield* Queue.offer(events, {
+        kind: "snapshot",
+        snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 40 },
+      });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter(
-          (value) =>
-            value.status === "synchronizing" &&
-            Option.isSome(value.snapshot) &&
-            value.snapshot.value.snapshotSequence === 20,
+          (value) => Option.isSome(value.snapshot) && value.snapshot.value.snapshotSequence === 40,
         ),
         Stream.runHead,
       );
 
+      // Foreground resubscriptions on the same session resume from the cursor
+      // instead of re-fetching the authoritative snapshot.
+      yield* Queue.offer(wakeups, "application-active");
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(subscriptionCount)) >= 2) break;
+        if ((yield* Ref.get(capturedAfterSequences)).length >= 2) break;
         yield* Effect.yieldNow;
       }
-
-      expect(yield* Ref.get(loaderCalls)).toBe(2);
-      expect(yield* Ref.get(subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40]);
+      yield* Queue.offer(events, { kind: "synchronized" });
 
       yield* Queue.offer(wakeups, "application-active-probe");
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(subscriptionCount)) >= 3) break;
+        if ((yield* Ref.get(capturedAfterSequences)).length >= 3) break;
         yield* Effect.yieldNow;
       }
-      expect(yield* Ref.get(loaderCalls)).toBe(3);
-      expect(yield* Ref.get(subscriptionCount)).toBe(3);
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40]);
 
       yield* Queue.offer(wakeups, "application-active-reconnect");
       for (let attempt = 0; attempt < 10; attempt += 1) {
         yield* Effect.yieldNow;
       }
-      expect(yield* Ref.get(loaderCalls)).toBe(3);
-      expect(yield* Ref.get(subscriptionCount)).toBe(3);
+      expect((yield* Ref.get(capturedAfterSequences)).length).toBe(3);
+      expect(yield* Ref.get(loaderCalls)).toBe(1);
+
+      // Replacing the session performs another authoritative refresh.
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(capturedAfterSequences)).length >= 4) break;
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40, 20]);
+      expect(yield* Ref.get(loaderCalls)).toBe(2);
     }),
   );
 

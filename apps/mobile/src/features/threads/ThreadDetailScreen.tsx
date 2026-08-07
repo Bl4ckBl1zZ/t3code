@@ -70,6 +70,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
+  /** Non-null when older turns exist beyond the loaded window. */
   readonly activeThreadBusy: boolean;
   readonly canStopThread: boolean;
   readonly environmentId: EnvironmentId;

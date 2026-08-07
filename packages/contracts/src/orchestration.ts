@@ -13,6 +13,7 @@ import {
   CommandId,
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
