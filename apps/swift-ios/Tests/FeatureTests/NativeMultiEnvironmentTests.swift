@@ -424,6 +424,7 @@ private actor FailOnceAggregateEnvironmentLoader {
 private actor BlockingFirstAggregateEnvironmentLoader {
     private let firstLoadStarted: XCTestExpectation
     private let restartedLoadObserved: XCTestExpectation
+    private var didObserveRestart = false
     private(set) var callCount = 0
 
     init(
@@ -440,7 +441,15 @@ private actor BlockingFirstAggregateEnvironmentLoader {
             firstLoadStarted.fulfill()
             try await Task.sleep(for: .seconds(60))
         }
-        restartedLoadObserved.fulfill()
+        // The refresh is on a 5ms interval, so loads keep arriving after the
+        // restart is observed. Fulfilling again over-fulfils the expectation,
+        // which throws an Objective-C exception and aborts the entire test
+        // process -- every later case then reports as "the test runner hung
+        // before establishing connection". Signal the restart exactly once.
+        if !didObserveRestart {
+            didObserveRestart = true
+            restartedLoadObserved.fulfill()
+        }
         return try await runtime.environments()
     }
 }
