@@ -59,6 +59,15 @@ public struct ThreadDetailView: View {
             ToolbarItem(placement: .principal) {
                 threadHeaderTitle
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    toolSurface = .details
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                }
+                .accessibilityLabel("Thread details")
+                .accessibilityIdentifier("thread-details-button")
+            }
             ToolbarItem(placement: .primaryAction) {
                 threadActionsMenu
             }
@@ -81,6 +90,18 @@ public struct ThreadDetailView: View {
         .sheet(item: $toolSurface) { surface in
             NavigationStack {
                 switch surface {
+                case .details:
+                    ThreadDetailsSheet(
+                        thread: currentThread,
+                        environment: threadEnvironment,
+                        project: threadProject,
+                        client: model.client,
+                        onNavigate: navigateFromDetails,
+                        onReconnect: {
+                            guard let environmentID = threadEnvironment?.id else { return }
+                            Task { _ = await model.activateEnvironment(environmentID) }
+                        }
+                    )
                 case .files:
                     FeatureFilesView(client: model.client, threadID: thread.id)
                 case .review:
@@ -395,8 +416,40 @@ public struct ThreadDetailView: View {
     }
 
     private var threadProviders: [FeatureProvider] {
-        let project = model.snapshot.projects.first { $0.id == currentThread.projectID }
-        return DailyUXCreationContext.providers(for: project, in: model.snapshot)
+        DailyUXCreationContext.providers(for: threadProject, in: model.snapshot)
+    }
+
+    private var threadProject: FeatureProject? {
+        model.snapshot.projects.first { $0.id == currentThread.projectID }
+    }
+
+    private var threadEnvironment: FeatureEnvironment? {
+        guard let environmentID = currentThread.environmentID ?? threadProject?.environmentID else {
+            return nil
+        }
+        return model.snapshot.environments.first { $0.id == environmentID }
+    }
+
+    /// Sheets stack over the thread, so a row that opens another surface swaps
+    /// the presented sheet rather than pushing a second one on top of it.
+    private func navigateFromDetails(_ destination: ThreadDetailsDestination) {
+        switch destination {
+        case .connections:
+            toolSurface = nil
+            model.setConnectionManagementPresented(true)
+        case .files:
+            toolSurface = .files
+        case .review:
+            toolSurface = .review
+        case .sourceControl:
+            toolSurface = .sourceControl
+        case .terminal:
+            toolSurface = .terminal
+        case .thread:
+            // Opening a related thread is the navigator's job, and this view is
+            // handed only a back action. Dismiss rather than pretend.
+            toolSurface = nil
+        }
     }
 
     private func dismissKeyboard() {
@@ -554,6 +607,7 @@ private struct FeatureThreadOpeningView: View {
 }
 
 private enum FeatureThreadToolSurface: String, Identifiable {
+    case details
     case files
     case review
     case sourceControl

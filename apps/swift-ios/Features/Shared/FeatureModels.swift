@@ -710,6 +710,10 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var hapticsEnabled: Bool
     public var notificationsEnabled: Bool
     public var liveActivitiesEnabled: Bool
+    /// Web's "Activity detail": a settled turn keeps its tool calls and
+    /// reasoning steps expanded instead of folding them away. Off by default so
+    /// the transcript stays scannable unless the reader asks for the detail.
+    public var alwaysExpandActivity: Bool
     public var defaultSelection: FeatureSelection?
 
     public init(
@@ -717,12 +721,14 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
         liveActivitiesEnabled: Bool = true,
+        alwaysExpandActivity: Bool = false,
         defaultSelection: FeatureSelection? = nil
     ) {
         self.appearance = appearance
         self.hapticsEnabled = hapticsEnabled
         self.notificationsEnabled = notificationsEnabled
         self.liveActivitiesEnabled = liveActivitiesEnabled
+        self.alwaysExpandActivity = alwaysExpandActivity
         self.defaultSelection = defaultSelection
     }
 
@@ -731,6 +737,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         case hapticsEnabled
         case notificationsEnabled
         case liveActivitiesEnabled
+        case alwaysExpandActivity
         case defaultSelection
     }
 
@@ -752,6 +759,10 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
             Bool.self,
             forKey: .liveActivitiesEnabled
         ) ?? true
+        alwaysExpandActivity = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .alwaysExpandActivity
+        ) ?? false
         defaultSelection = try container.decodeIfPresent(
             FeatureSelection.self,
             forKey: .defaultSelection
@@ -764,6 +775,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
         try container.encode(liveActivitiesEnabled, forKey: .liveActivitiesEnabled)
+        try container.encode(alwaysExpandActivity, forKey: .alwaysExpandActivity)
         try container.encodeIfPresent(defaultSelection, forKey: .defaultSelection)
     }
 }

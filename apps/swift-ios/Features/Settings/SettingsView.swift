@@ -532,7 +532,9 @@ private struct EnvironmentStatusPresentation {
     let color: Color
 }
 
-private struct SettingsSection<Content: View>: View {
+/// The settings row vocabulary. Internal rather than private so every settings
+/// screen in this folder renders from the same chrome instead of re-deriving it.
+struct SettingsSection<Content: View>: View {
     let title: String
     let footer: String?
     let content: Content
@@ -567,7 +569,7 @@ private struct SettingsSection<Content: View>: View {
     }
 }
 
-private struct SettingsRowIcon: View {
+struct SettingsRowIcon: View {
     let systemName: String
     var color: Color = T3Colors.accent
 
@@ -580,7 +582,7 @@ private struct SettingsRowIcon: View {
     }
 }
 
-private struct SettingsNavigationRow: View {
+struct SettingsNavigationRow: View {
     let title: String
     let systemImage: String
     var trailingSystemImage = "chevron.right"
@@ -603,7 +605,7 @@ private struct SettingsNavigationRow: View {
     }
 }
 
-private struct SettingsActionRow: View {
+struct SettingsActionRow: View {
     let title: String
     let systemImage: String
     var color: Color = T3Colors.accent
@@ -622,7 +624,7 @@ private struct SettingsActionRow: View {
     }
 }
 
-private struct SettingsValueRow: View {
+struct SettingsValueRow: View {
     let title: String
     let value: String
     var systemImage: String? = nil
@@ -647,7 +649,7 @@ private struct SettingsValueRow: View {
     }
 }
 
-private struct SettingsToggleRow: View {
+struct SettingsToggleRow: View {
     let title: String
     let systemImage: String
     @Binding var isOn: Bool
