@@ -1,4 +1,9 @@
-import { CodexSettings, defaultInstanceIdForDriver, ProviderDriverKind } from "@t3tools/contracts";
+import {
+  classifyV2AgentKind,
+  CodexSettings,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -209,6 +214,11 @@ export const CodexProviderCapabilitiesV2 = {
     canWaitForSubagents: true,
     canCloseSubagents: true,
     canForkSubagentThread: true,
+    // Codex collaborators are real threads, not scripted workflow runs, and
+    // the protocol carries no per-task token rollup.
+    reportsWorkflowPhases: false,
+    reportsTaskUsage: false,
+    exposesWorkflowScript: false,
   },
   context: {
     acceptsSystemContext: true,
@@ -2239,6 +2249,14 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               model: input.model,
               status: "running",
               result: null,
+              // Codex spawns collaborators as real provider threads, so every
+              // one of them is a roster agent. Stamping the classification
+              // here rather than leaving it to the client's fallback keeps the
+              // persisted row self-describing. Codex reports neither workflow
+              // scripts nor per-task usage, so those stay absent -- which the
+              // surface renders as "not reported", not as zero.
+              taskType: "subagent",
+              agentKind: classifyV2AgentKind({ taskType: "subagent" }),
               startedAt: now,
               completedAt: null,
               updatedAt: now,
