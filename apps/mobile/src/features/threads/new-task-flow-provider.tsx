@@ -27,6 +27,7 @@ import {
   groupByProvider,
   resolveSelectableModelSelection,
 } from "../../lib/modelOptions";
+import { resolveDraftWorkspaceMode } from "../../lib/mobileWorkspace";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
@@ -351,7 +352,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // explicitly — same resolution web uses for new draft threads.
   const defaultWorkspaceMode: WorkspaceMode =
     selectedEnvironmentServerConfig?.settings.defaultThreadEnvMode ?? "local";
-  const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode;
+  const workspaceMode: WorkspaceMode = resolveDraftWorkspaceMode({
+    isWorkConversation: draftScope === "work",
+    requestedMode: selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode,
+  });
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
   // Keep the user's explicit choice separate from the resolved display value:
@@ -707,7 +711,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       const workspaceSelection = draft.workspaceSelection;
       // Fall back to the resolved mode (server default) so queued tasks drain
       // with the same mode the composer displayed.
-      const mode = workspaceSelection?.mode ?? workspaceMode;
+      const mode = resolveDraftWorkspaceMode({
+        isWorkConversation: draftScope === "work",
+        requestedMode: workspaceSelection?.mode ?? workspaceMode,
+      });
       // When the selection is the stand-in built from the queued snapshot,
       // persist the original (possibly absent) snapshot values — the
       // stand-in's placeholder title/workspaceRoot must never be written back
