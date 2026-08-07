@@ -118,7 +118,7 @@ enum ConnectionDetailsParser {
         let allItems = queryItems + fragmentItems
         let token = firstValue(named: tokenNames, in: allItems)
 
-        if ["t3", "t3code", "t3code-swiftui", "t3code-swiftui-dev"].contains(scheme) {
+        if ["t3", "t3code", "t3code-debug"].contains(scheme) {
             if let wrappedPairingURL = firstValue(named: wrappedPairingURLNames, in: allItems) {
                 var wrapped = try parse(wrappedPairingURL)
                 if wrapped.pairingCode == nil {

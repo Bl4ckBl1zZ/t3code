@@ -990,8 +990,25 @@ public actor EnvironmentRuntime {
         supportsManagedAuthorization = managedAuthorization != nil
     }
 
+    /// Guards the one-time React Native import so concurrent readers cannot run
+    /// it twice on a cold launch.
+    private var didAttemptLegacyImport = false
+
     public func environments() async throws -> [Environment] {
-        try await environmentStore.load()
+        try await importLegacyEnvironmentsIfNeeded()
+        return try await environmentStore.load()
+    }
+
+    /// Adopts the React Native client's saved servers on first launch after the
+    /// update. Runs here rather than at app start so it is ordered ahead of the
+    /// first catalog read no matter which surface asks first.
+    private func importLegacyEnvironmentsIfNeeded() async {
+        guard !didAttemptLegacyImport else { return }
+        didAttemptLegacyImport = true
+        await LegacyReactNativeImport.run(
+            environmentStore: environmentStore,
+            credentialStore: credentialStore
+        )
     }
 
     public func activeEnvironment() async throws -> Environment? {

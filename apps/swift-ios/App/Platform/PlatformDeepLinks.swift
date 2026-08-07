@@ -2,9 +2,9 @@ import Foundation
 
 enum PlatformRoute: Codable, Hashable, Identifiable, Sendable {
     #if DEBUG
-    static let nativeScheme = "t3code-swiftui-dev"
+    static let nativeScheme = "t3code-debug"
     #else
-    static let nativeScheme = "t3code-swiftui"
+    static let nativeScheme = "t3code"
     #endif
 
     case connection(endpoint: String, token: String?)
@@ -97,7 +97,7 @@ enum PlatformDeepLinkParser {
         }
 
         let query = queryValues(components.queryItems ?? [])
-        if ["t3", "t3code", "t3code-swiftui", "t3code-swiftui-dev"].contains(scheme) {
+        if ["t3", "t3code", "t3code-debug"].contains(scheme) {
             let segments = customSchemeSegments(components)
             if isConnectionRoute(segments: segments, query: query) {
                 return try connectionRoute(url)

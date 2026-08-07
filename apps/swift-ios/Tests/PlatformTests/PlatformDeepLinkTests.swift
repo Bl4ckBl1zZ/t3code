@@ -84,11 +84,11 @@ struct PlatformDeepLinkTests {
     @Test
     func acceptsLinksFromBothSwiftUIIdentitiesAndLegacyRoutes() throws {
         #expect(
-            try PlatformDeepLinkParser.parse("t3code-swiftui://threads/environment/thread")
+            try PlatformDeepLinkParser.parse("t3code://threads/environment/thread")
                 == .thread(environmentID: "environment", threadID: "thread")
         )
         #expect(
-            try PlatformDeepLinkParser.parse("t3code-swiftui-dev://threads/environment/thread")
+            try PlatformDeepLinkParser.parse("t3code-debug://threads/environment/thread")
                 == .thread(environmentID: "environment", threadID: "thread")
         )
         #expect(

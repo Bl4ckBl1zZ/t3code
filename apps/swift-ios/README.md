@@ -82,10 +82,18 @@ pairing. Supply settings on the `xcodebuild` command line or through a local
 Debug and Release use separate identities so a local build can remain installed
 beside TestFlight:
 
-| Configuration | Display name    | Bundle identifier                | URL scheme           |
-| ------------- | --------------- | -------------------------------- | -------------------- |
-| Debug         | T3 Swift Dev    | `com.t3tools.t3code.swiftui.dev` | `t3code-swiftui-dev` |
-| Release       | T3 Code SwiftUI | `com.t3tools.t3code.swiftui`     | `t3code-swiftui`     |
+| Configuration | Display name  | Bundle identifier      | URL scheme     |
+| ------------- | ------------- | ---------------------- | -------------- |
+| Debug         | T3 Code Debug | `com.t3code.dev.debug` | `t3code-debug` |
+| Release       | T3 Code       | `com.t3code.dev`       | `t3code`       |
+
+Release is this fork's shipped identity: it replaces the React Native client on
+the same App Store record, so an update lands in place for existing testers. The
+Release App Group is `group.com.bl4ckbl1zz.t3code.dev`, which is not derivable
+from the bundle identifier -- anything reconstructing it by convention is wrong.
+Debug uses `.debug` suffixes throughout so a local build can sit beside the
+TestFlight install; its App Group needs registering before a Debug build with
+extensions will install on a device.
 
 Each identity also has matching widget and share-extension bundle identifiers
 and a separate App Group. Debug data and credentials therefore do not alter the
