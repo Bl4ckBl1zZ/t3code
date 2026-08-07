@@ -54,6 +54,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { IdAllocatorV2, layer as IdAllocatorV2Layer } from "../IdAllocator.ts";
 import type { ProviderAdapterV2TurnInput } from "../ProviderAdapter.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
+import { makeProviderFailure } from "../ProviderFailure.ts";
 import {
   diagnoseHermesMcpIntegration,
   HERMES_EXTERNAL_EVENT_BUFFER_LIMIT,
@@ -293,12 +294,15 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     };
   }
 
+  reconcileError: Error | null = null;
+
   async reconcileMutation(
     operationId: string,
     mutationId: string = operationId,
   ): Promise<HermesGatewayMutationStatusResult> {
     this.reconciliations.push(operationId);
     this.reconciliationMutationIds.push(mutationId);
+    if (this.reconcileError) throw this.reconcileError;
     return this.mutationStatus;
   }
 
@@ -508,6 +512,47 @@ function turnInput(
     runtimePolicy: policy,
   };
 }
+
+const STRANDED_OPERATION_ID = "hermes:prompt:attempt:lost-process";
+
+/**
+ * Reproduces what a process killed mid-prompt leaves behind: an intent admitted
+ * under the binding's lease that no surviving turn will ever settle.
+ */
+const strandPromptIntent = Effect.fnUntraced(function* (operationId: string) {
+  const repository = yield* HermesSessionBindingRepository;
+  const binding = Option.getOrNull(yield* repository.getByThreadId(String(threadId)))!;
+  const now = DateTime.nowUnsafe();
+  const fenceTimes = {
+    now: DateTime.formatIso(now),
+    expiresAt: DateTime.formatIso(DateTime.add(now, { hours: 1 })),
+  };
+  const lease = yield* repository.acquireOwnerLease({
+    bindingId: binding.bindingId,
+    ownerKey: String(providerSessionId),
+    expectedGeneration: binding.leaseGeneration,
+    ...fenceTimes,
+  });
+  const fence = {
+    bindingId: binding.bindingId,
+    ownerKey: String(providerSessionId),
+    generation: Option.getOrNull(lease)!.generation,
+    now: fenceTimes.now,
+  };
+  yield* repository.prepareMutationIntent({
+    ...fence,
+    operationId,
+    mutationKind: "prompt",
+    method: "prompt.submit",
+    payloadDigest: "a".repeat(64),
+  });
+  yield* repository.transitionMutationIntent({
+    ...fence,
+    operationId,
+    from: "prepared",
+    to: "admitted",
+  });
+});
 
 const makeRuntime = Effect.fnUntraced(function* (
   fake: FakeHermesGatewayClient,
@@ -2533,6 +2578,173 @@ describe("HermesServeAdapterV2", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("settles a prompt intent stranded by a lost process when the session binds", () =>
+    Effect.gen(function* () {
+      const createFake = new FakeHermesGatewayClient();
+      const createdThread = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(createFake);
+          return yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }),
+      );
+      // The state a killed process leaves behind: a prompt admitted before the
+      // gateway call, and no `finalizeTurn` left alive to settle it.
+      yield* strandPromptIntent(STRANDED_OPERATION_ID);
+
+      const resumeFake = new FakeHermesGatewayClient();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(resumeFake);
+          const resumed = yield* runtime.resumeThread({
+            providerThread: createdThread,
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(turnInput(resumed));
+        }),
+      );
+      const repository = yield* HermesSessionBindingRepository;
+      const stranded = yield* repository.getMutationIntent(STRANDED_OPERATION_ID);
+
+      assert.equal(Option.getOrNull(Option.map(stranded, (value) => value.state)), "reconciled");
+      assert.equal(resumeFake.prompts.length, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("settles a stranded prompt intent at prompt time instead of failing the run", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        // Strands after the bind, so only the prompt path can clear it.
+        yield* strandPromptIntent(STRANDED_OPERATION_ID);
+
+        yield* runtime.startTurn(turnInput(providerThread));
+
+        const repository = yield* HermesSessionBindingRepository;
+        const stranded = yield* repository.getMutationIntent(STRANDED_OPERATION_ID);
+        assert.equal(Option.getOrNull(Option.map(stranded, (value) => value.state)), "reconciled");
+        assert.equal(fake.prompts.length, 1);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "settles a stranded prompt the gateway no longer recalls when the session is idle",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = new FakeHermesGatewayClient();
+          const runtime = yield* makeRuntime(fake);
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* strandPromptIntent(STRANDED_OPERATION_ID);
+          // A gateway restarted since the stranded prompt keeps no record of it.
+          fake.reconcileError = new HermesGatewayRpcError(4004, "mutation.status", "fatal");
+
+          yield* runtime.startTurn(turnInput(providerThread));
+
+          const repository = yield* HermesSessionBindingRepository;
+          const stranded = yield* repository.getMutationIntent(STRANDED_OPERATION_ID);
+          assert.equal(
+            Option.getOrNull(Option.map(stranded, (value) => value.state)),
+            "reconciled",
+          );
+          assert.equal(fake.prompts.length, 1);
+        }),
+      ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("keeps the unsettled-prompt guard while Hermes still runs the earlier prompt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* strandPromptIntent(STRANDED_OPERATION_ID);
+        // The gateway took the prompt and its run is still streaming, so the
+        // guard is real backpressure rather than a leak.
+        fake.mutationStatus = { mutation_status: "admitted" };
+        fake.statusOutput = "Agent Running: Yes";
+
+        const error = yield* Effect.flip(runtime.startTurn(turnInput(providerThread)));
+
+        assert.equal(error._tag, "ProviderAdapterTurnStartError");
+        assert.include(
+          makeProviderFailure({ cause: error }).message,
+          "still running an earlier prompt",
+        );
+        const repository = yield* HermesSessionBindingRepository;
+        const stranded = yield* repository.getMutationIntent(STRANDED_OPERATION_ID);
+        assert.equal(Option.getOrNull(Option.map(stranded, (value) => value.state)), "admitted");
+        assert.equal(fake.prompts.length, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("prompts again once the competing owner releases the lease", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const input = turnInput(providerThread);
+        yield* runtime.startTurn(input);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          UPDATE hermes_session_bindings
+          SET
+            lease_owner_key = 'competing-owner',
+            lease_generation = lease_generation + 1,
+            lease_expires_at = '2999-01-01T00:00:00.000Z'
+          WHERE thread_id = ${String(threadId)}
+        `;
+        // Terminal settlement cannot hold the fence, which poisons the owner
+        // and leaves this turn's own prompt intent unsettled.
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "stale success" }));
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        yield* sql`
+          UPDATE hermes_session_bindings
+          SET lease_owner_key = NULL, lease_expires_at = NULL
+          WHERE thread_id = ${String(threadId)}
+        `;
+
+        yield* runtime.startTurn({
+          ...input,
+          runId: RunId.make("run:hermes-ownership-recovered:2"),
+          runOrdinal: 2,
+          providerTurnOrdinal: 2,
+          attemptId: RunAttemptId.make("attempt:hermes-ownership-recovered:2"),
+        });
+
+        const repository = yield* HermesSessionBindingRepository;
+        const poisoned = yield* repository.getMutationIntent(`hermes:prompt:${input.attemptId}`);
+        assert.equal(fake.prompts.length, 2);
+        assert.equal(Option.getOrNull(Option.map(poisoned, (value) => value.state)), "reconciled");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("waits for the terminal event when interrupting", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -2858,7 +3070,13 @@ describe("HermesServeAdapterV2", () => {
         );
 
         assert.equal(fake.prompts.length, 1);
-        assert.deepEqual(fake.reconciliations, [`hermes:prompt:${input.attemptId}`]);
+        // Twice: the replay of the same operation, then the different prompt
+        // asking whether the blocker is stranded. It is not — the gateway still
+        // reports it indeterminate — so the guard holds.
+        assert.deepEqual(fake.reconciliations, [
+          `hermes:prompt:${input.attemptId}`,
+          `hermes:prompt:${input.attemptId}`,
+        ]);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
