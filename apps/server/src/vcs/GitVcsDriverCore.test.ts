@@ -1358,15 +1358,85 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(created.worktree.refName, "feature/worktree");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
 
+        // Removing the worktree also drops the branch it created: the branch is
+        // fully merged (no commits on it), so git's own `-d` check permits it.
         yield* driver.removeWorktree({ cwd, path: worktreePath });
-        yield* driver.deleteLocalBranch({
-          cwd,
-          refName: "feature/worktree",
-          force: true,
-        });
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
         assert.notInclude(yield* driver.listLocalBranchNames(cwd), "feature/worktree");
+      }),
+    );
+
+    it.effect("keeps a worktree branch that still holds unmerged commits", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "unmerged");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/unmerged",
+        });
+        yield* git(worktreePath, ["commit", "--allow-empty", "-m", "work in progress"]);
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath, force: true });
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        // Unmerged work is never discarded — cleanup uses `-d`, never `-D`.
+        assert.include(yield* driver.listLocalBranchNames(cwd), "feature/unmerged");
+      }),
+    );
+
+    it.effect("leaves a pre-existing branch alone when its worktree is removed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "adopted");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // A branch the user already had: created outside createWorktree, so it
+        // carries no ownership marker and must survive the worktree.
+        yield* git(cwd, ["branch", "existing/branch", initialBranch]);
+        yield* driver.createWorktree({ cwd, path: worktreePath, refName: "existing/branch" });
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath });
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        assert.include(yield* driver.listLocalBranchNames(cwd), "existing/branch");
+      }),
+    );
+
+    it.effect("prunes the worktree registry when removal fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "stale");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/stale",
+        });
+        // Stand in for a removal that died partway through: the tree is torn up
+        // enough that git refuses to remove it, but the .git/worktrees admin
+        // entry still points at it. (A fully deleted directory needs no prune —
+        // git removes that entry on its own.)
+        yield* fileSystem.remove(pathService.join(worktreePath, ".git"));
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath }).pipe(Effect.flip);
+
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
       }),
     );
   });
