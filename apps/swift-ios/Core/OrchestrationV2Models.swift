@@ -256,7 +256,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case runInterruptResult(message: String)
         case error(failure: OrchestrationV2ProviderFailure, retry: OrchestrationV2ProviderRetry?)
         case compaction(driver: String?, summary: String?, beforeTokenCount: Int?, afterTokenCount: Int?)
-        case handoff(contextHandoffID: String, toProviderThreadID: String, toProviderInstanceID: String, toModel: String?, strategy: String, summary: String?)
+        case handoff(contextHandoffID: String, fromProviderInstanceIDs: [String], fromModelSelections: [ModelSelection]?, toProviderThreadID: String, toProviderInstanceID: String, toModel: String?, strategy: String, summary: String?)
         case fork(source: OrchestrationV2ForkSource, targetThreadID: String, providerThreadID: String?)
         case threadCreated(targetThreadID: String, targetRunID: String?, targetProviderInstanceID: String, targetModel: String)
         case subagent(subagentID: String, origin: String, driver: String, providerInstanceID: String, childThreadID: String?, prompt: String, progress: String?, result: String?)
@@ -281,7 +281,8 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case checkpointId, scopeId, files, restoredFileCount, rolledBackRunCount
         case message, failure, retry
         case driver, summary, beforeTokenCount, afterTokenCount
-        case contextHandoffId, toProviderThreadId, toProviderInstanceId, toModel, strategy
+        case contextHandoffId, fromProviderInstanceIds, fromModelSelections
+        case toProviderThreadId, toProviderInstanceId, toModel, strategy
         case source, targetThreadId, providerThreadId
         case targetRunId, targetProviderInstanceId, targetModel
         case subagentId, origin, providerInstanceId, childThreadId, progress, result
@@ -394,6 +395,12 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case "handoff":
             payload = .handoff(
                 contextHandoffID: try container.decode(String.self, forKey: .contextHandoffId),
+                fromProviderInstanceIDs: try container.decodeIfPresent(
+                    [String].self, forKey: .fromProviderInstanceIds
+                ) ?? [],
+                fromModelSelections: try container.decodeIfPresent(
+                    [ModelSelection].self, forKey: .fromModelSelections
+                ),
                 toProviderThreadID: try container.decode(String.self, forKey: .toProviderThreadId),
                 toProviderInstanceID: try container.decode(String.self, forKey: .toProviderInstanceId),
                 toModel: try container.decodeIfPresent(String.self, forKey: .toModel),
@@ -505,8 +512,10 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             try container.encodeIfPresent(summary, forKey: .summary)
             try container.encodeIfPresent(beforeTokenCount, forKey: .beforeTokenCount)
             try container.encodeIfPresent(afterTokenCount, forKey: .afterTokenCount)
-        case let .handoff(contextHandoffID, toProviderThreadID, toProviderInstanceID, toModel, strategy, summary):
+        case let .handoff(contextHandoffID, fromProviderInstanceIDs, fromModelSelections, toProviderThreadID, toProviderInstanceID, toModel, strategy, summary):
             try container.encode(contextHandoffID, forKey: .contextHandoffId)
+            try container.encode(fromProviderInstanceIDs, forKey: .fromProviderInstanceIds)
+            try container.encodeIfPresent(fromModelSelections, forKey: .fromModelSelections)
             try container.encode(toProviderThreadID, forKey: .toProviderThreadId)
             try container.encode(toProviderInstanceID, forKey: .toProviderInstanceId)
             try container.encodeIfPresent(toModel, forKey: .toModel)

@@ -3585,7 +3585,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         case let .runInterruptRequest(text), let .runInterruptResult(text):
             return message(.system, text, tool: "Interrupted")
 
-        case let .handoff(_, _, _, toModel, strategy, summary):
+        case let .handoff(_, _, _, _, _, toModel, strategy, summary):
             let label = toModel.map { "Handoff to \($0)" } ?? "Handoff"
             return message(.system, summary ?? strategy, tool: label)
 
