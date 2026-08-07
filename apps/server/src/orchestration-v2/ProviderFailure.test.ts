@@ -17,6 +17,7 @@ import {
   MAX_PROVIDER_FAILURE_MESSAGE_LENGTH,
 } from "./ProviderFailure.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
+import { ProviderAdapterProtocolError, ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
 
 it("redacts credentials and URL secrets from provider failures", () => {
   const failure = makeProviderFailure({
@@ -81,6 +82,50 @@ it("does not serialize arbitrary provider causes", () => {
     code: null,
     retryable: null,
   });
+});
+
+it("reports the innermost cause instead of the wrapper that only restates ids", () => {
+  const failure = makeProviderFailure({
+    cause: new ProviderAdapterTurnStartError({
+      driver: ProviderDriverKind.make("hermes"),
+      threadId: ThreadId.make("thread:provider-failure-cause"),
+      providerThreadId: ProviderThreadId.make("provider-thread:provider-failure-cause"),
+      runId: RunId.make("run:provider-failure-cause"),
+      cause: new ProviderAdapterProtocolError({
+        driver: ProviderDriverKind.make("hermes"),
+        detail: "Hermes is still running an earlier prompt on this session",
+      }),
+    }),
+    class: "provider_error",
+  });
+
+  assert.equal(
+    failure.message,
+    "hermes provider protocol error: Hermes is still running an earlier prompt on this session.",
+  );
+});
+
+it("reads a cause chain that lost its prototypes in transit", () => {
+  const failure = makeProviderFailure({
+    cause: {
+      _tag: "ProviderAdapterTurnStartError",
+      message: "Failed to start run run:x on hermes provider thread provider-thread:x.",
+      cause: {
+        _tag: "ProviderAdapterProtocolError",
+        detail: "Hermes owner lease is no longer held",
+      },
+    },
+  });
+
+  assert.equal(failure.message, "Hermes owner lease is no longer held");
+});
+
+it("falls back to the outermost readable message when the cause carries none", () => {
+  const failure = makeProviderFailure({
+    cause: new Error("gateway unavailable", { cause: { payload: { retry: true } } }),
+  });
+
+  assert.equal(failure.message, "gateway unavailable");
 });
 
 it.effect("keys terminal failure items by provider turn across retries and fallback paths", () =>

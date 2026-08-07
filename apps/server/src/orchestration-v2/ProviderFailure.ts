@@ -19,7 +19,14 @@ export const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;
 
 const DEFAULT_PROVIDER_FAILURE_MESSAGE = "Provider turn failed.";
 
-function stringField(value: unknown, key: "message" | "code"): string | undefined {
+/**
+ * Depth bound for {@link deepestCauseMessage}. Adapter errors nest a handful of
+ * wrappers at most; anything deeper is a cycle or a defect payload we should
+ * not be walking anyway.
+ */
+const MAX_PROVIDER_FAILURE_CAUSE_DEPTH = 8;
+
+function stringField(value: unknown, key: "message" | "code" | "detail"): string | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   try {
     const candidate = (value as Record<string, unknown>)[key];
@@ -27,6 +34,45 @@ function stringField(value: unknown, key: "message" | "code"): string | undefine
   } catch {
     return undefined;
   }
+}
+
+function describedMessage(value: unknown): string | undefined {
+  if (value instanceof Error) {
+    return typeof value.message === "string" && value.message.length > 0
+      ? value.message
+      : undefined;
+  }
+  // Tagged adapter errors keep their operational text in `detail` and lose the
+  // `message` getter once they cross a serialization boundary.
+  return stringField(value, "message") ?? stringField(value, "detail");
+}
+
+/**
+ * Returns the most specific message in a `cause` chain.
+ *
+ * Adapter wrappers (`Failed to start run … on … provider thread …`) restate ids
+ * the turn item already carries as fields and bury the operational reason one
+ * or more `cause` levels down. Reporting only the outermost message is what
+ * turns a diagnosable provider failure into an unactionable one, so prefer the
+ * innermost readable text and fall back outwards when a wrapper carries none.
+ */
+function deepestCauseMessage(cause: unknown): string | undefined {
+  let current: unknown = cause;
+  let deepest: string | undefined;
+  for (let depth = 0; depth < MAX_PROVIDER_FAILURE_CAUSE_DEPTH; depth += 1) {
+    if (typeof current !== "object" || current === null) break;
+    const message = describedMessage(current)?.trim();
+    if (message !== undefined && message.length > 0) deepest = message;
+    let next: unknown;
+    try {
+      next = (current as { readonly cause?: unknown }).cause;
+    } catch {
+      break;
+    }
+    if (next === undefined || next === null || next === current) break;
+    current = next;
+  }
+  return deepest;
 }
 
 function redactUrl(match: string): string {
@@ -96,9 +142,7 @@ export function makeProviderFailure(input: {
   readonly retryable?: boolean | null;
 }): OrchestrationV2ProviderFailure {
   const rawMessage =
-    input.message ??
-    (input.cause instanceof Error ? input.cause.message : stringField(input.cause, "message")) ??
-    DEFAULT_PROVIDER_FAILURE_MESSAGE;
+    input.message ?? deepestCauseMessage(input.cause) ?? DEFAULT_PROVIDER_FAILURE_MESSAGE;
   const message = boundedText(rawMessage, MAX_PROVIDER_FAILURE_MESSAGE_LENGTH);
   const rawCode = input.code ?? stringField(input.cause, "code") ?? null;
   const code =

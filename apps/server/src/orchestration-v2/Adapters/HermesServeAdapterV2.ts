@@ -694,6 +694,14 @@ interface PendingHermesRuntimeRequest {
 
 type HermesMutationFence = Pick<HermesThreadState, "binding" | "lease">;
 
+/**
+ * A resume prepares its mutation before any session exists, so the fence it
+ * carries is not yet a bound thread. Only a bound one can ask the gateway about
+ * a session.
+ */
+const isBoundThreadState = (state: HermesMutationFence): state is HermesThreadState =>
+  "liveSessionId" in state;
+
 const sha256 = (value: string): string =>
   NodeCrypto.createHash("sha256").update(value).digest("hex");
 const stableDigest = (...parts: ReadonlyArray<unknown>): string => sha256(JSON.stringify(parts));
@@ -1428,6 +1436,141 @@ export function makeHermesServeAdapterV2(
         );
       });
 
+      /**
+       * Retakes the binding's owner lease when the in-memory fence has gone
+       * stale. Renewal cannot revive a lapsed lease, and the generation this
+       * state remembers is stale as soon as anyone else acquires, so retry once
+       * against the generation the row actually carries. The compare-and-swap
+       * still refuses a lease another owner holds and has not let expire, so
+       * this widens recovery without ever stealing live ownership.
+       */
+      const retakeLease = Effect.fnUntraced(function* (state: HermesMutationFence) {
+        const { now, expiresAt } = leaseTimes();
+        const reacquired = yield* options.repository.acquireOwnerLease({
+          bindingId: state.binding.bindingId,
+          ownerKey: state.lease.ownerKey,
+          expectedGeneration: state.lease.generation,
+          now,
+          expiresAt,
+        });
+        if (Option.isSome(reacquired)) {
+          state.lease = reacquired.value;
+          return true;
+        }
+        const current = yield* options.repository.getByThreadId(String(state.binding.threadId));
+        if (Option.isNone(current) || current.value.bindingId !== state.binding.bindingId) {
+          return false;
+        }
+        const retaken = yield* options.repository.acquireOwnerLease({
+          bindingId: state.binding.bindingId,
+          ownerKey: state.lease.ownerKey,
+          expectedGeneration: current.value.leaseGeneration,
+          now,
+          expiresAt,
+        });
+        if (Option.isNone(retaken)) return false;
+        state.lease = retaken.value;
+        return true;
+      });
+
+      /**
+       * Settles a prompt intent that no live turn owns any more.
+       *
+       * A prompt intent is admitted before the gateway call and settled by
+       * `finalizeTurn`, which only ever runs in the process that opened the
+       * turn. A crash, a restart, or a session torn down mid-run therefore
+       * leaves the intent unsettled forever, and the durable one-unsettled-
+       * prompt guard then rejects every later prompt on the binding — one lost
+       * process bricking the thread permanently. Nothing else can clear it:
+       * `reconcileIntent` is only reachable when the *same* operation id is
+       * retried, which a new run never produces.
+       *
+       * Clearing it is only safe once the gateway agrees the prompt is over,
+       * so ask before settling and leave the guard standing when the answer is
+       * "still running" — that case is real backpressure, not a leak.
+       */
+      const settleStrandedPromptIntent = Effect.fnUntraced(function* (
+        state: HermesThreadState,
+        operationId: string,
+      ) {
+        for (const candidate of statesByProviderThread.values()) {
+          const active = candidate.activeTurn;
+          if (active !== null && !active.finalized && active.operationId === operationId) {
+            return false;
+          }
+        }
+        const intent = yield* options.repository.getMutationIntent(operationId);
+        if (Option.isNone(intent)) return true;
+        const stranded = intent.value;
+        if (
+          stranded.state === "confirmed" ||
+          stranded.state === "reconciled" ||
+          stranded.state === "rejected"
+        ) {
+          return true;
+        }
+        const settle = Effect.fnUntraced(function* () {
+          // `admitted` may only reach a terminal state through `indeterminate`:
+          // the outcome of a prompt whose owner died is exactly that, unknown.
+          if (stranded.state === "admitted") {
+            yield* transitionIntent(state, operationId, "admitted", "indeterminate");
+          }
+          yield* transitionIntent(
+            state,
+            operationId,
+            stranded.state === "prepared" ? "prepared" : "indeterminate",
+            "reconciled",
+          );
+          yield* Effect.logWarning("orchestration-v2.hermes-stranded-prompt-settled", {
+            bindingId: state.binding.bindingId,
+            providerThreadId: String(state.providerThread.id),
+            operationId,
+            from: stranded.state,
+          });
+          return true;
+        });
+        if (client.hasCapability("mutation.stable_ids")) {
+          const outcome = yield* gatewayEffect(() =>
+            client.reconcileMutation(operationId, hermesWireMutationId(operationId)),
+          ).pipe(Effect.option);
+          // A gateway that knows the mutation and still cannot say what became
+          // of it is the one case the guard exists for. Keep it: the write may
+          // yet be admitted, and a prompt behind it could double.
+          if (Option.isSome(outcome) && outcome.value.mutation_status === "indeterminate") {
+            return false;
+          }
+          if (Option.isSome(outcome) && outcome.value.mutation_status === "completed") {
+            return yield* settle();
+          }
+          // Otherwise the gateway either took the prompt without reporting its
+          // run ("admitted"), or no longer recalls a mutation this old. Both
+          // leave the session's own state as the authority.
+        }
+        const status = yield* gatewayEffect(() =>
+          client.readSessionStatus({
+            session_id: state.liveSessionId,
+            profile: state.binding.profileKey,
+          }),
+        );
+        if (isActiveHermesStatus(hermesSessionRuntimeStatus(status))) return false;
+        return yield* settle();
+      });
+
+      /**
+       * Clears prompt intents left behind by a previous process. Runs on the
+       * bind that follows a restart, where the authoritative session status is
+       * already known, so a thread is repaired before its owner ever prompts.
+       */
+      const sweepStrandedPromptIntents = Effect.fnUntraced(function* (state: HermesThreadState) {
+        const unsettled = yield* options.repository.listUnsettledMutationIntents(
+          state.binding.bindingId,
+        );
+        for (const intent of unsettled) {
+          if (intent.mutationKind !== "prompt") continue;
+          yield* settleStrandedPromptIntent(state, intent.operationId);
+        }
+      });
+
       const prepareBoundMutation = Effect.fnUntraced(function* (
         state: HermesMutationFence,
         input: {
@@ -1447,32 +1590,34 @@ export function makeHermesServeAdapterV2(
         });
         if (!renewed) {
           // A thread that sat idle past the lease window still belongs to this
-          // owner, and renewal cannot revive a lapsed lease. Retake it under the
-          // same generation fence so the lapse costs one prompt at most instead
-          // of stranding every later prompt on the thread. A competing owner has
-          // already bumped the generation, so this stays none for them.
-          const reacquired = yield* options.repository.acquireOwnerLease({
-            bindingId: state.binding.bindingId,
-            ownerKey: state.lease.ownerKey,
-            expectedGeneration: state.lease.generation,
-            now,
-            expiresAt,
-          });
-          if (Option.isNone(reacquired)) {
+          // owner, and renewal cannot revive a lapsed lease. Retake it so the
+          // lapse costs one prompt at most instead of stranding every later
+          // prompt on the thread. A competing owner still holding a live lease
+          // keeps it.
+          if (!(yield* retakeLease(state))) {
             return yield* new ProviderAdapterProtocolError({
               driver: HERMES_PROVIDER,
               detail: "Hermes owner lease is no longer held",
             });
           }
-          state.lease = reacquired.value;
         }
-        const result = yield* options.repository.prepareMutationIntent({
-          ...input,
-          bindingId: state.binding.bindingId,
-          ownerKey: state.lease.ownerKey,
-          generation: state.lease.generation,
-          now,
-        });
+        const prepare = () =>
+          options.repository.prepareMutationIntent({
+            ...input,
+            bindingId: state.binding.bindingId,
+            ownerKey: state.lease.ownerKey,
+            generation: state.lease.generation,
+            now,
+          });
+        let result = yield* prepare();
+        if (result.status === "unsettled_prompt" && isBoundThreadState(state)) {
+          // The blocker outlived the turn that admitted it. Settle it against
+          // the gateway and prepare again rather than failing this prompt and
+          // every prompt after it.
+          if (yield* settleStrandedPromptIntent(state, result.operationId)) {
+            result = yield* prepare();
+          }
+        }
         if (result.status === "prepared") {
           yield* transitionIntent(state, input.operationId, "prepared", "admitted");
           return {
@@ -1511,7 +1656,7 @@ export function makeHermesServeAdapterV2(
             driver: HERMES_PROVIDER,
             detail:
               result.status === "unsettled_prompt"
-                ? `Hermes prompt ${result.operationId} is still unsettled`
+                ? "Hermes is still running an earlier prompt on this session, so it cannot accept another one. Stop the running turn, or wait for it to finish, then try again"
                 : `Hermes mutation ${input.operationId} cannot be safely resubmitted (${result.status})`,
           });
         }
@@ -3446,7 +3591,7 @@ export function makeHermesServeAdapterV2(
         const externalRunActive = isTerminalHermesStatus(authoritativeRuntimeStatus)
           ? false
           : recoveredWork || isActiveHermesStatus(authoritativeRuntimeStatus);
-        return yield* registerState(
+        const registered = yield* registerState(
           binding,
           resumed.session_id,
           lease,
@@ -3455,6 +3600,23 @@ export function makeHermesServeAdapterV2(
           externalRunActive,
           titleState,
         );
+        // This is the first bind after a restart, so any prompt intent still
+        // open belongs to a process that is gone. Repair it here, while the
+        // authoritative status is in hand, instead of letting the next prompt
+        // discover it.
+        const state = statesByProviderThread.get(String(registered.id));
+        if (state !== undefined && !externalRunActive) {
+          yield* sweepStrandedPromptIntents(state).pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("orchestration-v2.hermes-stranded-prompt-sweep-failed", {
+                bindingId: binding.bindingId,
+                cause,
+              }),
+            ),
+            Effect.ignore,
+          );
+        }
+        return registered;
       });
 
       const createBinding = Effect.fnUntraced(function* (
@@ -3766,10 +3928,21 @@ export function makeHermesServeAdapterV2(
               });
             }
             if (state.ownershipLost) {
-              return yield* new ProviderAdapterProtocolError({
-                driver: HERMES_PROVIDER,
-                detail: "Hermes thread ownership was lost and cannot accept another prompt",
-              });
+              // Ownership is lost when a terminal settlement could not hold the
+              // lease fence, which a lapse causes as readily as a competing
+              // owner does. The flag is per-process and nothing else clears it,
+              // so without this retake the thread stays unusable until T3 is
+              // restarted. Retaking fails only while someone else holds a live
+              // lease, which is the one case worth refusing.
+              if (!(yield* retakeLease(state))) {
+                return yield* new ProviderAdapterProtocolError({
+                  driver: HERMES_PROVIDER,
+                  detail:
+                    "Another Hermes client owns this session right now, so T3 cannot prompt it. Close it there, then try again",
+                });
+              }
+              state.ownershipLost = false;
+              yield* sweepStrandedPromptIntents(state).pipe(Effect.ignore);
             }
             // An adapter-buffered wake attaches to the external run instead of
             // prompting, so it deliberately runs before the guard that rejects
