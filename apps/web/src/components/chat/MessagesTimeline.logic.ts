@@ -913,7 +913,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;
-
     case "work":
       return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);
 
