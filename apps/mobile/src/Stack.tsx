@@ -56,6 +56,7 @@ import {
   SettingsOpenRouterRouteScreen,
 } from "./features/settings/SettingsIntegrationsRouteScreen";
 import { SettingsVoiceInputRouteScreen } from "./features/settings/SettingsVoiceInputRouteScreen";
+import { SettingsVoiceModelRouteScreen } from "./features/settings/SettingsVoiceModelRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
   SettingsLegalDocumentCloseHeaderButton,
@@ -218,6 +219,11 @@ const SettingsSheetStack = createNativeStackNavigator({
       screen: SettingsVoiceInputRouteScreen,
       linking: "voice-input",
       options: { title: "Voice Input" },
+    }),
+    SettingsVoiceModel: createNativeStackScreen({
+      screen: SettingsVoiceModelRouteScreen,
+      linking: "voice-input/model",
+      options: { title: "Model" },
     }),
     SettingsAuth: createNativeStackScreen({
       screen: SettingsAuthRouteScreen,

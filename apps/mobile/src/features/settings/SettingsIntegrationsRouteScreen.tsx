@@ -1,9 +1,13 @@
-import { useEffect, useState } from "react";
-import { Alert, Linking, Pressable, ScrollView, TextInput, View } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { useCallback, useEffect, useState } from "react";
+import { Alert, Linking, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { OpenRouterIntegrationStatus } from "@t3tools/contracts/voice";
 
-import { AppText as Text } from "../../components/AppText";
+import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
+import { ErrorBanner } from "../../components/ErrorBanner";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
   deleteOpenRouterCredential,
   getOpenRouterIntegration,
@@ -11,145 +15,198 @@ import {
   validateOpenRouterCredential,
 } from "../voice/mobileVoiceApi";
 import { invalidateVoicePreflight } from "../voice/useMobileVoiceInput";
+import { SettingsActionButton } from "./components/SettingsActionButton";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 
-function label(status: OpenRouterIntegrationStatus | null): string {
-  if (!status) return "Checking";
+function label(status: OpenRouterIntegrationStatus | null, loaded: boolean): string {
+  if (!loaded) return "Checking";
+  // A settled-but-absent status means the status request itself failed.
+  if (!status) return "Unavailable";
   if (status.state === "connected") return "Connected";
   if (status.state === "validating") return "Validating";
   if (status.state === "invalid") return "Error";
   return status.configured ? "Unavailable" : "Not configured";
 }
 
+function formatValidatedAt(isoDate: string | undefined): string | null {
+  if (!isoDate) return null;
+  const parsed = new Date(isoDate);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleString();
+}
+
 export function SettingsIntegrationsRouteScreen() {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<OpenRouterIntegrationStatus | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
   useEffect(() => {
     void getOpenRouterIntegration()
       .then(setStatus)
-      .catch(() => setStatus(null));
+      .catch(() => setStatus(null))
+      .finally(() => setLoaded(true));
   }, []);
+
   return (
-    <View className="flex-1 bg-sheet">
-      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="px-5 pt-4">
+    <View collapsable={false} className="flex-1 bg-sheet">
+      {Platform.OS === "android" ? (
+        <>
+          <NativeStackScreenOptions options={{ headerShown: false }} />
+          <AndroidScreenHeader title="Integrations" onBack={() => navigation.goBack()} />
+        </>
+      ) : null}
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        className="flex-1"
+        contentContainerClassName="gap-5 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+      >
         <SettingsSection title="Integrations">
           <SettingsRow
             icon="point.3.connected.trianglepath.dotted"
             label="OpenRouter"
-            value={label(status)}
+            value={label(status, loaded)}
             target="SettingsOpenRouter"
           />
         </SettingsSection>
+        <Text className="px-2 text-sm leading-normal text-foreground-muted">
+          OpenRouter powers Voice Input transcription.
+        </Text>
       </ScrollView>
     </View>
   );
 }
 
 export function SettingsOpenRouterRouteScreen() {
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<OpenRouterIntegrationStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const run = async (operation: () => Promise<OpenRouterIntegrationStatus>) => {
+  const run = useCallback(async (operation: () => Promise<OpenRouterIntegrationStatus>) => {
     setBusy(true);
+    setError(null);
     try {
       setStatus(await operation());
       invalidateVoicePreflight();
       setApiKey("");
     } catch (cause) {
-      Alert.alert(
-        "OpenRouter unavailable",
-        cause instanceof Error ? cause.message : "The OpenRouter request failed.",
-      );
+      setError(cause instanceof Error ? cause.message : "The OpenRouter request failed.");
     } finally {
+      setLoaded(true);
       setBusy(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void run(getOpenRouterIntegration);
-  }, []);
+  }, [run]);
+
+  const validatedAt = formatValidatedAt(status?.lastValidatedAt);
+  const confirmDisconnect = () =>
+    Alert.alert("Disconnect OpenRouter?", "Voice Input preferences will be preserved.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Disconnect",
+        style: "destructive",
+        onPress: () => void run(deleteOpenRouterCredential),
+      },
+    ]);
 
   return (
-    <View className="flex-1 bg-sheet">
+    <View collapsable={false} className="flex-1 bg-sheet">
+      {Platform.OS === "android" ? (
+        <>
+          <NativeStackScreenOptions options={{ headerShown: false }} />
+          <AndroidScreenHeader title="OpenRouter" onBack={() => navigation.goBack()} />
+        </>
+      ) : null}
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        className="flex-1"
         contentContainerClassName="gap-5 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <SettingsSection title="Connection" card>
-          <View className="gap-2 p-4">
-            <Text className="text-lg text-foreground">{label(status)}</Text>
-            <Text className="text-sm text-foreground-muted">
+          <View collapsable={false} className="gap-1.5 p-4">
+            <Text className="text-lg text-foreground">{label(status, loaded)}</Text>
+            <Text className="text-sm leading-normal text-foreground-muted">
               {status?.credentialHint
                 ? `Configured key ${status.credentialHint}. Existing keys are never displayed.`
                 : "Connect an account-wide key for Voice Input."}
             </Text>
+            {validatedAt ? (
+              <Text className="text-sm leading-normal text-foreground-muted">
+                Last validated {validatedAt}.
+              </Text>
+            ) : null}
           </View>
         </SettingsSection>
+
         <SettingsSection title={status?.configured ? "Replace API key" : "API key"} card>
-          <View className="gap-3 p-4">
+          <View collapsable={false} className="gap-3 p-4">
             <TextInput
               accessibilityLabel="OpenRouter API key"
               autoCapitalize="none"
               autoCorrect={false}
-              className="h-12 rounded-xl bg-background px-3 text-base text-foreground"
+              editable={!busy}
               placeholder="sk-or-v1-…"
-              placeholderTextColor="#888"
               secureTextEntry
+              textContentType="password"
               value={apiKey}
               onChangeText={setApiKey}
+              onSubmitEditing={() => {
+                if (apiKey.trim().length > 0) void run(() => putOpenRouterCredential(apiKey));
+              }}
             />
-            <Pressable
-              accessibilityRole="button"
-              className="items-center rounded-xl bg-accent p-3 disabled:opacity-50"
-              disabled={busy || apiKey.trim().length === 0}
+            {error ? <ErrorBanner message={error} /> : null}
+            <SettingsActionButton
+              busy={busy}
+              disabled={apiKey.trim().length === 0}
+              icon="key"
+              label="Validate and connect"
+              tone="primary"
               onPress={() => void run(() => putOpenRouterCredential(apiKey))}
-            >
-              <Text className="font-t3-medium text-accent-foreground">Validate and Connect</Text>
-            </Pressable>
+            />
           </View>
         </SettingsSection>
+
         {status?.configured ? (
           <SettingsSection title="Manage" card>
-            <View className="gap-2 p-4">
-              <Pressable
-                accessibilityRole="button"
-                className="items-center rounded-xl bg-background p-3"
+            <View collapsable={false} className="gap-3 p-4">
+              <SettingsActionButton
                 disabled={busy}
+                icon="arrow.clockwise"
+                label="Revalidate"
                 onPress={() => void run(validateOpenRouterCredential)}
-              >
-                <Text className="text-foreground">Revalidate</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                className="items-center rounded-xl bg-destructive/10 p-3"
+              />
+              <SettingsActionButton
                 disabled={busy}
-                onPress={() =>
-                  Alert.alert(
-                    "Disconnect OpenRouter?",
-                    "Voice Input preferences will be preserved.",
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Disconnect",
-                        style: "destructive",
-                        onPress: () => void run(deleteOpenRouterCredential),
-                      },
-                    ],
-                  )
-                }
-              >
-                <Text className="text-destructive">Disconnect</Text>
-              </Pressable>
+                icon="trash"
+                label="Disconnect"
+                tone="danger"
+                onPress={confirmDisconnect}
+              />
             </View>
           </SettingsSection>
         ) : null}
-        <Pressable onPress={() => void Linking.openURL("https://openrouter.ai/settings/keys")}>
-          <Text className="px-2 text-sm text-accent">Manage keys on OpenRouter</Text>
-        </Pressable>
-        <Text className="px-2 text-sm text-foreground-muted">
+
+        <SettingsActionButton
+          icon="arrow.up.right"
+          label="Manage keys on OpenRouter"
+          onPress={() => void Linking.openURL("https://openrouter.ai/settings/keys")}
+        />
+
+        <Text className="px-2 text-sm leading-normal text-foreground-muted">
           Audio and transcripts are processed by OpenRouter and the selected upstream providers.
         </Text>
       </ScrollView>
