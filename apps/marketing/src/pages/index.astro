@@ -404,9 +404,30 @@ const mobileEndorsementRows = [
     return null;
   }
 
+  // Windows on ARM runs x64 browsers under emulation, so the UA string still
+  // says x64. Client Hints report the real CPU; anything else means x64.
+  async function detectWindowsArch(): Promise<"arm64" | "x64"> {
+    const uaData = (
+      navigator as Navigator & {
+        userAgentData?: {
+          getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }>;
+        };
+      }
+    ).userAgentData;
+
+    try {
+      const values = await uaData?.getHighEntropyValues?.(["architecture"]);
+      return values?.architecture === "arm" ? "arm64" : "x64";
+    } catch {
+      return "x64";
+    }
+  }
+
   function pickAsset(assets: ReleaseAsset[], platform: Platform): string | null {
     if (platform.os === "win") {
-      return assets.find((a) => a.name.endsWith("-x64.exe"))?.browser_download_url ?? null;
+      const preferred = assets.find((a) => a.name.endsWith(`-${platform.arch}.exe`));
+      const fallback = assets.find((a) => a.name.endsWith("-x64.exe"));
+      return (preferred ?? fallback)?.browser_download_url ?? null;
     }
     if (platform.os === "mac") {
       const preferred = assets.find((a) => a.name.endsWith(`-${platform.arch}.dmg`));
@@ -434,8 +455,11 @@ const mobileEndorsementRows = [
     if (kbd && platform.os !== "mac") kbd.textContent = "Ctrl ⏎";
 
     try {
-      const release = await fetchLatestRelease();
-      const url = pickAsset(release.assets ?? [], platform);
+      const [release, winArch] = await Promise.all([
+        fetchLatestRelease(),
+        platform.os === "win" ? detectWindowsArch() : Promise.resolve(undefined),
+      ]);
+      const url = pickAsset(release.assets ?? [], { ...platform, arch: winArch ?? platform.arch });
       if (url) {
         if (btn) {
           btn.href = url;

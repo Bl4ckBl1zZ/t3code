@@ -96,6 +96,13 @@ const CLOUDFLARED_RELEASE_ASSETS: Readonly<
     sha256: "20b9638f685333d623798e733effbad2487093f15ba592f6c7752360ff3b7ab7",
     archive: "binary",
   },
+  // cloudflared ships no windows-arm64 build; Windows on ARM runs the amd64
+  // binary under x64 emulation.
+  "win32-arm64": {
+    url: "https://github.com/cloudflare/cloudflared/releases/download/2026.5.2/cloudflared-windows-amd64.exe",
+    sha256: "20b9638f685333d623798e733effbad2487093f15ba592f6c7752360ff3b7ab7",
+    archive: "binary",
+  },
 };
 
 const INSTALL_LOCK_RETRY_COUNT = 100;
