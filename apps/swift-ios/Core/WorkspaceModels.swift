@@ -303,10 +303,77 @@ private extension KeyedDecodingContainer {
     }
 }
 
+/// What happened to a file, as git's porcelain XY codes report it.
+///
+/// Raw rather than an enum: the contract may add a kind before this client
+/// learns about it, and an unknown string must not fail the whole status decode.
+/// `NativeWorkspaceMapper` is where it becomes a `FeatureSourceControlFileState`.
+public enum VCSWorkingTreeFileChangeKind: String, Codable, Equatable, Sendable {
+    case added
+    case modified
+    case deleted
+    case renamed
+    case copied
+    case untracked
+    case conflicted
+}
+
 public struct VCSWorkingTreeFile: Codable, Equatable, Sendable {
     public let path: String
+    /// Lines from `git diff HEAD --numstat`, which folds the index and the
+    /// working tree into one entry per path. Zero is meaningful: an untracked or
+    /// binary file is unscoreable, not unchanged.
     public let insertions: Int
     public let deletions: Int
+    /// The file's overall change versus HEAD.
+    public let changeKind: VCSWorkingTreeFileChangeKind?
+    /// What the index holds against HEAD. Absent means nothing is staged for
+    /// this path — this is the staged-ness flag.
+    public let stagedChangeKind: VCSWorkingTreeFileChangeKind?
+    /// What the working tree holds against the index. Present alongside
+    /// `stagedChangeKind` for a file staged and then edited again.
+    public let unstagedChangeKind: VCSWorkingTreeFileChangeKind?
+    /// Where a rename or copy came from.
+    public let originalPath: String?
+
+    /// All four status fields are optional on the wire, so a server older than
+    /// them decodes into a file with only its path and line counts.
+    public init(
+        path: String,
+        insertions: Int,
+        deletions: Int,
+        changeKind: VCSWorkingTreeFileChangeKind? = nil,
+        stagedChangeKind: VCSWorkingTreeFileChangeKind? = nil,
+        unstagedChangeKind: VCSWorkingTreeFileChangeKind? = nil,
+        originalPath: String? = nil
+    ) {
+        self.path = path
+        self.insertions = insertions
+        self.deletions = deletions
+        self.changeKind = changeKind
+        self.stagedChangeKind = stagedChangeKind
+        self.unstagedChangeKind = unstagedChangeKind
+        self.originalPath = originalPath
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.decode(String.self, forKey: .path)
+        insertions = try container.decode(Int.self, forKey: .insertions)
+        deletions = try container.decode(Int.self, forKey: .deletions)
+        // A kind this build does not know reads as absent rather than failing
+        // the decode and taking the whole status down with it.
+        changeKind = try? container.decodeIfPresent(
+            VCSWorkingTreeFileChangeKind.self, forKey: .changeKind
+        )
+        stagedChangeKind = try? container.decodeIfPresent(
+            VCSWorkingTreeFileChangeKind.self, forKey: .stagedChangeKind
+        )
+        unstagedChangeKind = try? container.decodeIfPresent(
+            VCSWorkingTreeFileChangeKind.self, forKey: .unstagedChangeKind
+        )
+        originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
+    }
 }
 
 public struct VCSWorkingTree: Codable, Equatable, Sendable {

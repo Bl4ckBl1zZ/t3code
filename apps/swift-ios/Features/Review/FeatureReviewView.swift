@@ -14,8 +14,29 @@ public struct FeatureReviewView: View {
     @State private var review: FeatureReview?
     @State private var isLoading = true
     @State private var errorMessage: String?
+    /// The scope `review` was actually loaded for, which is not always the one
+    /// selected right now: a load in flight, or one that failed, leaves the two
+    /// apart, and the header labels what is on screen rather than what was asked
+    /// for.
+    @State private var loadedScope: ReviewSectionID?
     /// The row the preselection resolved to, highlighted and scrolled to once.
     @State private var focusedFileID: String?
+    /// Whether the handover from the feed has been passed to the store yet. The
+    /// load is keyed on the scope and so re-runs on every switch; the handover
+    /// is a first-appearance thing.
+    @State private var didArmInitialFile = false
+
+    /// What the review is pointed at, from the selection the feed armed.
+    ///
+    /// An id this build cannot read falls back to the working tree, and the
+    /// header then says "working tree" — the fallback is allowed to change what
+    /// is shown, never to mislabel it.
+    private var scope: ReviewSectionID {
+        guard let sectionID = selection.selection(for: threadID).sectionID else {
+            return .workingTree
+        }
+        return ReviewSectionID(rawValue: sectionID) ?? .workingTree
+    }
 
     public init(
         client: any FeatureClient,
@@ -49,11 +70,7 @@ public struct FeatureReviewView: View {
                         }
                 }
             } else {
-                ContentUnavailableView(
-                    "Review unavailable",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text(errorMessage ?? "Changes could not be loaded.")
-                )
+                unavailable
             }
         }
         .background(T3Colors.background)
@@ -69,14 +86,21 @@ public struct FeatureReviewView: View {
                 .accessibilityLabel("Reload changes")
             }
         }
-        .task {
-            // Armed before the first read, so a diff that parses while this
-            // screen is still loading already has the request waiting for it.
-            // Unconditional, `nil` included: opening the review from anywhere
-            // but a file chip has to disarm a request that was never spent —
-            // a sheet dismissed before its diff parsed would otherwise scroll
-            // the next reader to a file they did not ask for.
-            selection.selectFile(initialFilePath, for: threadID)
+        // Keyed on the scope so switching between a checkpoint and the working
+        // tree re-reads rather than relabelling the diff already on screen.
+        .task(id: scope) {
+            if !didArmInitialFile {
+                didArmInitialFile = true
+                // Armed before the first read, so a diff that parses while this
+                // screen is still loading already has the request waiting for
+                // it. Unconditional, `nil` included: opening the review from
+                // anywhere but a file chip has to disarm a request that was
+                // never spent — a sheet dismissed before its diff parsed would
+                // otherwise scroll the next reader to a file they did not ask
+                // for. Once only, because a later scope switch is the reader
+                // navigating, not the feed handing a file over.
+                selection.selectFile(initialFilePath, for: threadID)
+            }
             await load()
         }
         .onChange(of: scenePhase) { _, phase in
@@ -85,11 +109,48 @@ public struct FeatureReviewView: View {
         }
     }
 
+    /// What a scope that could not be loaded says.
+    ///
+    /// A checkpoint whose diff cannot be resolved says so and offers the working
+    /// tree as an explicit, labelled choice. Quietly loading the working tree
+    /// instead is the bug this screen is fixing: it renders as a success and
+    /// attributes today's uncommitted edits to a turn that ended hours ago.
+    @ViewBuilder
+    private var unavailable: some View {
+        switch scope {
+        case .workingTree:
+            ContentUnavailableView(
+                "Review unavailable",
+                systemImage: "doc.text.magnifyingglass",
+                description: Text(errorMessage ?? "Changes could not be loaded.")
+            )
+        case .checkpoint:
+            ContentUnavailableView {
+                Label("Checkpoint diff unavailable", systemImage: "clock.badge.xmark")
+            } description: {
+                Text(errorMessage ?? "This checkpoint's diff could not be loaded.")
+            } actions: {
+                Button("Show the working tree instead") { showWorkingTree() }
+            }
+        }
+    }
+
+    private func showWorkingTree() {
+        selection.selectSection(ReviewSectionID.workingTree.rawValue, for: threadID)
+    }
+
     private func reviewList(_ review: FeatureReview) -> some View {
         List {
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
+                        // Two diffs that look alike in a file list can mean very
+                        // different things, so what is being shown is stated
+                        // rather than left to be inferred from the title.
+                        Text(scopeEyebrow)
+                            .font(T3Typography.eyebrow)
+                            .foregroundStyle(T3Colors.textTertiary)
+                            .accessibilityLabel("Showing \(scopeEyebrow.lowercased())")
                         Text(review.title)
                             .font(T3Typography.navigationTitle)
                         if let base = review.baseReference {
@@ -108,6 +169,17 @@ public struct FeatureReviewView: View {
                         .font(T3Typography.supporting)
                         .foregroundStyle(.orange)
                 }
+
+                if isShowingCheckpoint {
+                    // The way back. Without it a review opened from a checkpoint
+                    // row is stuck on history for the rest of the sheet.
+                    Button {
+                        showWorkingTree()
+                    } label: {
+                        Label("Show the working tree", systemImage: "arrow.uturn.forward")
+                            .font(T3Typography.control)
+                    }
+                }
             }
 
             Section("\(review.files.count) changed \(review.files.count == 1 ? "file" : "files")") {
@@ -115,7 +187,11 @@ public struct FeatureReviewView: View {
                     ContentUnavailableView(
                         "No changes",
                         systemImage: "checkmark.circle",
-                        description: Text("The working tree is clean.")
+                        description: Text(
+                            isShowingCheckpoint
+                                ? "This turn captured no file changes."
+                                : "The working tree is clean."
+                        )
                     )
                     .listRowBackground(Color.clear)
                 }
@@ -141,12 +217,32 @@ public struct FeatureReviewView: View {
         file.id == focusedFileID ? T3Colors.accent.opacity(0.12) : nil
     }
 
+    /// True only once the checkpoint's own diff is the thing on screen. Read
+    /// from `loadedScope`, not from `scope`: mid-switch the two disagree, and
+    /// labelling the outgoing diff with the incoming scope is the same lie in
+    /// miniature.
+    private var isShowingCheckpoint: Bool {
+        loadedScope?.checkpointID != nil
+    }
+
+    private var scopeEyebrow: String {
+        isShowingCheckpoint ? "CHECKPOINT DIFF" : "WORKING TREE"
+    }
+
     private func load() async {
+        let scope = scope
         isLoading = true
         defer { isLoading = false }
         do {
-            let loaded = try await client.loadReview(threadID: threadID)
+            let loaded: FeatureReview
+            switch scope {
+            case .workingTree:
+                loaded = try await client.loadReview(threadID: threadID)
+            case let .checkpoint(id):
+                loaded = try await client.loadReview(threadID: threadID, checkpointID: id)
+            }
             review = loaded
+            loadedScope = scope
             errorMessage = nil
             // Every load re-runs this, and the store is what makes that safe:
             // an unparsed diff leaves the request armed, and a parsed one spends
@@ -159,6 +255,15 @@ public struct FeatureReviewView: View {
             }
         } catch {
             errorMessage = error.localizedDescription
+            // A failed refresh of the scope already on screen keeps showing it:
+            // it was right when it loaded and it is still that scope. A failed
+            // *switch* must not, because what is on screen is then the other
+            // scope's diff under the new scope's heading.
+            if loadedScope != scope {
+                review = nil
+                loadedScope = nil
+                focusedFileID = nil
+            }
         }
     }
 }

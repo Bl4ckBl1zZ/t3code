@@ -75,23 +75,18 @@ enum NativeWorkspaceMapper {
     /// (always false) meant the "you are committing to the default branch"
     /// confirmation could never fire.
     ///
-    /// Two things stay unset because the contract does not report them, not
-    /// because the mapping is lossy:
+    /// One thing stays unset because the contract does not report it, not
+    /// because the mapping is lossy: `upstream`. `VcsStatusResult` reports
+    /// `hasUpstream` but not the upstream ref name — the driver resolves
+    /// `branch.upstream` internally and drops it before the boundary
+    /// (GitVcsDriverCore's `statusDetails`), so there is nothing to map.
     ///
-    /// - `upstream` — `VcsStatusResult` reports `hasUpstream` but not the
-    ///   upstream ref name. The driver resolves `branch.upstream` internally and
-    ///   drops it before the boundary (GitVcsDriverCore's `statusDetails`), so
-    ///   there is nothing to map.
-    /// - per-file `state` / `isStaged` — `workingTree.files` is
-    ///   `{ path, insertions, deletions }`. The driver parses git's porcelain XY
-    ///   codes only to decide *that* a path changed, and the numstat it scores
-    ///   the lines from is `git diff HEAD`, which folds index and working tree
-    ///   together. Neither the change kind nor staged-ness survives to the wire,
-    ///   and both are underivable from what does: an added file and a
-    ///   modified-only-with-additions file are the same `n/0`, and a 0/0 entry is
-    ///   an untracked file or a binary one with no way to tell which. So every
-    ///   file is reported `.modified` and unstaged, deliberately, until the
-    ///   contract carries the code.
+    /// Per-file state and staged-ness *are* reported now. They come from git's
+    /// porcelain XY codes, which the server used to parse only to decide *that*
+    /// a path changed. They are not derivable from the line counts next to them:
+    /// the numstat is `git diff HEAD`, which folds index and working tree into
+    /// one entry per path, so an added file and an addition-only edit are the
+    /// same `n/0`, and a 0/0 entry is an untracked file or a binary one.
     static func sourceControl(_ status: VCSStatus) -> FeatureSourceControlStatus {
         FeatureSourceControlStatus(
             isRepository: status.isRepo,
@@ -104,15 +99,7 @@ enum NativeWorkspaceMapper {
             hasWorkingTreeChanges: status.hasWorkingTreeChanges,
             insertions: status.workingTree.insertions,
             deletions: status.workingTree.deletions,
-            files: status.workingTree.files.map {
-                FeatureSourceControlFile(
-                    path: $0.path,
-                    state: .modified,
-                    isStaged: false,
-                    insertions: $0.insertions,
-                    deletions: $0.deletions
-                )
-            },
+            files: status.workingTree.files.map(sourceControlFile),
             pullRequest: status.pr.map {
                 FeaturePullRequest(
                     number: $0.number,
@@ -122,6 +109,43 @@ enum NativeWorkspaceMapper {
                 )
             }
         )
+    }
+
+    /// One changed path, with the porcelain code the server now carries.
+    ///
+    /// A file from a server that predates the per-file status fields has no
+    /// `changeKind` at all. `.modified` is the fallback for that case only — it
+    /// is what the whole list used to be, and it is the least wrong label for
+    /// "git says this path changed and will not say how".
+    static func sourceControlFile(_ file: VCSWorkingTreeFile) -> FeatureSourceControlFile {
+        FeatureSourceControlFile(
+            path: file.path,
+            state: sourceControlFileState(file.changeKind),
+            // Staged-ness is the presence of an index-side change, which is
+            // exactly what porcelain's first XY column reports.
+            isStaged: file.stagedChangeKind != nil,
+            insertions: file.insertions,
+            deletions: file.deletions,
+            hasUnstagedChanges: file.unstagedChangeKind != nil,
+            previousPath: file.originalPath
+        )
+    }
+
+    private static func sourceControlFileState(
+        _ kind: VCSWorkingTreeFileChangeKind?
+    ) -> FeatureSourceControlFileState {
+        switch kind {
+        case .added: .added
+        case .modified: .modified
+        case .deleted: .deleted
+        case .renamed: .renamed
+        // A copy puts a new file at this path; nothing downstream draws copies
+        // apart from additions, and the source is carried as `previousPath`.
+        case .copied: .added
+        case .untracked: .untracked
+        case .conflicted: .conflicted
+        case nil: .modified
+        }
     }
 
     static func gitAction(_ action: FeatureSourceControlAction) -> GitStackedAction {

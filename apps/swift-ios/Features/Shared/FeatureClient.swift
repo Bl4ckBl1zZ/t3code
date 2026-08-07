@@ -136,7 +136,16 @@ public protocol FeatureClient: AnyObject {
         limit: Int
     ) async throws -> [FeatureFileEntry]
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent
+    /// The thread's working tree as it stands now.
     func loadReview(threadID: String) async throws -> FeatureReview
+    /// The diff one checkpoint captured, which is a different question from
+    /// ``loadReview(threadID:)`` and is answered by a different server call.
+    ///
+    /// Separate rather than an optional argument on the working-tree call so
+    /// that an environment which cannot answer it fails loudly. Handing back
+    /// the working tree for a checkpoint would render as if it had worked while
+    /// showing changes the checkpoint never captured.
+    func loadReview(threadID: String, checkpointID: String) async throws -> FeatureReview
     func loadReviewFileContents(
         threadID: String,
         file: FeatureReviewFile
@@ -397,6 +406,10 @@ public extension FeatureClient {
 
     func loadReview(threadID: String) async throws -> FeatureReview {
         throw FeatureCapabilityUnavailable("Review")
+    }
+
+    func loadReview(threadID: String, checkpointID: String) async throws -> FeatureReview {
+        throw FeatureCapabilityUnavailable("Checkpoint diff")
     }
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus {

@@ -25,6 +25,8 @@ import {
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
   type VcsRef,
+  type VcsWorkingTreeFile,
+  type VcsWorkingTreeFileChangeKind,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
@@ -166,10 +168,50 @@ function parseBranchAb(value: string): { ahead: number; behind: number } {
   };
 }
 
-function parseNumstatEntries(
-  stdout: string,
-): Array<{ path: string; insertions: number; deletions: number }> {
-  const entries: Array<{ path: string; insertions: number; deletions: number }> = [];
+export interface NumstatEntry {
+  readonly path: string;
+  /** The pre-rename path, when `git diff` scored this entry as a rename. */
+  readonly originalPath: string | null;
+  readonly insertions: number;
+  readonly deletions: number;
+}
+
+/**
+ * Splits the two paths out of a `--numstat` rename entry.
+ *
+ * `git diff --numstat` writes a rename as one path with the differing segment
+ * bracketed against the shared prefix and suffix — `src/{old.ts => new.ts}`, or
+ * `src/{ => sub}/file.ts` for a move down a directory — and falls back to a bare
+ * `old => new` when the two share nothing. Reading only the text after the arrow
+ * yields `new.ts}`, which matches no real path, so the rename's line counts fail
+ * to join to its porcelain entry and a phantom file appears in the list.
+ */
+function parseNumstatRenamePaths(rawPath: string): { from: string; to: string } | null {
+  const braceStart = rawPath.indexOf("{");
+  const arrowIndex = rawPath.indexOf(" => ");
+  if (arrowIndex < 0) return null;
+
+  if (braceStart >= 0 && braceStart < arrowIndex) {
+    const braceEnd = rawPath.indexOf("}", arrowIndex);
+    if (braceEnd < 0) return null;
+    const prefix = rawPath.slice(0, braceStart);
+    const suffix = rawPath.slice(braceEnd + 1);
+    const from = rawPath.slice(braceStart + 1, arrowIndex);
+    const to = rawPath.slice(arrowIndex + " => ".length, braceEnd);
+    // `src/{ => sub}/file.ts` leaves an empty segment on one side, so the
+    // rejoined path would carry a doubled separator git never emits.
+    const join = (middle: string) => `${prefix}${middle}${suffix}`.replace(/\/{2,}/g, "/");
+    return { from: join(from), to: join(to) };
+  }
+
+  return {
+    from: rawPath.slice(0, arrowIndex),
+    to: rawPath.slice(arrowIndex + " => ".length),
+  };
+}
+
+function parseNumstatEntries(stdout: string): Array<NumstatEntry> {
+  const entries: Array<NumstatEntry> = [];
   for (const line of stdout.split(/\r?\n/g)) {
     if (line.trim().length === 0) continue;
     const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
@@ -178,11 +220,12 @@ function parseNumstatEntries(
     if (rawPath.length === 0) continue;
     const added = Number.parseInt(addedRaw ?? "0", 10);
     const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const renameArrowIndex = rawPath.indexOf(" => ");
-    const normalizedPath =
-      renameArrowIndex >= 0 ? rawPath.slice(renameArrowIndex + " => ".length).trim() : rawPath;
+    const rename = parseNumstatRenamePaths(rawPath);
+    const resolvedPath = rename?.to.trim() ?? rawPath;
+    const originalPath = rename?.from.trim() ?? "";
     entries.push({
-      path: normalizedPath.length > 0 ? normalizedPath : rawPath,
+      path: resolvedPath.length > 0 ? resolvedPath : rawPath,
+      originalPath: originalPath.length > 0 ? originalPath : null,
       insertions: Number.isFinite(added) ? added : 0,
       deletions: Number.isFinite(deleted) ? deleted : 0,
     });
@@ -190,26 +233,154 @@ function parseNumstatEntries(
   return entries;
 }
 
-function parsePorcelainPath(line: string): string | null {
+export interface PorcelainStatusEntry {
+  readonly path: string;
+  /** Set only for the rename/copy (`2 `) records that carry a source path. */
+  readonly originalPath: string | null;
+  /** The file's change versus HEAD, folding both porcelain columns into one. */
+  readonly changeKind: VcsWorkingTreeFileChangeKind;
+  /** The index column, or null when the index matches HEAD (porcelain `.`). */
+  readonly stagedChangeKind: VcsWorkingTreeFileChangeKind | null;
+  /** The worktree column, or null when the worktree matches the index. */
+  readonly unstagedChangeKind: VcsWorkingTreeFileChangeKind | null;
+}
+
+/**
+ * One porcelain v2 XY column. `.` means "this side matches", which is not a
+ * change kind, so it — like any letter a future git adds — reads as null.
+ */
+function porcelainColumnChangeKind(
+  column: string | undefined,
+): VcsWorkingTreeFileChangeKind | null {
+  switch (column) {
+    case "M":
+      return "modified";
+    // A type change (regular file <-> symlink <-> submodule) is a content change
+    // as far as anything downstream is concerned.
+    case "T":
+      return "modified";
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+      return "renamed";
+    case "C":
+      return "copied";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Folds the two porcelain columns into the single kind a file list renders.
+ *
+ * A worktree deletion wins outright: whatever the index holds, the file is gone
+ * from disk. Otherwise the index side wins, because it is what a commit would
+ * record — a staged add that was since edited is still an add.
+ */
+function summarizePorcelainChangeKind(
+  stagedChangeKind: VcsWorkingTreeFileChangeKind | null,
+  unstagedChangeKind: VcsWorkingTreeFileChangeKind | null,
+): VcsWorkingTreeFileChangeKind {
+  if (unstagedChangeKind === "deleted") return "deleted";
+  return stagedChangeKind ?? unstagedChangeKind ?? "modified";
+}
+
+// Fields ahead of the path in each porcelain v2 record kind. Paths may contain
+// spaces, so the path is everything from this offset on rather than the last
+// whitespace-delimited token. Git C-quotes anything gnarlier (tabs, newlines,
+// non-ASCII under the default core.quotePath), which keeps these records
+// single-line and keeps the rename separator below unambiguous.
+const PORCELAIN_ORDINARY_PATH_FIELD_INDEX = 8;
+const PORCELAIN_RENAME_PATH_FIELD_INDEX = 9;
+const PORCELAIN_UNMERGED_PATH_FIELD_INDEX = 10;
+
+function porcelainRecordPath(line: string, fieldIndex: number): string | null {
+  const fields = line.split(" ");
+  if (fields.length <= fieldIndex) {
+    // Defensive: an unrecognised record shape still has to yield a path, or the
+    // file silently vanishes from the changed list.
+    const fallback = fields.at(-1)?.trim() ?? "";
+    return fallback.length > 0 ? fallback : null;
+  }
+  const rest = fields.slice(fieldIndex).join(" ").trim();
+  return rest.length > 0 ? rest : null;
+}
+
+/**
+ * Reads one `git status --porcelain=v2` record.
+ *
+ * The XY codes are the only place the change kind and staged-ness exist:
+ * `git diff HEAD --numstat` reports one entry per path with index and worktree
+ * summed together, so `n/0` is an added file *or* an addition-only edit, and
+ * `0/0` is an untracked file *or* a binary one.
+ */
+export function parsePorcelainStatusEntry(line: string): PorcelainStatusEntry | null {
+  // `? ` untracked, `! ` ignored (only emitted under --ignored, which status
+  // reads do not pass, but a record that appears must still name its path).
   if (line.startsWith("? ") || line.startsWith("! ")) {
     const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
+    if (simple.length === 0) return null;
+    return {
+      path: simple,
+      originalPath: null,
+      changeKind: "untracked",
+      stagedChangeKind: null,
+      // Nothing is staged for an untracked path; the file exists only on disk.
+      unstagedChangeKind: "untracked",
+    };
   }
 
   if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
     return null;
   }
 
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
+  const columns = line.slice(2, 4);
+  const stagedChangeKind = porcelainColumnChangeKind(columns[0]);
+  const unstagedChangeKind = porcelainColumnChangeKind(columns[1]);
+
+  if (line.startsWith("u ")) {
+    const filePath = porcelainRecordPath(line, PORCELAIN_UNMERGED_PATH_FIELD_INDEX);
+    if (filePath === null) return null;
+    return {
+      path: filePath,
+      originalPath: null,
+      changeKind: "conflicted",
+      // An unmerged path holds several index stages rather than one staged
+      // change, so it is reported as neither staged nor cleanly unstaged; the
+      // kind above is what consumers act on.
+      stagedChangeKind: null,
+      unstagedChangeKind: null,
+    };
   }
 
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
-  return filePath.length > 0 ? filePath : null;
+  if (line.startsWith("2 ")) {
+    const rest = porcelainRecordPath(line, PORCELAIN_RENAME_PATH_FIELD_INDEX);
+    if (rest === null) return null;
+    // `2 ` records end with `<path>\t<originalPath>`.
+    const separatorIndex = rest.indexOf("\t");
+    const filePath = (separatorIndex >= 0 ? rest.slice(0, separatorIndex) : rest).trim();
+    const originalPath = separatorIndex >= 0 ? rest.slice(separatorIndex + 1).trim() : "";
+    if (filePath.length === 0) return null;
+    return {
+      path: filePath,
+      originalPath: originalPath.length > 0 ? originalPath : null,
+      changeKind: summarizePorcelainChangeKind(stagedChangeKind, unstagedChangeKind),
+      stagedChangeKind,
+      unstagedChangeKind,
+    };
+  }
+
+  const filePath = porcelainRecordPath(line, PORCELAIN_ORDINARY_PATH_FIELD_INDEX);
+  if (filePath === null) return null;
+  return {
+    path: filePath,
+    originalPath: null,
+    changeKind: summarizePorcelainChangeKind(stagedChangeKind, unstagedChangeKind),
+    stagedChangeKind,
+    unstagedChangeKind,
+  };
 }
 
 function filterBranchesForListQuery(
@@ -1601,7 +1772,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
     );
     const statusCacheKey = repositoryPaths?.gitCommonDir;
-    const [numstatStdout, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
+    const [numstatEntries, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
       [
         executeGitWithStableDiagnostics(
           "GitVcsDriver.statusDetails.numstat",
@@ -1609,8 +1780,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ["diff", "HEAD", "--numstat"],
           { allowNonZeroExit: true },
         ).pipe(
-          Effect.flatMap((result) => {
-            if (result.exitCode === 0) return Effect.succeed(result.stdout);
+          Effect.flatMap((result): Effect.Effect<ReadonlyArray<NumstatEntry>, GitCommandError> => {
+            if (result.exitCode === 0) return Effect.succeed(parseNumstatEntries(result.stdout));
             if (isUnbornHeadStderr(result.stderr)) {
               return Effect.map(
                 Effect.all([
@@ -1624,7 +1795,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                     "--numstat",
                   ]),
                 ]),
-                ([unstagedStdout, stagedStdout]) => {
+                ([unstagedStdout, stagedStdout]): ReadonlyArray<NumstatEntry> => {
                   const staged = parseNumstatEntries(stagedStdout);
                   const unstaged = parseNumstatEntries(unstagedStdout);
                   const map = new Map<string, { insertions: number; deletions: number }>();
@@ -1637,9 +1808,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                     existing.deletions += entry.deletions;
                     map.set(entry.path, existing);
                   }
-                  return Array.from(map.entries())
-                    .map(([p, s]) => `${s.insertions}\t${s.deletions}\t${p}`)
-                    .join("\n");
+                  return Array.from(map.entries()).map(([entryPath, stat]) => ({
+                    path: entryPath,
+                    // An unborn HEAD has nothing to rename away from.
+                    originalPath: null,
+                    insertions: stat.insertions,
+                    deletions: stat.deletions,
+                  }));
                 },
               );
             }
@@ -1675,7 +1850,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     let behindCount = 0;
     let aheadOfDefaultCount = 0;
     let hasWorkingTreeChanges = false;
-    const changedFilesWithoutNumstat = new Set<string>();
+    // Keyed by path, because that is the only key `git diff HEAD --numstat`
+    // shares with the porcelain records.
+    const porcelainEntriesByPath = new Map<string, PorcelainStatusEntry>();
 
     for (const line of statusStdout.split(/\r?\n/g)) {
       if (line.startsWith("# branch.head ")) {
@@ -1697,8 +1874,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       if (line.trim().length > 0 && !line.startsWith("#")) {
         hasWorkingTreeChanges = true;
-        const pathValue = parsePorcelainPath(line);
-        if (pathValue) changedFilesWithoutNumstat.add(pathValue);
+        const entry = parsePorcelainStatusEntry(line);
+        if (entry) porcelainEntriesByPath.set(entry.path, entry);
       }
     }
 
@@ -1723,27 +1900,43 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0));
     }
 
-    const numstatEntries = parseNumstatEntries(numstatStdout);
-    const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
+    const fileStatMap = new Map<string, NumstatEntry>();
     for (const entry of numstatEntries) {
-      fileStatMap.set(entry.path, { insertions: entry.insertions, deletions: entry.deletions });
+      fileStatMap.set(entry.path, entry);
     }
 
+    // The two sources disagree about which paths they can see: numstat scores
+    // nothing for untracked or binary files, and it lists paths that porcelain
+    // omits when a change is already fully described by the index. Both halves
+    // stay, joined on path.
     let insertions = 0;
     let deletions = 0;
-    const files = Array.from(fileStatMap.entries())
-      .map(([filePath, stat]) => {
-        insertions += stat.insertions;
-        deletions += stat.deletions;
-        return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
-      })
-      .toSorted((a, b) => a.path.localeCompare(b.path));
-
-    for (const filePath of changedFilesWithoutNumstat) {
-      if (fileStatMap.has(filePath)) continue;
-      files.push({ path: filePath, insertions: 0, deletions: 0 });
+    for (const entry of fileStatMap.values()) {
+      insertions += entry.insertions;
+      deletions += entry.deletions;
     }
-    files.sort((a, b) => a.path.localeCompare(b.path));
+
+    const changedPaths = new Set<string>([...fileStatMap.keys(), ...porcelainEntriesByPath.keys()]);
+    const files: Array<VcsWorkingTreeFile> = Array.from(changedPaths, (filePath) => {
+      const stat = fileStatMap.get(filePath);
+      const porcelain = porcelainEntriesByPath.get(filePath);
+      // Prefer the porcelain source path: it is git's own rename record, where
+      // numstat's is reconstructed from an abbreviated display form.
+      const originalPath = porcelain?.originalPath ?? stat?.originalPath ?? null;
+      return {
+        path: filePath,
+        insertions: stat?.insertions ?? 0,
+        deletions: stat?.deletions ?? 0,
+        // Left absent, not defaulted: a path only numstat saw has no XY code,
+        // and guessing "modified" for it is the bug this replaces.
+        ...(porcelain ? { changeKind: porcelain.changeKind } : {}),
+        ...(porcelain?.stagedChangeKind ? { stagedChangeKind: porcelain.stagedChangeKind } : {}),
+        ...(porcelain?.unstagedChangeKind
+          ? { unstagedChangeKind: porcelain.unstagedChangeKind }
+          : {}),
+        ...(originalPath !== null ? { originalPath } : {}),
+      };
+    }).toSorted((a, b) => a.path.localeCompare(b.path));
 
     return {
       isRepo: true,

@@ -745,13 +745,14 @@ public struct ThreadDetailView: View {
     /// Opens the review on a checkpoint's diff, pointed at one file when a chip
     /// rather than the row was tapped.
     ///
-    /// The section is recorded even though nothing reads it yet: this client's
-    /// `loadReview` returns the working tree, so a checkpoint's own diff is not
-    /// reachable, and the store is where that turn will be waiting when it is.
+    /// The section is what makes the review show *this* checkpoint's diff rather
+    /// than the working tree, so it is namespaced on the way in: the store keeps
+    /// section ids opaque, and a bare checkpoint id would be indistinguishable
+    /// from any other section spelling the review might grow.
     private func openDiff(checkpointID: String, filePath: String?) {
         model.reviewSelection.openReview(
             threadID: thread.id,
-            sectionID: checkpointID,
+            sectionID: ReviewSectionID.checkpoint(id: checkpointID).rawValue,
             filePath: filePath
         )
         toolSurface = .review(filePath: filePath)

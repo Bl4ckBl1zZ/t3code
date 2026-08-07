@@ -1683,6 +1683,90 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return NativeWorkspaceMapper.review(preview)
     }
 
+    /// The diff one checkpoint captured.
+    ///
+    /// `orchestration.getTurnDiff` addresses a checkpoint by the turn-count
+    /// range around it rather than by id, so the projection is read first to
+    /// translate — see ``CheckpointTurnRangeResolver``. A checkpoint that cannot
+    /// be translated throws: the working tree answers a different question, and
+    /// returning it here is exactly the mistake this call exists to stop.
+    func loadReview(threadID: String, checkpointID: String) async throws -> FeatureReview {
+        let route = try checkpointRoute(for: threadID)
+        let projection = try await threadProjection(for: route)
+        let range = try CheckpointTurnRangeResolver.range(
+            forCheckpoint: checkpointID,
+            in: projection
+        )
+        let diff = range.needsFullThreadDiff
+            ? try await route.client.fullThreadDiff(
+                threadID: route.wireID,
+                toTurnCount: range.toTurnCount
+            )
+            : try await route.client.turnDiff(
+                threadID: route.wireID,
+                fromTurnCount: range.fromTurnCount,
+                toTurnCount: range.toTurnCount
+            )
+        return Self.checkpointReview(diff, cwd: try? workspaceContext(route: route).cwd)
+    }
+
+    /// The open thread's projection is already in hand; anything else is read
+    /// fresh. Same rule as ``providerSessionIDs(for:)``, and for the same
+    /// reason: a stale projection would resolve the checkpoint to the wrong
+    /// turn, which is a mislabelled diff rather than a visible failure.
+    private func threadProjection(
+        for route: NativeThreadRoute
+    ) async throws -> OrchestrationV2ThreadProjection {
+        if activeThreadID == route.uiID, let cached = activeRawThread { return cached }
+        return try await route.client.threadSnapshot(id: route.wireID).projection
+    }
+
+    /// Folds a turn diff into the same shape the working-tree path returns, so
+    /// the review renders it unchanged.
+    ///
+    /// The patch goes through `NativeWorkspaceMapper.review` rather than a
+    /// second parser: both replies are plain unified diffs, and the one wrapped
+    /// as a `ReviewDiffSource` here is the only input that mapper takes.
+    ///
+    /// The per-file source refs are then cleared. They exist so the diff view
+    /// can hydrate full-file context through `review.getDiffFileContents`, which
+    /// reads the *current* workspace — for a historical checkpoint that would
+    /// re-introduce the bug one screen deeper, so the file view keeps to the
+    /// hunks the patch actually carries.
+    static func checkpointReview(_ diff: ThreadTurnDiff, cwd: String?) -> FeatureReview {
+        let sourceID = "turn:\(diff.fromTurnCount)-\(diff.toTurnCount)"
+        var review = NativeWorkspaceMapper.review(
+            ReviewDiffPreview(
+                cwd: cwd ?? "",
+                generatedAt: "",
+                sources: [
+                    ReviewDiffSource(
+                        id: sourceID,
+                        kind: "turn",
+                        title: "Turn \(diff.toTurnCount)",
+                        baseRef: nil,
+                        headRef: nil,
+                        diff: diff.diff,
+                        diffHash: sourceID,
+                        truncated: false
+                    ),
+                ]
+            )
+        )
+        review.title = "Turn \(diff.toTurnCount)"
+        review.baseReference = diff.fromTurnCount == 0
+            ? "Thread start … turn \(diff.toTurnCount)"
+            : "Turn \(diff.fromTurnCount) … turn \(diff.toTurnCount)"
+        review.files = review.files.map { file in
+            var file = file
+            file.sourceKind = nil
+            file.sourceBaseReference = nil
+            file.sourceHeadReference = nil
+            return file
+        }
+        return review
+    }
+
     func loadReviewFileContents(
         threadID: String,
         file: FeatureReviewFile

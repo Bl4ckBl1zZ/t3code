@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 @testable import T3Code
@@ -136,28 +137,231 @@ final class SourceControlStatusMappingTests: XCTestCase {
         XCTAssertFalse(mapped.availableActions.contains(.commit))
     }
 
-    /// `upstream` and the per-file `state` / `isStaged` are the parts the status
-    /// contract does not carry. Pinning them here documents the gap: when the
-    /// contract grows the ref name or the porcelain XY code, this test is what
-    /// fails and points at the mapper.
-    func testTheFieldsTheStatusContractDoesNotReportStayUnset() throws {
+    /// The upstream *ref name* is the one thing the status contract still does
+    /// not carry. Pinning it documents the gap: when the contract grows it, this
+    /// test is what fails and points at the mapper.
+    func testTheUpstreamRefNameTheStatusContractDoesNotReportStaysUnset() {
+        let mapped = NativeWorkspaceMapper.sourceControl(
+            wireStatus(hasUpstream: true)
+        )
+
+        // `hasUpstream` is reported; the ref *name* is not, so this stays nil
+        // and consumers must not read it as "no upstream".
+        XCTAssertNil(mapped.upstream)
+        XCTAssertTrue(mapped.hasUpstream)
+    }
+
+    // MARK: - Per-file status
+
+    /// Every file used to arrive `.modified` and unstaged, because the server
+    /// parsed git's porcelain XY codes only to learn *that* a path changed. The
+    /// codes reach the wire now, and none of these states is recoverable from
+    /// the line counts beside them: an addition and an addition-only edit are
+    /// both `n/0`, and an untracked file and a binary one are both `0/0`.
+    func testEveryPorcelainChangeKindReachesTheFileList() {
         let mapped = NativeWorkspaceMapper.sourceControl(
             wireStatus(
                 hasWorkingTreeChanges: true,
-                files: [VCSWorkingTreeFile(path: "Deleted.swift", insertions: 0, deletions: 9)],
-                hasUpstream: true
+                files: [
+                    VCSWorkingTreeFile(
+                        path: "Added.swift",
+                        insertions: 12,
+                        deletions: 0,
+                        changeKind: .added,
+                        stagedChangeKind: .added
+                    ),
+                    VCSWorkingTreeFile(
+                        path: "Modified.swift",
+                        insertions: 3,
+                        deletions: 1,
+                        changeKind: .modified,
+                        unstagedChangeKind: .modified
+                    ),
+                    VCSWorkingTreeFile(
+                        path: "Deleted.swift",
+                        insertions: 0,
+                        deletions: 9,
+                        changeKind: .deleted,
+                        unstagedChangeKind: .deleted
+                    ),
+                    VCSWorkingTreeFile(
+                        path: "Untracked.swift",
+                        insertions: 0,
+                        deletions: 0,
+                        changeKind: .untracked,
+                        unstagedChangeKind: .untracked
+                    ),
+                    VCSWorkingTreeFile(
+                        path: "Conflicted.swift",
+                        insertions: 4,
+                        deletions: 4,
+                        changeKind: .conflicted
+                    ),
+                ]
             )
         )
 
-        // `hasUpstream` is reported; the upstream ref *name* is not, so this
-        // stays nil and consumers must not read it as "no upstream".
-        XCTAssertNil(mapped.upstream)
-        XCTAssertTrue(mapped.hasUpstream)
+        XCTAssertEqual(
+            mapped.files.map(\.state),
+            [.added, .modified, .deleted, .untracked, .conflicted]
+        )
+        // The line counts are still the real ones next to the new states.
+        XCTAssertEqual(mapped.files.map(\.insertions), [12, 3, 0, 0, 4])
+        XCTAssertEqual(mapped.files.map(\.deletions), [0, 1, 9, 0, 4])
+    }
+
+    func testAStagedFileIsReportedAsStagedAndAnUnstagedOneIsNot() throws {
+        let mapped = NativeWorkspaceMapper.sourceControl(
+            wireStatus(
+                hasWorkingTreeChanges: true,
+                files: [
+                    VCSWorkingTreeFile(
+                        path: "Staged.swift",
+                        insertions: 2,
+                        deletions: 0,
+                        changeKind: .modified,
+                        stagedChangeKind: .modified
+                    ),
+                    VCSWorkingTreeFile(
+                        path: "Unstaged.swift",
+                        insertions: 2,
+                        deletions: 0,
+                        changeKind: .modified,
+                        unstagedChangeKind: .modified
+                    ),
+                ]
+            )
+        )
+
+        let staged = try XCTUnwrap(mapped.files.first)
+        XCTAssertTrue(staged.isStaged)
+        XCTAssertFalse(staged.hasUnstagedChanges)
+
+        let unstaged = try XCTUnwrap(mapped.files.last)
+        XCTAssertFalse(unstaged.isStaged)
+        XCTAssertTrue(unstaged.hasUnstagedChanges)
+    }
+
+    /// The case a single staged flag cannot express. Porcelain reports the index
+    /// and the working tree in separate columns (`MM`), so a file with something
+    /// to commit *and* something still outside the index is distinguishable from
+    /// one that is fully staged.
+    func testAFileStagedAndThenEditedAgainReportsBothSides() throws {
+        let mapped = NativeWorkspaceMapper.sourceControl(
+            wireStatus(
+                hasWorkingTreeChanges: true,
+                files: [
+                    VCSWorkingTreeFile(
+                        path: "StagedThenEdited.swift",
+                        insertions: 2,
+                        deletions: 0,
+                        changeKind: .modified,
+                        stagedChangeKind: .modified,
+                        unstagedChangeKind: .modified
+                    )
+                ]
+            )
+        )
+
+        let file = try XCTUnwrap(mapped.files.first)
+        XCTAssertTrue(file.isStaged)
+        XCTAssertTrue(file.hasUnstagedChanges)
+    }
+
+    func testARenameCarriesThePathItCameFrom() throws {
+        let mapped = NativeWorkspaceMapper.sourceControl(
+            wireStatus(
+                hasWorkingTreeChanges: true,
+                files: [
+                    VCSWorkingTreeFile(
+                        path: "Features/Renamed.swift",
+                        insertions: 1,
+                        deletions: 0,
+                        changeKind: .renamed,
+                        stagedChangeKind: .renamed,
+                        originalPath: "App/Renamed.swift"
+                    )
+                ]
+            )
+        )
+
+        let file = try XCTUnwrap(mapped.files.first)
+        XCTAssertEqual(file.state, .renamed)
+        XCTAssertEqual(file.previousPath, "App/Renamed.swift")
+        XCTAssertTrue(file.isStaged)
+    }
+
+    /// `FeatureSourceControlFileState` has no `copied`, and the view that renders
+    /// it switches exhaustively. A copy creates a new file at this path, so it
+    /// reads as an addition that remembers its source.
+    func testACopyIsShownAsAnAdditionThatRemembersItsSource() throws {
+        let mapped = NativeWorkspaceMapper.sourceControl(
+            wireStatus(
+                hasWorkingTreeChanges: true,
+                files: [
+                    VCSWorkingTreeFile(
+                        path: "Copy.swift",
+                        insertions: 20,
+                        deletions: 0,
+                        changeKind: .copied,
+                        stagedChangeKind: .copied,
+                        originalPath: "Original.swift"
+                    )
+                ]
+            )
+        )
+
+        let file = try XCTUnwrap(mapped.files.first)
+        XCTAssertEqual(file.state, .added)
+        XCTAssertEqual(file.previousPath, "Original.swift")
+    }
+
+    /// A server that predates the per-file status fields sends none of them. The
+    /// file still has to appear, and `.modified`/unstaged is what the whole list
+    /// used to be.
+    func testAFileFromAServerWithoutPerFileStatusFallsBackToModified() throws {
+        let mapped = NativeWorkspaceMapper.sourceControl(
+            wireStatus(
+                hasWorkingTreeChanges: true,
+                files: [VCSWorkingTreeFile(path: "Legacy.swift", insertions: 1, deletions: 1)]
+            )
+        )
 
         let file = try XCTUnwrap(mapped.files.first)
         XCTAssertEqual(file.state, .modified)
         XCTAssertFalse(file.isStaged)
-        XCTAssertEqual(file.deletions, 9)
+        XCTAssertNil(file.previousPath)
+        XCTAssertEqual(file.insertions, 1)
+        XCTAssertEqual(file.deletions, 1)
+    }
+
+    /// The status fields are optional on the wire, so a payload from an older
+    /// server has to decode rather than take the whole git surface down with it.
+    func testAWorkingTreeFileDecodesWithoutTheOptionalStatusFields() throws {
+        let payload = Data(
+            #"{"path":"Legacy.swift","insertions":2,"deletions":0}"#.utf8
+        )
+
+        let file = try JSONDecoder().decode(VCSWorkingTreeFile.self, from: payload)
+
+        XCTAssertEqual(file.path, "Legacy.swift")
+        XCTAssertNil(file.changeKind)
+        XCTAssertNil(file.stagedChangeKind)
+        XCTAssertNil(file.unstagedChangeKind)
+        XCTAssertNil(file.originalPath)
+    }
+
+    /// A change kind added to the contract after this build shipped reads as
+    /// absent — the file still lists, rather than the decode failing.
+    func testAnUnknownChangeKindDoesNotFailTheDecode() throws {
+        let payload = Data(
+            #"{"path":"Future.swift","insertions":0,"deletions":0,"changeKind":"submoduled"}"#.utf8
+        )
+
+        let file = try JSONDecoder().decode(VCSWorkingTreeFile.self, from: payload)
+
+        XCTAssertEqual(file.path, "Future.swift")
+        XCTAssertNil(file.changeKind)
     }
 
     // MARK: - Hand-built statuses
@@ -172,6 +376,13 @@ final class SourceControlStatusMappingTests: XCTestCase {
             files: [FeatureSourceControlFile(path: "a.swift", state: .modified, isStaged: false)]
         )
         XCTAssertTrue(dirty.hasWorkingTreeChanges)
+        // An unstaged file has working-tree changes; that is the only way it
+        // could have been listed.
+        XCTAssertTrue(dirty.files.first?.hasUnstagedChanges == true)
+        XCTAssertFalse(
+            FeatureSourceControlFile(path: "b.swift", state: .added, isStaged: true)
+                .hasUnstagedChanges
+        )
 
         let clean = FeatureSourceControlStatus(branch: "feature")
         XCTAssertFalse(clean.hasWorkingTreeChanges)

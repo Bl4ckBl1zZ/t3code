@@ -803,40 +803,48 @@ public enum FeatureSourceControlFileState: String, Sendable, Codable {
 public struct FeatureSourceControlFile: Identifiable, Sendable, Equatable, Hashable, Codable {
     public var id: String { path }
     public var path: String
-    /// What happened to the file.
+    /// What happened to the file, from git's porcelain XY codes by way of
+    /// `VcsStatusResult.workingTree.files`.
     ///
-    /// `VcsStatusResult.workingTree.files` reports only `path`, `insertions` and
-    /// `deletions` — the server parses git's porcelain XY codes to decide *that*
-    /// a file changed and then discards them (GitVcsDriverCore's
-    /// `parsePorcelainPath`). So this cannot be read off the status wire today:
-    /// the mapper reports `.modified` for every file, and a real value needs the
-    /// contract to carry the code. `insertions`/`deletions` below are the part
-    /// that is real.
+    /// Not derivable from `insertions`/`deletions`: the server's numstat is
+    /// `git diff HEAD`, so an added file and an addition-only edit are both
+    /// `n/0`, and an untracked file and a binary one are both `0/0`.
     public var state: FeatureSourceControlFileState
-    /// Whether the change is in the index.
-    ///
-    /// Also absent from the status contract: the server's numstat is
-    /// `git diff HEAD`, which sums staged and unstaged changes into one entry
-    /// per path with no way to tell them apart.
+    /// Whether the index holds a change to this path — what a commit right now
+    /// would record.
     public var isStaged: Bool
+    /// Whether the working tree differs from the index. Independent of
+    /// `isStaged`: a file staged and then edited again is both, and only that
+    /// pair distinguishes it from one that is fully staged.
+    public var hasUnstagedChanges: Bool
     /// Lines added in this file's working-tree change. Zero is meaningful: a
     /// file git listed as changed but that `git diff HEAD --numstat` did not
     /// score (an untracked file, or a binary one) reports 0/0.
     public var insertions: Int
     public var deletions: Int
+    /// Where a renamed or copied file came from. Nil for every other state.
+    public var previousPath: String?
 
+    /// `hasUnstagedChanges` defaults to `nil` rather than to a literal so a
+    /// hand-built file stays self-consistent: omitting it reads an unstaged file
+    /// as having working-tree changes, which is the only way it could have been
+    /// listed at all.
     public init(
         path: String,
         state: FeatureSourceControlFileState,
         isStaged: Bool,
         insertions: Int = 0,
-        deletions: Int = 0
+        deletions: Int = 0,
+        hasUnstagedChanges: Bool? = nil,
+        previousPath: String? = nil
     ) {
         self.path = path
         self.state = state
         self.isStaged = isStaged
         self.insertions = insertions
         self.deletions = deletions
+        self.hasUnstagedChanges = hasUnstagedChanges ?? !isStaged
+        self.previousPath = previousPath
     }
 }
 

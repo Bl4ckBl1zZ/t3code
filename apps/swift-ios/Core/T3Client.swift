@@ -1011,6 +1011,55 @@ public actor T3Client {
         )
     }
 
+    // MARK: Checkpoint diffs
+
+    /// The patch between two of a thread's turn checkpoints.
+    ///
+    /// The range is a pair of *turn counts*, not checkpoint ids: the server
+    /// resolves each end against the checkpoint whose `appRunOrdinal` matches
+    /// (`apps/server/src/checkpointing/CheckpointDiffQuery.ts`). `fromTurnCount`
+    /// of 0 is not addressable here — the thread-start checkpoint is a synthetic
+    /// baseline the server only materialises for `getFullThreadDiff` — so use
+    /// ``fullThreadDiff(threadID:toTurnCount:ignoreWhitespace:)`` for that end.
+    ///
+    /// `ignoreWhitespace` defaults to false to match this client's working-tree
+    /// path (`reviewDiffPreview`); the server's own default when the key is
+    /// absent is true, so it is always sent.
+    public func turnDiff(
+        threadID: String,
+        fromTurnCount: Int,
+        toTurnCount: Int,
+        ignoreWhitespace: Bool = false
+    ) async throws -> ThreadTurnDiff {
+        try await rpc.request(
+            RPCMethod.getTurnDiff.rawValue,
+            payload: .object([
+                "threadId": .string(threadID),
+                "fromTurnCount": .number(Double(fromTurnCount)),
+                "toTurnCount": .number(Double(toTurnCount)),
+                "ignoreWhitespace": .bool(ignoreWhitespace),
+            ]),
+            as: ThreadTurnDiff.self
+        )
+    }
+
+    /// The patch from the thread's starting state up to `toTurnCount`.
+    public func fullThreadDiff(
+        threadID: String,
+        toTurnCount: Int,
+        ignoreWhitespace: Bool = false
+    ) async throws -> ThreadTurnDiff {
+        try await rpc.request(
+            RPCMethod.getFullThreadDiff.rawValue,
+            payload: .object([
+                "threadId": .string(threadID),
+                "toTurnCount": .number(Double(toTurnCount)),
+                "ignoreWhitespace": .bool(ignoreWhitespace),
+            ]),
+            as: ThreadTurnDiff.self
+        )
+    }
+
     // MARK: Terminal
 
     public func openTerminal(
@@ -1485,6 +1534,8 @@ public enum RPCMethod: String, Sendable {
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"
     case generateHandoffScript = "orchestration.generateHandoffScript"
+    case getTurnDiff = "orchestration.getTurnDiff"
+    case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
@@ -1773,6 +1824,27 @@ public struct HandoffScriptResult: Decodable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         script = try container.decode(String.self, forKey: .script)
         aiGenerated = try container.decodeIfPresent(Bool.self, forKey: .aiGenerated) ?? false
+    }
+}
+
+/// `ThreadTurnDiff` from `packages/contracts/src/checkpointDiff.ts` — the reply
+/// shared by `orchestration.getTurnDiff` and `orchestration.getFullThreadDiff`.
+///
+/// The echoed range is what makes the patch attributable: the caller asked for
+/// a checkpoint, the server answers with the turn counts it actually diffed, so
+/// a surface can label the diff with the range it really came from rather than
+/// with the one it hoped for.
+public struct ThreadTurnDiff: Decodable, Equatable, Sendable {
+    public let threadId: String
+    public let fromTurnCount: Int
+    public let toTurnCount: Int
+    public let diff: String
+
+    public init(threadId: String, fromTurnCount: Int, toTurnCount: Int, diff: String) {
+        self.threadId = threadId
+        self.fromTurnCount = fromTurnCount
+        self.toTurnCount = toTurnCount
+        self.diff = diff
     }
 }
 
