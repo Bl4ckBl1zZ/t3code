@@ -510,4 +510,99 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         XCTAssertEqual(projectionThread.status, "waiting")
         XCTAssertEqual(projectionThread.title, "Open")
     }
+
+    /// The projection's subagent row is the authoritative link: it carries the
+    /// child thread that makes a row openable, the driver's own title, and the
+    /// observability annotations no transcript item reports.
+    func testSubagentAdapterReadsTheProjectionRow() {
+        let subagent = Self.decode(
+            OrchestrationV2Subagent.self,
+            """
+            {
+              "id": "sub-1",
+              "threadId": "thread-parent",
+              "childThreadId": "thread-child",
+              "title": "Audit the router",
+              "origin": "delegated_task",
+              "status": "running",
+              "progress": null,
+              "result": null,
+              "workflow": {
+                "name": "review",
+                "phases": [{ "index": 0, "title": "scan" }, { "index": 1, "title": "report" }],
+                "currentPhase": "report",
+                "spawnedCount": 2
+              },
+              "usage": { "totalTokens": 1200, "toolUses": 7 }
+            }
+            """
+        )
+
+        let link = ThreadRelationshipSubagentLink(subagent)
+        XCTAssertEqual(link.id, "sub-1")
+        XCTAssertEqual(link.childThreadID, "thread-child")
+        XCTAssertEqual(link.title, "Audit the router")
+        XCTAssertEqual(link.status, "running")
+        // The child thread doubles as the orb seed, which is what keeps one
+        // agent the same colour on the timeline and in the banner.
+        XCTAssertEqual(link.orbSeed, "thread-child")
+        XCTAssertEqual(link.workflow?.name, "review")
+        XCTAssertEqual(link.workflow?.phases.map(\.title), ["scan", "report"])
+        XCTAssertEqual(
+            WorkflowObservability.phaseProgress(link.workflow),
+            WorkflowPhaseProgress(current: 2, total: 2)
+        )
+        XCTAssertEqual(link.usage?.totalTokens, 1200)
+        XCTAssertEqual(link.usage?.toolUses, 7)
+    }
+
+    /// A driver that runs subagents without addressable threads still produces
+    /// a row; it just cannot be opened.
+    func testSubagentAdapterKeepsAnUnaddressableAgentButSeedsItFromItsOwnID() {
+        let subagent = Self.decode(
+            OrchestrationV2Subagent.self,
+            """
+            {
+              "id": "sub-2", "threadId": "thread-parent", "childThreadId": null,
+              "title": null, "origin": "provider_native", "status": "completed",
+              "progress": null, "result": null, "workflow": null, "usage": null
+            }
+            """
+        )
+
+        let link = ThreadRelationshipSubagentLink(subagent)
+        XCTAssertNil(link.childThreadID)
+        XCTAssertEqual(link.orbSeed, "sub-2")
+        XCTAssertNil(link.workflow)
+    }
+
+    /// Both ends of a transfer are non-null on the wire, so a transfer always
+    /// draws a complete edge rather than a dangling one.
+    func testTransferAdapterDrawsBothEndsOfTheEdge() {
+        let transfer = Self.decode(
+            OrchestrationV2ContextTransfer.self,
+            """
+            {
+              "id": "transfer-1", "type": "handoff",
+              "sourceThreadId": "thread-a", "targetThreadId": "thread-b",
+              "status": "completed", "resolution": null
+            }
+            """
+        )
+
+        let link = ThreadRelationshipTransferLink(transfer)
+        let graph = ThreadRelationships.deriveGraph(
+            threads: [],
+            ownerThreadID: "thread-a",
+            transfers: [link]
+        )
+        XCTAssertEqual(graph.edges.count, 1)
+        XCTAssertEqual(graph.edges[0].kind, .transfer)
+        XCTAssertEqual(graph.edges[0].sourceThreadID, "thread-a")
+        XCTAssertEqual(graph.edges[0].targetThreadID, "thread-b")
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T {
+        try! JSONDecoder.t3.decode(type, from: Data(json.utf8))
+    }
 }

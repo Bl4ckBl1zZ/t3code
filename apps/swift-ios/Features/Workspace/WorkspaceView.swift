@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct FeatureWorkspaceNavigationRequest: Equatable, Sendable {
     enum Destination: Equatable, Sendable {
@@ -25,6 +26,9 @@ public struct WorkspaceView: View {
     private let submitNewTask: (NewTaskRequest) async -> FeatureThread?
     private let submitMessage: (FeatureMessageSubmission) async -> Bool
 
+    @AppStorage(WorkspaceSwitcher.storageKey) private var storedWorkspace = MobileWorkspace.code
+        .rawValue
+
     @State private var selectedThreadID: String?
     @State private var selectedProjectID: String?
     @State private var searchText = ""
@@ -42,6 +46,11 @@ public struct WorkspaceView: View {
     @State private var sidebarBoundaryNow = Date.now
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     @State private var homePresentationCache = HomePresentationCache()
+    @State private var threadListActions = ThreadListActions()
+    /// One slot for every "here is what happened" message the sidebar raises —
+    /// a copied handoff script, a refused regeneration, an unconfigured Hermes.
+    /// They cannot overlap: each is the direct result of a single tap.
+    @State private var noticeAlert: ThreadListActionAlert?
     @FocusState private var isSearchFocused: Bool
 
     public init(
@@ -158,6 +167,18 @@ public struct WorkspaceView: View {
             }
             .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .alert(
+            noticeAlert?.title ?? "",
+            isPresented: Binding(
+                get: { noticeAlert != nil },
+                set: { if !$0 { noticeAlert = nil } }
+            ),
+            presenting: noticeAlert
+        ) { _ in
+            Button("OK") { noticeAlert = nil }
+        } message: { notice in
+            Text(notice.message)
+        }
         .onChange(of: selectedThreadIsAvailable) { _, isAvailable in
             if !isAvailable { closeSelectedThread() }
         }
@@ -207,21 +228,30 @@ public struct WorkspaceView: View {
         .onChange(of: selectedProjectID) {
             settledLimit = 12
         }
+        // A different workspace is a different list, so the settled shelf starts
+        // from its own first page rather than inheriting the other's.
+        .onChange(of: storedWorkspace) {
+            settledLimit = 12
+        }
     }
 
     private var threadList: some View {
         let presentation = homePresentationCache.presentation(
             snapshot: model.snapshot,
             revision: model.homePresentationRevision,
+            workspace: workspace,
             query: searchText,
-            projectID: selectedProjectID,
+            projectID: activeProjectFilterID,
             now: sidebarBoundaryNow
         )
 
         return VStack(spacing: 0) {
-            projectFilter
+            if WorkspaceSwitcher.showsProjectFilter(workspace) {
+                projectFilter
+            }
             HomeThreadCollectionView(
                 presentation: presentation,
+                workspace: workspace,
                 query: searchText,
                 selectedThreadID: selectedThreadID,
                 forceRichRows: dynamicTypeSize.isAccessibilitySize,
@@ -252,7 +282,9 @@ public struct WorkspaceView: View {
                 },
                 onDelete: { thread in
                     Task { await model.deleteThread(thread.id) }
-                }
+                },
+                onCopyHandoffScript: copyHandoffScript,
+                onRegenerateTitle: regenerateTitle
             )
         }
         .background(T3Colors.background)
@@ -266,7 +298,14 @@ public struct WorkspaceView: View {
                 model: model,
                 thread: thread,
                 submitMessage: submitMessage,
-                onNavigateBack: closeSelectedThread
+                onNavigateBack: closeSelectedThread,
+                // Subagent cards, fork dividers and lineage rows all point at
+                // another thread; an archived target also needs the shelf open
+                // or it lands on a list that does not contain it.
+                onOpenRelatedThread: { threadID, isArchived in
+                    if isArchived { isArchiveExpanded = true }
+                    openThread(threadID)
+                }
             )
             .id(id)
         } else {
@@ -409,18 +448,45 @@ public struct WorkspaceView: View {
             .foregroundStyle(T3Colors.danger)
             .accessibilityElement(children: .contain)
         } else {
+            workspaceSwitcher
+        }
+    }
+
+    /// The wordmark is the switcher: T3 Work and T3 Code share this one list, so
+    /// the name of what is being listed is also the control that changes it.
+    private var workspaceSwitcher: some View {
+        Menu {
+            ForEach(WorkspaceSwitcher.menuItems(current: workspace)) { item in
+                Button {
+                    storedWorkspace = item.workspace.rawValue
+                } label: {
+                    if item.isOn {
+                        Label(item.title, systemImage: "checkmark")
+                    } else {
+                        Text(item.title)
+                    }
+                }
+            }
+        } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text("T3")
                     .fontWeight(.bold)
                     .foregroundStyle(T3Colors.textPrimary)
-                Text("Code")
+                Text(WorkspaceSwitcher.shortTitle(workspace))
                     .fontWeight(.medium)
                     .foregroundStyle(T3Colors.textSecondary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(T3Colors.textTertiary)
             }
             .font(.system(size: 16))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("T3 Code")
+            .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(WorkspaceSwitcher.accessibilityLabel(current: workspace))
+        .accessibilityValue(WorkspaceSwitcher.title(workspace))
+        .accessibilityIdentifier("sidebar-workspace-switcher")
     }
 
     private var searchBar: some View {
@@ -537,6 +603,48 @@ public struct WorkspaceView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var workspace: MobileWorkspace {
+        WorkspaceSwitcher.stored(storedWorkspace)
+    }
+
+    /// Work keeps the remembered Code selection rather than clearing it, so
+    /// switching back lands where the user left off.
+    private var activeProjectFilterID: String? {
+        WorkspaceSwitcher.projectFilter(workspace, selectedProjectID: selectedProjectID)
+    }
+
+    /// The Home projects as the routing model reads them. `OrchestrationProject.id`
+    /// carries the *feature* id here so a resolved Hermes target names a project
+    /// this view can actually open.
+    private var workspaceProjects: [MobileWorkspaceProject] {
+        model.snapshot.projects.map { project in
+            MobileWorkspaceProject(
+                environmentID: project.environmentID,
+                project: OrchestrationProject(
+                    id: project.id,
+                    title: project.name,
+                    workspaceRoot: project.path,
+                    repositoryIdentity: nil,
+                    defaultModelSelection: nil,
+                    scripts: project.scripts,
+                    createdAt: "",
+                    updatedAt: "",
+                    deletedAt: nil
+                )
+            )
+        }
+    }
+
+    /// Empty until a client capability surfaces `ServerConfigSnapshot` — and in
+    /// particular its `t3WorkDirectory` — to the feature layer. The snapshot
+    /// carries provider drivers but not the server's Work checkout, and without
+    /// that there is no way to tell the backing project apart from any other, so
+    /// a Work launch honestly reports itself unavailable rather than attaching
+    /// the conversation to an arbitrary project.
+    private var workspaceServerConfigs: [MobileWorkspaceEnvironmentConfig] {
+        []
+    }
+
     private var selectedProject: FeatureProject? {
         model.snapshot.projects.first { $0.id == selectedProjectID }
     }
@@ -607,11 +715,70 @@ public struct WorkspaceView: View {
     }
 
     private func openNewTaskOrProjectCreation(initialProjectID: String?) {
+        let intent = WorkspaceSwitcher.newTaskIntent(
+            workspace: workspace,
+            selectedProjectID: initialProjectID,
+            projects: workspaceProjects,
+            serverConfigs: workspaceServerConfigs,
+            requiredEnvironmentID: nil
+        )
+        switch intent {
+        case let .newTask(projectID):
+            presentNewTask(projectID: projectID)
+        case let .hermesConversation(target):
+            // The backing project came out of the snapshot, so there is nothing
+            // to create first: launch straight onto it.
+            newTaskInitialProjectID = target.project.project.id
+            showingNewTask = true
+        case let .hermesUnavailable(title, message):
+            noticeAlert = ThreadListActionAlert(title: title, message: message)
+        }
+    }
+
+    private func presentNewTask(projectID: String?) {
         if creationProjects.isEmpty {
             showingAddProject = true
         } else {
-            newTaskInitialProjectID = initialProjectID
+            newTaskInitialProjectID = projectID
             showingNewTask = true
+        }
+    }
+
+    /// The pasteboard write lives here rather than in ``ThreadListActions`` so
+    /// the whole path stays testable without UIKit.
+    private func copyHandoffScript(for thread: FeatureThread) {
+        Task { @MainActor in
+            let outcome = await threadListActions.copyHandoffScript(threadID: thread.id) {
+                try await model.client.generateHandoffScript(threadID: thread.id)
+            }
+            switch outcome {
+            case let .handoffScript(script, alert):
+                UIPasteboard.general.string = script
+                noticeAlert = alert
+            case let .unsupported(alert), let .failed(alert):
+                noticeAlert = alert
+            case .alreadyRunning, .titleRegenerationRequested:
+                break
+            }
+        }
+    }
+
+    private func regenerateTitle(for thread: FeatureThread) {
+        Task { @MainActor in
+            let outcome = await threadListActions.regenerateTitle(
+                threadID: thread.id,
+                supported: thread.canRegenerateTitle
+            ) {
+                try await model.client.regenerateThreadTitle(id: thread.id)
+            }
+            switch outcome {
+            case let .unsupported(alert), let .failed(alert):
+                noticeAlert = alert
+            // The new title streams in over the shell subscription, so an
+            // accepted request has nothing left to report.
+            case .alreadyRunning, .titleRegenerationRequested, .handoffScript:
+                break
+            }
         }
     }
 
@@ -635,7 +802,15 @@ public struct WorkspaceView: View {
             dismissTransientPresentations()
             Task { @MainActor in
                 await Task.yield()
-                openNewTaskOrProjectCreation(initialProjectID: projectID)
+                // A link that names a project is asking for that project's task
+                // sheet, whichever workspace happens to be selected — routing it
+                // through the switcher would answer "Hermes is not ready" to a
+                // request that never mentioned Work.
+                if let projectID {
+                    presentNewTask(projectID: projectID)
+                } else {
+                    openNewTaskOrProjectCreation(initialProjectID: nil)
+                }
             }
         }
         onNavigationRequestConsumed(navigationRequest.id)
@@ -674,16 +849,44 @@ struct HomePresentation {
     let searchResults: [FeatureThread]
     let rowContexts: [String: HomeThreadRowContext]
 
-    init(snapshot: FeatureSnapshot, query: String, projectID: String?, now: Date) {
+    init(
+        snapshot: FeatureSnapshot,
+        workspace: MobileWorkspace,
+        query: String,
+        projectID: String?,
+        now: Date
+    ) {
+        // The two workspaces share one thread list; which rows belong to which
+        // is decided here, before the shelves are built, so every shelf below
+        // agrees about what it is looking at.
+        let providerDrivers = WorkspaceSwitcher.providerDrivers(in: snapshot)
+        let fallbackEnvironmentID = WorkspaceSwitcher.fallbackEnvironmentID(in: snapshot)
+        var scoped = snapshot
+        scoped.threads = WorkspaceSwitcher.threads(
+            snapshot.threads,
+            in: workspace,
+            providerDrivers: providerDrivers,
+            fallbackEnvironmentID: fallbackEnvironmentID,
+            relationshipToParent: \.relationshipToParent
+        )
         let index = DailyUXSidebarIndex(
-            snapshot: snapshot,
+            snapshot: scoped,
             query: "",
             projectID: projectID,
             now: now
         )
+        // Archived rows never reach `WorkspaceSwitcher.threads` — it drops them
+        // along with subagents — so the shelf splits them by workspace itself.
         let archived = snapshot.threads
             .filter { thread in
-                thread.isArchived && (projectID == nil || thread.projectID == projectID)
+                guard thread.isArchived, !thread.isSubagentThread else { return false }
+                guard projectID == nil || thread.projectID == projectID else { return false }
+                let isWork = WorkspaceSwitcher.isWorkThread(
+                    thread,
+                    environmentID: thread.environmentID ?? fallbackEnvironmentID,
+                    providerDrivers: providerDrivers
+                )
+                return isWork == (workspace == .work)
             }
             .sorted {
                 if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
@@ -708,9 +911,13 @@ struct HomePresentation {
 }
 
 @MainActor
-private final class HomePresentationCache {
+final class HomePresentationCache {
     private struct Key: Equatable {
         let revision: UInt64
+        /// Part of the key because the workspace decides which threads the
+        /// presentation contains. Without it, flipping the switcher hits the
+        /// cache and the list silently keeps showing the other workspace.
+        let workspace: MobileWorkspace
         let query: String
         let projectID: String?
         let now: Date
@@ -722,12 +929,14 @@ private final class HomePresentationCache {
     func presentation(
         snapshot: FeatureSnapshot,
         revision: UInt64,
+        workspace: MobileWorkspace,
         query: String,
         projectID: String?,
         now: Date
     ) -> HomePresentation {
         let key = Key(
             revision: revision,
+            workspace: workspace,
             query: query,
             projectID: projectID,
             now: now
@@ -738,6 +947,7 @@ private final class HomePresentationCache {
 
         let presentation = HomePresentation(
             snapshot: snapshot,
+            workspace: workspace,
             query: query,
             projectID: projectID,
             now: now

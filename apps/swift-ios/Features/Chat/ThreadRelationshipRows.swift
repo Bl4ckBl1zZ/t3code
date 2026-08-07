@@ -8,11 +8,12 @@ import Foundation
 // disagree about what a thread is related to.
 //
 // As in ThreadActivityInspector, the inputs are narrowed value types rather than
-// `OrchestrationV2ThreadProjection` itself: `Core` models the projection's
-// subagent and context-transfer tables without the join columns this graph
-// walks (`subagent.childThreadId`, `contextTransfer.sourceThreadId` /
-// `targetThreadId`), so the caller supplies the links it can resolve and the
-// graph degrades to the relationships it was actually given.
+// `OrchestrationV2ThreadProjection` itself, so the graph stays testable without
+// a projection. `Core` now models the join columns this graph walks
+// (`subagent.threadId` / `childThreadId` / `title`,
+// `contextTransfer.sourceThreadId` / `targetThreadId`), so the `init(_:)`
+// adapters below are lossless; the graph still degrades to whatever links the
+// caller was able to supply.
 
 public enum ThreadRelationshipKind: String, Equatable, Hashable, Sendable {
     case fork
@@ -120,11 +121,57 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
         self.usage = usage
     }
 
-    /// Best-effort recovery from the transcript.
+    /// The projection's own subagent row: the authoritative link, carrying the
+    /// driver's title and the observability annotations no transcript item
+    /// reports.
     ///
-    /// `Core`'s `OrchestrationV2Subagent` does not model `childThreadId`, but the
-    /// `subagent` turn item does, so subagent rows work today and gain their
-    /// workflow/usage annotations once the projection row carries them.
+    /// `subagent.threadId` — the parent half of the edge — is deliberately
+    /// dropped: ``ThreadRelationships/deriveGraph(threads:ownerThreadID:subagents:transfers:)``
+    /// anchors every subagent edge on the thread whose projection supplied the
+    /// row, which is the same thread, and a second copy could only disagree.
+    public init(_ subagent: OrchestrationV2Subagent) {
+        self.init(
+            id: subagent.id,
+            childThreadID: subagent.childThreadId,
+            status: subagent.status,
+            title: subagent.title,
+            workflow: subagent.workflow.map(Self.workflow(_:)),
+            usage: subagent.usage.map(Self.usage(_:))
+        )
+    }
+
+    /// The observability annotations restated in this layer's value types. They
+    /// are structurally identical to `Core`'s; the copy exists so the
+    /// presentation layer keeps one set of types to render.
+    private static func workflow(
+        _ value: OrchestrationV2WorkflowProgress
+    ) -> AgentWorkflowProgress {
+        AgentWorkflowProgress(
+            name: value.name,
+            description: value.description,
+            phases: value.phases.map {
+                AgentWorkflowPhase(index: $0.index, title: $0.title, detail: $0.detail)
+            },
+            currentPhase: value.currentPhase,
+            spawnedCount: value.spawnedCount
+        )
+    }
+
+    private static func usage(_ value: OrchestrationV2TaskUsage) -> AgentTaskUsage {
+        AgentTaskUsage(
+            totalTokens: value.totalTokens,
+            inputTokens: value.inputTokens,
+            cachedInputTokens: value.cachedInputTokens,
+            outputTokens: value.outputTokens,
+            reasoningOutputTokens: value.reasoningOutputTokens,
+            toolUses: value.toolUses,
+            durationMs: value.durationMs
+        )
+    }
+
+    /// Best-effort recovery from the transcript, for a client that holds the
+    /// thread's turn items but not its subagent table. Carries no workflow or
+    /// usage: the `subagent` turn item does not report them.
     public init?(turnItem: OrchestrationV2TurnItem) {
         guard case let .subagent(subagentID, _, _, _, childThreadID, _, _, _) = turnItem.payload
         else { return nil }
@@ -151,6 +198,17 @@ public struct ThreadRelationshipTransferLink: Equatable, Hashable, Sendable, Ide
         self.sourceThreadID = sourceThreadID
         self.targetThreadID = targetThreadID
         self.status = status
+    }
+
+    /// The projection's context-transfer row. Both ends are non-null on the
+    /// wire, so a transfer always draws a complete edge.
+    public init(_ transfer: OrchestrationV2ContextTransfer) {
+        self.init(
+            id: transfer.id,
+            sourceThreadID: transfer.sourceThreadId,
+            targetThreadID: transfer.targetThreadId,
+            status: transfer.status
+        )
     }
 }
 

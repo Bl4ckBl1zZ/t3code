@@ -67,9 +67,10 @@ public struct ThreadDetailsPullRequest: Equatable, Sendable {
 /// packages/contracts' `VcsStatusResult` reports them.
 ///
 /// Modelled separately from Core's `VCSStatus` because the sheet has to be able
-/// to build one from whatever status the client actually has — see
-/// `init(sourceControl:)`, whose lossy fields are the shared-layer gap this port
-/// is blocked on.
+/// to build one from whatever status the client actually has: the wire status
+/// (`init(_:)`) and the feature-layer status (`init(sourceControl:)`) now carry
+/// the same facts, so both paths produce the same rows and the same
+/// confirmations.
 public struct ThreadDetailsGitStatus: Equatable, Sendable {
     public let isRepo: Bool
     public let refName: String?
@@ -134,32 +135,33 @@ public struct ThreadDetailsGitStatus: Equatable, Sendable {
         )
     }
 
-    /// Lossy read of the feature-layer status, which drops four fields the wire
-    /// status carries: `hasWorkingTreeChanges`, `hasUpstream`, `isDefaultRef`,
-    /// `hasPrimaryRemote`, and the working-tree line counts.
+    /// Lossless read of the feature-layer status.
     ///
-    /// Each is reconstructed from what survives, and each reconstruction is a
-    /// guess that a real field would settle:
+    /// `FeatureSourceControlStatus` reports `hasWorkingTreeChanges`,
+    /// `hasUpstream`, `isDefaultRef`, `hasPrimaryRemote` and the working-tree
+    /// line counts directly, so nothing here is inferred:
     ///
-    /// - `hasUpstream` — ahead/behind counts are only ever non-zero against an
-    ///   upstream, so either one proves there is one. A branch level with its
-    ///   upstream is indistinguishable from one with none.
-    /// - `isDefaultRef` — assumed false, which is the safe direction: it only
-    ///   ever *adds* a confirmation prompt, never removes one.
-    /// - `hasPrimaryRemote` — assumed true, matching the upstream default, since
-    ///   a repository with no remote at all is the rarer case and assuming
-    ///   otherwise would hide push and PR actions from everyone.
+    /// - `hasWorkingTreeChanges` is the server's own verdict rather than
+    ///   `!files.isEmpty`, which misses a dirty tree whose numstat is empty
+    ///   (mode-only changes, ignored-but-listed paths).
+    /// - `hasUpstream` is the tracking fact, not drift: a branch level with its
+    ///   upstream has both counts at zero and is still tracked.
+    /// - `isDefaultRef` is what makes the commit confirmation fire before a
+    ///   publish lands on the repository's main line, so guessing `false` here
+    ///   silently removed that prompt.
     public init(sourceControl status: FeatureSourceControlStatus) {
         self.init(
             isRepo: status.isRepository,
             refName: status.branch,
-            hasWorkingTreeChanges: !status.files.isEmpty,
+            hasWorkingTreeChanges: status.hasWorkingTreeChanges,
             changedFileCount: status.files.count,
-            hasUpstream: status.upstream != nil || status.aheadCount > 0 || status.behindCount > 0,
+            insertions: status.insertions,
+            deletions: status.deletions,
+            hasUpstream: status.hasUpstream,
             aheadCount: status.aheadCount,
             behindCount: status.behindCount,
-            isDefaultRef: false,
-            hasPrimaryRemote: true,
+            isDefaultRef: status.isDefaultRef,
+            hasPrimaryRemote: status.hasPrimaryRemote,
             pullRequest: status.pullRequest.map {
                 ThreadDetailsPullRequest(
                     number: $0.number,

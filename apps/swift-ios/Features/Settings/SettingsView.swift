@@ -9,6 +9,9 @@ public struct SettingsView: View {
     @State private var showingAddEnvironment = false
     @State private var showingDevices = false
     @State private var showingT3Connect = false
+    @State private var showingIntegrations = false
+    @State private var showingVoiceInput = false
+    @State private var showingAutomations = false
     @State private var removalTarget: FeatureEnvironment?
     @State private var saveErrorMessage: String?
 
@@ -31,6 +34,10 @@ public struct SettingsView: View {
                         t3ConnectSection
                         agentSection
                         preferencesSection
+                        configurationSection
+                        ThreadAppearanceSection(
+                            alwaysExpandActivity: $settings.alwaysExpandActivity
+                        )
                         aboutSection
                     }
                     .padding(.vertical, 18)
@@ -100,6 +107,39 @@ public struct SettingsView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { showingDevices = false }
+                            }
+                        }
+                }
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showingIntegrations) {
+                NavigationStack {
+                    SettingsIntegrationsView(manager: voiceSettingsManager)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingIntegrations = false }
+                            }
+                        }
+                }
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showingVoiceInput) {
+                NavigationStack {
+                    SettingsVoiceInputView(manager: voiceSettingsManager)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingVoiceInput = false }
+                            }
+                        }
+                }
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showingAutomations) {
+                NavigationStack {
+                    SettingsAutomationsView(model: model, manager: scheduledTaskManager)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingAutomations = false }
                             }
                         }
                 }
@@ -307,6 +347,50 @@ public struct SettingsView: View {
         }
     }
 
+    /// The three screens the React Native client files under Configuration,
+    /// General and Threads. They are one section here because this sheet is a
+    /// single scroll rather than a navigation tree: three one-row sections would
+    /// be three headers introducing nothing.
+    private var configurationSection: some View {
+        SettingsSection(title: "Configuration") {
+            VStack(spacing: 0) {
+                Button {
+                    showingIntegrations = true
+                } label: {
+                    SettingsNavigationRow(
+                        title: "Integrations",
+                        systemImage: "point.3.connected.trianglepath.dotted"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                settingsDivider
+
+                Button {
+                    showingVoiceInput = true
+                } label: {
+                    SettingsNavigationRow(
+                        title: "Voice Input",
+                        systemImage: "mic"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                settingsDivider
+
+                Button {
+                    showingAutomations = true
+                } label: {
+                    SettingsNavigationRow(
+                        title: "Automations",
+                        systemImage: "calendar.badge.clock"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     private var aboutSection: some View {
         SettingsSection(title: "About") {
             VStack(spacing: 0) {
@@ -438,6 +522,19 @@ public struct SettingsView: View {
 
     private var deviceManager: any FeatureDeviceManaging {
         (model.client as? any FeatureDeviceManaging) ?? EmptyFeatureDeviceManager.shared
+    }
+
+    /// Same optional-capability shape as ``deviceManager``: a client without the
+    /// relay capability still reaches the screens, which then report the
+    /// integration as unavailable instead of the rows being missing entirely.
+    private var voiceSettingsManager: any FeatureVoiceSettingsManaging {
+        (model.client as? any FeatureVoiceSettingsManaging)
+            ?? EmptyFeatureVoiceSettingsManager.shared
+    }
+
+    private var scheduledTaskManager: any FeatureScheduledTaskManaging {
+        (model.client as? any FeatureScheduledTaskManaging)
+            ?? EmptyFeatureScheduledTaskManager.shared
     }
 
     private var selectedProvider: FeatureProvider? {

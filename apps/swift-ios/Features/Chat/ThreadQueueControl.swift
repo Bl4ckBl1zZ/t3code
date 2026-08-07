@@ -11,12 +11,12 @@ import SwiftUI
 // the phone's `FeatureOutboxStore`, which holds submissions that have not
 // reached a server at all. The two never show the same message.
 //
-// As elsewhere in this folder the inputs are narrowed value types: `Core` models
-// runs, provider turns and provider sessions without the columns this derivation
-// reads (`run.queuePosition`, `run.userMessageId`, `run.activeAttemptId`,
-// `providerTurn.runAttemptId`, `providerSession.capabilities`), so the caller
-// supplies what it can resolve and the control degrades to read-only when it
-// cannot prove a capability.
+// As elsewhere in this folder the inputs are narrowed value types, so the
+// derivation stays testable without a projection. `Core` now models every column
+// this reads (`run.queuePosition`, `run.userMessageId`, `run.activeAttemptId`,
+// `providerTurn.runAttemptId`, `providerSession.capabilities`), so the `init(_:)`
+// adapters below are lossless; a caller that builds the narrowed values by hand
+// still degrades to read-only when it cannot prove a capability.
 
 // MARK: - Narrowed inputs
 
@@ -49,7 +49,15 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
     }
 
     public init(_ run: OrchestrationV2Run) {
-        self.init(id: run.id, ordinal: run.ordinal, status: run.status)
+        self.init(
+            id: run.id,
+            ordinal: run.ordinal,
+            status: run.status,
+            queuePosition: run.queuePosition,
+            userMessageID: run.userMessageId,
+            providerThreadID: run.providerThreadId,
+            activeAttemptID: run.activeAttemptId
+        )
     }
 }
 
@@ -65,7 +73,7 @@ public struct ThreadWorkflowProviderTurn: Equatable, Hashable, Sendable, Identif
     }
 
     public init(_ turn: OrchestrationV2ProviderTurn) {
-        self.init(id: turn.id, runAttemptID: nil, status: turn.status)
+        self.init(id: turn.id, runAttemptID: turn.runAttemptId, status: turn.status)
     }
 }
 
@@ -83,7 +91,7 @@ public struct ThreadWorkflowProviderThread: Equatable, Hashable, Sendable, Ident
     public init(_ providerThread: OrchestrationV2ProviderThread) {
         self.init(
             id: providerThread.id,
-            appThreadID: nil,
+            appThreadID: providerThread.appThreadId,
             providerSessionID: providerThread.providerSessionId
         )
     }
@@ -120,8 +128,21 @@ public struct ThreadWorkflowSession: Equatable, Hashable, Sendable, Identifiable
         self.turns = turns
     }
 
+    /// A session whose driver descriptor predates the capability block keeps
+    /// `turns` nil, which reads as "no evidence" — the same as the absent
+    /// descriptor it came from, and not as a denial.
     public init(_ session: OrchestrationV2ProviderSession) {
-        self.init(id: session.id, status: session.status, turns: nil)
+        self.init(
+            id: session.id,
+            status: session.status,
+            turns: session.capabilities?.turns.map {
+                ThreadTurnCapabilities(
+                    supportsActiveSteering: $0.supportsActiveSteering,
+                    supportsSteeringByInterruptRestart: $0.supportsSteeringByInterruptRestart,
+                    supportsQueuedMessages: $0.supportsQueuedMessages
+                )
+            }
+        )
     }
 }
 

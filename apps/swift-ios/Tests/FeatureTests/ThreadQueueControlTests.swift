@@ -350,4 +350,142 @@ final class ThreadQueueControlTests: XCTestCase {
         XCTAssertEqual(QueuedMessagePresentation.estimatedHeight(messageCount: 0), 0)
         XCTAssertEqual(QueuedMessagePresentation.estimatedHeight(messageCount: 2), 108)
     }
+
+    // MARK: - Wire adapters
+
+    /// The queue reads columns the narrowed types used to leave nil. A run
+    /// adapted from the projection has to arrive with them, or the queue can
+    /// neither order itself nor name what is waiting.
+    func testRunAdapterCarriesTheQueueColumns() {
+        let run = Self.decodeRun(
+            """
+            {
+              "id": "run-2",
+              "ordinal": 2,
+              "status": "queued",
+              "providerInstanceId": "claude",
+              "modelSelection": { "instanceId": "claude", "model": "opus" },
+              "providerThreadId": "pt-1",
+              "userMessageId": "msg-9",
+              "activeAttemptId": "attempt-3",
+              "queuePosition": 1,
+              "requestedAt": "2026-07-31T12:00:00.000Z",
+              "startedAt": null,
+              "completedAt": null
+            }
+            """
+        )
+
+        let adapted = ThreadWorkflowRun(run)
+        XCTAssertEqual(adapted.id, "run-2")
+        XCTAssertEqual(adapted.ordinal, 2)
+        XCTAssertEqual(adapted.status, "queued")
+        XCTAssertEqual(adapted.queuePosition, 1)
+        XCTAssertEqual(adapted.userMessageID, "msg-9")
+        XCTAssertEqual(adapted.providerThreadID, "pt-1")
+        XCTAssertEqual(adapted.activeAttemptID, "attempt-3")
+    }
+
+    /// Steering needs the join from a provider turn back to the attempt that
+    /// asked for it; without it the control can never prove a live turn.
+    func testProviderTurnAdapterCarriesTheAttemptJoin() {
+        let turn = Self.decode(
+            OrchestrationV2ProviderTurn.self,
+            """
+            { "id": "turn-1", "runAttemptId": "attempt-3", "status": "running" }
+            """
+        )
+        XCTAssertEqual(ThreadWorkflowProviderTurn(turn).runAttemptID, "attempt-3")
+    }
+
+    func testProviderThreadAdapterCarriesTheOwningAppThread() {
+        let providerThread = Self.decode(
+            OrchestrationV2ProviderThread.self,
+            """
+            {
+              "id": "pt-1",
+              "providerInstanceId": "claude",
+              "providerSessionId": "session-1",
+              "appThreadId": "thread-v2",
+              "status": "active"
+            }
+            """
+        )
+        let adapted = ThreadWorkflowProviderThread(providerThread)
+        XCTAssertEqual(adapted.appThreadID, "thread-v2")
+        XCTAssertEqual(adapted.providerSessionID, "session-1")
+    }
+
+    func testSessionAdapterCarriesTurnCapabilities() {
+        let session = Self.decode(
+            OrchestrationV2ProviderSession.self,
+            """
+            {
+              "id": "session-1",
+              "status": "running",
+              "model": null,
+              "cwd": null,
+              "capabilities": { "turns": { "supportsQueuedMessages": true } }
+            }
+            """
+        )
+        let adapted = ThreadWorkflowSession(session)
+        XCTAssertEqual(adapted.turns?.supportsQueuedMessages, true)
+        XCTAssertEqual(adapted.turns?.supportsActiveSteering, false)
+    }
+
+    /// A descriptor written before the capability block reads as "no evidence",
+    /// which is not the same as a denial and must stay distinguishable.
+    func testSessionAdapterLeavesCapabilitiesAbsentWhenTheServerReportedNone() {
+        let session = Self.decode(
+            OrchestrationV2ProviderSession.self,
+            """
+            { "id": "session-1", "status": "running", "model": null, "cwd": null }
+            """
+        )
+        XCTAssertNil(ThreadWorkflowSession(session).turns)
+    }
+
+    /// End to end: the adapters feed the derivation the projection's own rows.
+    func testAdaptedRunsAndSessionDriveTheQueueState() {
+        let queued = Self.decodeRun(
+            """
+            {
+              "id": "run-2", "ordinal": 2, "status": "queued",
+              "providerInstanceId": null, "modelSelection": null,
+              "providerThreadId": null, "userMessageId": "msg-9",
+              "activeAttemptId": null, "queuePosition": 1,
+              "requestedAt": "2026-07-31T12:00:00.000Z",
+              "startedAt": null, "completedAt": null
+            }
+            """
+        )
+        let session = Self.decode(
+            OrchestrationV2ProviderSession.self,
+            """
+            {
+              "id": "session-1", "status": "running", "model": null, "cwd": null,
+              "capabilities": { "turns": { "supportsQueuedMessages": true } }
+            }
+            """
+        )
+
+        let state = ThreadWorkflows.deriveQueueWorkflowState(
+            runs: [ThreadWorkflowRun(queued)],
+            session: ThreadWorkflowSession(session),
+            messageTexts: ["msg-9": "ship it"]
+        )
+
+        XCTAssertEqual(state.queuedRuns.map(\.text), ["ship it"])
+        XCTAssertTrue(state.canReorder)
+        XCTAssertFalse(state.canPromoteToSteer)
+    }
+
+    private static func decodeRun(_ json: String) -> OrchestrationV2Run {
+        decode(OrchestrationV2Run.self, json)
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T {
+        try! JSONDecoder.t3.decode(type, from: Data(json.utf8))
+    }
 }

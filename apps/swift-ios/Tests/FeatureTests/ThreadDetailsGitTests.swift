@@ -347,34 +347,75 @@ final class ThreadDetailsGitTests: XCTestCase {
         XCTAssertTrue(status.pullRequest?.isOpen == true)
     }
 
-    /// The feature-layer status drops the flags the wire status carries, so the
-    /// reconstruction has to be pinned: ahead/behind counts are the only
-    /// evidence of an upstream that survives the mapping.
-    func testTheFeatureStatusInfersAnUpstreamFromDriftAndAssumesTheSafeDefaults() {
-        let ahead = ThreadDetailsGitStatus(
-            sourceControl: FeatureSourceControlStatus(branch: "feature", aheadCount: 1)
+    /// The feature-layer status carries every flag the wire status does, so it
+    /// is read rather than reconstructed: a branch level with its upstream is
+    /// still tracked, which drift alone could never have shown.
+    func testTheFeatureStatusReadsTrackingAndRemoteFactsRatherThanInferringThem() {
+        let tracked = ThreadDetailsGitStatus(
+            sourceControl: FeatureSourceControlStatus(
+                branch: "feature",
+                hasUpstream: true,
+                hasPrimaryRemote: true
+            )
         )
-        XCTAssertTrue(ahead.hasUpstream)
-        XCTAssertFalse(ahead.isDefaultRef)
-        XCTAssertTrue(ahead.hasPrimaryRemote)
+        XCTAssertTrue(tracked.hasUpstream)
+        XCTAssertTrue(tracked.hasPrimaryRemote)
 
-        let level = ThreadDetailsGitStatus(
-            sourceControl: FeatureSourceControlStatus(branch: "feature")
+        let untracked = ThreadDetailsGitStatus(
+            sourceControl: FeatureSourceControlStatus(
+                branch: "feature",
+                hasUpstream: false,
+                hasPrimaryRemote: false,
+                aheadCount: 3
+            )
         )
-        XCTAssertFalse(level.hasUpstream)
+        XCTAssertFalse(untracked.hasUpstream)
+        XCTAssertFalse(untracked.hasPrimaryRemote)
     }
 
-    func testTheFeatureStatusTreatsChangedFilesAsWorkingTreeChanges() {
+    /// The confirmation before publishing onto the default branch is the one
+    /// git prompt with no undo behind it, and `isDefaultRef` is the only thing
+    /// that fires it. Assuming `false` silently removed it.
+    func testTheFeatureStatusCarriesTheDefaultBranchFlagThroughToTheConfirmation() {
+        let onDefault = ThreadDetailsGitStatus(
+            sourceControl: FeatureSourceControlStatus(branch: "main", isDefaultRef: true)
+        )
+        XCTAssertTrue(onDefault.isDefaultRef)
+        XCTAssertTrue(
+            ThreadDetailsGit.requiresDefaultBranchConfirmation(
+                .commitAndPush,
+                isDefaultBranch: onDefault.isDefaultRef
+            )
+        )
+
+        let onBranch = ThreadDetailsGitStatus(
+            sourceControl: FeatureSourceControlStatus(branch: "feature")
+        )
+        XCTAssertFalse(onBranch.isDefaultRef)
+    }
+
+    func testTheFeatureStatusReportsTheWorkingTreeVerdictAndItsLineCounts() {
         let dirty = ThreadDetailsGitStatus(
             sourceControl: FeatureSourceControlStatus(
                 branch: "feature",
+                insertions: 12,
+                deletions: 3,
                 files: [FeatureSourceControlFile(path: "a.swift", state: .modified, isStaged: false)]
             )
         )
         XCTAssertTrue(dirty.hasWorkingTreeChanges)
         XCTAssertEqual(dirty.changedFileCount, 1)
-        // No line counts survive the mapping, so the delta badge stays hidden
-        // rather than claiming a zero-line change.
-        XCTAssertNil(ThreadDetailsGit.workingTreeDelta(dirty))
+        XCTAssertEqual(ThreadDetailsGit.workingTreeDelta(dirty), "+12 −3")
+
+        // Git can report a dirty tree whose per-file numstat is empty, which
+        // `!files.isEmpty` used to read as clean.
+        let modeOnly = ThreadDetailsGitStatus(
+            sourceControl: FeatureSourceControlStatus(
+                branch: "feature",
+                hasWorkingTreeChanges: true
+            )
+        )
+        XCTAssertTrue(modeOnly.hasWorkingTreeChanges)
+        XCTAssertEqual(modeOnly.changedFileCount, 0)
     }
 }

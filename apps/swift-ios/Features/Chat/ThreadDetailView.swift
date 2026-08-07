@@ -10,7 +10,14 @@ public struct ThreadDetailView: View {
     let thread: FeatureThread
     let submitMessage: (FeatureMessageSubmission) async -> Bool
     let onNavigateBack: () -> Void
+    /// Opening a related thread — a subagent card, a fork divider, a lineage row
+    /// — is the navigator's job: this view is inside someone else's stack and
+    /// only reports which thread was asked for. `isArchived` routes to the
+    /// archive, which is the only place an archived thread can be shown.
+    let onOpenRelatedThread: (_ threadID: String, _ isArchived: Bool) -> Void
     private let draftStore: FeatureComposerDraftStore
+
+    @SwiftUI.Environment(\.openURL) private var openURL
 
     @State private var draft = ""
     @State private var selection: FeatureSelection?
@@ -21,6 +28,9 @@ public struct ThreadDetailView: View {
     @State private var didRestoreDraft = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var toolSurface: FeatureThreadToolSurface?
+    /// The queued run a reorder, edit or cancel is in flight for. One at a time:
+    /// two overlapping reorders would race for the same positions.
+    @State private var queueBusyRunID: String?
     @FocusState private var composerFocused: Bool
 
     public init(
@@ -28,12 +38,14 @@ public struct ThreadDetailView: View {
         thread: FeatureThread,
         submitMessage: @escaping (FeatureMessageSubmission) async -> Bool,
         onNavigateBack: @escaping () -> Void = {},
+        onOpenRelatedThread: @escaping (String, Bool) -> Void = { _, _ in },
         draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.thread = thread
         self.submitMessage = submitMessage
         self.onNavigateBack = onNavigateBack
+        self.onOpenRelatedThread = onOpenRelatedThread
         self.draftStore = draftStore
     }
 
@@ -100,7 +112,14 @@ public struct ThreadDetailView: View {
                         onReconnect: {
                             guard let environmentID = threadEnvironment?.id else { return }
                             Task { _ = await model.activateEnvironment(environmentID) }
-                        }
+                        },
+                        // The same projection the transcript renders, so the
+                        // sheet's Background Tasks and Lineage sections cannot
+                        // disagree with the rows above them.
+                        turnItems: detail?.timelineItems.map(\.item) ?? [],
+                        relationships: relationships,
+                        onMergeBack: mergeBack,
+                        onDetachSession: detachSession
                     )
                 case .files:
                     FeatureFilesView(client: model.client, threadID: thread.id)
@@ -328,7 +347,7 @@ public struct ThreadDetailView: View {
     private func timeline(_ detail: FeatureThreadDetail) -> some View {
         let isWorking = detail.thread.state == .working || detail.thread.state == .queued
         return Group {
-            if detail.messages.isEmpty, !isWorking {
+            if detail.messages.isEmpty, detail.timelineItems.isEmpty, !isWorking {
                 ContentUnavailableView(
                     "Ready for a task",
                     systemImage: "sparkles",
@@ -338,47 +357,158 @@ public struct ThreadDetailView: View {
             } else {
                 FeatureTranscriptCollectionView(
                     threadID: thread.id,
-                    messages: detail.messages,
+                    detail: detail,
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
                     isWorking: isWorking,
                     canLoadEarlier: detail.page?.hasMore == true,
                     isLoadingEarlier: detail.page?.isLoading == true,
+                    workspaceRoot: threadWorkspaceRoot,
                     onLoadEarlier: {
                         Task { await model.loadEarlierTurns(for: thread.id) }
                     },
-                    onDismissKeyboard: dismissKeyboard
+                    onDismissKeyboard: dismissKeyboard,
+                    onOpenThread: openRelatedThread,
+                    // No file or diff route reaches a path yet, so a link opens
+                    // the surface that owns it rather than doing nothing.
+                    onOpenFile: { _ in toolSurface = .files },
+                    onOpenURL: { openURL($0) },
+                    onOpenDiff: { _, _ in toolSurface = .review }
                 )
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            FeatureComposerView(
-                text: $draft,
-                selection: $selection,
-                attachments: $attachments,
-                providers: threadProviders,
-                threadSelection: currentSelection,
-                materializesDefaultSelection: false,
-                isSending: isSending,
-                isWorking: detail.thread.state == .working || detail.thread.state == .queued,
-                focused: $composerFocused,
-                onSend: send,
-                onStop: {
-                    Task { await model.cancelTurn(threadID: thread.id) }
-                },
-                pendingApprovals: detail.approvals,
-                pendingUserInputs: detail.userInputs,
-                isResolvingRequest: model.isPerformingAction,
-                powerFeatures: composerPowerFeatures,
-                onApprovalDecision: { id, decision in
-                    Task { await model.resolveApproval(id, decision: decision) }
-                },
-                onUserInputSubmit: { id, answers in
-                    Task { await model.resolveUserInput(id, answers: answers) }
-                }
-            )
-            .simultaneousGesture(composerKeyboardDismissGesture)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            relationshipsBanner
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                queueSurfaces
+                composer(detail)
+            }
+        }
+    }
+
+    /// The lineage line above the transcript. A `safeAreaInset` rather than a
+    /// row in the feed: it summarises the whole thread, so it has to stay put
+    /// while the transcript scrolls under it.
+    @ViewBuilder
+    private var relationshipsBanner: some View {
+        if let relationships, !relationships.isEmpty {
+            ThreadRelationshipsBanner(
+                model: relationships,
+                onOpenThread: onOpenRelatedThread,
+                onMerge: mergeBack,
+                onDetach: detachSession
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+            .background(.bar)
+        }
+    }
+
+    /// Queued runs, above the composer that will add to them.
+    ///
+    /// `QueuedMessageStripView` is the surface: it lists every queued message
+    /// and owns reorder, edit and cancel. `ThreadQueueControlView` reads the
+    /// same rows, so showing both unconditionally would print the queue twice —
+    /// it appears only when the provider can actually promote a queued message
+    /// into a steer, which is the one affordance the strip does not have.
+    @ViewBuilder
+    private var queueSurfaces: some View {
+        let state = queueState
+        if !state.queuedRuns.isEmpty {
+            VStack(spacing: 8) {
+                if state.canPromoteToSteer {
+                    ThreadQueueControlView(
+                        state: state,
+                        busyRunID: queueBusyRunID,
+                        onReorder: { target in
+                            performQueueAction(runID: target.runID) {
+                                try await model.client.reorderQueuedRun(
+                                    threadID: thread.id,
+                                    runID: target.runID,
+                                    beforeRunID: target.beforeRunID
+                                )
+                            }
+                        },
+                        onPromoteToSteer: { queuedRunID, targetRunID in
+                            performQueueAction(runID: queuedRunID) {
+                                try await model.client.promoteQueuedRun(
+                                    threadID: thread.id,
+                                    queuedRunID: queuedRunID,
+                                    targetRunID: targetRunID
+                                )
+                            }
+                        }
+                    )
+                }
+
+                QueuedMessageStripView(
+                    queuedRuns: state.queuedRuns,
+                    canReorder: state.canReorder,
+                    dispatchingRunID: nil,
+                    busyRunID: queueBusyRunID,
+                    onReorder: { target in
+                        performQueueAction(runID: target.runID) {
+                            try await model.client.reorderQueuedRun(
+                                threadID: thread.id,
+                                runID: target.runID,
+                                beforeRunID: target.beforeRunID
+                            )
+                        }
+                    },
+                    onEdit: { runID, text in
+                        performQueueAction(runID: runID) {
+                            try await model.client.editQueuedRun(
+                                threadID: thread.id,
+                                runID: runID,
+                                text: text
+                            )
+                        }
+                    },
+                    onDelete: { runID in
+                        performQueueAction(runID: runID) {
+                            try await model.client.cancelQueuedRun(
+                                threadID: thread.id,
+                                runID: runID
+                            )
+                        }
+                    }
+                )
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
+            .background(.bar)
+        }
+    }
+
+    private func composer(_ detail: FeatureThreadDetail) -> some View {
+        FeatureComposerView(
+            text: $draft,
+            selection: $selection,
+            attachments: $attachments,
+            providers: threadProviders,
+            threadSelection: currentSelection,
+            materializesDefaultSelection: false,
+            isSending: isSending,
+            isWorking: detail.thread.state == .working || detail.thread.state == .queued,
+            focused: $composerFocused,
+            onSend: send,
+            onStop: {
+                Task { await model.cancelTurn(threadID: thread.id) }
+            },
+            pendingApprovals: detail.approvals,
+            pendingUserInputs: detail.userInputs,
+            isResolvingRequest: model.isPerformingAction,
+            powerFeatures: composerPowerFeatures,
+            onApprovalDecision: { id, decision in
+                Task { await model.resolveApproval(id, decision: decision) }
+            },
+            onUserInputSubmit: { id, answers in
+                Task { await model.resolveUserInput(id, answers: answers) }
+            }
+        )
+        .simultaneousGesture(composerKeyboardDismissGesture)
     }
 
     private var composerKeyboardDismissGesture: some Gesture {
@@ -430,6 +560,134 @@ public struct ThreadDetailView: View {
         return model.snapshot.environments.first { $0.id == environmentID }
     }
 
+    /// The root a work-log row resolves its file paths against.
+    private var threadWorkspaceRoot: String? {
+        currentThread.worktreePath ?? threadProject?.path
+    }
+
+    // MARK: - Lineage
+
+    /// The thread's lineage, as much of it as the feature layer can see.
+    ///
+    /// Subagent edges come from the transcript's own `subagent` items, remapped
+    /// onto the feature-scoped child thread ids the detail resolved — that
+    /// remap is the whole point of ``FeatureThreadDetail/subagentChildThreadIDs``
+    /// and it is what makes a card in the timeline and a row in the banner point
+    /// at the same thread.
+    ///
+    /// Fork and transfer edges stay missing: they need
+    /// `thread.lineage.parentThreadId` and the projection's context-transfer
+    /// table, neither of which `FeatureThreadDetail` carries. So do merge-back
+    /// and detach, which need the thread's runs and its provider session.
+    private var relationships: ThreadRelationshipsModel? {
+        guard let detail else { return nil }
+        let subagents = detail.timelineItems.compactMap { projected in
+            ThreadRelationshipSubagentLink(turnItem: projected.item).map { link in
+                guard let scopedThreadID = detail.subagentChildThreadIDs[link.id] else {
+                    return link
+                }
+                return ThreadRelationshipSubagentLink(
+                    id: link.id,
+                    childThreadID: scopedThreadID,
+                    status: link.status,
+                    title: link.title
+                )
+            }
+        }
+        guard !subagents.isEmpty else { return nil }
+
+        let current = relationshipShell(currentThread)
+        let relatedIDs = Set(subagents.compactMap(\.childThreadID))
+        let related = model.snapshot.threads
+            .filter { relatedIDs.contains($0.id) && $0.id != current.id }
+            .map(relationshipShell)
+        return ThreadRelationships.build(
+            currentThreadID: current.id,
+            currentThread: current,
+            threads: [current] + related,
+            subagents: subagents
+        )
+    }
+
+    private func relationshipShell(_ thread: FeatureThread) -> ThreadRelationshipShell {
+        // The graph speaks run statuses, which is what `subagentOrbState` reads.
+        let status: String = switch thread.state {
+        case .working, .queued: "running"
+        case .failed: "failed"
+        default: "idle"
+        }
+        return ThreadRelationshipShell(
+            id: thread.id,
+            title: thread.title,
+            status: status,
+            parentThreadID: nil,
+            relationshipToParent: thread.relationshipToParent,
+            forkedFromRunThreadID: nil,
+            // Availability only asks whether these are set, and an archived
+            // thread has no timestamp on this layer's model.
+            archivedAt: thread.isArchived ? "archived" : nil
+        )
+    }
+
+    private func mergeBack() async -> Bool {
+        guard let relationships,
+              let targetThreadID = relationships.mergeTargetThreadID,
+              let runID = relationships.latestMergeBackRunID else {
+            return false
+        }
+        do {
+            try await model.client.mergeThreadBack(
+                sourceThreadID: thread.id,
+                targetThreadID: targetThreadID,
+                runID: runID
+            )
+        } catch {
+            return false
+        }
+        _ = await model.detail(for: thread.id, force: true)
+        return true
+    }
+
+    private func detachSession() async {
+        try? await model.client.stopThreadSession(threadID: thread.id)
+        _ = await model.detail(for: thread.id, force: true)
+    }
+
+    // MARK: - Queue
+
+    /// Queued runs waiting behind the running turn.
+    ///
+    /// Server state, not the phone's outbox: a message sent with dispatch mode
+    /// "queue" becomes a run in `queued` status that every client can see.
+    ///
+    /// Empty on every build today. The derivation needs run statuses, queue
+    /// positions, the active attempt's provider turn and the provider session's
+    /// capabilities; `FeatureThreadDetail` carries none of them, because
+    /// `timelineRuns` is narrowed to the four fields handoff rows read and the
+    /// rest of the projection's tables are dropped by `mapDetail`. Everything
+    /// below is wired through this one value, so the queue appears as soon as
+    /// the detail carries the projection's `runs`, `providerTurns` and
+    /// `providerSessions`.
+    private var queueState: ThreadQueueWorkflowState {
+        ThreadWorkflows.deriveQueueWorkflowState(runs: [])
+    }
+
+    /// Runs one queue command, locking the row it targets for its duration and
+    /// refreshing afterwards so the list reflects what the server did rather
+    /// than what was asked for.
+    private func performQueueAction(
+        runID: String,
+        _ command: @escaping () async throws -> Void
+    ) {
+        guard queueBusyRunID == nil else { return }
+        queueBusyRunID = runID
+        Task {
+            defer { queueBusyRunID = nil }
+            try? await command()
+            _ = await model.detail(for: thread.id, force: true)
+        }
+    }
+
     /// Sheets stack over the thread, so a row that opens another surface swaps
     /// the presented sheet rather than pushing a second one on top of it.
     private func navigateFromDetails(_ destination: ThreadDetailsDestination) {
@@ -445,11 +703,18 @@ public struct ThreadDetailView: View {
             toolSurface = .sourceControl
         case .terminal:
             toolSurface = .terminal
-        case .thread:
-            // Opening a related thread is the navigator's job, and this view is
-            // handed only a back action. Dismiss rather than pretend.
+        case let .thread(id, isArchived):
             toolSurface = nil
+            onOpenRelatedThread(id, isArchived)
         }
+    }
+
+    /// Routes a thread id from a timeline row. Whether the target is archived
+    /// decides which stack the navigator pushes onto, and the snapshot is the
+    /// only place this view can learn that.
+    private func openRelatedThread(_ threadID: String) {
+        let isArchived = model.snapshot.threads.first { $0.id == threadID }?.isArchived ?? false
+        onOpenRelatedThread(threadID, isArchived)
     }
 
     private func dismissKeyboard() {
@@ -669,8 +934,287 @@ enum FeatureComposerDraftRestoration {
     }
 }
 
-/// A recycled transcript surface. SwiftUI still owns each message's rendering,
-/// while UIKit keeps offscreen messages out of the active view hierarchy.
+// MARK: - Timeline feed
+
+/// One row of the transcript.
+///
+/// The transcript is not a message list. The projection's turn items divide
+/// three ways — conversation messages, lifecycle rows (system dividers and
+/// related-thread cards), and everything else, which folds into work-log groups
+/// — and calendar boundaries add a fourth. Each case carries everything its row
+/// renders, so the recycled collection view can decide what changed by comparing
+/// entries and nothing else.
+enum ThreadTimelineEntry: Identifiable, Equatable {
+    case message(FeatureMessage)
+    case lifecycle(Lifecycle)
+    case workLog(WorkLog)
+    case dayDivider(id: String, date: Date)
+
+    struct Lifecycle: Equatable {
+        let id: String
+        /// More than one only for a merged run of related-thread cards, which
+        /// share a single card surface rather than stacking identical boxes.
+        let rows: [OrchestrationV2ProjectedTurnItem]
+        /// Handoff rows recover the model that was speaking before the handoff
+        /// from run history.
+        let runs: [LifecycleTimelineRun]
+        /// Projected-item id to the feature-scoped id of the thread a subagent
+        /// spawned, which is what makes its card tappable.
+        let childThreadIDs: [String: String]
+        let date: Date?
+    }
+
+    struct WorkLog: Equatable {
+        let id: String
+        let rows: [ThreadWorkLogRow]
+        /// Relational support keyed by projected-item id, read by the inspector
+        /// a row opens.
+        let support: [String: ThreadActivityItemSupport]
+        let date: Date?
+    }
+
+    var id: String {
+        switch self {
+        case let .message(message): "message:\(message.id)"
+        case let .lifecycle(lifecycle): lifecycle.id
+        case let .workLog(workLog): workLog.id
+        case let .dayDivider(id, _): id
+        }
+    }
+
+    /// When the entry happened, for day bucketing. Nil when the timestamp did
+    /// not parse, which drops the divider rather than the row under it.
+    var date: Date? {
+        switch self {
+        case let .message(message): message.createdAt
+        case let .lifecycle(lifecycle): lifecycle.date
+        case let .workLog(workLog): workLog.date
+        case let .dayDivider(_, date): date
+        }
+    }
+}
+
+/// Turns a thread detail into the rows the transcript renders.
+///
+/// Ports `buildThreadFeed` from apps/mobile/src/lib/threadActivity.ts so both
+/// clients divide the same projection the same way: classify each item, fold
+/// contiguous work into groups, merge adjacent related-thread cards, then split
+/// by calendar day.
+enum ThreadTimelineFeed {
+    static func entries(
+        for detail: FeatureThreadDetail,
+        calendar: Calendar = .current
+    ) -> [ThreadTimelineEntry] {
+        entries(
+            timelineItems: detail.timelineItems,
+            messages: detail.messages,
+            runs: detail.timelineRuns,
+            support: detail.itemSupport,
+            subagentChildThreadIDs: detail.subagentChildThreadIDs,
+            calendar: calendar
+        )
+    }
+
+    static func entries(
+        timelineItems: [OrchestrationV2ProjectedTurnItem],
+        messages: [FeatureMessage],
+        runs: [LifecycleTimelineRun] = [],
+        support: [String: ThreadActivityItemSupport] = [:],
+        subagentChildThreadIDs: [String: String] = [:],
+        calendar: Calendar = .current
+    ) -> [ThreadTimelineEntry] {
+        var messagesByID: [String: FeatureMessage] = [:]
+        messagesByID.reserveCapacity(messages.count)
+        for message in messages { messagesByID[message.id] = message }
+
+        var entries: [ThreadTimelineEntry] = []
+        var openWork: [ThreadWorkLogRow] = []
+        var openLifecycle: [OrchestrationV2ProjectedTurnItem] = []
+
+        func closeWork() {
+            guard !openWork.isEmpty else { return }
+            for group in ThreadWorkLogRow.groups(openWork) {
+                var groupSupport: [String: ThreadActivityItemSupport] = [:]
+                for row in group where support[row.projectedItem.id] != nil {
+                    groupSupport[row.projectedItem.id] = support[row.projectedItem.id]
+                }
+                entries.append(
+                    .workLog(
+                        ThreadTimelineEntry.WorkLog(
+                            id: "work:\(group[0].id)",
+                            rows: group,
+                            support: groupSupport,
+                            date: ThreadTimelineDay.date(fromISO8601: group[0].createdAt)
+                        )
+                    )
+                )
+            }
+            openWork.removeAll(keepingCapacity: true)
+        }
+
+        func closeLifecycle() {
+            guard !openLifecycle.isEmpty else { return }
+            for group in ThreadTimelineGrouping.mergeRelatedThreadCardRuns(openLifecycle) {
+                var childThreadIDs: [String: String] = [:]
+                for row in group.elements {
+                    guard case let .subagent(subagentID, _, _, _, _, _, _, _) = row.item.payload,
+                          let childThreadID = subagentChildThreadIDs[subagentID] else {
+                        continue
+                    }
+                    childThreadIDs[row.id] = childThreadID
+                }
+                entries.append(
+                    .lifecycle(
+                        ThreadTimelineEntry.Lifecycle(
+                            // The merge already anchors a run's id on its first
+                            // member, so this stays stable as later cards join.
+                            id: "lifecycle:\(group.id)",
+                            rows: group.elements,
+                            runs: runs,
+                            childThreadIDs: childThreadIDs,
+                            date: itemDate(group.first.item)
+                        )
+                    )
+                )
+            }
+            openLifecycle.removeAll(keepingCapacity: true)
+        }
+
+        for projected in timelineItems {
+            let item = projected.item
+            if item.type == "user_message" || item.type == "assistant_message" {
+                // An empty bubble is not a row — an assistant message before its
+                // first token, say — and skipping it must not split the work
+                // group it sits inside.
+                guard let message = messagesByID[item.id], !message.isEmptyBubble else { continue }
+                closeWork()
+                closeLifecycle()
+                entries.append(.message(message))
+                continue
+            }
+            if ThreadLifecycle.isLifecycleTimelineItem(item) {
+                closeWork()
+                openLifecycle.append(projected)
+                continue
+            }
+            closeLifecycle()
+            openWork.append(ThreadWorkLogRow.make(projected))
+        }
+        closeWork()
+        closeLifecycle()
+
+        // Optimistic sends have no projected item yet, and a client that carries
+        // no projection at all has only messages. Both arrive here as plain
+        // message rows, which is what keeps a just-sent bubble on screen.
+        let projectedItemIDs = Set(timelineItems.map(\.item.id))
+        for message in messages
+        where !projectedItemIDs.contains(message.id) && !message.isEmptyBubble {
+            entries.append(.message(message))
+        }
+
+        // A duplicate identifier is fatal to a diffable data source, so identity
+        // is enforced here rather than trusted.
+        var seenIDs = Set<String>()
+        entries = entries.filter { seenIDs.insert($0.id).inserted }
+
+        return insertingDayDividers(entries, calendar: calendar)
+    }
+
+    private static func itemDate(_ item: OrchestrationV2TurnItem) -> Date? {
+        ThreadTimelineDay.date(fromISO8601: item.base.startedAt ?? item.base.updatedAt)
+    }
+
+    /// Divider ids are anchored on the entry below them, which is both unique
+    /// and stable as the feed grows.
+    private static func insertingDayDividers(
+        _ entries: [ThreadTimelineEntry],
+        calendar: Calendar
+    ) -> [ThreadTimelineEntry] {
+        let dividerIndexes = Set(
+            ThreadTimelineDay.dividerIndexes(entries, calendar: calendar) { $0.date }
+        )
+        guard !dividerIndexes.isEmpty else { return entries }
+        var result: [ThreadTimelineEntry] = []
+        result.reserveCapacity(entries.count + dividerIndexes.count)
+        for (index, entry) in entries.enumerated() {
+            if dividerIndexes.contains(index), let date = entry.date {
+                result.append(.dayDivider(id: "day-divider:\(entry.id)", date: date))
+            }
+            result.append(entry)
+        }
+        return result
+    }
+}
+
+private extension FeatureMessage {
+    /// Nothing to render: no text and no attachments.
+    var isEmptyBubble: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
+    }
+}
+
+/// One row of the transcript, rendered.
+///
+/// Every entry owns 16pt of bottom margin — `ChatTimelineStyle.entrySpacing`,
+/// the rhythm the React Native client uses — so the hosting collection view
+/// stacks entries with zero spacing between them. Lifecycle rows and dividers
+/// carry that margin themselves; messages and work-log groups get it here.
+private struct ThreadTimelineEntryView: View {
+    let entry: ThreadTimelineEntry
+    let currentThreadID: String
+    let workspaceRoot: String?
+    let onOpenThread: (String) -> Void
+    let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
+    let onOpenURL: (URL) -> Void
+    let onOpenDiff: (String, String?) -> Void
+
+    var body: some View {
+        switch entry {
+        case let .message(message):
+            FeatureMessageView(message: message)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
+        case let .lifecycle(lifecycle):
+            if lifecycle.rows.count > 1 {
+                ThreadLifecycleCardGroup(
+                    rows: lifecycle.rows,
+                    runs: lifecycle.runs,
+                    liveChildThreadIDs: lifecycle.childThreadIDs,
+                    onOpenThread: onOpenThread
+                )
+            } else if let row = lifecycle.rows.first {
+                ThreadLifecycleRow(
+                    row: row,
+                    runs: lifecycle.runs,
+                    liveChildThreadID: lifecycle.childThreadIDs[row.id],
+                    onOpenThread: onOpenThread
+                )
+            }
+
+        case let .workLog(workLog):
+            ThreadWorkLog(
+                rows: workLog.rows,
+                currentThreadID: currentThreadID,
+                workspaceRoot: workspaceRoot,
+                itemSupport: { workLog.support[$0.id] ?? .empty },
+                onOpenThread: onOpenThread,
+                onOpenFile: onOpenFile,
+                onOpenURL: onOpenURL,
+                onOpenDiff: onOpenDiff
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // The log already ends on 12pt of its own.
+            .padding(.bottom, ChatTimelineStyle.entrySpacing - 12)
+
+        case let .dayDivider(_, date):
+            TimelineDayDivider(date: date)
+        }
+    }
+}
+
+/// A recycled transcript surface. SwiftUI still owns each entry's rendering,
+/// while UIKit keeps offscreen entries out of the active view hierarchy.
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     private static let workingIndicatorID = "__t3-working-indicator__"
     private static let loadEarlierID = "__t3-load-earlier__"
@@ -680,14 +1224,22 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 
     let threadID: String
-    let messages: [FeatureMessage]
+    /// The whole detail rather than its rows: building the feed costs O(window),
+    /// so it happens inside the coordinator once the revision guard has proved
+    /// something actually changed, not on every SwiftUI body evaluation.
+    let detail: FeatureThreadDetail
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
     let isWorking: Bool
     let canLoadEarlier: Bool
     let isLoadingEarlier: Bool
+    let workspaceRoot: String?
     let onLoadEarlier: () -> Void
     let onDismissKeyboard: () -> Void
+    let onOpenThread: (String) -> Void
+    let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
+    let onOpenURL: (URL) -> Void
+    let onOpenDiff: (String, String?) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -712,12 +1264,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     func updateUIView(_ collectionView: UICollectionView, context: Context) {
         context.coordinator.update(
             threadID: threadID,
-            messages: messages,
+            detail: detail,
             renderUpdate: renderUpdate,
             dynamicTypeSize: dynamicTypeSize,
             isWorking: isWorking,
             canLoadEarlier: canLoadEarlier,
             isLoadingEarlier: isLoadingEarlier,
+            rowContext: Coordinator.RowContext(
+                currentThreadID: threadID,
+                workspaceRoot: workspaceRoot,
+                onOpenThread: onOpenThread,
+                onOpenFile: onOpenFile,
+                onOpenURL: onOpenURL,
+                onOpenDiff: onOpenDiff
+            ),
             onLoadEarlier: onLoadEarlier,
             onDismissKeyboard: onDismissKeyboard,
             in: collectionView
@@ -738,7 +1298,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 subitems: [item]
             )
             let section = NSCollectionLayoutSection(group: group)
-            section.interGroupSpacing = 22
+            // Zero, deliberately: every entry owns its own bottom margin
+            // (`ChatTimelineStyle.entrySpacing`), and a divider that carries 16
+            // on top of a section gap would sit at double the RN client's
+            // rhythm.
+            section.interGroupSpacing = 0
             section.contentInsets = NSDirectionalEdgeInsets(
                 top: 18,
                 leading: sideInset,
@@ -756,8 +1320,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let task: Task<Void, Never>
         }
 
+        /// Everything a row needs beyond its own entry. Replaced on every
+        /// update and never compared, so a fresh closure identity per SwiftUI
+        /// body evaluation can't be mistaken for a content change.
+        struct RowContext {
+            var currentThreadID: String = ""
+            var workspaceRoot: String?
+            var onOpenThread: (String) -> Void = { _ in }
+            var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
+            var onOpenURL: (URL) -> Void = { _ in }
+            var onOpenDiff: (String, String?) -> Void = { _, _ in }
+        }
+
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
-        private var messagesByID: [String: FeatureMessage] = [:]
+        private var entriesByID: [String: ThreadTimelineEntry] = [:]
         private var orderedIDs: [String] = []
         private var currentThreadID: String?
         private var currentDetailRevision: UInt64?
@@ -766,6 +1342,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
+        private var rowContext = RowContext()
         private var onLoadEarlier: (() -> Void)?
         private var onDismissKeyboard: (() -> Void)?
 
@@ -775,20 +1352,21 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
         func connect(to collectionView: UICollectionView) {
             let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> {
-                [weak self] cell, _, messageID in
-                if messageID == FeatureTranscriptCollectionView.loadEarlierID {
+                [weak self] cell, _, entryID in
+                if entryID == FeatureTranscriptCollectionView.loadEarlierID {
                     cell.contentConfiguration = UIHostingConfiguration {
                         FeatureLoadEarlierTurnsButton(
                             isLoading: self?.currentIsLoadingEarlier == true,
                             onLoad: { self?.onLoadEarlier?() }
                         )
+                        .padding(.bottom, ChatTimelineStyle.entrySpacing)
                     }
                     .margins(.all, 0)
                     cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
                     cell.accessibilityIdentifier = "load-earlier-turns"
                     return
                 }
-                if messageID == FeatureTranscriptCollectionView.workingIndicatorID {
+                if entryID == FeatureTranscriptCollectionView.workingIndicatorID {
                     cell.contentConfiguration = UIHostingConfiguration {
                         FeatureThreadWorkingIndicator()
                     }
@@ -797,27 +1375,40 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     cell.accessibilityIdentifier = "thread-working-indicator"
                     return
                 }
-                guard let message = self?.messagesByID[messageID] else {
+                guard let self, let entry = entriesByID[entryID] else {
                     cell.contentConfiguration = nil
                     return
                 }
 
+                let context = rowContext
                 cell.contentConfiguration = UIHostingConfiguration {
-                    FeatureMessageView(message: message)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ThreadTimelineEntryView(
+                        entry: entry,
+                        currentThreadID: context.currentThreadID,
+                        workspaceRoot: context.workspaceRoot,
+                        onOpenThread: context.onOpenThread,
+                        onOpenFile: context.onOpenFile,
+                        onOpenURL: context.onOpenURL,
+                        onOpenDiff: context.onOpenDiff
+                    )
+                    // A recycled cell keeps the SwiftUI state of whatever it
+                    // rendered last. Keying on the entry drops an expansion
+                    // when the cell is reused for a different row, rather than
+                    // showing it against the wrong one.
+                    .id(entryID)
                 }
                 .margins(.all, 0)
                 cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
-                cell.accessibilityIdentifier = "message-cell-\(messageID)"
+                cell.accessibilityIdentifier = "message-cell-\(entryID)"
             }
 
             dataSource = UICollectionViewDiffableDataSource<Section, String>(
                 collectionView: collectionView
-            ) { collectionView, indexPath, messageID in
+            ) { collectionView, indexPath, entryID in
                 collectionView.dequeueConfiguredReusableCell(
                     using: registration,
                     for: indexPath,
-                    item: messageID
+                    item: entryID
                 )
             }
             collectionView.prefetchDataSource = self
@@ -826,17 +1417,19 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
         func update(
             threadID: String,
-            messages: [FeatureMessage],
+            detail: FeatureThreadDetail,
             renderUpdate: FeatureDetailRenderUpdate?,
             dynamicTypeSize: DynamicTypeSize,
             isWorking: Bool,
             canLoadEarlier: Bool,
             isLoadingEarlier: Bool,
+            rowContext: RowContext,
             onLoadEarlier: @escaping () -> Void,
             onDismissKeyboard: @escaping () -> Void,
             in collectionView: UICollectionView
         ) {
             guard let dataSource else { return }
+            self.rowContext = rowContext
             self.onLoadEarlier = onLoadEarlier
             self.onDismissKeyboard = onDismissKeyboard
 
@@ -849,10 +1442,12 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             guard threadChanged || typeSizeChanged || revisionChanged || workingChanged
                 || loadEarlierChanged else { return }
 
-            let incremental = !threadChanged
-                ? incrementalState(messages: messages, renderUpdate: renderUpdate)
-                : nil
-            let state = incremental ?? fullState(messages: messages)
+            // Always the whole feed. An item's shape depends on its neighbours —
+            // a new tool call joins the work group above it, a subagent card
+            // merges into the run beside it — so a delta that only names changed
+            // messages cannot say which rows moved, and applying it would leave
+            // stale groups on screen instead of failing loudly.
+            let state = entryState(ThreadTimelineFeed.entries(for: detail))
             let newIDs = state.ids
             let idsChanged = state.idsChanged
             let changedIDs = typeSizeChanged
@@ -891,9 +1486,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 : nil
 
             currentThreadID = threadID
-            if let replacementMessagesByID = state.replacementMessagesByID {
-                messagesByID = replacementMessagesByID
-            }
+            entriesByID = state.entriesByID
             orderedIDs = newIDs
             (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor =
                 isInitialLoad || wasNearBottom
@@ -914,9 +1507,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             } else if state.isAppendOnly {
                 snapshot = dataSource.snapshot()
                 snapshot.appendItems(state.appendedIDs, toSection: .transcript)
-            } else if newIDs.starts(with: previousIDs) {
-                snapshot = dataSource.snapshot()
-                snapshot.appendItems(Array(newIDs.dropFirst(previousIDs.count)), toSection: .transcript)
             } else {
                 snapshot = NSDiffableDataSourceSnapshot<Section, String>()
                 snapshot.appendSections([.transcript])
@@ -1015,91 +1605,57 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             )
         }
 
-        private struct MessageState {
+        private struct EntryState {
             let ids: [String]
-            let replacementMessagesByID: [String: FeatureMessage]?
+            let entriesByID: [String: ThreadTimelineEntry]
             let changedIDs: [String]
             let appendedIDs: [String]
             let idsChanged: Bool
-            let isAppendOnly: Bool
+            /// The new order is the old one plus a tail, so the snapshot can be
+            /// extended rather than rebuilt.
+            var isAppendOnly: Bool { !appendedIDs.isEmpty }
         }
 
-        private func incrementalState(
-            messages: [FeatureMessage],
-            renderUpdate: FeatureDetailRenderUpdate?
-        ) -> MessageState? {
-            guard let currentDetailRevision,
-                  let renderUpdate,
-                  renderUpdate.baseRevision == currentDetailRevision,
-                  case let .delta(delta) = renderUpdate.change,
-                  messages.count == orderedIDs.count + delta.appendedMessageIDs.count else {
-                return nil
-            }
-
-            let appendedIDs = delta.appendedMessageIDs
-            guard Set(appendedIDs).count == appendedIDs.count,
-                  appendedIDs.allSatisfy({ messagesByID[$0] == nil }) else {
-                return nil
-            }
-
-            let appendedIDSet = Set(appendedIDs)
-            let changedMessageIDs = Set(delta.changedMessages.map(\.id))
-            guard appendedIDs.allSatisfy(changedMessageIDs.contains),
-                  delta.changedMessages.allSatisfy({
-                      messagesByID[$0.id] != nil || appendedIDSet.contains($0.id)
-                  }) else {
-                return nil
-            }
-
-            var changedIDs: [String] = []
-            changedIDs.reserveCapacity(delta.changedMessages.count)
-            for message in delta.changedMessages {
-                if messagesByID[message.id] != message {
-                    changedIDs.append(message.id)
-                }
-                messagesByID[message.id] = message
-            }
-
-            return MessageState(
-                ids: appendedIDs.isEmpty ? orderedIDs : orderedIDs + appendedIDs,
-                replacementMessagesByID: nil,
-                changedIDs: changedIDs,
-                appendedIDs: appendedIDs,
-                idsChanged: !appendedIDs.isEmpty,
-                isAppendOnly: !appendedIDs.isEmpty
-            )
-        }
-
-        private func fullState(messages: [FeatureMessage]) -> MessageState {
-            var seenMessageIDs = Set<String>()
-            let uniqueMessages = Array(messages.reversed().filter {
-                seenMessageIDs.insert($0.id).inserted
-            }.reversed())
-            let ids = uniqueMessages.map(\.id)
-            let updatedMessages = uniqueMessages.reduce(into: [String: FeatureMessage]()) {
-                $0[$1.id] = $1
-            }
-            return MessageState(
+        private func entryState(_ entries: [ThreadTimelineEntry]) -> EntryState {
+            let ids = entries.map(\.id)
+            var updated: [String: ThreadTimelineEntry] = [:]
+            updated.reserveCapacity(entries.count)
+            for entry in entries { updated[entry.id] = entry }
+            let idsChanged = orderedIDs != ids
+            return EntryState(
                 ids: ids,
-                replacementMessagesByID: updatedMessages,
-                changedIDs: ids.filter { messagesByID[$0] != updatedMessages[$0] },
-                appendedIDs: [],
-                idsChanged: orderedIDs != ids,
-                isAppendOnly: false
+                entriesByID: updated,
+                changedIDs: ids.filter { entriesByID[$0] != updated[$0] },
+                appendedIDs: idsChanged && ids.starts(with: orderedIDs)
+                    ? Array(ids.dropFirst(orderedIDs.count))
+                    : [],
+                idsChanged: idsChanged
             )
+        }
+
+        /// The message behind an entry, or nil for a row that renders no
+        /// Markdown and therefore has nothing worth warming.
+        private func prefetchableMessage(for entryID: String) -> FeatureMessage? {
+            guard case let .message(message) = entriesByID[entryID],
+                  !message.text.isEmpty,
+                  message.state != .streaming,
+                  message.role == .user || message.role == .assistant else {
+                return nil
+            }
+            return message
         }
 
         func collectionView(
             _ collectionView: UICollectionView,
             prefetchItemsAt indexPaths: [IndexPath]
         ) {
-            for indexPath in indexPaths where orderedIDs.indices.contains(indexPath.item) {
-                let messageID = orderedIDs[indexPath.item]
-                guard markdownPrefetches[messageID] == nil,
-                      let message = messagesByID[messageID],
-                      !message.text.isEmpty,
-                      message.state != .streaming,
-                      message.role == .user || message.role == .assistant else {
+            // Through the data source rather than by index: the load-earlier
+            // cell shifts every row, so `orderedIDs[indexPath.item]` names the
+            // wrong entry as soon as a thread has more history.
+            for indexPath in indexPaths {
+                guard let entryID = dataSource?.itemIdentifier(for: indexPath),
+                      markdownPrefetches[entryID] == nil,
+                      let message = prefetchableMessage(for: entryID) else {
                     continue
                 }
 
@@ -1112,9 +1668,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     guard !Task.isCancelled else { return }
                     _ = await MarkdownRenderCache.shared.document(for: revision)
                     guard !Task.isCancelled else { return }
-                    self?.finishMarkdownPrefetch(messageID: messageID, revision: revision)
+                    self?.finishMarkdownPrefetch(messageID: entryID, revision: revision)
                 }
-                markdownPrefetches[messageID] = MarkdownPrefetch(
+                markdownPrefetches[entryID] = MarkdownPrefetch(
                     revision: revision,
                     task: task
                 )
@@ -1125,10 +1681,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             _ collectionView: UICollectionView,
             cancelPrefetchingForItemsAt indexPaths: [IndexPath]
         ) {
-            let messageIDs = indexPaths.compactMap { indexPath in
-                orderedIDs.indices.contains(indexPath.item) ? orderedIDs[indexPath.item] : nil
-            }
-            cancelMarkdownPrefetches(for: Set(messageIDs))
+            let entryIDs = indexPaths.compactMap { dataSource?.itemIdentifier(for: $0) }
+            cancelMarkdownPrefetches(for: Set(entryIDs))
         }
 
         private func finishMarkdownPrefetch(

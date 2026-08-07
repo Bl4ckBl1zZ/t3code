@@ -100,7 +100,7 @@ public enum WorkInboxSections {
 
     public static func groups(
         active threads: [FeatureThread],
-        workInboxRole: (FeatureThread) -> String? = { _ in nil }
+        workInboxRole: (FeatureThread) -> String? = \.workInboxRole
     ) -> [WorkInboxGroup<FeatureThread>] {
         groups(active: threads) { section(of: $0, workInboxRole: workInboxRole($0)) }
     }

@@ -252,7 +252,7 @@ public enum WorkspaceSwitcher {
         in workspace: MobileWorkspace,
         providerDrivers: MobileWorkspaceProviderDrivers,
         fallbackEnvironmentID: String = "",
-        relationshipToParent: (FeatureThread) -> String? = { _ in nil }
+        relationshipToParent: (FeatureThread) -> String? = \.relationshipToParent
     ) -> [FeatureThread] {
         threads.filter { thread in
             MobileWorkspaceRouting.isWorkspaceThread(

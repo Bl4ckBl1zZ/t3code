@@ -5,6 +5,9 @@ import UIKit
 /// while UIKit keeps row creation and updates proportional to visible threads.
 struct HomeThreadCollectionView: UIViewRepresentable {
     let presentation: HomePresentation
+    /// Only T3 Work splits its active block into inbox sections, so the rows a
+    /// workspace shows and the dividers between them are decided together.
+    let workspace: MobileWorkspace
     let query: String
     let selectedThreadID: String?
     let forceRichRows: Bool
@@ -23,6 +26,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let onSnooze: (FeatureThread, Date?) -> Void
     let onPin: (FeatureThread, Bool) -> Void
     let onDelete: (FeatureThread) -> Void
+    /// Both are slow server round trips whose result is a pasteboard write or a
+    /// streamed title, so the row hands them off rather than awaiting anything.
+    let onCopyHandoffScript: (FeatureThread) -> Void
+    let onRegenerateTitle: (FeatureThread) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -167,7 +174,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             case .showMoreSettled:
                 collectionView.deselectItem(at: indexPath, animated: false)
                 parent.onShowMoreSettled()
-            case .empty, .searchEmpty, .pinnedDivider:
+            case .empty, .searchEmpty, .pinnedDivider, .workSectionHeader:
                 collectionView.deselectItem(at: indexPath, animated: false)
             }
         }
@@ -286,6 +293,15 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 cell.accessibilityValue = isExpanded ? "Expanded" : "Collapsed"
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = { [weak self] in self?.toggle(shelf) }
+            case let .workSectionHeader(header):
+                // A Work section is structure, not a control: it reads as a
+                // heading and has nothing to activate.
+                cell.isAccessibilityElement = true
+                cell.accessibilityTraits = .header
+                cell.accessibilityLabel = header.label
+                cell.accessibilityValue = nil
+                cell.accessibilityHint = nil
+                cell.onAccessibilityActivate = nil
             case let .showMoreSettled(remaining):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .button
@@ -369,65 +385,68 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             }
         }
 
+        /// The menu is decided by ``ThreadRowMenuActions`` and only rendered
+        /// here: which items exist, in what order, and which are disabled is the
+        /// part worth testing without UIKit.
         private func menuActions(for thread: FeatureThread, isArchived: Bool) -> [UIMenuElement] {
-            let rename = UIAction(title: "Rename", image: UIImage(systemName: "pencil")) { [weak self] _ in
-                self?.parent.onRename(thread)
-            }
-            let archive = UIAction(
-                title: isArchived ? "Restore" : "Archive",
-                image: UIImage(systemName: isArchived ? "arrow.uturn.backward" : "archivebox")
-            ) { [weak self] _ in
-                self?.parent.onArchive(thread, !isArchived)
-            }
-
-            var actions: [UIMenuElement] = [rename, archive]
-            if !isArchived {
-                if thread.canTogglePin {
-                    let isPinned = thread.pinnedAt != nil
-                    actions.append(
-                        UIAction(
-                            title: isPinned ? "Unpin" : "Pin",
-                            image: UIImage(systemName: isPinned ? "pin.slash" : "pin")
-                        ) { [weak self] _ in
-                            self?.parent.onPin(thread, !isPinned)
-                        }
-                    )
-                }
-                let isSettled = thread.isEffectivelySettled(at: .now)
-                actions.append(
-                    UIAction(
-                        title: isSettled ? "Reopen" : "Settle",
-                        image: UIImage(systemName: isSettled ? "arrow.counterclockwise" : "checkmark")
-                    ) { [weak self] _ in
-                        self?.parent.onSettle(thread, !isSettled)
-                    }
-                )
-
-                let isSnoozed = thread.isEffectivelySnoozed(at: .now)
-                let snooze = UIAction(
-                    title: isSnoozed ? "Unsnooze" : "Snooze 1 hour",
-                    image: UIImage(systemName: isSnoozed ? "bell" : "clock")
-                ) { [weak self] _ in
-                    self?.parent.onSnooze(
-                        thread,
-                        isSnoozed ? nil : Date.now.addingTimeInterval(60 * 60)
-                    )
-                }
-                if thread.state == .queued
-                    || thread.state == .waitingForApproval
-                    || thread.state == .waitingForInput {
-                    snooze.attributes = .disabled
-                }
-                actions.append(snooze)
-            }
-
-            actions.append(
-                UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) {
-                    [weak self] _ in
-                    self?.parent.onDelete(thread)
-                }
+            let now = Date.now
+            let context = ThreadRowMenuContext(
+                isArchived: isArchived,
+                canTogglePin: thread.canTogglePin,
+                isPinned: thread.pinnedAt != nil,
+                isSettled: thread.isEffectivelySettled(at: now),
+                isSnoozed: thread.isEffectivelySnoozed(at: now),
+                canSnooze: thread.state != .queued
+                    && thread.state != .waitingForApproval
+                    && thread.state != .waitingForInput,
+                titleRegenerationSupported: thread.canRegenerateTitle,
+                isRegeneratingTitle: thread.isRegeneratingTitle
             )
-            return actions
+
+            return ThreadRowMenuActions.homeRowActions(context).map { action in
+                let element = UIAction(
+                    title: action.title,
+                    image: action.symbol.flatMap { UIImage(systemName: $0) },
+                    attributes: action.destructive ? .destructive : []
+                ) { [weak self] _ in
+                    self?.perform(action.id, on: thread)
+                }
+                if action.disabled { element.attributes.insert(.disabled) }
+                return element
+            }
+        }
+
+        private func perform(_ actionID: String, on thread: FeatureThread) {
+            switch actionID {
+            case ThreadRowMenuActions.renameActionID:
+                parent.onRename(thread)
+            // Archive and restore are two ids rather than one flipping title, so
+            // the row never has to re-derive which direction it is going.
+            case ThreadRowMenuActions.archiveActionID:
+                parent.onArchive(thread, true)
+            case ThreadRowMenuActions.restoreActionID:
+                parent.onArchive(thread, false)
+            case ThreadRowMenuActions.pinActionID:
+                parent.onPin(thread, true)
+            case ThreadRowMenuActions.unpinActionID:
+                parent.onPin(thread, false)
+            case ThreadRowMenuActions.settleActionID:
+                parent.onSettle(thread, true)
+            case ThreadRowMenuActions.unsettleActionID:
+                parent.onSettle(thread, false)
+            case ThreadRowMenuActions.snoozeActionID:
+                parent.onSnooze(thread, Date.now.addingTimeInterval(60 * 60))
+            case ThreadRowMenuActions.unsnoozeActionID:
+                parent.onSnooze(thread, nil)
+            case ThreadRowMenuActions.copyHandoffScriptActionID:
+                parent.onCopyHandoffScript(thread)
+            case ThreadRowMenu.regenerateTitleActionID:
+                parent.onRegenerateTitle(thread)
+            case ThreadRowMenuActions.deleteActionID:
+                parent.onDelete(thread)
+            default:
+                break
+            }
         }
 
         /// Working rows show a live per-second duration, so they need a 1 Hz
@@ -472,7 +491,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
     }
 
-    private var collectionItems: [HomeCollectionItem] {
+    var collectionItems: [HomeCollectionItem] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalizedQuery.isEmpty {
             if presentation.searchResults.isEmpty {
@@ -503,6 +522,26 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
         if presentation.active.isEmpty, presentation.pinned.isEmpty {
             items.append(.empty(.active))
+        } else if workspace == .work {
+            // `\.workInboxRole` rather than the closure's nil default: without
+            // the role every row lands in Needs you / Active and the Main
+            // section never appears at all.
+            let groups = WorkInboxSections.groups(
+                active: presentation.active,
+                workInboxRole: \.workInboxRole
+            )
+            for group in groups {
+                items.append(.workSectionHeader(group.header))
+                items.append(contentsOf: group.rows.map {
+                    .thread(
+                        $0,
+                        presentation.rowContexts[$0.id] ?? .fallback,
+                        .rich,
+                        false,
+                        forceRichRows
+                    )
+                })
+            }
         } else {
             items.append(contentsOf: presentation.active.map {
                 .thread(
@@ -579,7 +618,7 @@ private final class HomeCollectionCell: UICollectionViewListCell {
     }
 }
 
-private enum HomeShelf: String, Hashable {
+enum HomeShelf: String, Hashable {
     case active
     case snoozed
     case settled
@@ -590,10 +629,13 @@ private enum HomeShelf: String, Hashable {
     }
 }
 
-private enum HomeCollectionItem: Equatable {
+/// Internal rather than file-private so the list a workspace produces — which
+/// dividers appear and where — is assertable without a collection view.
+enum HomeCollectionItem: Equatable {
     enum ID: Hashable {
         case thread(String)
         case shelfHeader(HomeShelf)
+        case workSectionHeader(MobileWorkInboxSection)
         case empty(HomeShelf)
         case showMoreSettled
         case searchEmpty
@@ -607,6 +649,7 @@ private enum HomeCollectionItem: Equatable {
 
     case thread(FeatureThread, HomeThreadRowContext, FeatureThreadRow.Style, Bool, Bool)
     case shelfHeader(HomeShelf, Int, Bool)
+    case workSectionHeader(WorkInboxSectionHeader)
     case empty(HomeShelf)
     case showMoreSettled(Int)
     case searchEmpty(String)
@@ -616,6 +659,7 @@ private enum HomeCollectionItem: Equatable {
         switch self {
         case let .thread(thread, _, _, _, _): .thread(thread.id)
         case let .shelfHeader(shelf, _, _): .shelfHeader(shelf)
+        case let .workSectionHeader(header): .workSectionHeader(header.section)
         case let .empty(shelf): .empty(shelf)
         case .showMoreSettled: .showMoreSettled
         case .searchEmpty: .searchEmpty
@@ -649,6 +693,8 @@ private struct HomeCollectionCellContent: View {
                 isExpanded: isExpanded,
                 accent: shelf == .snoozed ? T3Colors.accent : nil
             )
+        case let .workSectionHeader(header):
+            WorkInboxSectionDivider(header: header)
         case let .empty(shelf):
             Text(shelf == .active ? "No active tasks" : "None")
                 .font(T3Typography.homeMetadata)
