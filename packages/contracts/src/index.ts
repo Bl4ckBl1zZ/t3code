@@ -40,6 +40,7 @@ export * from "./scheduledTask.ts";
 export * from "./worktreeMcp.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./voice.ts";
+export * from "./usage.ts";
 export * from "./rpc.ts";
 export * from "./hermesGateway.ts";
 export * from "./hermesProactive.ts";
