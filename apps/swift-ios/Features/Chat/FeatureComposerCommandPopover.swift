@@ -41,14 +41,20 @@ struct FeatureComposerCommandPopover: View {
             }
         }
         .frame(height: menuHeight, alignment: .top)
-        .background(T3Colors.surfaceRaised.opacity(0.98))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // A menu floating over the conversation is the surface Liquid Glass
+        // exists for; `.regular` keeps the rows legible against whatever is
+        // scrolling behind them.
+        .clipShape(shape)
+        .t3GlassEffect(.regular, in: shape)
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(T3Colors.border, lineWidth: 1)
+            shape.stroke(T3Colors.border, lineWidth: 1)
         }
         .accessibilityLabel(groupLabel)
         .accessibilityIdentifier("composer-command-menu")
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
     }
 
     private var groupLabel: String {

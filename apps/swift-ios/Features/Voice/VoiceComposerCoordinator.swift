@@ -58,6 +58,13 @@ public final class VoiceComposerCoordinator {
     public var level: Double { controller?.level ?? 0 }
     /// A push-to-talk finger is down.
     public private(set) var holdActive = false
+
+    /// Whether a finger is currently down on the combo button, from touch-down
+    /// rather than from the moment a hold classifies. The composer's
+    /// keyboard-dismiss drag reads this: a push-to-talk hold is a drag, and
+    /// without the guard sliding on the mic dismisses the keyboard under the
+    /// user mid-recording.
+    public var isTouchActive: Bool { gestureState != .idle }
     public private(set) var cancelArmed = false
     /// 0...1, quantized to 5% steps so a hold re-renders at most 20 times.
     public private(set) var cancelProgress: Double = 0

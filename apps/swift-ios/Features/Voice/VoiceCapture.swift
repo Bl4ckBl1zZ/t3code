@@ -40,14 +40,27 @@ public protocol VoiceCapturing: AnyObject {
 
 public enum VoiceCaptureError: LocalizedError, Equatable {
     case unavailable
+    case permissionNotGranted
     case noAudioCaptured
+    case recordingTooShort
+    /// Bytes were captured, but they carry no signal. Uploading them buys a
+    /// blank transcript and, once the cleanup pass is handed that blank, a
+    /// conversational reply that reads like a transcript.
+    case silentInput
 
     public var errorDescription: String? {
         switch self {
         case .unavailable:
             "The microphone is unavailable right now."
+        case .permissionNotGranted:
+            "Microphone access has not been granted."
         case .noAudioCaptured:
             "The recording did not contain usable audio."
+        case .recordingTooShort:
+            "That was too short to transcribe. Hold the microphone a moment longer."
+        case .silentInput:
+            "No sound reached the microphone. Check that nothing is covering it "
+                + "and that no other app is using it."
         }
     }
 }
@@ -65,12 +78,23 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
     /// Matches `LEVEL_SAMPLE_INTERVAL_MS`.
     private static let levelSampleInterval = Duration.milliseconds(100)
 
-    private let engine = AVAudioEngine()
+    /// Rebuilt per recording rather than held for the lifetime of the app.
+    ///
+    /// `AVAudioEngine` resolves its input node against the session that was
+    /// active when the node was first touched and caches that node's format.
+    /// Since teardown deactivates the session, a reused engine can carry a
+    /// format from a route that no longer exists, and a tap installed against
+    /// the stale format is the one shape of this bug that never reports itself.
+    private var engine = AVAudioEngine()
     private let sink = VoicePCMSink()
     private var isCapturing = false
     private var levelTask: Task<Void, Never>?
     private var interruptionObserver: (any NSObjectProtocol)?
     private var didInterrupt = false
+    /// Held past `start` so teardown can flush whatever the resampler is still
+    /// buffering instead of dropping it.
+    private var converter: AVAudioConverter?
+    private var targetFormat: AVAudioFormat?
 
     public init() {}
 
@@ -103,16 +127,48 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
     ) async throws {
         await cancel()
         didInterrupt = false
+        VoiceCaptureDiagnostics.beginRun("voice capture start")
+
+        // Checked here and not only in the controller: iOS does not fail an
+        // engine start without record permission, it hands back a running tap
+        // full of zeros. Without this guard a revoked or never-granted mic
+        // produces a perfectly well-formed silent WAV.
+        let permission = AVAudioApplication.shared.recordPermission
+        VoiceCaptureDiagnostics.record(
+            "permission=\(VoiceCaptureDiagnostics.describe(permission: permission))"
+        )
+        guard permission == .granted else { throw VoiceCaptureError.permissionNotGranted }
 
         let session = AVAudioSession.sharedInstance()
-        // `.measurement` disables the input processing chain (AGC, EQ) that
-        // colours speech before it reaches the transcriber.
-        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+        // `.record`, not `.playAndRecord`: nothing here plays while the
+        // microphone is open, and `.playAndRecord` drags in an output route —
+        // and with it `.defaultToSpeaker`, which exists only to move that output
+        // — for no benefit. A record-only session also takes the input outright
+        // instead of sharing it with whatever else is making noise.
+        //
+        // `.default`, not `.measurement`: `.measurement` is the mode that
+        // *disables* the input chain (AGC, EQ, noise suppression). That is right
+        // for an app measuring a signal and wrong for one handing handheld
+        // speech to a remote transcriber — without gain control a phone held at
+        // arm's length lands tens of decibels below what a speech model needs,
+        // and a model given near-silence returns an empty transcript rather than
+        // an error.
+        try session.setCategory(.record, mode: .default, options: [])
         try session.setActive(true, options: [])
+        VoiceCaptureDiagnostics.record(VoiceCaptureDiagnostics.describe(session: session))
+        guard session.isInputAvailable else {
+            VoiceCaptureDiagnostics.record("abort: session reports no input available")
+            throw VoiceCaptureError.unavailable
+        }
 
+        engine = AVAudioEngine()
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
+        VoiceCaptureDiagnostics.record(
+            VoiceCaptureDiagnostics.describe(format: inputFormat, label: "input")
+        )
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            VoiceCaptureDiagnostics.record("abort: input node reported an empty format")
             throw VoiceCaptureError.unavailable
         }
         guard let targetFormat = AVAudioFormat(
@@ -121,8 +177,14 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
             channels: AVAudioChannelCount(VoiceWaveFile.channelCount),
             interleaved: true
         ), let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            VoiceCaptureDiagnostics.record("abort: could not build the 16 kHz converter")
             throw VoiceCaptureError.unavailable
         }
+        VoiceCaptureDiagnostics.record(
+            VoiceCaptureDiagnostics.describe(format: targetFormat, label: "target")
+        )
+        self.converter = converter
+        self.targetFormat = targetFormat
 
         sink.reset(
             maximumByteCount: Int(
@@ -138,9 +200,11 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
+            VoiceCaptureDiagnostics.record("abort: engine.start threw \(error)")
             throw error
         }
         isCapturing = true
+        VoiceCaptureDiagnostics.record("engine running")
 
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -152,6 +216,7 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
             MainActor.assumeIsolated {
                 guard let self, !self.didInterrupt else { return }
                 self.didInterrupt = true
+                VoiceCaptureDiagnostics.record("interrupted")
                 onInterrupted()
             }
         }
@@ -170,22 +235,44 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
 
     public func stop() async throws -> VoiceRecording {
         guard isCapturing else { throw VoiceCaptureError.noAudioCaptured }
-        let samples = teardown()
-        guard !samples.isEmpty else { throw VoiceCaptureError.noAudioCaptured }
+        let (samples, tally) = teardown()
+
+        // Measured before the header goes on, so what is checked is the payload
+        // rather than the 44 bytes that are always there.
+        let audit = VoiceCaptureAudit.audit(samples: samples)
+        VoiceCaptureDiagnostics.record(tally.description)
+        VoiceCaptureDiagnostics.record("audit \(audit)")
+        if let rejection = audit.rejection {
+            VoiceCaptureDiagnostics.record("rejected: \(rejection.errorDescription ?? "")")
+            throw rejection
+        }
+        if audit.isQuiet {
+            VoiceCaptureDiagnostics.record(
+                "warning: the whole recording sits below "
+                    + "\(VoiceCaptureAudit.quietPeakDecibels) dBFS peak"
+            )
+        }
+
         return VoiceRecording(
             data: VoiceWaveFile.file(samples: samples),
             format: .wav,
-            durationSeconds: VoiceWaveFile.durationSeconds(dataByteCount: samples.count)
+            durationSeconds: audit.durationSeconds
         )
     }
 
     public func cancel() async {
         guard isCapturing else { return }
-        _ = teardown()
+        let (samples, tally) = teardown()
+        // Logged even though the audio is being thrown away: a run the user
+        // discarded is still a run whose capture numbers say whether the
+        // microphone was working.
+        VoiceCaptureDiagnostics.record("discarded \(tally)")
+        VoiceCaptureDiagnostics.record(
+            "discarded audit \(VoiceCaptureAudit.audit(samples: samples))"
+        )
     }
 
-    @discardableResult
-    private func teardown() -> Data {
+    private func teardown() -> (samples: Data, tally: VoiceConversionTally) {
         levelTask?.cancel()
         levelTask = nil
         if let interruptionObserver {
@@ -194,14 +281,21 @@ public final class VoiceMicrophoneCapture: VoiceCapturing {
         }
         if isCapturing {
             engine.inputNode.removeTap(onBus: 0)
+            // Blocks until the render thread has stopped, so the converter is
+            // ours again and flushing it cannot race a tap still in flight.
             engine.stop()
+            if let converter, let targetFormat {
+                sink.finish(using: converter, to: targetFormat)
+            }
         }
         isCapturing = false
-        let samples = sink.drain()
+        converter = nil
+        targetFormat = nil
+        let drained = sink.drain()
         // Best effort: another app may already own the session, and failing to
         // hand it back is not a reason to lose the recording.
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        return samples
+        return drained
     }
 }
 
@@ -218,22 +312,26 @@ private final class VoicePCMSink: @unchecked Sendable {
     private var samples = Data()
     private var level = 0.0
     private var maximumByteCount = Int.max
+    private var tally = VoiceConversionTally()
 
     func reset(maximumByteCount: Int) {
         lock.lock()
         defer { lock.unlock() }
         samples = Data()
         level = 0
+        tally = VoiceConversionTally()
         self.maximumByteCount = max(0, maximumByteCount)
     }
 
-    func drain() -> Data {
+    func drain() -> (samples: Data, tally: VoiceConversionTally) {
         lock.lock()
         defer { lock.unlock() }
         let drained = samples
+        let drainedTally = tally
         samples = Data()
         level = 0
-        return drained
+        tally = VoiceConversionTally()
+        return (drained, drainedTally)
     }
 
     func takeLevel() -> Double {
@@ -254,9 +352,12 @@ private final class VoicePCMSink: @unchecked Sendable {
         }
         var consumed = false
         var conversionError: NSError?
-        converter.convert(to: converted, error: &conversionError) { _, status in
-            // One tap buffer per conversion pass: reporting `.haveData` twice
-            // would replay the same audio.
+        // One tap buffer per conversion pass: reporting `.haveData` twice would
+        // replay the same audio. The pass therefore ends on `.inputRanDry`,
+        // which is the expected status here and not a failure — the resampler
+        // emits every whole output frame it can build from the input it was
+        // given and keeps only the handful of samples straddling the boundary.
+        let status = converter.convert(to: converted, error: &conversionError) { _, status in
             if consumed {
                 status.pointee = .noDataNow
                 return nil
@@ -265,11 +366,42 @@ private final class VoicePCMSink: @unchecked Sendable {
             status.pointee = .haveData
             return buffer
         }
-        guard conversionError == nil,
-              converted.frameLength > 0,
-              let channel = converted.int16ChannelData?[0] else {
+
+        lock.lock()
+        tally.tapCallbacks += 1
+        tally.inputFrames += Int(buffer.frameLength)
+        tally.record(status: status)
+        if let conversionError {
+            if tally.firstErrorCode == 0 { tally.firstErrorCode = conversionError.code }
+        }
+        if conversionError == nil, converted.frameLength == 0 { tally.emptyPasses += 1 }
+        lock.unlock()
+
+        guard conversionError == nil, converted.frameLength > 0 else { return }
+        store(converted)
+    }
+
+    /// Flushes the frames the resampler is still holding once the tap has been
+    /// removed. Small — a handful of samples — but it is the only part of the
+    /// pipeline that would otherwise be dropped on the floor by design.
+    func finish(using converter: AVAudioConverter, to format: AVAudioFormat) {
+        guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096) else {
             return
         }
+        var conversionError: NSError?
+        _ = converter.convert(to: converted, error: &conversionError) { _, status in
+            status.pointee = .endOfStream
+            return nil
+        }
+        guard conversionError == nil, converted.frameLength > 0 else { return }
+        lock.lock()
+        tally.tailFrames += Int(converted.frameLength)
+        lock.unlock()
+        store(converted)
+    }
+
+    private func store(_ converted: AVAudioPCMBuffer) {
+        guard let channel = converted.int16ChannelData?[0] else { return }
         let frameCount = Int(converted.frameLength)
 
         var sumOfSquares = 0.0
@@ -288,7 +420,11 @@ private final class VoicePCMSink: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         level = normalized
-        guard samples.count < maximumByteCount else { return }
+        tally.outputFrames += frameCount
+        guard samples.count < maximumByteCount else {
+            tally.cappedPasses += 1
+            return
+        }
         channel.withMemoryRebound(to: UInt8.self, capacity: frameCount * 2) { bytes in
             samples.append(bytes, count: frameCount * 2)
         }

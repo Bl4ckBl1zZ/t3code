@@ -50,7 +50,6 @@ struct FeatureImageAttachmentPicker: View {
     /// available on a text-only model.
     let isEnabled: Bool
 
-    @State private var isAttachmentSourcePresented = false
     @State private var isPhotoLibraryPresented = false
     @State private var isCameraPresented = false
     @State private var isDocumentPickerPresented = false
@@ -69,30 +68,53 @@ struct FeatureImageAttachmentPicker: View {
         self.isEnabled = isEnabled
     }
 
+    /// Matches the send button's disc so the two ends of the composer toolbar
+    /// read as one control set: a glass secondary next to a filled primary.
+    private var glyphShape: Circle { Circle() }
+
     var body: some View {
-        Button {
-            isAttachmentSourcePresented = true
+        Menu {
+            Button { present(.photoLibrary) } label: {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
+            }
+            .disabled(!isEnabled)
+            Button { present(.camera) } label: {
+                Label("Camera", systemImage: "camera")
+            }
+            .disabled(!isEnabled || !UIImagePickerController.isSourceTypeAvailable(.camera))
+            Button { present(.files) } label: {
+                Label("Files", systemImage: "folder")
+            }
         } label: {
             Image(systemName: preparationState.isPreparing ? "hourglass" : "paperclip")
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(T3Colors.textSecondary)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 34, height: 34)
+                // Liquid Glass on iOS 26, the closest pre-glass material below
+                // it. `.clear` because this floats over the draft the user is
+                // reading rather than over chrome.
+                .t3GlassEffect(.clear, in: glyphShape)
+                // A material alone all but disappears against the composer's own
+                // fill, so the rim is what makes the control legible on both
+                // paths.
+                .overlay { glyphShape.stroke(T3Colors.inputBorder, lineWidth: 1) }
                 .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
                 .contentShape(Rectangle())
         }
+        // The composer sits at the bottom, so the menu opens upward; `.priority`
+        // ordering would flip the list and put Files on top.
+        .menuOrder(.fixed)
         .buttonStyle(.plain)
+        .animation(
+            .spring(response: 0.32, dampingFraction: 0.72),
+            value: preparationState.isPreparing
+        )
         .disabled(!canAdd)
         .opacity(canAdd ? 1 : 0.3)
         .accessibilityLabel(attachmentAccessibilityLabel)
         .accessibilityIdentifier("image-attachment-picker")
         .accessibilityHint(attachmentAccessibilityHint)
-        .confirmationDialog("Add attachment", isPresented: $isAttachmentSourcePresented) {
-            Button("Photo Library") { present(.photoLibrary) }
-                .disabled(!isEnabled)
-            Button("Camera") { present(.camera) }
-                .disabled(!isEnabled || !UIImagePickerController.isSourceTypeAvailable(.camera))
-            Button("Files") { present(.files) }
-            Button("Cancel", role: .cancel) {}
-        }
         .fullScreenCover(isPresented: $isPhotoLibraryPresented) {
             FeaturePhotoLibraryPicker(
                 maximumCount: max(1, remainingCount),
@@ -162,12 +184,11 @@ struct FeatureImageAttachmentPicker: View {
 
     private func present(_ source: Source) {
         sourcePresentationTask?.cancel()
-        isAttachmentSourcePresented = false
         sourcePresentationTask = Task { @MainActor in
-            // A confirmation dialog is still the active presenter while its action
-            // runs. Wait for its dismissal animation before presenting another
-            // controller or UIKit can reject (or race) the new presentation.
-            try? await Task.sleep(for: .milliseconds(300))
+            // The menu is still the active presenter while its action runs. Wait
+            // for its dismissal animation before presenting another controller or
+            // UIKit can reject (or race) the new presentation.
+            try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, canAdd else { return }
             switch source {
             case .photoLibrary:

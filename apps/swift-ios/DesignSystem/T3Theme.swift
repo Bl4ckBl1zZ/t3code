@@ -97,6 +97,81 @@ enum T3Metrics {
     static let readingWidth: CGFloat = 760
 }
 
+/// Liquid Glass, with a genuine pre-iOS-26 fallback.
+///
+/// `glassEffect(_:in:)`, `GlassEffectContainer` and the `.glass` button style
+/// all arrived in iOS 26; this target still deploys to iOS 17 while building
+/// against the iOS 27 SDK, so calling them unguarded would compile and then
+/// crash on every shipping device that predates them. Every glass surface goes
+/// through here instead: iOS 26 gets the system material, and older systems get
+/// the closest thing that shipped before it — a blur material filling the same
+/// shape.
+enum T3Glass {
+    /// How much of the backdrop shows through.
+    enum Prominence {
+        /// Chrome that content passes behind.
+        case regular
+        /// A control floating directly over content, where the backdrop should
+        /// stay legible through it.
+        case clear
+    }
+}
+
+extension View {
+    /// Fills `shape` behind the view with Liquid Glass, or with the closest
+    /// pre-iOS-26 blur material.
+    ///
+    /// The rim is deliberately not drawn here: real glass carries its own
+    /// specular edge and a material does not, so call sites that need a visible
+    /// boundary add one stroke that both paths share.
+    @ViewBuilder
+    func t3GlassEffect(
+        _ prominence: T3Glass.Prominence = .regular,
+        in shape: some Shape,
+        tint: Color? = nil,
+        interactive: Bool = false
+    ) -> some View {
+        if #available(iOS 26, *) {
+            let base: Glass = prominence == .clear ? .clear : .regular
+            let tinted = tint.map { base.tint($0) } ?? base
+            glassEffect(tinted.interactive(interactive), in: shape)
+        } else {
+            background {
+                ZStack {
+                    shape.fill(
+                        prominence == .clear
+                            ? AnyShapeStyle(.ultraThinMaterial)
+                            : AnyShapeStyle(.regularMaterial)
+                    )
+                    if let tint {
+                        // Glass tints the material rather than painting over it,
+                        // so the fallback keeps the tint translucent too.
+                        shape.fill(tint.opacity(0.22))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Groups sibling glass shapes so iOS 26 can blend them into a single lens as
+/// they approach each other. Before iOS 26 it simply lays its content out,
+/// which is exactly what happened before Liquid Glass existed.
+struct T3GlassContainer<Content: View>: View {
+    var spacing: CGFloat?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if #available(iOS 26, *) {
+            GlassEffectContainer(spacing: spacing) {
+                content
+            }
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
     func t3NavigationChrome() -> some View {
         toolbarBackground(T3Colors.sheet, for: .navigationBar)

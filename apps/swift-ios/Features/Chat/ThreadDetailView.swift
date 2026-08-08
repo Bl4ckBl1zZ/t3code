@@ -536,6 +536,10 @@ public struct ThreadDetailView: View {
     private var composerKeyboardDismissGesture: some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged { value in
+                // A push-to-talk hold is itself a drag over this view. Without
+                // this the keyboard closes the moment the finger drifts on the
+                // mic, mid-recording.
+                guard !VoiceComposerCoordinator.shared.isTouchActive else { return }
                 guard composerFocused,
                       value.translation.height > 8,
                       value.translation.height > abs(value.translation.width) else {

@@ -13,6 +13,11 @@ struct FeatureComposerView: View {
     /// view's own text input.
     private let voice = VoiceComposerCoordinator.shared
     @State private var caret = VoiceComposerCaret()
+    /// Owned here because both halves of the recording morph — the proxy inside
+    /// the combo button and the capsule behind the recording bar — live in this
+    /// view, and `matchedGeometryEffect` only pairs them within one namespace.
+    @Namespace private var voiceMorph
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
@@ -104,6 +109,12 @@ struct FeatureComposerView: View {
                 )
                 .padding(.trailing, 13)
                 .padding(.bottom, 62)
+                // Without a transaction around the hold flipping on, the target
+                // has a transition it never gets to play.
+                .animation(
+                    VoiceMorph.appearance(reduceMotion: reduceMotion),
+                    value: voice.holdActive
+                )
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -227,6 +238,11 @@ struct FeatureComposerView: View {
                 .stroke(T3Colors.inputBorder, lineWidth: 1)
         }
         .clipShape(composerShape)
+        // Scoped to the one value that opens and closes the recording bar, so
+        // the button's proxy and the bar's capsule change in a single
+        // transaction and the shared shape interpolates between them. Nothing
+        // else in the composer animates off the back of it.
+        .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: voice.state.isBusy)
     }
 
     private var collapsedComposer: some View {
@@ -302,9 +318,15 @@ struct FeatureComposerView: View {
                     .accessibilityIdentifier("attachment-preparing")
             }
 
-            VoiceRecordingBar(voice: voice)
+            // One container so iOS 26 can merge the recording capsule and the
+            // attachment button into a single lens as the bar grows past it.
+            T3GlassContainer(spacing: 16) {
+                VStack(spacing: 0) {
+                    VoiceRecordingBar(voice: voice, morphNamespace: voiceMorph)
 
-            composerFooter
+                    composerFooter
+                }
+            }
         }
     }
 
@@ -352,6 +374,7 @@ struct FeatureComposerView: View {
                 voice: voice,
                 canSend: canSend,
                 isSending: isSending,
+                morphNamespace: voiceMorph,
                 onSend: performPrimaryAction
             )
         } else {
