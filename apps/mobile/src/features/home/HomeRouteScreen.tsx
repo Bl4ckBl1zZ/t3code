@@ -3,7 +3,6 @@ import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 
-import { getCompactBrandHeaderOptions } from "../../components/CompactBrandTitle";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import {
@@ -27,6 +26,7 @@ import { useHomeListOptions } from "./home-list-options";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
+import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -58,6 +58,7 @@ export function HomeRouteScreen() {
     unsnoozeThread,
     pinThread,
     unpinThread,
+    movePinnedThread,
     unsettleThread,
   } = useThreadListActions();
   const allPendingTasks = usePendingNewTasks();
@@ -161,12 +162,17 @@ export function HomeRouteScreen() {
   return (
     <AndroidHomeFabLayout onStartNewTask={startNewTask}>
       <>
-        {/* Restore the compact title after the split branch blanks the detail header. */}
+        {/* Restore the compact title after the split branch blanks the detail
+            header. The brand slot doubles as the connection status surface:
+            while an environment reconnects, the lockup fades to a status label
+            in place (no layout shift in the list below); while connected it
+            stays the workspace-switcher trigger. */}
         <NativeStackScreenOptions
           optionsVersion={workspace}
-          options={getCompactBrandHeaderOptions(undefined, {
-            workspace,
-            onWorkspaceChange: setWorkspace,
+          options={getConnectionAwareBrandHeaderOptions({
+            onOpenEnvironments: () =>
+              navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" }),
+            workspaceMenu: { workspace, onWorkspaceChange: setWorkspace },
           })}
         />
         <HomeHeader
@@ -181,6 +187,9 @@ export function HomeRouteScreen() {
           onEnvironmentChange={setSelectedEnvironmentId}
           onWorkspaceChange={setWorkspace}
           onProjectChange={setSelectedProjectKey}
+          onOpenEnvironments={() =>
+            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+          }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
@@ -202,11 +211,9 @@ export function HomeRouteScreen() {
           onUnsettleThread={unsettleThread}
           onPinThread={pinThread}
           onUnpinThread={unpinThread}
+          onMovePinnedThread={movePinnedThread}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
-          onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
-          }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}

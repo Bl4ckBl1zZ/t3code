@@ -60,9 +60,8 @@ import {
   isDraftComposerImageAttachment,
   type DraftComposerAttachment,
 } from "../../lib/composerImages";
-import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { buildProviderDriverMap, isHermesThread } from "../../lib/mobileWorkspace";
-import { runtimeModeMenu } from "../../lib/runtimeModeMenu";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -70,12 +69,7 @@ import {
   normalizeSearchQuery,
   scoreQueryMatch,
 } from "@t3tools/shared/searchRanking";
-import {
-  applyProviderOptionMenuEvent,
-  buildProviderOptionMenuActions,
-  providerOptionsConfigurationLabel,
-  resolveProviderOptionDescriptors,
-} from "../../lib/providerOptions";
+import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import type { QueuedThreadMessage } from "../../state/thread-outbox";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { QueuedMessageStrip } from "./QueuedMessageStrip";
@@ -83,11 +77,12 @@ import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerComm
 import { AnimatedSymbolSwap, SymbolView } from "../../components/AppSymbol";
 import {
   voiceComboButtonProps,
-  VoiceCancelTarget,
   VoiceComboBadge,
   VoiceRecordingBar,
 } from "../voice/VoiceComposerControls";
 import { useVoiceComposer } from "../voice/useVoiceComposer";
+import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
+import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -302,14 +297,27 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
   const [isFocused, setIsFocused] = useState(false);
+  const settingsSheetPresentation = useThreadSettingsSheetPresentation({
+    editorRef: inputRef,
+    isEditorFocused: isFocused,
+  });
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
-  const isExpanded = isFocused;
+  // Opening and closing count as active so the composer stays expanded while
+  // focus moves between its native editor and the settings modal.
+  const isExpanded = isFocused || settingsSheetPresentation.isActive;
   const canSend = hasContent;
+
+  // Notify the parent from the derived value, not focus events: the parent
+  // sizes the feed inset from this, and blur-during-sheet would otherwise
+  // report collapsed while the composer still renders expanded.
+  useEffect(() => {
+    onExpandedChange?.(isExpanded);
+  }, [isExpanded, onExpandedChange]);
 
   const onPressImage = useCallback(
     (uri: string) => {
@@ -328,13 +336,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const handleFocus = useCallback(() => {
     setIsFocused(true);
-    onExpandedChange?.(true);
-  }, [onExpandedChange]);
+  }, []);
 
   const handleBlur = useCallback(() => {
     setIsFocused(false);
-    onExpandedChange?.(false);
-  }, [onExpandedChange]);
+  }, []);
   const showStopAction = props.canStopThread;
 
   const currentModelSelection = props.selectedThread.modelSelection;
@@ -668,6 +674,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [props.serverConfig, currentModelSelection, isHermesConversation],
   );
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
+  // An existing thread is bound to its harness: sessions can't move between
+  // provider instances, so the picker only offers the thread's own group.
+  const threadProviderGroups = useMemo(
+    () => providerGroups.filter((group) => group.providerKey === currentModelSelection.instanceId),
+    [providerGroups, currentModelSelection.instanceId],
+  );
   const currentModelOption =
     modelOptions.find(
       (option) =>
@@ -682,88 +694,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }),
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
-  const configurationLabel = useMemo(
-    () => providerOptionsConfigurationLabel(providerOptionDescriptors),
-    [providerOptionDescriptors],
-  );
-  const modelMenuActions = useMemo(
-    () => buildModelMenuActions(providerGroups, currentModelSelection),
-    [providerGroups, currentModelSelection],
-  );
-
-  // ── Options menu ─────────────────────────────────────────
-  const runtimeMenu = useMemo(
-    () =>
-      runtimeModeMenu({
-        isHermes: isHermesConversation,
-        runtimeMode: currentRuntimeMode,
-      }),
-    [currentRuntimeMode, isHermesConversation],
-  );
-  const optionsMenuActions = useMemo(
-    () => [
-      ...buildProviderOptionMenuActions(providerOptionDescriptors),
-      {
-        id: "options-runtime",
-        title: "Runtime",
-        subtitle: runtimeMenu.selected.title,
-        subactions: runtimeMenu.options.map((option) => ({
-          id: `options:runtime:${option.mode}`,
-          title: option.title,
-          state: runtimeMenu.selected.mode === option.mode ? ("on" as const) : undefined,
-        })),
-      },
-      {
-        id: "options-interaction",
-        title: "Interaction",
-        subtitle: currentInteractionMode === "plan" ? "Plan" : "Default",
-        subactions: [
-          { id: "options:interaction:default", title: "Default" },
-          { id: "options:interaction:plan", title: "Plan" },
-        ].map((option) => {
-          const value = option.id.replace("options:interaction:", "");
-          return {
-            id: option.id,
-            title: option.title,
-            state: currentInteractionMode === value ? ("on" as const) : undefined,
-          };
-        }),
-      },
-    ],
-    [currentInteractionMode, providerOptionDescriptors, runtimeMenu],
-  );
-
-  // ── Menu handlers ────────────────────────────────────────
-  function handleModelMenuAction(event: string) {
-    if (!event.startsWith("model:")) {
-      return;
-    }
-    const modelKey = event.slice("model:".length);
-    const option = modelOptions.find((o) => o.key === modelKey);
-    if (option) {
-      props.onUpdateModelSelection(option.selection);
-    }
-  }
-
-  function handleOptionsMenuAction(event: string) {
-    const providerOptions = applyProviderOptionMenuEvent(providerOptionDescriptors, event);
-    if (providerOptions) {
-      props.onUpdateModelSelection({
-        ...currentModelSelection,
-        options: providerOptions,
-      });
-      return;
-    }
-    if (event.startsWith("options:runtime:")) {
-      const runtimeMode = event.slice("options:runtime:".length) as RuntimeMode;
-      props.onUpdateRuntimeMode(runtimeMode);
-      return;
-    }
-    if (event.startsWith("options:interaction:")) {
-      const interactionMode = event.slice("options:interaction:".length) as ProviderInteractionMode;
-      props.onUpdateInteractionMode(interactionMode);
-    }
-  }
+  const settingsSummaryLabel = threadSettingsSummaryLabel({
+    modelLabel: currentModelOption?.label ?? currentModelSelection.model,
+    optionDescriptors: providerOptionDescriptors,
+    runtimeMode: currentRuntimeMode,
+    interactionMode: currentInteractionMode,
+    isHermes: isHermesConversation,
+  });
 
   return (
     <Animated.View
@@ -811,17 +748,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           />
         ) : null}
 
-        {/* The one recording HUD for both modes: it sits above the pill/card so the draft and
-            attachments stay visible and mounted while Voice Input is active. */}
-        <VoiceRecordingBar
-          state={voice.state}
-          subscribeLevel={voice.subscribeLevel}
-          onCancel={() => void voice.cancel()}
-          onCleanupChange={voice.setCleanup}
-          holdActive={voice.holdActive}
-          cancelArmed={voice.cancelArmed}
-        />
-
         <QueuedMessageStrip
           messages={props.queuedMessages}
           dispatchingMessageId={props.dispatchingQueuedMessageId}
@@ -831,187 +757,210 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           onEditingChange={props.onQueuedMessageEditingChange}
         />
 
-        <ComposerSurface
-          isDarkMode={isDarkMode}
-          style={
-            isExpanded
-              ? {
-                  borderRadius: 20,
-                  overflow: "hidden" as const,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                }
-              : {
-                  borderRadius: 999,
-                  overflow: "hidden" as const,
-                  flexDirection: "row" as const,
-                  alignItems: "center" as const,
-                  paddingLeft: 5,
-                  paddingRight: 5,
-                  paddingVertical: 5,
-                }
-          }
-        >
-          {/* Attachment strip — inside the card, above the text input */}
-          {isExpanded ? (
-            <Animated.View
-              className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
-              entering={FadeIn.duration(160)}
-              exiting={FadeOut.duration(120)}
-            >
-              <ComposerAttachmentStrip
-                attachments={props.draftAttachments}
-                onRemove={props.onRemoveDraftImage}
-                onPressImage={onPressImage}
-              />
-            </Animated.View>
-          ) : null}
+        <View className="relative">
+          <ComposerSurface
+            isDarkMode={isDarkMode}
+            style={
+              isExpanded
+                ? {
+                    borderRadius: 20,
+                    overflow: "hidden" as const,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                  }
+                : {
+                    borderRadius: 999,
+                    overflow: "hidden" as const,
+                    flexDirection: "row" as const,
+                    alignItems: "center" as const,
+                    paddingLeft: 5,
+                    paddingRight: 5,
+                    paddingVertical: 5,
+                  }
+            }
+          >
+            {/* Attachment strip — inside the card, above the text input */}
+            {isExpanded ? (
+              <Animated.View
+                className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
+                entering={FadeIn.duration(160)}
+                exiting={FadeOut.duration(120)}
+              >
+                <ComposerAttachmentStrip
+                  attachments={props.draftAttachments}
+                  onRemove={props.onRemoveDraftImage}
+                  onPressImage={onPressImage}
+                />
+              </Animated.View>
+            ) : null}
 
-          {!isExpanded ? (
-            <ControlPillMenu
-              actions={attachmentMenuActions}
-              onPressAction={({ nativeEvent }) => onAttachmentMenuSelect(nativeEvent.event)}
-            >
-              <ControlPill glass icon="plus" accessibilityLabel="Add attachment" />
-            </ControlPillMenu>
-          ) : null}
-          <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
-            <ComposerEditor
-              ref={inputRef}
-              multiline
-              value={props.draftMessage}
-              skills={selectedProviderStatus?.skills ?? []}
-              selection={composerSelection}
-              onChangeText={props.onChangeDraftMessage}
-              onSelectionChange={handleSelectionChange}
-              onPasteImages={(uris) => void props.onNativePasteImages(uris)}
-              placeholder={props.placeholder}
-              onFocus={handleFocus}
-              onBlur={handleBlur}
-              onSubmit={handleSend}
-              scrollEnabled={isExpanded}
-              // Android: collapsed single line centers natively (gravity) in
-              // a pill-height box matching the send button; iOS keeps insets.
-              singleLineCentered={!isExpanded}
-              contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
-              style={
-                isExpanded
-                  ? {
-                      minHeight: 80,
-                      maxHeight: 160,
-                      paddingHorizontal: 4,
-                      paddingVertical: 4,
-                    }
-                  : {
-                      height: 36,
-                    }
-              }
-              textStyle={{
-                ...bodyText,
-                color: foregroundColor,
-              }}
-            />
-          </View>
-          {!isExpanded && props.draftAttachments.length > 0 ? (
-            <View className="flex-row gap-1 pl-1">
-              {props.draftAttachments.slice(0, 3).map((attachment) =>
-                isDraftComposerImageAttachment(attachment) ? (
-                  <Pressable
-                    key={attachment.id}
-                    onPress={() => onPressImage(attachment.previewUri)}
-                  >
-                    <Image
-                      source={{ uri: attachment.previewUri }}
-                      className="size-[30px] rounded-lg bg-subtle"
-                      resizeMode="cover"
-                    />
-                  </Pressable>
-                ) : (
-                  // No thumbnail for documents: a glyph tile keeps the
-                  // collapsed strip's 30pt rhythm.
-                  <View
-                    key={attachment.id}
-                    className="size-[30px] items-center justify-center rounded-lg bg-subtle"
-                  >
-                    <SymbolView
-                      name={
-                        attachment.type === "pdf"
-                          ? "doc.richtext"
-                          : attachment.type === "video"
-                            ? "play.rectangle"
-                            : "doc"
-                      }
-                      size={14}
-                      tintColor={foregroundColor}
-                      type="monochrome"
-                    />
-                  </View>
-                ),
-              )}
-              {props.draftAttachments.length > 3 ? (
-                <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
-                  <Text className="text-foreground-muted text-2xs font-t3-bold">
-                    +{props.draftAttachments.length - 3}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-          {!isExpanded ? (
-            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
-              <View className="flex-row items-center gap-1">
-                {/* Mic drives the full gesture: tap toggles hands-free, hold is
-                  push-to-talk, slide up cancels. The recording HUD renders above the pill.
-                  A running thread swaps the send pill for a stop pill. */}
-                <GestureDetector
-                  gesture={voice.comboGesture({ canSend: false, onSend: () => undefined })}
+            {!isExpanded ? (
+              <ControlPillMenu
+                actions={attachmentMenuActions}
+                onPressAction={({ nativeEvent }) => onAttachmentMenuSelect(nativeEvent.event)}
+              >
+                {/* Bare glyph instead of a bordered circle: the pill's chrome is the container,
+                    matching the reference composer. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Add attachment"
+                  className="h-11 w-10 items-center justify-center"
                 >
-                  <Animated.View style={voice.comboPressStyle}>
+                  <SymbolView name="plus" size={20} tintColor={iconColor} type="monochrome" />
+                </Pressable>
+              </ControlPillMenu>
+            ) : null}
+            <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
+              <ComposerEditor
+                ref={inputRef}
+                multiline
+                value={props.draftMessage}
+                skills={selectedProviderStatus?.skills ?? []}
+                selection={composerSelection}
+                onChangeText={props.onChangeDraftMessage}
+                onSelectionChange={handleSelectionChange}
+                onPasteImages={(uris) => void props.onNativePasteImages(uris)}
+                placeholder={props.placeholder}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                onSubmit={handleSend}
+                scrollEnabled={isExpanded}
+                // Android: collapsed single line centers natively (gravity) in
+                // a pill-height box matching the send button; iOS keeps insets.
+                singleLineCentered={!isExpanded}
+                contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
+                style={
+                  isExpanded
+                    ? {
+                        minHeight: 80,
+                        maxHeight: 160,
+                        paddingHorizontal: 4,
+                        paddingVertical: 4,
+                      }
+                    : {
+                        height: 36,
+                      }
+                }
+                textStyle={{
+                  ...bodyText,
+                  color: foregroundColor,
+                }}
+              />
+            </View>
+            {!isExpanded && props.draftAttachments.length > 0 ? (
+              <View className="flex-row gap-1 pl-1">
+                {props.draftAttachments.slice(0, 3).map((attachment) =>
+                  isDraftComposerImageAttachment(attachment) ? (
                     <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        voice.state.type === "recording"
-                          ? "Stop recording and transcribe"
-                          : "Dictate message"
-                      }
-                      accessibilityHint="Hold to record, release to send, slide up and release to cancel"
-                      disabled={voiceBusy && voice.state.type !== "recording"}
-                      onPress={() =>
-                        voice.comboActivate({ canSend: false, onSend: () => undefined })
-                      }
-                      className="h-11 w-9 items-center justify-center"
+                      key={attachment.id}
+                      onPress={() => onPressImage(attachment.previewUri)}
                     >
-                      <AnimatedSymbolSwap
-                        name={voice.state.type === "recording" ? "stop.fill" : "mic"}
-                        size={18}
-                        tintColor={voice.state.type === "recording" ? dangerColor : iconColor}
-                        type="monochrome"
+                      <Image
+                        source={{ uri: attachment.previewUri }}
+                        className="size-[30px] rounded-lg bg-subtle"
+                        resizeMode="cover"
                       />
                     </Pressable>
-                  </Animated.View>
-                </GestureDetector>
-                {showStopAction ? (
-                  <ControlPill
-                    glass
-                    icon="stop.fill"
-                    variant="danger"
-                    accessibilityLabel="Stop"
-                    onPress={props.onStopThread}
-                  />
-                ) : (
-                  <ControlPill
-                    glass
-                    icon="arrow.up"
-                    variant="primary"
-                    disabled={!canSend || voiceBusy}
-                    accessibilityLabel="Send"
-                    onPress={() => void handleSend()}
-                  />
+                  ) : (
+                    // No thumbnail for documents: a glyph tile keeps the
+                    // collapsed strip's 30pt rhythm.
+                    <View
+                      key={attachment.id}
+                      className="size-[30px] items-center justify-center rounded-lg bg-subtle"
+                    >
+                      <SymbolView
+                        name={
+                          attachment.type === "pdf"
+                            ? "doc.richtext"
+                            : attachment.type === "video"
+                              ? "play.rectangle"
+                              : "doc"
+                        }
+                        size={14}
+                        tintColor={foregroundColor}
+                        type="monochrome"
+                      />
+                    </View>
+                  ),
                 )}
+                {props.draftAttachments.length > 3 ? (
+                  <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
+                    <Text className="text-foreground-muted text-2xs font-t3-bold">
+                      +{props.draftAttachments.length - 3}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
-            </Animated.View>
-          ) : null}
-        </ComposerSurface>
+            ) : null}
+            {!isExpanded ? (
+              <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
+                <View className="flex-row items-center gap-1">
+                  {/* Mic drives the full gesture: tap toggles hands-free, hold is
+                    push-to-talk, slide up cancels. The recording HUD renders above the pill.
+                    A running thread swaps the send pill for a stop pill. */}
+                  <GestureDetector
+                    gesture={voice.comboGesture({ canSend: false, onSend: () => undefined })}
+                  >
+                    <Animated.View style={voice.comboPressStyle}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          voice.state.type === "recording"
+                            ? "Stop recording and transcribe"
+                            : "Dictate message"
+                        }
+                        accessibilityHint="Hold to record, release to send, slide up and release to cancel"
+                        disabled={voiceBusy && voice.state.type !== "recording"}
+                        onPress={() =>
+                          voice.comboActivate({ canSend: false, onSend: () => undefined })
+                        }
+                        className="h-11 w-9 items-center justify-center"
+                      >
+                        <AnimatedSymbolSwap
+                          name={voice.state.type === "recording" ? "stop.fill" : "mic"}
+                          size={20}
+                          tintColor={voice.state.type === "recording" ? dangerColor : iconColor}
+                          type="monochrome"
+                        />
+                      </Pressable>
+                    </Animated.View>
+                  </GestureDetector>
+                  {/* Solid circles (no glass) so the send button reads as the filled primary
+                      circle from the reference design. */}
+                  {showStopAction ? (
+                    <ControlPill
+                      icon="stop.fill"
+                      variant="danger"
+                      accessibilityLabel="Stop"
+                      onPress={props.onStopThread}
+                    />
+                  ) : (
+                    <ControlPill
+                      icon="arrow.up"
+                      variant="primary"
+                      disabled={!canSend || voiceBusy}
+                      accessibilityLabel="Send"
+                      onPress={() => void handleSend()}
+                    />
+                  )}
+                </View>
+              </Animated.View>
+            ) : null}
+          </ComposerSurface>
+
+          {/* Recording HUD covers the surface in place (ChatGPT-style pill takeover): the editor
+              and keyboard stay mounted underneath, and the release hint floats above. */}
+          <VoiceRecordingBar
+            state={voice.state}
+            subscribeLevel={voice.subscribeLevel}
+            onCancel={() => void voice.cancel()}
+            onStop={voice.toggle}
+            onCleanupChange={voice.setCleanup}
+            holdActive={voice.holdActive}
+            cancelArmed={voice.cancelArmed}
+            overlay={{ borderRadius: isExpanded ? 20 : 999 }}
+          />
+        </View>
 
         {isExpanded ? (
           // Toolbar row — matches draft page layout (expanded only)
@@ -1032,28 +981,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     showChevron={false}
                   />
                 </ControlPillMenu>
-                <ControlPillMenu
-                  actions={modelMenuActions}
-                  onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
-                >
-                  <ComposerToolbarTrigger
-                    accessibilityLabel="Model"
-                    iconNode={
-                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                    }
-                    label={currentModelOption?.label ?? currentModelSelection.model}
-                  />
-                </ControlPillMenu>
-                <ControlPillMenu
-                  actions={optionsMenuActions}
-                  onPressAction={({ nativeEvent }) => handleOptionsMenuAction(nativeEvent.event)}
-                >
-                  <ComposerToolbarTrigger
-                    accessibilityLabel="Configuration"
-                    icon="slider.horizontal.3"
-                    label={configurationLabel}
-                  />
-                </ControlPillMenu>
+                <ComposerToolbarTrigger
+                  accessibilityLabel="Thread settings"
+                  iconNode={
+                    <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
+                  }
+                  label={settingsSummaryLabel}
+                  maxWidth={320}
+                  onPress={settingsSheetPresentation.open}
+                />
                 {showStopAction ? (
                   <ComposerToolbarButton
                     accessibilityLabel="Stop"
@@ -1092,11 +1028,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     </Animated.View>
                   </GestureDetector>
                 </VoiceComboBadge>
-                <VoiceCancelTarget
-                  holdActive={voice.holdActive}
-                  cancelArmed={voice.cancelArmed}
-                  cancelProgress={voice.cancelProgress}
-                />
               </View>
             </ComposerToolbarRow>
           </Animated.View>
@@ -1110,6 +1041,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         existingCount={props.draftAttachments.length}
         onClose={() => setCameraSheetVisible(false)}
         onCapture={(image) => props.onAddDraftAttachments([image])}
+      />
+
+      <ThreadSettingsSheet
+        visible={settingsSheetPresentation.isVisible}
+        onClose={settingsSheetPresentation.close}
+        onDismissed={settingsSheetPresentation.onDismissed}
+        providerGroups={threadProviderGroups}
+        selectedModel={currentModelSelection}
+        onSelectModel={(option) => props.onUpdateModelSelection(option.selection)}
+        optionDescriptors={providerOptionDescriptors}
+        onUpdateOptionSelections={(options) =>
+          props.onUpdateModelSelection({ ...currentModelSelection, options })
+        }
+        runtimeMode={currentRuntimeMode}
+        onUpdateRuntimeMode={props.onUpdateRuntimeMode}
+        isHermes={isHermesConversation}
       />
 
       <ImageViewing

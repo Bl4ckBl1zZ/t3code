@@ -13,7 +13,6 @@ import {
   BotIcon,
   CalendarClockIcon,
   Clock3Icon,
-  FlaskConicalIcon,
   GitBranchIcon,
   BlocksIcon,
   GraduationCapIcon,
@@ -58,7 +57,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,
   "/settings/integrations": BlocksIcon,
-  "/settings/beta": FlaskConicalIcon,
   "/settings/archived": ArchiveIcon,
 };
 

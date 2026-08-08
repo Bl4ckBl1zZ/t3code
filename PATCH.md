@@ -23,12 +23,24 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `projection_turns`; the fork windows cold loads with `maxVisibleItems` /
   `truncatedVisibleItemCount` over the V2 projection instead (`threadSnapshotWindow`), and
   `requestThreadFullHistory` is its load-more path.
+- Implements pinned-thread reordering on orchestration V2 rather than upstream's V1
+  `thread.pin.reorder` command. `pinOrderKey` rides the fork's single `thread.metadata.update`
+  command (alone to reorder, or with `pinned: true` to place a fresh pin) and is cleared when a
+  thread is unpinned; the fractional-key math itself is upstream's shared
+  `@t3tools/client-runtime/state/thread-sort`, so web and mobile compute identical orders. The
+  server keeps advertising the `threadPinReorder` capability. Mobile uses this end to end. The web
+  sidebar deliberately does not adopt upstream's pinned-block drag: it keeps the fork's
+  client-local whole-list manual order (`applyManualThreadOrderForSidebarV2`), which already lets
+  users arrange pinned threads and would otherwise fight upstream's DnD over the same
+  `DndContext`.
 - Owns SQLite migration numbers 36 and up (orchestration V2, Hermes, scheduled tasks). Upstream
   migrations that claim those numbers must be renumbered or dropped on sync — applying two different
   migrations under one number would corrupt existing fork databases. Upstream's
-  `036_ProjectionThreadsPinned` and `037_ProjectionTurnsKeysetIndex` are dropped: they target the
-  retired V1 `projection_threads`/`projection_turns` tables, and the fork already implements thread
-  pinning in orchestration V2.
+  `036_ProjectionThreadsPinned`, `037_ProjectionTurnsKeysetIndex`, and
+  `038_ProjectionThreadsPinOrderKey` are dropped: they target the retired V1
+  `projection_threads`/`projection_turns` tables, and the fork already implements thread pinning
+  (and its ordering key) in orchestration V2, whose thread state is a JSON projection rather than
+  those columns.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.

@@ -95,9 +95,17 @@ export interface VisitThreadInput extends ThreadCommandInput {
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
 
-export type PinThreadInput = ThreadCommandInput;
+export interface PinThreadInput extends ThreadCommandInput {
+  /** Fractional key placing the fresh pin inside the arranged run. Omitted
+      against servers that predate pinned reordering. */
+  readonly orderKey?: string;
+}
 
 export type UnpinThreadInput = ThreadCommandInput;
+
+export interface ReorderPinnedThreadInput extends ThreadCommandInput {
+  readonly orderKey: string;
+}
 
 export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly title?: string;
@@ -443,6 +451,23 @@ export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     pinned: true,
+    ...(input.orderKey === undefined ? {} : { pinOrderKey: input.orderKey }),
+  });
+});
+
+/**
+ * Move an already-pinned thread within the arranged run. Carries only the new
+ * fractional key: pin state is untouched, so a reorder racing an unpin cannot
+ * silently re-pin the thread.
+ */
+export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
+  input: ReorderPinnedThreadInput,
+) {
+  return yield* dispatch({
+    type: "thread.metadata.update",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    pinOrderKey: input.orderKey,
   });
 });
 

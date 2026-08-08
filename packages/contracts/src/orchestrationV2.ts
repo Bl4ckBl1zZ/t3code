@@ -332,6 +332,9 @@ export const OrchestrationV2AppThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  // Fractional sort key for the user-arranged pinned run. Absent on threads
+  // pinned before reordering existed; those sort below arranged ones.
+  pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1555,6 +1558,9 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(Schema.DateTimeUtc),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  // Fractional sort key for the user-arranged pinned run. Absent on threads
+  // pinned before reordering existed; those sort below arranged ones.
+  pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1646,6 +1652,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2041,6 +2048,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   settledAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2299,6 +2307,9 @@ export const OrchestrationV2Command = Schema.Union([
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     pinned: Schema.optional(Schema.Boolean),
+    /** Fractional key placing this thread within the pinned run. Sent alone to
+        reorder, or alongside `pinned: true` to place a fresh pin. */
+    pinOrderKey: Schema.optional(TrimmedNonEmptyString),
     workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
     clearTimeline: Schema.optional(Schema.Literal(true)),
   }),

@@ -26,6 +26,18 @@ export type CompactBrandWorkspaceMenu = {
 };
 
 /**
+ * Horizontal correction applied to content rendered in the brand title slot,
+ * shared with the connection-status swap so both align identically.
+ */
+export function brandTitleOffset(nativeLeadingItem: boolean): number {
+  if (Platform.OS !== "ios") return 0;
+  if (nativeLeadingItem) {
+    return Platform.isPad ? IPAD_NATIVE_LEADING_TITLE_OFFSET : IOS_NATIVE_LEADING_TITLE_OFFSET;
+  }
+  return Platform.isPad ? IPAD_HOME_TITLE_OFFSET : 0;
+}
+
+/**
  * Compact brand lockup sized for native navigation bars. When `workspaceMenu`
  * is provided the entire lockup becomes the workspace-switcher trigger: any
  * tap on it opens the T3 Work / T3 Code menu.
@@ -41,16 +53,7 @@ export function CompactBrandTitle(
   const mutedColor = useThemeColor("--color-foreground-muted");
   const subtleColor = useThemeColor("--color-subtle");
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
-  const titleOffset =
-    Platform.OS !== "ios"
-      ? 0
-      : props.nativeLeadingItem
-        ? Platform.isPad
-          ? IPAD_NATIVE_LEADING_TITLE_OFFSET
-          : IOS_NATIVE_LEADING_TITLE_OFFSET
-        : Platform.isPad
-          ? IPAD_HOME_TITLE_OFFSET
-          : 0;
+  const titleOffset = brandTitleOffset(props.nativeLeadingItem === true);
 
   const menu = props.workspaceMenu;
   const workspace = menu?.workspace ?? props.workspace;
