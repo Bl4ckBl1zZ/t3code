@@ -55,8 +55,16 @@ log "Resolving identity from the provisioning profiles"
 # profiles rather than configured. The App Group
 # (group.com.bl4ckbl1zz.t3code.dev) is not derivable from the bundle identifier
 # (com.t3code.dev), so anything reconstructing it by convention is wrong.
-identity="$(node "${repo_root}/scripts/ios-release.ts" identity)"
+identity="$(node "${repo_root}/scripts/ios-release.ts" identity \
+  --app "${APPLE_MAIN_PROFILE}" \
+  --widgets "${APPLE_WIDGETS_PROFILE}" \
+  --sharing "${APPLE_SHARING_PROFILE}" \
+  ${T3CODE_IOS_BUILD_NUMBER:+--build-number "${T3CODE_IOS_BUILD_NUMBER}"})"
+# export-options later reads these from the environment, so export rather
+# than just assign.
+set -a
 eval "${identity}"
+set +a
 
 require_env \
   T3CODE_IOS_APPLE_TEAM_ID T3CODE_IOS_BUNDLE_ID T3CODE_IOS_BUILD_NUMBER \
