@@ -157,7 +157,13 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var environmentID: String?
     public var environmentName: String?
     public var title: String
+    /// The latest visible message, flattened to one line.
     public var preview: String?
+    /// Whether ``preview`` is something the user said rather than something the
+    /// agent said. Conversation rows prefix their own turns with "You:", the way
+    /// every message list does — without the role there is no way to tell the
+    /// last word apart from the last answer.
+    public var previewIsFromUser: Bool
     public var branch: String?
     public var worktreePath: String?
     public var createdAt: Date
@@ -204,6 +210,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         environmentName: String? = nil,
         title: String,
         preview: String? = nil,
+        previewIsFromUser: Bool = false,
         branch: String? = nil,
         worktreePath: String? = nil,
         createdAt: Date = .now,
@@ -239,6 +246,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.environmentName = environmentName
         self.title = title
         self.preview = preview
+        self.previewIsFromUser = previewIsFromUser
         self.branch = branch
         self.worktreePath = worktreePath
         self.createdAt = createdAt

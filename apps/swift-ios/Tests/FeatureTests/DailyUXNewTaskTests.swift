@@ -6,6 +6,58 @@ import UIKit
 @Suite("Message-first task creation")
 struct DailyUXNewTaskTests {
     @Test
+    func creationProjectsExcludeTheServersWorkCheckout() {
+        let snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "home",
+                    name: "Home",
+                    endpoint: "https://home.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+                .init(
+                    id: "other",
+                    name: "Other",
+                    endpoint: "https://other.example",
+                    connectionState: .connected
+                ),
+            ],
+            projects: [
+                .init(id: "app", environmentID: "home", name: "App", path: "/code/app"),
+                .init(id: "work", environmentID: "home", name: "T3 Work", path: "/code/t3-work"),
+                // Same path, different environment: only the server that
+                // declares the directory as its Work checkout hides it.
+                .init(id: "twin", environmentID: "other", name: "Twin", path: "/code/t3-work"),
+            ]
+        )
+        let serverConfigs = [
+            MobileWorkspaceEnvironmentConfig(
+                environmentID: "home",
+                t3WorkDirectory: "/code/t3-work",
+                providers: []
+            ),
+            MobileWorkspaceEnvironmentConfig(
+                environmentID: "other",
+                t3WorkDirectory: nil,
+                providers: []
+            ),
+        ]
+
+        #expect(
+            DailyUXCreationContext.projects(in: snapshot, serverConfigs: serverConfigs)
+                .map(\.id) == ["app", "twin"]
+        )
+        // Without server config there is nothing to identify the checkout by, so
+        // no project is hidden on a guess.
+        #expect(
+            DailyUXCreationContext.projects(in: snapshot, serverConfigs: [])
+                .map(\.id) == ["app", "work", "twin"]
+        )
+    }
+
+    @Test
     func requestNormalizesLegacyModesAndKeepsImageBytes() {
         let image = FeatureDraftAttachment(
             data: Data([1, 2, 3]),
@@ -199,7 +251,7 @@ struct DailyUXNewTaskTests {
         )
 
         #expect(
-            DailyUXCreationContext.projects(in: snapshot).map(\.id)
+            DailyUXCreationContext.projects(in: snapshot, serverConfigs: []).map(\.id)
                 == ["active-project", "passive-project"]
         )
         let passiveProviders = DailyUXCreationContext.providers(

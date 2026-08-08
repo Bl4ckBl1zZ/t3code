@@ -360,7 +360,10 @@ public struct NewThreadView: View {
     }
 
     private var creationProjects: [FeatureProject] {
-        DailyUXCreationContext.projects(in: model.snapshot)
+        DailyUXCreationContext.projects(
+            in: model.snapshot,
+            serverConfigs: model.client.workspaceServerConfigs()
+        )
     }
 
     private var creationProjectIDs: [String] {
