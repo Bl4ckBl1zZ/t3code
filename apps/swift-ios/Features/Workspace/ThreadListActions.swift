@@ -24,6 +24,10 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
     /// False while the thread is queued or waiting on the user: snoozing would
     /// hide a row that is asking for something.
     public let canSnooze: Bool
+    /// Whether this surface has the parking shelves at all. Chat does not: a
+    /// conversation is either there or deleted, so Settle and Snooze never
+    /// appear on its rows.
+    public let offersParking: Bool
     public let handoffScriptSupported: Bool
     /// Version skew: older servers reject `regenerateTitle` outright, so the
     /// action is omitted rather than offered and refused.
@@ -37,6 +41,7 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         isSettled: Bool = false,
         isSnoozed: Bool = false,
         canSnooze: Bool = true,
+        offersParking: Bool = true,
         handoffScriptSupported: Bool = true,
         titleRegenerationSupported: Bool = false,
         isRegeneratingTitle: Bool = false
@@ -47,6 +52,7 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         self.isSettled = isSettled
         self.isSnoozed = isSnoozed
         self.canSnooze = canSnooze
+        self.offersParking = offersParking
         self.handoffScriptSupported = handoffScriptSupported
         self.titleRegenerationSupported = titleRegenerationSupported
         self.isRegeneratingTitle = isRegeneratingTitle
@@ -117,23 +123,25 @@ public enum ThreadRowMenuActions {
                         : ThreadRowMenuAction(id: pinActionID, title: "Pin", symbol: "pin")
                 )
             }
-            actions.append(
-                context.isSettled
-                    ? ThreadRowMenuAction(
-                        id: unsettleActionID, title: "Reopen", symbol: "arrow.counterclockwise"
-                    )
-                    : ThreadRowMenuAction(id: settleActionID, title: "Settle", symbol: "checkmark")
-            )
-            actions.append(
-                context.isSnoozed
-                    ? ThreadRowMenuAction(id: unsnoozeActionID, title: "Unsnooze", symbol: "bell")
-                    : ThreadRowMenuAction(
-                        id: snoozeActionID,
-                        title: "Snooze 1 hour",
-                        symbol: "clock",
-                        disabled: !context.canSnooze
-                    )
-            )
+            if context.offersParking {
+                actions.append(
+                    context.isSettled
+                        ? ThreadRowMenuAction(
+                            id: unsettleActionID, title: "Reopen", symbol: "arrow.counterclockwise"
+                        )
+                        : ThreadRowMenuAction(id: settleActionID, title: "Settle", symbol: "checkmark")
+                )
+                actions.append(
+                    context.isSnoozed
+                        ? ThreadRowMenuAction(id: unsnoozeActionID, title: "Unsnooze", symbol: "bell")
+                        : ThreadRowMenuAction(
+                            id: snoozeActionID,
+                            title: "Snooze 1 hour",
+                            symbol: "clock",
+                            disabled: !context.canSnooze
+                        )
+                )
+            }
         }
 
         actions.append(

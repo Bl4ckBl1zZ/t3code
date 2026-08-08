@@ -9,9 +9,13 @@ import Foundation
 // switcher then hides project filters and starts a Hermes conversation instead
 // of opening the project task sheet.
 
+/// Declaration order is tab order: Code, Work, Chat.
 public enum MobileWorkspace: String, CaseIterable, Sendable {
-    case work
     case code
+    case work
+    /// Hermes conversations born on the Chat surface (`workInboxRole: "chat"`),
+    /// kept apart from Work's task inbox.
+    case chat
 }
 
 /// Driver kind per `(environment, provider instance)` pair, keyed by
@@ -207,7 +211,16 @@ public enum MobileWorkspaceRouting {
             return false
         }
         let isHermes = isHermesThread(thread, providerDrivers: providerDrivers)
-        return workspace == .work ? isHermes : !isHermes
+        switch workspace {
+        case .code:
+            return !isHermes
+        case .work:
+            // Work keeps its whole inbox — including Main — minus the
+            // conversations that were born as Chat.
+            return isHermes && thread.workInboxRole != "chat"
+        case .chat:
+            return isHermes && thread.workInboxRole == "chat"
+        }
     }
 
     public static func workInboxSection(_ thread: MobileWorkspaceThread) -> MobileWorkInboxSection {

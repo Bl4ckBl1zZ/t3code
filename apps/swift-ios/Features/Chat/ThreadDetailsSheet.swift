@@ -49,6 +49,10 @@ struct ThreadDetailsSheet: View {
     var onTogglePin: (() -> Void)?
     var onReload: (() -> Void)?
     var onToggleArchive: (() -> Void)?
+    /// Chat conversations subtract the workbench: no workspace tools, ports,
+    /// version control or automations — the environment row, background tasks,
+    /// lineage and thread actions remain.
+    var isChatConversation = false
 
     @State private var sourceControl: FeatureSourceControlStatus?
     @State private var isLoadingStatus = true
@@ -63,10 +67,14 @@ struct ThreadDetailsSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 connectionNotice
                 workspaceSection
-                portsSection
+                if !isChatConversation {
+                    portsSection
+                }
                 backgroundTasksSection
-                versionControlSection
-                automationsSection
+                if !isChatConversation {
+                    versionControlSection
+                    automationsSection
+                }
                 lineageSection
                 threadActionsSection
             }
@@ -196,7 +204,7 @@ struct ThreadDetailsSheet: View {
                 onNavigate(.connections)
             }
 
-            if let workspacePath {
+            if let workspacePath, !isChatConversation {
                 ThreadDetailsDivider()
                 ThreadDetailsRow(
                     systemImage: ThreadDetailsWorkspace.icon(worktreePath: thread.worktreePath),
@@ -235,7 +243,7 @@ struct ThreadDetailsSheet: View {
                 }
             }
 
-            ForEach(scripts) { script in
+            ForEach(isChatConversation ? [] : scripts) { script in
                 let isActive = activeScriptIDs.contains(script.id)
                 ThreadDetailsDivider()
                 ThreadDetailsRow(

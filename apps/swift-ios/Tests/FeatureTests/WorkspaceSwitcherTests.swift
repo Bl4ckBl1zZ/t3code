@@ -84,16 +84,16 @@ final class WorkspaceSwitcherTests: XCTestCase {
 
     // MARK: - Menu
 
-    func testMenuOffersBothWorkspacesWithWorkFirstAndOnlyTheCurrentOneChecked() {
+    func testMenuOffersEveryWorkspaceInTabOrderAndOnlyTheCurrentOneChecked() {
         let items = WorkspaceSwitcher.menuItems(current: .code)
 
-        XCTAssertEqual(items.map(\.id), ["workspace:work", "workspace:code"])
-        XCTAssertEqual(items.map(\.title), ["T3 Work", "T3 Code"])
+        XCTAssertEqual(items.map(\.id), ["workspace:code", "workspace:work", "workspace:chat"])
+        XCTAssertEqual(items.map(\.title), ["T3 Code", "T3 Work", "T3 Chat"])
         XCTAssertEqual(
             items.map(\.subtitle),
-            ["Create, learn, and explore", "Build, debug, and ship"]
+            ["Build, debug, and ship", "Create, learn, and explore", "Talk it through"]
         )
-        XCTAssertEqual(items.map(\.isOn), [false, true])
+        XCTAssertEqual(items.map(\.isOn), [true, false, false])
     }
 
     func testMenuActionIDsRoundTrip() {

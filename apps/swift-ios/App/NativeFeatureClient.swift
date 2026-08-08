@@ -16,7 +16,7 @@ extension FeatureInputAnswer {
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureProjectCreationClient, FeatureWorkspaceAssetResolving,
-    FeatureProjectFaviconResolving, T3ConnectCapable
+    FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -1213,6 +1213,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func setThreadPinned(id: String, pinned: Bool) async throws {
         let route = try threadRoute(for: id)
         _ = try await route.client.pin(threadID: route.wireID, pinned: pinned)
+        try? await refresh(client: route.client)
+    }
+
+    func setWorkInboxRole(threadID: String, role: String?) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.setWorkInboxRole(threadID: route.wireID, role: role)
         try? await refresh(client: route.client)
     }
 
@@ -4027,7 +4033,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         sizeBytes: $0.sizeBytes,
                         url: cachedAttachmentURL(for: $0.id, environmentID: environmentID)
                     )
-                }
+                },
+                // Kept so the transcript can tell an agent-sent user message
+                // from the reader's own, matching the RN feed.
+                createdBy: item.base.createdBy
             )
 
         case let .assistantMessage(_, text, streaming):

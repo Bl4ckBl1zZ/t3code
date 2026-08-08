@@ -38,6 +38,7 @@ public struct WorkspaceView: View {
     @State private var isArchiveExpanded = false
     @State private var settledLimit = 12
     @State private var showingNewTask = false
+    @State private var showingNewWorkConversation = false
     @State private var newTaskInitialProjectID: String?
     @State private var showingAddProject = false
     @State private var showingSettings = false
@@ -144,6 +145,17 @@ public struct WorkspaceView: View {
                 initialProjectID: newTaskInitialProjectID
             )
         }
+        .sheet(isPresented: $showingNewWorkConversation) {
+            NewWorkConversationView(
+                model: model,
+                flavor: workspace == .chat ? .chat : .work,
+                submit: submitNewTask,
+                onCreated: { thread in
+                    openThread(thread.id)
+                    showingNewWorkConversation = false
+                }
+            )
+        }
         .sheet(isPresented: $showingAddProject) {
             AddProjectView(model: model)
         }
@@ -238,6 +250,13 @@ public struct WorkspaceView: View {
         // from its own first page rather than inheriting the other's.
         .onChange(of: storedWorkspace) {
             settledLimit = 12
+            // Chat lands in the conversation, not on a list: switching to the
+            // tab opens the most recent chat so "continue talking" is zero
+            // taps. The list stays one back-swipe away.
+            if workspace == .chat, selectedThreadID == nil,
+               let latest = latestChatThreadID {
+                openThread(latest)
+            }
         }
     }
 
@@ -459,47 +478,39 @@ public struct WorkspaceView: View {
     }
 
     /// Both workspaces are always on screen: the wordmark names the product and
-    /// the two tabs beside it are the switcher — no menu to open first.
+    /// the segmented tabs beside it are the switcher — no menu to open first.
+    /// One glass thumb slides between the segments via matched geometry, so
+    /// switching reads as the selection travelling rather than two highlights
+    /// blinking.
+    /// Both workspaces are always on screen. The switcher is the native
+    /// segmented `Picker` — the system owns the sliding thumb, its animation
+    /// and its glass treatment, which a hand-rolled matched-geometry copy
+    /// never quite matched.
     private var workspaceSwitcher: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 11) {
             Text("T3")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(T3Colors.textPrimary)
 
-            HStack(spacing: 4) {
-                ForEach(WorkspaceSwitcher.menuItems(current: workspace)) { item in
-                    Button {
-                        withAnimation(.easeOut(duration: 0.16)) {
-                            storedWorkspace = item.workspace.rawValue
-                        }
-                    } label: {
-                        Text(WorkspaceSwitcher.shortTitle(item.workspace))
-                            .font(.system(size: 14, weight: item.isOn ? .semibold : .medium))
-                            .foregroundStyle(
-                                item.isOn ? T3Colors.textPrimary : T3Colors.textTertiary
-                            )
-                            .padding(.horizontal, 11)
-                            .frame(height: 30)
-                            .background {
-                                if item.isOn {
-                                    Color.clear
-                                        .t3GlassEffect(.regular, in: Capsule())
-                                        .overlay {
-                                            Capsule().stroke(T3Colors.border, lineWidth: 1)
-                                        }
-                                }
-                            }
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(item.title)
-                    .accessibilityAddTraits(item.isOn ? [.isSelected] : [])
+            Picker("Workspace", selection: workspaceSelection) {
+                ForEach(MobileWorkspace.allCases, id: \.self) { candidate in
+                    Text(WorkspaceSwitcher.shortTitle(candidate))
+                        .tag(candidate)
                 }
             }
+            .pickerStyle(.segmented)
+            .fixedSize()
         }
         .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar-workspace-switcher")
+    }
+
+    private var workspaceSelection: Binding<MobileWorkspace> {
+        Binding(
+            get: { workspace },
+            set: { storedWorkspace = $0.rawValue }
+        )
     }
 
     private var searchBar: some View {
@@ -665,6 +676,24 @@ public struct WorkspaceView: View {
         model.snapshot.projects.first { $0.id == selectedProjectID }
     }
 
+    /// The conversation the Chat tab lands in: the most recently touched
+    /// chat-role thread, if any exist yet.
+    private var latestChatThreadID: String? {
+        let providerDrivers = WorkspaceSwitcher.providerDrivers(in: model.snapshot)
+        let fallback = WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
+        return WorkspaceSwitcher.threads(
+            model.snapshot.threads,
+            in: .chat,
+            providerDrivers: providerDrivers,
+            fallbackEnvironmentID: fallback
+        )
+        .max { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt < rhs.updatedAt }
+            return lhs.id > rhs.id
+        }?
+        .id
+    }
+
     private var creationProjects: [FeatureProject] {
         DailyUXCreationContext.projects(in: model.snapshot)
     }
@@ -741,11 +770,10 @@ public struct WorkspaceView: View {
         switch intent {
         case let .newTask(projectID):
             presentNewTask(projectID: projectID)
-        case let .hermesConversation(target):
-            // The backing project came out of the snapshot, so there is nothing
-            // to create first: launch straight onto it.
-            newTaskInitialProjectID = target.project.project.id
-            showingNewTask = true
+        case .hermesConversation:
+            // Work gets its own compose screen: assistant-shaped, no project
+            // or git chrome. It re-resolves the target itself.
+            showingNewWorkConversation = true
         case let .hermesUnavailable(title, message):
             noticeAlert = ThreadListActionAlert(title: title, message: message)
         }
@@ -897,12 +925,16 @@ struct HomePresentation {
             .filter { thread in
                 guard thread.isArchived, !thread.isSubagentThread else { return false }
                 guard projectID == nil || thread.projectID == projectID else { return false }
-                let isWork = WorkspaceSwitcher.isWorkThread(
+                let isHermes = WorkspaceSwitcher.isWorkThread(
                     thread,
                     environmentID: thread.environmentID ?? fallbackEnvironmentID,
                     providerDrivers: providerDrivers
                 )
-                return isWork == (workspace == .work)
+                switch workspace {
+                case .code: return !isHermes
+                case .work: return isHermes && thread.workInboxRole != "chat"
+                case .chat: return isHermes && thread.workInboxRole == "chat"
+                }
             }
             .sorted {
                 if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
@@ -910,9 +942,20 @@ struct HomePresentation {
             }
 
         pinned = index.pinned
-        active = index.active
-        snoozed = index.snoozed
-        settled = index.settled
+        if workspace == .chat {
+            // Chat has no parking: a conversation someone snoozed or settled
+            // elsewhere still just shows in the list.
+            active = (index.active + index.snoozed + index.settled).sorted {
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                return $0.id < $1.id
+            }
+            snoozed = []
+            settled = []
+        } else {
+            active = index.active
+            snoozed = index.snoozed
+            settled = index.settled
+        }
         self.archived = archived
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         searchResults = normalizedQuery.isEmpty
@@ -1086,6 +1129,9 @@ struct FeatureThreadRow: View, Equatable {
     enum Style: Equatable {
         case rich
         case slim
+        /// Chat rows: a conversation, not a task — title and a quiet
+        /// model + time line, no repo badge, no branch, no status machinery.
+        case conversation
     }
 
     let thread: FeatureThread
@@ -1127,6 +1173,7 @@ struct FeatureThreadRow: View, Equatable {
             switch style {
             case .rich: richRow(at: now)
             case .slim: slimRow(at: now)
+            case .conversation: conversationRow(at: now)
             }
         }
         .contentShape(Rectangle())
@@ -1231,6 +1278,47 @@ struct FeatureThreadRow: View, Equatable {
             isSelected ? T3Colors.subtleStrong : Color.clear,
             in: RoundedRectangle(cornerRadius: 7)
         )
+    }
+
+    /// The Chat row: no repo badge, no branch, no status machinery — a
+    /// conversation title over a quiet model + time line.
+    private func conversationRow(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(thread.title)
+                    .font(T3Typography.homeTitle)
+                    .tracking(-0.14)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(allowsMultilineTitle ? 2 : 1)
+                Spacer(minLength: 8)
+                if thread.pinnedAt != nil {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
+            }
+
+            HStack(spacing: 6) {
+                providerIcon(size: 14)
+                Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
+                    .font(T3Typography.homeMetadata.monospacedDigit())
+                if thread.homeStatus == .working {
+                    Text("· responding…")
+                        .font(T3Typography.homeMetadata)
+                        .foregroundStyle(T3Colors.statusRunning)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(T3Colors.textTertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(minHeight: 56)
+        .background(
+            isSelected ? T3Colors.subtleStrong : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .padding(.horizontal, 8)
     }
 
     @ViewBuilder

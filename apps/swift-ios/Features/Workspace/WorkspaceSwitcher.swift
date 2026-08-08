@@ -60,7 +60,7 @@ public enum WorkspaceSwitcher {
     /// by a future build all have to land somewhere, and Code is the surface
     /// that works without Hermes being configured at all.
     public static func stored(_ rawValue: String?) -> MobileWorkspace {
-        rawValue == MobileWorkspace.work.rawValue ? .work : .code
+        rawValue.flatMap(MobileWorkspace.init(rawValue:)) ?? .code
     }
 
     // MARK: - Menu
@@ -75,6 +75,7 @@ public enum WorkspaceSwitcher {
         switch workspace {
         case .work: "Work"
         case .code: "Code"
+        case .chat: "Chat"
         }
     }
 
@@ -82,6 +83,7 @@ public enum WorkspaceSwitcher {
         switch workspace {
         case .work: "Create, learn, and explore"
         case .code: "Build, debug, and ship"
+        case .chat: "Talk it through"
         }
     }
 
@@ -259,6 +261,9 @@ public enum WorkspaceSwitcher {
                 workspaceThread(
                     thread,
                     environmentID: thread.environmentID ?? fallbackEnvironmentID,
+                    // Chat vs Work is decided by the inbox role, so it has to
+                    // survive the bridging.
+                    workInboxRole: thread.workInboxRole,
                     relationshipToParent: relationshipToParent(thread)
                 ),
                 workspace: workspace,
@@ -285,7 +290,9 @@ public enum WorkspaceSwitcher {
         serverConfigs: [MobileWorkspaceEnvironmentConfig],
         requiredEnvironmentID: String?
     ) -> WorkspaceNewTaskIntent {
-        guard workspace == .work else {
+        // Chat and Work both live on Hermes; only Code opens the project task
+        // sheet.
+        guard workspace != .code else {
             return .newTask(projectID: selectedProjectID)
         }
         guard let target = MobileWorkspaceRouting.resolveHermesConversationTarget(

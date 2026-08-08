@@ -624,6 +624,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Scan pairing QR codes and attach photos to T3 Code tasks.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Pick photos from your library to attach to T3 Code tasks.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Dictate messages to T3 Code agents.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
@@ -683,6 +684,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Scan pairing QR codes and attach photos to T3 Code tasks.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Pick photos from your library to attach to T3 Code tasks.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Dictate messages to T3 Code agents.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;

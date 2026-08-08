@@ -83,7 +83,11 @@ public struct ThreadDetailView: View {
                     toolSurface = .details
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
+                        // Explicit: a bare toolbar button falls back to the
+                        // accent tint, which read as a random blue icon.
+                        .foregroundStyle(T3Colors.textPrimary)
                 }
+                .tint(T3Colors.textPrimary)
                 .accessibilityLabel("Thread details")
                 .accessibilityIdentifier("thread-details-button")
             }
@@ -145,7 +149,8 @@ public struct ThreadDetailView: View {
                                     archived: !currentThread.isArchived
                                 )
                             }
-                        }
+                        },
+                        isChatConversation: currentThread.workInboxRole == "chat"
                     )
                 case let .files(path, line):
                     FeatureFilesView(
@@ -2289,8 +2294,55 @@ private enum FeatureAttachmentThumbnailError: Error {
 struct FeatureMessageView: View {
     let message: FeatureMessage
 
+    /// Tail at the top-leading corner — the mirror of the user bubble's
+    /// bottom-trailing tail.
+    private var agentAuthoredShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 4,
+            bottomLeadingRadius: 16,
+            bottomTrailingRadius: 16,
+            topTrailingRadius: 16
+        )
+    }
+
     var body: some View {
         switch message.role {
+        case .user where message.isAgentAuthored:
+            // Sent into this thread by another agent, not by the reader:
+            // mirrored to the agent side with a byline, so "I never wrote
+            // that" bubbles stop wearing the reader's color. Matches the RN
+            // feed's treatment.
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Sent by another agent")
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textTertiary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        FeatureMessageAttachmentsView(attachments: message.attachments)
+                        if !message.text.isEmpty {
+                            MarkdownMessageView(
+                                message.text,
+                                isStreaming: message.state == .streaming
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
+                    .background(
+                        T3Colors.surface,
+                        in: agentAuthoredShape
+                    )
+                    .overlay {
+                        agentAuthoredShape.stroke(T3Colors.border, lineWidth: 1)
+                    }
+                }
+                Spacer(minLength: 44)
+            }
+            .accessibilityLabel("Another agent")
+            .accessibilityValue(accessibilityValue)
+            .accessibilityIdentifier("message-\(message.id)")
         case .user:
             HStack {
                 Spacer(minLength: 44)

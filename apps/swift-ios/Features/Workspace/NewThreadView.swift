@@ -68,7 +68,12 @@ public struct NewThreadView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !creationProjects.isEmpty {
                 VStack(spacing: 0) {
-                    workspaceControls
+                    // A T3 Work conversation is directory-based Hermes chat:
+                    // worktrees, branches and origin do not apply, so the row
+                    // that offers them disappears entirely.
+                    if !isWorkConversation {
+                        workspaceControls
+                    }
 
                     FeatureComposerView(
                         text: $prompt,
@@ -452,7 +457,27 @@ public struct NewThreadView: View {
             && concreteSelection != nil
             && (!trimmedPrompt.isEmpty || !attachments.isEmpty)
             && (attachments.isEmpty || imagesAllowed)
-            && (workspaceMode != .worktree || selectedBranch != nil)
+            && (effectiveWorkspaceMode != .worktree || selectedBranch != nil)
+    }
+
+    /// The selected project is the server's Hermes backing project — the one
+    /// sitting on its configured `t3WorkDirectory`. Work conversations are
+    /// directory-based, so every worktree affordance and parameter drops out.
+    private var isWorkConversation: Bool {
+        guard let project = selectedProject else { return false }
+        return model.client.workspaceServerConfigs().contains { config in
+            config.environmentID == project.environmentID
+                && config.t3WorkDirectory == project.path
+        }
+    }
+
+    /// Work always resolves to the current checkout; a server-configured
+    /// worktree default would otherwise leave the send gate permanently off.
+    private var effectiveWorkspaceMode: FeatureWorkspaceMode {
+        MobileWorkspaceRouting.resolveDraftWorkspaceMode(
+            isWorkConversation: isWorkConversation,
+            requestedMode: workspaceMode
+        )
     }
 
     private var trimmedPrompt: String {
@@ -492,15 +517,15 @@ public struct NewThreadView: View {
             selection: concreteSelection,
             runtimeMode: .fullAccess,
             interactionMode: .standard,
-            workspaceMode: workspaceMode,
-            branch: selectedBranch?.name,
-            worktreePath: workspaceMode == .local
+            workspaceMode: effectiveWorkspaceMode,
+            branch: isWorkConversation ? nil : selectedBranch?.name,
+            worktreePath: !isWorkConversation && effectiveWorkspaceMode == .local
                 ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
                     for: selectedBranch,
                     projectPath: project.path
                 )
                 : nil,
-            startFromOrigin: startFromOrigin,
+            startFromOrigin: isWorkConversation ? false : startFromOrigin,
             attachments: attachments
         )
 

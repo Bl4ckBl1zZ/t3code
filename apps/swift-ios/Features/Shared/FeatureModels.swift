@@ -349,6 +349,10 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
     public var state: FeatureMessageState
     public var toolName: String?
     public var attachments: [FeatureMessageAttachment]
+    /// The wire `createdBy` actor for user messages: "agent" marks a message
+    /// another agent sent into this thread, which renders as agent-sent rather
+    /// than as the reader's own bubble.
+    public var createdBy: String?
 
     public init(
         id: String,
@@ -357,7 +361,8 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
         createdAt: Date = .now,
         state: FeatureMessageState = .complete,
         toolName: String? = nil,
-        attachments: [FeatureMessageAttachment] = []
+        attachments: [FeatureMessageAttachment] = [],
+        createdBy: String? = nil
     ) {
         self.id = id
         self.role = role
@@ -366,6 +371,13 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
         self.state = state
         self.toolName = toolName
         self.attachments = attachments
+        self.createdBy = createdBy
+    }
+
+    /// A user-role message authored by another agent (a delegated task waking
+    /// its parent, a background agent reporting in).
+    public var isAgentAuthored: Bool {
+        role == .user && createdBy == "agent"
     }
 }
 

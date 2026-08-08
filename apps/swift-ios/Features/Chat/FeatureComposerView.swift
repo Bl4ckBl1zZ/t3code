@@ -9,6 +9,9 @@ struct FeatureComposerView: View {
     @State private var isPickingAttachment = false
     /// The in-pill attachment menu the plus morphs the composer into.
     @State private var isAttachMenuOpen = false
+    /// The in-pill camera / photo-library window. Files stay on the native
+    /// document picker.
+    @State private var mediaSurface: ComposerMediaSurface?
     /// Hands the menu's choice to the picker, which owns the presentations.
     @State private var requestedAttachmentSource: FeatureAttachmentSource?
     /// Whether the keyboard was up when a recording began, so it can be pinned
@@ -264,9 +267,73 @@ struct FeatureComposerView: View {
         // single transaction.
         .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: voice.state.isBusy)
         .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: isAttachMenuOpen)
+        .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: mediaSurface)
     }
 
+    @ViewBuilder
     private var editor: some View {
+        if let mediaSurface {
+            composerMediaWindow(mediaSurface)
+        } else {
+            editorContent
+        }
+    }
+
+    /// The pill morphed into the media card: camera or photo grid at chat
+    /// width. Taking a photo (or sliding the grid down) collapses the card
+    /// back into the composer with the picks landing in the attachment strip.
+    private func composerMediaWindow(_ surface: ComposerMediaSurface) -> some View {
+        Group {
+            switch surface {
+            case .camera:
+                ComposerCameraWindow(
+                    onClose: { closeMediaWindow() },
+                    onCapture: { data in
+                        appendImageData([data])
+                        closeMediaWindow()
+                    }
+                )
+            case .photoLibrary:
+                ComposerPhotoLibraryWindow(
+                    maximumSelectable: max(0, 8 - attachments.count),
+                    onConfirm: { datas in
+                        appendImageData(datas)
+                        closeMediaWindow()
+                    }
+                )
+            }
+        }
+        .frame(height: min(560, UIScreen.main.bounds.height * 0.55))
+        .frame(maxWidth: .infinity)
+        .transition(.opacity)
+    }
+
+    private func closeMediaWindow() {
+        withAnimation(VoiceMorph.appearance(reduceMotion: reduceMotion)) {
+            mediaSurface = nil
+        }
+    }
+
+    /// Runs captured/picked image data through the same processor the pickers
+    /// use, with the same preparation bookkeeping.
+    private func appendImageData(_ datas: [Data]) {
+        guard !datas.isEmpty else { return }
+        let firstOrdinal = attachments.count + attachmentPreparation.pendingItemCount + 1
+        let operation = attachmentPreparation.begin(itemCount: datas.count)
+        Task { @MainActor in
+            defer { attachmentPreparation.finish(operation) }
+            for (offset, data) in datas.enumerated() {
+                guard attachments.count < 8 else { break }
+                if let attachment = try? await Task.detached(priority: .userInitiated, operation: {
+                    try FeatureImageProcessor.attachment(from: data, ordinal: firstOrdinal + offset)
+                }).value {
+                    attachments.append(attachment)
+                }
+            }
+        }
+    }
+
+    private var editorContent: some View {
         VStack(spacing: 0) {
             if !attachments.isEmpty {
                 FeatureAttachmentStrip(attachments: $attachments)
@@ -306,14 +373,12 @@ struct FeatureComposerView: View {
 
             composerRow
 
-            // Collapsed rather than removed while recording or the menu is up,
-            // for the same reason as the trailing controls: no structural
-            // change anywhere in the pill during a push-to-talk hold.
+            // Always present: the model, effort and context chips are the
+            // composer's identity, not editing chrome — hiding them on focus
+            // loss or mid-recording read as the controls randomly vanishing.
+            // Unconditional also means no structural change during a
+            // push-to-talk hold.
             composerFooter
-                .frame(height: showsFooter ? nil : 0, alignment: .top)
-                .opacity(showsFooter ? 1 : 0)
-                .allowsHitTesting(showsFooter)
-                .clipped()
         }
     }
 
@@ -387,10 +452,6 @@ struct FeatureComposerView: View {
         voice.state.isBusy || isAttachMenuOpen
     }
 
-    private var showsFooter: Bool {
-        isExpanded && !pillContentHidden
-    }
-
     private var inputRow: some View {
         TextField(
             isWorking ? "Message to queue…" : "Ask anything…",
@@ -445,7 +506,15 @@ struct FeatureComposerView: View {
     ) -> some View {
         Button {
             isAttachMenuOpen = false
-            requestedAttachmentSource = source
+            switch source {
+            case .camera:
+                // In-pill capture: the card morphs into the camera window.
+                mediaSurface = .camera
+            case .photoLibrary:
+                mediaSurface = .photoLibrary
+            case .files:
+                requestedAttachmentSource = source
+            }
         } label: {
             HStack(spacing: 16) {
                 Image(systemName: systemImage)
@@ -468,7 +537,7 @@ struct FeatureComposerView: View {
     }
 
     private var composerFooter: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 6) {
             ProviderModelPicker(
                 providers: providers,
                 selection: $selection,
@@ -477,9 +546,21 @@ struct FeatureComposerView: View {
                 materializesDefaultSelection: materializesDefaultSelection
             )
             .frame(maxWidth: 220, alignment: .leading)
-            .layoutPriority(2)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+
+            // Right-aligned, and never squeezed: the chips keep their ideal
+            // width ("Medium", not "Medi…") and the model picker is what
+            // shortens when the row runs out of room.
+            if let effort = selectOption(ids: Self.effortOptionIDs) {
+                effortChip(effort)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+
+            if let contextWindow = selectOption(ids: Self.contextOptionIDs) {
+                contextWindowChip(contextWindow)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
 
             if let contextUsage {
                 FeatureContextMeter(usage: contextUsage)
@@ -487,6 +568,118 @@ struct FeatureComposerView: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+    }
+
+    // MARK: Model option chips
+
+    /// The two option ids providers publish for these knobs; matched as a set
+    /// because drivers disagree on the spelling.
+    private static let effortOptionIDs: Set<String> = ["effort", "reasoningEffort"]
+    private static let contextOptionIDs: Set<String> = ["contextWindow", "context"]
+
+    private var activeSelection: FeatureSelection? { selection ?? threadSelection }
+
+    private var activeModel: FeatureModel? {
+        guard let active = activeSelection,
+              let provider = providers.first(where: { $0.id == active.providerID }) else {
+            return nil
+        }
+        return provider.models.first { $0.id == active.modelID }
+    }
+
+    private func selectOption(ids: Set<String>) -> FeatureModelOptionDescriptor? {
+        activeModel?.options.first { ids.contains($0.id) && $0.kind == .select && !$0.choices.isEmpty }
+    }
+
+    private func currentChoiceID(of descriptor: FeatureModelOptionDescriptor) -> String {
+        if let active = activeSelection,
+           case let .string(value)? = active.options.first(where: { $0.id == descriptor.id })?.value {
+            return value
+        }
+        if case let .string(value)? = descriptor.defaultValue { return value }
+        return descriptor.choices.first(where: \.isDefault)?.id
+            ?? descriptor.choices.first?.id
+            ?? ""
+    }
+
+    private func currentChoice(of descriptor: FeatureModelOptionDescriptor) -> FeatureModelOptionChoice? {
+        let id = currentChoiceID(of: descriptor)
+        return descriptor.choices.first { $0.id == id }
+    }
+
+    private func setOption(id: String, value: String) {
+        guard var next = activeSelection else { return }
+        next.options.removeAll { $0.id == id }
+        next.options.append(FeatureModelOptionSelection(id: id, value: .string(value)))
+        selection = next
+    }
+
+    /// Seven levels are a menu, not a cycle: nobody should tap through
+    /// Ultracode to get from High back to Medium.
+    private func effortChip(_ descriptor: FeatureModelOptionDescriptor) -> some View {
+        let current = currentChoiceID(of: descriptor)
+        return Menu {
+            ForEach(descriptor.choices) { choice in
+                Button {
+                    setOption(id: descriptor.id, value: choice.id)
+                } label: {
+                    if choice.id == current {
+                        Label(choice.label, systemImage: "checkmark")
+                    } else {
+                        Text(choice.label)
+                    }
+                }
+            }
+        } label: {
+            optionChipLabel(
+                icon: "brain",
+                text: currentChoice(of: descriptor)?.label ?? current
+            )
+        }
+        .menuOrder(.fixed)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reasoning effort")
+        .accessibilityValue(currentChoice(of: descriptor)?.label ?? current)
+    }
+
+    /// Two choices, so a tap just flips to the next one — no menu.
+    private func contextWindowChip(_ descriptor: FeatureModelOptionDescriptor) -> some View {
+        let current = currentChoiceID(of: descriptor)
+        return Button {
+            let choices = descriptor.choices
+            guard !choices.isEmpty else { return }
+            let index = choices.firstIndex { $0.id == current } ?? 0
+            let next = choices[(index + 1) % choices.count]
+            setOption(id: descriptor.id, value: next.id)
+        } label: {
+            optionChipLabel(
+                icon: "square.3.layers.3d",
+                text: currentChoice(of: descriptor)?.label ?? current
+            )
+            .contentTransition(.numericText())
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: current)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Context window")
+        .accessibilityValue(currentChoice(of: descriptor)?.label ?? current)
+        .accessibilityHint("Switches to the next size")
+    }
+
+    private func optionChipLabel(icon: String, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .medium))
+            Text(text)
+                .lineLimit(1)
+        }
+        .font(T3Typography.supporting.weight(.semibold))
+        .foregroundStyle(T3Colors.textSecondary)
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(T3Colors.subtle, in: Capsule())
+        .overlay { Capsule().stroke(T3Colors.border, lineWidth: 1) }
+        .contentShape(Capsule())
+        .frame(minHeight: T3Metrics.minimumTapTarget)
     }
 
     /// Send only: the mic beside it owns everything voice. Inverted rather than
@@ -518,8 +711,12 @@ struct FeatureComposerView: View {
     }
 
     private var composerShape: RoundedRectangle {
-        // The pill relaxes into a card while it hosts the attachment menu.
-        RoundedRectangle(cornerRadius: isAttachMenuOpen ? 32 : 27, style: .continuous)
+        // The pill relaxes into a card while it hosts the attachment menu or
+        // the media window.
+        RoundedRectangle(
+            cornerRadius: isAttachMenuOpen || mediaSurface != nil ? 32 : 27,
+            style: .continuous
+        )
     }
 
     private var isExpanded: Bool {

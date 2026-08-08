@@ -19,6 +19,14 @@ public protocol FeatureWorkspaceAssetResolving: AnyObject {
     func workspaceAssetURL(threadID: String, path: String) async throws -> URL
 }
 
+/// Optional thread-role capability: marks a Hermes conversation as belonging
+/// to the Chat surface (`workInboxRole: "chat"`) via the thread metadata
+/// command. Older servers reject the value, which callers treat as cosmetic.
+@MainActor
+public protocol FeatureThreadRoleAssigning: AnyObject {
+    func setWorkInboxRole(threadID: String, role: String?) async throws
+}
+
 /// Optional project-favicon capability: the same signed asset route the desktop
 /// sidebar uses for its repo icons (`t3.json` `iconPath`, else well-known
 /// favicon files in the workspace).

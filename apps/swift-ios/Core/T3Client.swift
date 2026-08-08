@@ -589,6 +589,12 @@ public actor T3Client {
         try await dispatch(OrchestrationCommands.pin(threadID: threadID, pinned: pinned))
     }
 
+    public func setWorkInboxRole(threadID: String, role: String?) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.setWorkInboxRole(threadID: threadID, role: role)
+        )
+    }
+
     @discardableResult
     public func setRuntimeMode(
         threadID: String,
@@ -2324,6 +2330,21 @@ public enum OrchestrationCommands {
             threadID: threadID,
             commandID: commandID,
             fields: ["pinned": .bool(pinned)]
+        )
+    }
+
+    /// The Work-inbox role is a thread metadata field too. `"chat"` marks a
+    /// Hermes conversation as belonging to the Chat surface; nil clears the
+    /// role back to an ordinary thread.
+    public static func setWorkInboxRole(
+        threadID: String,
+        role: String?,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        updateMetadata(
+            threadID: threadID,
+            commandID: commandID,
+            fields: ["workInboxRole": role.map(JSONValue.string) ?? .null]
         )
     }
 

@@ -222,6 +222,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 }
                 primaryAction.image = UIImage(systemName: "pin.slash")
                 primaryAction.backgroundColor = .systemBlue
+            } else if parent.workspace == .chat {
+                // Chat has no parking: a conversation is either there or
+                // deleted, so the swipe offers nothing beside Delete.
+                let configuration = UISwipeActionsConfiguration(actions: [delete])
+                configuration.performsFirstActionWithFullSwipe = false
+                return configuration
             } else {
                 let isSettled = thread.isEffectivelySettled(at: .now)
                 primaryAction = UIContextualAction(
@@ -399,6 +405,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 canSnooze: thread.state != .queued
                     && thread.state != .waitingForApproval
                     && thread.state != .waitingForInput,
+                offersParking: parent.workspace != .chat,
                 titleRegenerationSupported: thread.canRegenerateTitle,
                 isRegeneratingTitle: thread.isRegeneratingTitle
             )
@@ -508,11 +515,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             }
         }
 
+        let mainStyle: FeatureThreadRow.Style = workspace == .chat ? .conversation : .rich
         var items = presentation.pinned.map {
             HomeCollectionItem.thread(
                 $0,
                 presentation.rowContexts[$0.id] ?? .fallback,
-                .rich,
+                mainStyle,
                 false,
                 forceRichRows
             )
@@ -547,18 +555,34 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 .thread(
                     $0,
                     presentation.rowContexts[$0.id] ?? .fallback,
-                    .rich,
+                    mainStyle,
                     false,
                     forceRichRows
                 )
             })
         }
 
-        items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
-        if isSnoozedExpanded {
-            items.append(contentsOf: presentation.snoozed.isEmpty
-                ? [.empty(.snoozed)]
-                : presentation.snoozed.map {
+        // Chat has neither shelf: a conversation is either in the list or
+        // deleted, so the parked sections would only ever be empty chrome.
+        if workspace != .chat {
+            items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
+            if isSnoozedExpanded {
+                items.append(contentsOf: presentation.snoozed.isEmpty
+                    ? [.empty(.snoozed)]
+                    : presentation.snoozed.map {
+                        .thread(
+                            $0,
+                            presentation.rowContexts[$0.id] ?? .fallback,
+                            forceRichRows ? .rich : .slim,
+                            false,
+                            forceRichRows
+                        )
+                    })
+            }
+
+            items.append(.shelfHeader(.settled, presentation.settled.count, isSettledExpanded))
+            if isSettledExpanded {
+                items.append(contentsOf: presentation.settled.prefix(settledLimit).map {
                     .thread(
                         $0,
                         presentation.rowContexts[$0.id] ?? .fallback,
@@ -567,21 +591,9 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                         forceRichRows
                     )
                 })
-        }
-
-        items.append(.shelfHeader(.settled, presentation.settled.count, isSettledExpanded))
-        if isSettledExpanded {
-            items.append(contentsOf: presentation.settled.prefix(settledLimit).map {
-                .thread(
-                    $0,
-                    presentation.rowContexts[$0.id] ?? .fallback,
-                    forceRichRows ? .rich : .slim,
-                    false,
-                    forceRichRows
-                )
-            })
-            if presentation.settled.count > settledLimit {
-                items.append(.showMoreSettled(presentation.settled.count - settledLimit))
+                if presentation.settled.count > settledLimit {
+                    items.append(.showMoreSettled(presentation.settled.count - settledLimit))
+                }
             }
         }
 
