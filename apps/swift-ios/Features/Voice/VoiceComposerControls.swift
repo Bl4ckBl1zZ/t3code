@@ -249,7 +249,8 @@ struct VoiceCancelTarget: View {
                 .frame(width: 32, height: 32)
                 .background {
                     ZStack {
-                        Color.clear.t3GlassEffect(.clear, in: Circle())
+                        // Reads against the bar behind it, which is surfaceRaised.
+                        Circle().fill(T3Colors.surface)
                         Circle()
                             .fill(T3Colors.danger)
                             .opacity(cancelArmed ? 1 : 0)
@@ -331,12 +332,13 @@ struct VoiceRecordingBar: View {
         }
     }
 
-    /// The recording half of the shared shape. Glass because this is a control
-    /// surface that has just been pushed out over the draft, which is what the
-    /// system material is for.
+    /// The recording half of the shared shape. Solid rather than glass: the bar
+    /// sits directly over the draft the user was just reading, and a refracting
+    /// material there drags that text up into the control instead of covering
+    /// it. The morph still runs — only the fill changed.
     private var morphSurface: some View {
-        Color.clear
-            .t3GlassEffect(.regular, in: capsule)
+        Capsule(style: .continuous)
+            .fill(T3Colors.surfaceRaised)
             .overlay { capsule.stroke(T3Colors.border, lineWidth: 1) }
             .modifier(
                 VoiceMorphSource(
