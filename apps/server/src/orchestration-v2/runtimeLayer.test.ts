@@ -1208,6 +1208,71 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("carries pinOrderKey through pin, reorder, and unpin", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-pin-order-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-pin-order-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-pin-order-project"),
+        title: "Pinned",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+
+      // Fresh pin places the thread with an order key in one command.
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-pin-order-pin"),
+        threadId,
+        pinned: true,
+        pinOrderKey: "m",
+      });
+      const pinned = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNotNull(pinned.thread.pinnedAt);
+      assert.equal(pinned.thread.pinOrderKey, "m");
+      const pinnedShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+        (candidate) => candidate.id === threadId,
+      );
+      assert.equal(pinnedShell?.pinOrderKey, "m");
+
+      // A reorder carries only the key: pin state must be untouched, so a
+      // reorder racing an unpin cannot silently re-pin the thread.
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-pin-order-reorder"),
+        threadId,
+        pinOrderKey: "g",
+      });
+      const reordered = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(reordered.thread.pinOrderKey, "g");
+      assert.deepEqual(reordered.thread.pinnedAt, pinned.thread.pinnedAt);
+
+      // Unpinning drops the arranged position with the pin: a later re-pin is a
+      // fresh placement, not a resurrection of a slot the run has moved past.
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-pin-order-unpin"),
+        threadId,
+        pinned: false,
+      });
+      const unpinned = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(unpinned.thread.pinnedAt ?? null);
+      assert.isNull(unpinned.thread.pinOrderKey ?? null);
+      const unpinnedShell = (yield* orchestrator.getShellSnapshot()).threads.find(
+        (candidate) => candidate.id === threadId,
+      );
+      assert.isNull(unpinnedShell?.pinOrderKey ?? null);
+    }),
+  );
+
   it.effect("persists an in-place timeline clear boundary on the thread and shell", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

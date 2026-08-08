@@ -1248,7 +1248,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             ...(command.pinned === undefined
               ? {}
-              : { pinnedAt: command.pinned || thread.workInboxRole === "main" ? now : null }),
+              : {
+                  pinnedAt: command.pinned || thread.workInboxRole === "main" ? now : null,
+                  // Unpinning drops the arranged position with the pin: a later
+                  // re-pin is a fresh placement, not a resurrection of the old
+                  // slot (which the rest of the run has since moved past).
+                  ...(command.pinned || thread.workInboxRole === "main"
+                    ? {}
+                    : { pinOrderKey: null }),
+                }),
+            ...(command.pinOrderKey === undefined ? {} : { pinOrderKey: command.pinOrderKey }),
             ...(command.workInboxRole === undefined
               ? {}
               : {

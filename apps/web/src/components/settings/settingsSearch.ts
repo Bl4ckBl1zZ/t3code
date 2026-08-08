@@ -7,7 +7,6 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/connections"
   | "/settings/integrations"
-  | "/settings/beta"
   | "/settings/archived";
 
 export interface SettingsSearchItem {
@@ -30,7 +29,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
   "/settings/integrations": "Integrations",
-  "/settings/beta": "Beta",
   "/settings/archived": "Archive",
 };
 
@@ -95,6 +93,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "auto-settle-inactive-threads",
+    title: "Auto-settle inactive threads",
+    to: "/settings/general",
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
@@ -102,11 +105,6 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "hide-whitespace-changes",
     title: "Hide whitespace changes",
-    to: "/settings/general",
-  },
-  {
-    id: "assistant-output",
-    title: "Assistant output",
     to: "/settings/general",
   },
   {
@@ -161,6 +159,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "legacy-plan-mode",
+    title: "Plan mode (legacy)",
+    to: "/settings/general",
+  },
+  {
+    id: "legacy-token-streaming",
+    title: "Stream token by token (legacy)",
+    to: "/settings/general",
+  },
+  {
+    id: "legacy-sidebar",
+    title: "Sidebar (legacy)",
+    to: "/settings/general",
+  },
+  {
     id: "keybindings",
     title: "Keybindings",
     to: "/settings/keybindings",
@@ -184,17 +197,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "integrations",
     title: "Integrations",
     to: "/settings/integrations",
-  },
-  {
-    id: "sidebar-v2",
-    title: "Sidebar v2",
-    to: "/settings/beta",
-  },
-  {
-    id: "auto-settle-inactive-threads",
-    title: "Auto-settle inactive threads",
-    to: "/settings/beta",
-    targetId: "sidebar-v2",
   },
   {
     id: "archive",

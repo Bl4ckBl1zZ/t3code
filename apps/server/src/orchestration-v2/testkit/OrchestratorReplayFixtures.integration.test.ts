@@ -60,7 +60,7 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
   readonly buildInput: () => OrchestratorFixtureInput;
   readonly driver: ProviderOrchestratorReplayVariant;
   readonly harness: OrchestratorV2ProviderReplayHarness<Transcript, Error>;
-  readonly enableAssistantStreaming?: boolean;
+  readonly enableLegacyTokenStreaming?: boolean;
 }) {
   const rawTranscript = yield* readTranscript(input.driver.transcriptFile);
   const workspace = yield* checkpointWorkspace(input.fixtureName);
@@ -88,10 +88,10 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
   };
 
   const result = yield* runOrchestratorV2ProviderReplayScenario(scenario, input.harness, {
-    enableAssistantStreaming: input.enableAssistantStreaming ?? false,
+    enableLegacyTokenStreaming: input.enableLegacyTokenStreaming ?? false,
   }).pipe(provideDeterministicTestRuntime);
   input.driver.assertOutput(result, transcript);
-  if (input.enableAssistantStreaming !== true) {
+  if (input.enableLegacyTokenStreaming !== true) {
     assert.isFalse(
       result.domainEvents.some(isStreamingAssistantEvent),
       "buffered delivery must not persist streaming assistant artifacts",
@@ -120,7 +120,7 @@ function runFixtureProviderWithRegisteredHarness(input: {
   readonly fixtureName: string;
   readonly buildInput: () => OrchestratorFixtureInput;
   readonly driver: ProviderOrchestratorReplayVariant;
-  readonly enableAssistantStreaming?: boolean;
+  readonly enableLegacyTokenStreaming?: boolean;
 }) {
   switch (input.driver.driver) {
     case "codex":
@@ -202,7 +202,7 @@ describe("orchestrator replay fixtures", () => {
           fixtureName: "simple-cursor-streaming",
           buildInput: simpleFixture.buildInput,
           driver: simpleCursorProvider,
-          enableAssistantStreaming: true,
+          enableLegacyTokenStreaming: true,
         });
 
         assert.deepEqual(

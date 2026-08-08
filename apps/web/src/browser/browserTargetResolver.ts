@@ -6,6 +6,7 @@ import type {
 import {
   isLocalLoopbackHost,
   isPrivateNetworkHost,
+  normalizeHostname,
   resolveEndpointUrl,
   type EndpointReachability,
 } from "@t3tools/shared/endpointReachability";
@@ -14,6 +15,7 @@ import { isLoopbackHost, normalizePreviewUrl } from "@t3tools/shared/preview";
 import { readPreparedConnection } from "~/state/session";
 
 export type { EndpointReachability };
+export { isLocalLoopbackHost, normalizeHostname };
 
 const readEnvironmentUrl = (environmentId: EnvironmentId): URL => {
   const connection = readPreparedConnection(environmentId);
