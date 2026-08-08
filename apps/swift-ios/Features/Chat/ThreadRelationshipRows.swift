@@ -564,9 +564,17 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
     /// one, because "Forked from X" says more than "Fork: Y".
     public let primaryRow: ThreadRelationshipRow?
     public let summary: String
+    /// Derived here with the rest of the banner's state rather than recomputed
+    /// per body: this view re-renders on every streamed thread update.
+    public let subagentSummary: ThreadSubagentSummary
 
     /// Nothing to say and nothing to disconnect — the banner hides entirely.
     public var isEmpty: Bool { rows.isEmpty && !canDetach }
+
+    /// The banner earns its place only while agents are in flight, or while
+    /// there is a session to disconnect. Lineage alone does not: it never
+    /// changes while the thread is open, so it belongs in the sheet.
+    public var showsCollapsedBanner: Bool { !subagentSummary.isEmpty || canDetach }
 
     public func title(for threadID: String) -> String {
         graph.node(threadID)?.thread?.title ?? threadID
@@ -590,26 +598,58 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
 /// (apps/web/src/components/chat/ThreadRelationshipsControl.tsx): an orb stack
 /// plus a count that leads with work in progress, because that is the only part
 /// a glance needs to act on.
+public extension ThreadSubagentSummary {
+    /// Subagents the given thread spawned. Incoming edges are lineage — where
+    /// the thread came from, not what it is running — so they are excluded.
+    static func derive(
+        rows: [ThreadRelationshipRow],
+        currentThreadID: String
+    ) -> ThreadSubagentSummary {
+        var working: [ThreadRelationshipRow] = []
+        var failed: [ThreadRelationshipRow] = []
+        for row in rows
+        where row.edge.kind == .subagent && row.edge.sourceThreadID == currentThreadID {
+            switch row.edge.status {
+            case "completed":
+                continue
+            case "failed", "error":
+                failed.append(row)
+            default:
+                // Deliberately looser than `subagentOrbState`, which will not
+                // animate a parked agent: `pending` and `waiting` still mean
+                // this thread is outstanding on someone.
+                working.append(row)
+            }
+        }
+        // Finished agents are classified and then dropped: a completed agent is
+        // nothing the reader has to act on, and keeping it pinned a banner to
+        // the top of the thread reading "4 done" long after the work had
+        // already landed in the transcript.
+        return ThreadSubagentSummary(
+            orbRows: Array((working + failed).prefix(4)),
+            workingCount: working.count,
+            failedCount: failed.count
+        )
+    }
+}
+
 public struct ThreadSubagentSummary: Equatable, Sendable {
-    /// Working, then failed, then done — capped at the four the stack shows.
+    /// Working, then failed — capped at the four the stack shows. Finished
+    /// agents are deliberately absent; see `derive`.
     public let orbRows: [ThreadRelationshipRow]
     public let workingCount: Int
     public let failedCount: Int
-    public let doneCount: Int
 
-    public var isEmpty: Bool { workingCount == 0 && failedCount == 0 && doneCount == 0 }
-
-    /// Nothing is running, so the row reports a result rather than progress and
-    /// is styled down accordingly.
-    public var isSettled: Bool { workingCount == 0 && failedCount == 0 }
+    /// Nothing is in flight and nothing failed, so the banner has nothing to
+    /// report and hides rather than narrating history.
+    public var isEmpty: Bool { workingCount == 0 && failedCount == 0 }
 
     public var primaryLabel: String {
-        if isSettled, doneCount > 0 { return "\(doneCount) done" }
         // A pure-failure set leads with the failure; otherwise the working
-        // count leads even at zero, so the row keeps a stable shape as agents
-        // finish rather than reordering under the reader.
-        if workingCount > 0 || failedCount == 0 { return "\(workingCount) working" }
-        return "\(failedCount) failed"
+        // count leads, so the row keeps a stable shape as agents finish.
+        workingCount > 0 || failedCount == 0
+            ? "\(workingCount) working"
+            : "\(failedCount) failed"
     }
 
     /// Only when both states are present — otherwise the failure count is
@@ -617,37 +657,8 @@ public struct ThreadSubagentSummary: Equatable, Sendable {
     public var secondaryFailedLabel: String? {
         workingCount > 0 && failedCount > 0 ? "\(failedCount) failed" : nil
     }
-
-    /// Withheld when "N done" is already the primary label.
-    public var trailingDoneLabel: String? {
-        doneCount > 0 && (workingCount > 0 || failedCount > 0) ? "\(doneCount) done" : nil
-    }
 }
 
-public extension ThreadRelationshipsModel {
-    /// Subagents this thread spawned. Incoming edges are lineage — where the
-    /// thread came from, not what it is running — so they are excluded.
-    var subagentSummary: ThreadSubagentSummary {
-        let subagentRows = rows.filter {
-            $0.edge.kind == .subagent && $0.edge.sourceThreadID == currentThreadID
-        }
-        let done = subagentRows.filter { $0.edge.status == "completed" }
-        let failed = subagentRows.filter {
-            $0.edge.status == "failed" || $0.edge.status == "error"
-        }
-        // Anything not finished counts as working, including `pending` and
-        // `waiting`. That is deliberately looser than `subagentOrbState`, which
-        // will not animate a parked agent: the count answers "is this thread
-        // still waiting on anyone", where a parked agent is still outstanding.
-        let working = subagentRows.filter { !done.contains($0) && !failed.contains($0) }
-        return ThreadSubagentSummary(
-            orbRows: Array((working + failed + done).prefix(4)),
-            workingCount: working.count,
-            failedCount: failed.count,
-            doneCount: done.count
-        )
-    }
-}
 
 public extension ThreadRelationships {
     /// - Parameters:
@@ -705,7 +716,11 @@ public extension ThreadRelationships {
             canDetach: ThreadWorkflows.canDetachProviderSession(providerSession),
             subagentsByChildThreadID: index,
             primaryRow: primaryRow,
-            summary: summary
+            summary: summary,
+            subagentSummary: ThreadSubagentSummary.derive(
+                rows: rows,
+                currentThreadID: currentThreadID
+            )
         )
     }
 }

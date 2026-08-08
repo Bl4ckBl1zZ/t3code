@@ -44,6 +44,11 @@ struct ThreadDetailsSheet: View {
     var onDetachSession: (() async -> Void)?
     var automations: [FeatureScheduledTask] = []
     var automationsFailedToLoad = false
+    /// Thread-level actions, folded in here from the old toolbar ••• menu so
+    /// the details button is the thread's single secondary surface.
+    var onTogglePin: (() -> Void)?
+    var onReload: (() -> Void)?
+    var onToggleArchive: (() -> Void)?
 
     @State private var sourceControl: FeatureSourceControlStatus?
     @State private var isLoadingStatus = true
@@ -63,6 +68,7 @@ struct ThreadDetailsSheet: View {
                 versionControlSection
                 automationsSection
                 lineageSection
+                threadActionsSection
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -239,6 +245,48 @@ struct ThreadDetailsSheet: View {
                     showsChevron: false,
                     action: onRunScript.map { run in { run(script) } }
                 )
+            }
+        }
+    }
+
+    // MARK: - Thread actions
+
+    /// Pin, reload and archive — the rows that used to live in the toolbar's
+    /// ••• menu. Last in the sheet: they act on the thread rather than report
+    /// on it, and archive ends the visit.
+    @ViewBuilder
+    private var threadActionsSection: some View {
+        if onTogglePin != nil || onReload != nil || onToggleArchive != nil {
+            ThreadDetailsSection(title: "Thread") {
+                if let onTogglePin, thread.canTogglePin, !thread.isArchived {
+                    ThreadDetailsRow(
+                        systemImage: thread.pinnedAt == nil ? "pin" : "pin.slash",
+                        title: thread.pinnedAt == nil ? "Pin" : "Unpin",
+                        showsChevron: false,
+                        action: onTogglePin
+                    )
+                    ThreadDetailsDivider()
+                }
+
+                if let onReload {
+                    ThreadDetailsRow(
+                        systemImage: "arrow.clockwise",
+                        title: "Reload",
+                        subtitle: "Refresh this thread from the server",
+                        showsChevron: false,
+                        action: onReload
+                    )
+                }
+
+                if let onToggleArchive {
+                    ThreadDetailsDivider()
+                    ThreadDetailsRow(
+                        systemImage: thread.isArchived ? "arrow.uturn.backward" : "archivebox",
+                        title: thread.isArchived ? "Restore" : "Archive",
+                        showsChevron: false,
+                        action: onToggleArchive
+                    )
+                }
             }
         }
     }

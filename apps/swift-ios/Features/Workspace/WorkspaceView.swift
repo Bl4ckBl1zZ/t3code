@@ -197,6 +197,12 @@ public struct WorkspaceView: View {
         .onChange(of: model.homePresentationRevision) { _, _ in
             if navigationRequest != nil { consumeNavigationRequest() }
         }
+        .onAppear {
+            // The favicon store resolves through whichever client this session
+            // runs on; re-pointing on every appearance keeps it current after
+            // a reconnect swaps the client out.
+            ProjectFaviconStore.shared.attach(model.client)
+        }
         .task(id: nextSidebarBoundary) {
             guard let boundary = nextSidebarBoundary else { return }
             do {
@@ -452,40 +458,47 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// The wordmark is the switcher: T3 Work and T3 Code share this one list, so
-    /// the name of what is being listed is also the control that changes it.
+    /// Both workspaces are always on screen: the wordmark names the product and
+    /// the two tabs beside it are the switcher — no menu to open first.
     private var workspaceSwitcher: some View {
-        Menu {
-            ForEach(WorkspaceSwitcher.menuItems(current: workspace)) { item in
-                Button {
-                    storedWorkspace = item.workspace.rawValue
-                } label: {
-                    if item.isOn {
-                        Label(item.title, systemImage: "checkmark")
-                    } else {
-                        Text(item.title)
+        HStack(spacing: 10) {
+            Text("T3")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(T3Colors.textPrimary)
+
+            HStack(spacing: 4) {
+                ForEach(WorkspaceSwitcher.menuItems(current: workspace)) { item in
+                    Button {
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            storedWorkspace = item.workspace.rawValue
+                        }
+                    } label: {
+                        Text(WorkspaceSwitcher.shortTitle(item.workspace))
+                            .font(.system(size: 14, weight: item.isOn ? .semibold : .medium))
+                            .foregroundStyle(
+                                item.isOn ? T3Colors.textPrimary : T3Colors.textTertiary
+                            )
+                            .padding(.horizontal, 11)
+                            .frame(height: 30)
+                            .background {
+                                if item.isOn {
+                                    Color.clear
+                                        .t3GlassEffect(.regular, in: Capsule())
+                                        .overlay {
+                                            Capsule().stroke(T3Colors.border, lineWidth: 1)
+                                        }
+                                }
+                            }
+                            .contentShape(Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(item.title)
+                    .accessibilityAddTraits(item.isOn ? [.isSelected] : [])
                 }
             }
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("T3")
-                    .fontWeight(.bold)
-                    .foregroundStyle(T3Colors.textPrimary)
-                Text(WorkspaceSwitcher.shortTitle(workspace))
-                    .fontWeight(.medium)
-                    .foregroundStyle(T3Colors.textSecondary)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(T3Colors.textTertiary)
-            }
-            .font(.system(size: 16))
-            .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(WorkspaceSwitcher.accessibilityLabel(current: workspace))
-        .accessibilityValue(WorkspaceSwitcher.title(workspace))
+        .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar-workspace-switcher")
     }
 
@@ -988,6 +1001,9 @@ struct HomeShelfHeader: View {
 
 struct HomeThreadRowContext: Equatable {
     let projectName: String
+    /// Where the project's favicon resolves from; nil keeps the letter badge.
+    let projectEnvironmentID: String?
+    let projectWorkspaceRoot: String?
     let environmentLabel: String?
     let providerID: String
     let providerDriver: String
@@ -996,6 +1012,8 @@ struct HomeThreadRowContext: Equatable {
 
     static let fallback = HomeThreadRowContext(
         projectName: "Project",
+        projectEnvironmentID: nil,
+        projectWorkspaceRoot: nil,
         environmentLabel: nil,
         providerID: "agent",
         providerDriver: "",
@@ -1052,6 +1070,8 @@ struct HomeThreadRowContext: Equatable {
 
             result[thread.id] = HomeThreadRowContext(
                 projectName: project?.name ?? "Project",
+                projectEnvironmentID: project?.environmentID,
+                projectWorkspaceRoot: project?.path,
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
                 providerID: providerID,
                 providerDriver: providerDriver,
@@ -1115,7 +1135,12 @@ struct FeatureThreadRow: View, Equatable {
     private func richRow(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                ProjectBadge(name: context.projectName)
+                ProjectFaviconBadge(
+                    environmentID: context.projectEnvironmentID,
+                    workspaceRoot: context.projectWorkspaceRoot
+                ) {
+                    ProjectBadge(name: context.projectName)
+                }
                 Text(context.projectName)
                     .lineLimit(1)
                     .foregroundStyle(T3Colors.textSecondary)
@@ -1176,9 +1201,14 @@ struct FeatureThreadRow: View, Equatable {
 
     private func slimRow(at now: Date) -> some View {
         HStack(spacing: 9) {
-            ProjectBadge(name: context.projectName)
-                .saturation(0)
-                .opacity(0.48)
+            ProjectFaviconBadge(
+                environmentID: context.projectEnvironmentID,
+                workspaceRoot: context.projectWorkspaceRoot
+            ) {
+                ProjectBadge(name: context.projectName)
+            }
+            .saturation(0)
+            .opacity(0.48)
             Text(thread.title)
                 .font(T3Typography.homeTitle)
                 .foregroundStyle(T3Colors.textSecondary)

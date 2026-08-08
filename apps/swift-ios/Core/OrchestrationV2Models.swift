@@ -398,6 +398,45 @@ public struct OrchestrationV2TurnItemBase: Codable, Equatable, Sendable {
         case startedAt, completedAt, updatedAt, createdBy, creationSource
     }
 
+    /// Memberwise, for items this client synthesizes rather than decodes — a
+    /// provider switch the server has not yet echoed as a turn item, say.
+    public init(
+        id: String,
+        threadId: String,
+        runId: String? = nil,
+        nodeId: String? = nil,
+        providerThreadId: String? = nil,
+        providerTurnId: String? = nil,
+        nativeItemRef: OrchestrationV2ProviderRef? = nil,
+        parentItemId: String? = nil,
+        ordinal: Int = 0,
+        status: OrchestrationV2TurnItemStatus,
+        title: String? = nil,
+        startedAt: OrchestrationV2Timestamp? = nil,
+        completedAt: OrchestrationV2Timestamp? = nil,
+        updatedAt: OrchestrationV2Timestamp,
+        createdBy: String? = nil,
+        creationSource: String? = nil
+    ) {
+        self.id = id
+        self.threadId = threadId
+        self.runId = runId
+        self.nodeId = nodeId
+        self.providerThreadId = providerThreadId
+        self.providerTurnId = providerTurnId
+        self.nativeItemRef = nativeItemRef
+        self.parentItemId = parentItemId
+        self.ordinal = ordinal
+        rawStatus = status.rawValue
+        self.status = status
+        self.title = title
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.updatedAt = updatedAt
+        self.createdBy = createdBy
+        self.creationSource = creationSource
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -462,6 +501,12 @@ public struct OrchestrationV2CommandLiveness: Codable, Equatable, Sendable {
 public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiable {
     public let base: OrchestrationV2TurnItemBase
     public let payload: Payload
+
+    public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
+        self.type = type
+        self.base = base
+        self.payload = payload
+    }
 
     public var id: String { base.id }
     public var status: OrchestrationV2TurnItemStatus { base.status }

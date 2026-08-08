@@ -15,7 +15,8 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureWorkspaceAssetResolving, T3ConnectCapable
+    FeatureProjectCreationClient, FeatureWorkspaceAssetResolving,
+    FeatureProjectFaviconResolving, T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -455,6 +456,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.resolvedAssetURL(
             resource: .workspaceFile(threadID: route.wireID, path: path)
         )
+    }
+
+    func projectFaviconURL(environmentID: String, cwd: String) async throws -> URL? {
+        let client = try await environmentClient(id: environmentID)
+        let url = try await client.resolvedAssetURL(resource: .projectFavicon(cwd: cwd))
+        // The server signals "no icon" with a marker filename instead of an
+        // error, so the letter badge is a decision rather than a failure path.
+        return url.lastPathComponent.contains("project-favicon-missing") ? nil : url
     }
 
     func discoverProjectSources(

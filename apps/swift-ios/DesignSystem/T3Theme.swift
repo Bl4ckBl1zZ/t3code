@@ -127,47 +127,18 @@ extension View {
     @ViewBuilder
     func t3GlassEffect(
         _ prominence: T3Glass.Prominence = .regular,
-        in shape: some Shape,
-        tint: Color? = nil,
-        interactive: Bool = false
+        in shape: some Shape
     ) -> some View {
         if #available(iOS 26, *) {
-            let base: Glass = prominence == .clear ? .clear : .regular
-            let tinted = tint.map { base.tint($0) } ?? base
-            glassEffect(tinted.interactive(interactive), in: shape)
+            glassEffect(prominence == .clear ? Glass.clear : Glass.regular, in: shape)
         } else {
             background {
-                ZStack {
-                    shape.fill(
-                        prominence == .clear
-                            ? AnyShapeStyle(.ultraThinMaterial)
-                            : AnyShapeStyle(.regularMaterial)
-                    )
-                    if let tint {
-                        // Glass tints the material rather than painting over it,
-                        // so the fallback keeps the tint translucent too.
-                        shape.fill(tint.opacity(0.22))
-                    }
-                }
+                shape.fill(
+                    prominence == .clear
+                        ? AnyShapeStyle(.ultraThinMaterial)
+                        : AnyShapeStyle(.regularMaterial)
+                )
             }
-        }
-    }
-}
-
-/// Groups sibling glass shapes so iOS 26 can blend them into a single lens as
-/// they approach each other. Before iOS 26 it simply lays its content out,
-/// which is exactly what happened before Liquid Glass existed.
-struct T3GlassContainer<Content: View>: View {
-    var spacing: CGFloat?
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        if #available(iOS 26, *) {
-            GlassEffectContainer(spacing: spacing) {
-                content
-            }
-        } else {
-            content
         }
     }
 }

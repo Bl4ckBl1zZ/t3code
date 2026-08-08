@@ -59,6 +59,88 @@ final class ThreadTimelineGroupingTests: XCTestCase {
         )
     }
 
+    // MARK: - Pending provider switch
+
+    /// A cross-provider switch is recorded server-side as a context handoff but
+    /// never echoed as a `handoff` turn item, so the client synthesizes one to
+    /// explain the wait. It has to render through the same lifecycle path as a
+    /// server-sent handoff, spinner and endpoint labels included.
+    func testSynthesizedHandoffRendersAsAPreparingLifecycleDivider() {
+        let base = OrchestrationV2TurnItemBase(
+            id: "__t3-pending-handoff__",
+            threadId: "thread-v2",
+            ordinal: Int.max,
+            status: .running,
+            updatedAt: "2026-08-08T12:00:00.000Z"
+        )
+        let item = OrchestrationV2TurnItem(
+            type: "handoff",
+            base: base,
+            payload: .handoff(
+                contextHandoffID: base.id,
+                fromProviderInstanceIDs: ["anthropic"],
+                fromModelSelections: [ModelSelection(instanceId: "anthropic", model: "opus")],
+                toProviderThreadID: "",
+                toProviderInstanceID: "openai",
+                toModel: "gpt-5",
+                strategy: "full_thread_summary",
+                summary: nil
+            )
+        )
+
+        XCTAssertTrue(
+            ThreadLifecycle.isLifecycleTimelineItem(item),
+            "must fold into the lifecycle path, not the work log"
+        )
+
+        guard case let .divider(divider) = ThreadLifecycle.resolvePresentation(item) else {
+            return XCTFail("expected a divider")
+        }
+        XCTAssertEqual(divider.label, "Preparing context handoff")
+        XCTAssertTrue(divider.busy, "the wait is the whole point of the row")
+        // `endpointLabel` prefers the model over the instance id.
+        XCTAssertEqual(divider.detail, "opus → gpt-5")
+    }
+
+    // MARK: - Optimistic send reconciliation
+
+    /// The client keeps a just-sent bubble on screen by appending an optimistic
+    /// `FeatureMessage` keyed on the message id it generated, while the server
+    /// echoes a turn item keyed on the id *it* assigned. Deduping on the item id
+    /// alone printed the bubble twice the moment the echo arrived, and the
+    /// duplicate survived until a reload dropped the optimistic copy.
+    func testEchoedUserMessageReplacesItsOptimisticRowRatherThanDoublingIt() {
+        let projectedItem = userMessage("item-1", createdBy: "user")
+        let serverBacked = FeatureMessage(id: "item-1", role: .user, text: "Do it again")
+        let optimistic = FeatureMessage(id: "message-item-1", role: .user, text: "Do it again")
+
+        let entries = ThreadTimelineFeed.entries(
+            timelineItems: [projectedItem],
+            messages: [serverBacked, optimistic]
+        )
+
+        let bubbles = entries.compactMap { entry -> FeatureMessage? in
+            guard case let .message(message) = entry else { return nil }
+            return message
+        }
+        XCTAssertEqual(bubbles.map(\.id), ["item-1"], "the optimistic twin must not survive its echo")
+    }
+
+    /// The other half of the contract: before the echo lands there is no
+    /// projected item, and dropping the optimistic row would blank the bubble
+    /// the user just sent.
+    func testOptimisticRowStillRendersBeforeItsEchoArrives() {
+        let optimistic = FeatureMessage(id: "message-pending", role: .user, text: "Do it again")
+
+        let entries = ThreadTimelineFeed.entries(timelineItems: [], messages: [optimistic])
+
+        let bubbles = entries.compactMap { entry -> FeatureMessage? in
+            guard case let .message(message) = entry else { return nil }
+            return message
+        }
+        XCTAssertEqual(bubbles.map(\.id), ["message-pending"])
+    }
+
     // MARK: - Related-thread card runs
 
     func testAdjacentRelatedThreadCardsCollapseIntoOneGroup() {

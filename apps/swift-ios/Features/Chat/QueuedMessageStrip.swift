@@ -66,9 +66,14 @@ struct QueuedMessageStripView: View {
     /// The run currently dispatching, whose row locks and loses its editor.
     let dispatchingRunID: String?
     let busyRunID: String?
+    /// Set when the provider can fold a queued message into the running turn.
+    /// Absent, the action hides rather than showing a disabled control on every
+    /// row of a queue that can never be steered.
+    let steerTargetRunID: String?
     let onReorder: (QueueReorderTarget) -> Void
     let onEdit: (_ runID: String, _ text: String) -> Void
     let onDelete: (_ runID: String) -> Void
+    let onPromoteToSteer: (_ queuedRunID: String, _ targetRunID: String) -> Void
 
     @State private var editingRunID: String?
     @State private var editText = ""
@@ -138,6 +143,15 @@ struct QueuedMessageStripView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 0) {
+                    if let steerTargetRunID {
+                        iconButton(
+                            "arrow.turn.left.up",
+                            label: "Promote queued message to steer",
+                            disabled: isDispatching || busyRunID != nil
+                        ) {
+                            onPromoteToSteer(queued.run.id, steerTargetRunID)
+                        }
+                    }
                     moveButton(at: index, direction: .up, isDispatching: isDispatching)
                     moveButton(at: index, direction: .down, isDispatching: isDispatching)
                     iconButton(

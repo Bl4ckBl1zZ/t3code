@@ -29,12 +29,12 @@ public enum VoiceCaptureDiagnostics {
 
     private static let lock = NSLock()
 
-    public static var fileURL: URL? {
-        FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent(fileName, isDirectory: false)
-    }
+    /// Resolved once: `append` runs per log line, and eight of those land in
+    /// `start()` between the user's hold and the engine actually running.
+    public static let fileURL: URL? = FileManager.default
+        .urls(for: .documentDirectory, in: .userDomainMask)
+        .first?
+        .appendingPathComponent(fileName, isDirectory: false)
 
     public static func record(_ message: @autoclosure () -> String) {
         #if DEBUG

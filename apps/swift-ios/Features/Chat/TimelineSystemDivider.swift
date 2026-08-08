@@ -49,13 +49,19 @@ struct TimelineSystemDivider: View {
     var body: some View {
         HStack(spacing: 10) {
             hairline
-            if let action {
-                Button(action: action) { pill }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(accessibilityActionLabel ?? label)
-            } else {
-                pill
+            // Priority over the hairlines: they are infinitely greedy, and
+            // without this the layout crushes the pill's labels into "Interr…"
+            // instead of shortening the lines beside it.
+            Group {
+                if let action {
+                    Button(action: action) { pill }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(accessibilityActionLabel ?? label)
+                } else {
+                    pill
+                }
             }
+            .layoutPriority(1)
             hairline
         }
         .padding(.bottom, ChatTimelineStyle.entrySpacing)
@@ -134,12 +140,17 @@ struct TimelineSystemDivider: View {
 
     @ViewBuilder
     private var detailText: some View {
-        if let detail, !detail.isEmpty {
+        // A detail that just repeats the label ("Interrupted  Interrupted")
+        // adds noise, not information.
+        if let detail, !detail.isEmpty, detail != label {
             Text(verbatim: detail)
                 .font(ChatTimelineStyle.small)
                 .foregroundStyle(T3Colors.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                // Bounded so a sentence-length message shortens itself instead
+                // of eating the hairlines entirely.
+                .frame(maxWidth: 220)
         }
     }
 

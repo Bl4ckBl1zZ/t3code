@@ -2,7 +2,18 @@ import SwiftUI
 import UIKit
 
 struct FeatureComposerView: View {
-    @State private var isManuallyExpanded = false
+    /// True while the attachment picker has a camera, photo, or file source on
+    /// screen. Presenting any of them resigns the keyboard; without this the
+    /// resulting focus loss would collapse the footer, and the composer needs
+    /// to know a presentation it just opened is the reason focus went away.
+    @State private var isPickingAttachment = false
+    /// The in-pill attachment menu the plus morphs the composer into.
+    @State private var isAttachMenuOpen = false
+    /// Hands the menu's choice to the picker, which owns the presentations.
+    @State private var requestedAttachmentSource: FeatureAttachmentSource?
+    /// Whether the keyboard was up when a recording began, so it can be pinned
+    /// open through the recording and restored after transcription.
+    @State private var resumeFocusAfterVoice = false
     @State private var attachmentPreparation = FeatureAttachmentPreparationState()
     @State private var pathEntries: [FeatureComposerPathEntry] = []
     @State private var isPathSearchLoading = false
@@ -13,10 +24,6 @@ struct FeatureComposerView: View {
     /// view's own text input.
     private let voice = VoiceComposerCoordinator.shared
     @State private var caret = VoiceComposerCaret()
-    /// Owned here because both halves of the recording morph — the proxy inside
-    /// the combo button and the capsule behind the recording bar — live in this
-    /// view, and `matchedGeometryEffect` only pairs them within one namespace.
-    @Namespace private var voiceMorph
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
@@ -98,45 +105,59 @@ struct FeatureComposerView: View {
                     }
                 }
             }
-            // Sits outside the composer's clip shape on purpose: the slide-up
-            // cancel target floats above the send button and an overlay inside
+            // Sits outside the composer's clip shape on purpose: the hold hint
+            // floats in the conversation above the pill, and an overlay inside
             // the rounded surface would be cut off exactly where it matters.
-            .overlay(alignment: .bottomTrailing) {
-                VoiceCancelTarget(
-                    holdActive: voice.holdActive,
-                    cancelArmed: voice.cancelArmed,
-                    progress: voice.cancelProgress
-                )
-                .padding(.trailing, 13)
-                .padding(.bottom, 62)
-                // Without a transaction around the hold flipping on, the target
-                // has a transition it never gets to play.
-                .animation(
-                    VoiceMorph.appearance(reduceMotion: reduceMotion),
-                    value: voice.holdActive
-                )
+            .overlay(alignment: .top) {
+                if voice.holdActive, voice.state.isRecording {
+                    VoiceReleaseHint(armed: voice.cancelArmed)
+                        // A plain offset, not an alignment guide: the guide was
+                        // silently ignored here and left the chip sitting on
+                        // the pill's top edge. −56 clears the pill with a small
+                        // gap so it floats over the transcript.
+                        .offset(y: -56)
+                        .transition(.opacity)
+                }
+            }
+            // Without a transaction around the hold flipping on, the hint has a
+            // transition it never gets to play.
+            .animation(
+                VoiceMorph.appearance(reduceMotion: reduceMotion),
+                value: voice.holdActive
+            )
+            .onChange(of: voice.holdActive) { _, active in
+                if active {
+                    resumeFocusAfterVoice = resumeFocusAfterVoice || focused.wrappedValue
+                } else if !voice.state.isBusy {
+                    // The hold never became a recording (too short, cancelled
+                    // before start): nothing will end later to restore for.
+                    resumeFocusAfterVoice = false
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
             .padding(.bottom, 10)
-            .background {
-                LinearGradient(
-                    colors: [
-                        .clear,
-                        T3Colors.background.opacity(0.94),
-                        T3Colors.background,
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+            // No backdrop on purpose: the pill is glass and the transcript
+            // scrolls behind it.
+            .onChange(of: voice.state.isBusy) { _, busy in
+                if busy {
+                    isAttachMenuOpen = false
+                    // Captured at recording start; `holdActive` alone is too
+                    // early for hands-free taps and permission waits.
+                    resumeFocusAfterVoice = resumeFocusAfterVoice || focused.wrappedValue
+                } else if resumeFocusAfterVoice {
+                    resumeFocusAfterVoice = false
+                    focused.wrappedValue = true
+                }
             }
-            .onChange(of: focused.wrappedValue) {
-                if !focused.wrappedValue,
-                   textIsEmpty,
-                   attachments.isEmpty,
-                   !attachmentPreparation.isPreparing {
-                    isManuallyExpanded = false
+            // The reference behaviour: recording must not take the keyboard
+            // away. If anything in the swap resigns the field, put it back.
+            .onChange(of: focused.wrappedValue) { _, isFocused in
+                if !isFocused, voice.state.isBusy, resumeFocusAfterVoice {
+                    Task { @MainActor in
+                        await Task.yield()
+                        focused.wrappedValue = true
+                    }
                 }
             }
             .task(id: pathSearchRequest) {
@@ -226,78 +247,32 @@ struct FeatureComposerView: View {
                         onUserInputSubmit(input.id, answers)
                     }
                 )
-            } else if isExpanded {
-                expandedComposer
             } else {
-                collapsedComposer
+                editor
             }
         }
-        .background(T3Colors.input.opacity(0.98), in: composerShape)
+        // Liquid Glass rather than a solid fill: the transcript scrolls behind
+        // the pill and refracts through it.
+        .t3GlassEffect(.regular, in: composerShape)
         .overlay {
             composerShape
                 .stroke(T3Colors.inputBorder, lineWidth: 1)
         }
         .clipShape(composerShape)
-        // Scoped to the one value that opens and closes the recording bar, so
-        // the button's proxy and the bar's capsule change in a single
-        // transaction and the shared shape interpolates between them. Nothing
-        // else in the composer animates off the back of it.
+        // Scoped to the two values that swap the pill's content — recording
+        // strip and attachment menu — so both halves of each swap change in a
+        // single transaction.
         .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: voice.state.isBusy)
+        .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: isAttachMenuOpen)
     }
 
-    private var collapsedComposer: some View {
-        HStack(spacing: 4) {
-            Button {
-                isManuallyExpanded = true
-                Task { @MainActor in
-                    await Task.yield()
-                    focused.wrappedValue = true
-                }
-            } label: {
-                Text(isWorking ? "Message to queue…" : "Ask anything…")
-                    .font(T3Typography.composer)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(minHeight: T3Metrics.minimumTapTarget)
-            .accessibilityLabel("Message agent")
-            .accessibilityHint("Opens the message editor")
-
-            submitButton
-                .padding(.trailing, 7)
-        }
-        .padding(.leading, 14)
-        .padding(.vertical, 7)
-    }
-
-    private var expandedComposer: some View {
+    private var editor: some View {
         VStack(spacing: 0) {
             if !attachments.isEmpty {
                 FeatureAttachmentStrip(attachments: $attachments)
                     .padding(.horizontal, 12)
-                    .padding(.top, 3)
-
-                Divider()
-                    .overlay(T3Colors.separator)
-                    .padding(.horizontal, 13)
+                    .padding(.top, 10)
             }
-
-            TextField(
-                isWorking ? "Message to queue…" : "Ask anything…",
-                text: $text,
-                axis: .vertical
-            )
-                .font(T3Typography.composer)
-                .lineLimit(1...7)
-                .focused(focused)
-                // Return is always editing input. Sending is deliberately button-only.
-                .submitLabel(.return)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 7)
-                .frame(minHeight: 62, alignment: .top)
 
             if imageAttachmentCount > 0, !imagesAllowed {
                 Label("Choose a model that accepts images", systemImage: "exclamationmark.circle")
@@ -305,7 +280,7 @@ struct FeatureComposerView: View {
                     .foregroundStyle(T3Colors.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 15)
-                    .padding(.bottom, 4)
+                    .padding(.top, 8)
             }
 
             if attachmentPreparation.isPreparing {
@@ -314,30 +289,186 @@ struct FeatureComposerView: View {
                     .foregroundStyle(T3Colors.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 15)
-                    .padding(.bottom, 4)
+                    .padding(.top, 8)
                     .accessibilityIdentifier("attachment-preparing")
             }
 
-            // One container so iOS 26 can merge the recording capsule and the
-            // attachment button into a single lens as the bar grows past it.
-            T3GlassContainer(spacing: 16) {
-                VStack(spacing: 0) {
-                    VoiceRecordingBar(voice: voice, morphNamespace: voiceMorph)
+            if isAttachMenuOpen {
+                attachmentMenuList
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .opacity.combined(
+                                with: .scale(scale: 0.8, anchor: .bottomLeading)
+                            )
+                    )
+            }
 
-                    composerFooter
+            composerRow
+
+            // Collapsed rather than removed while recording or the menu is up,
+            // for the same reason as the trailing controls: no structural
+            // change anywhere in the pill during a push-to-talk hold.
+            composerFooter
+                .frame(height: showsFooter ? nil : 0, alignment: .top)
+                .opacity(showsFooter ? 1 : 0)
+                .allowsHitTesting(showsFooter)
+                .clipped()
+        }
+    }
+
+    /// The pill's one row: plus, draft, mic, send. While Voice Input is busy
+    /// the plus and the draft give way to the recording strip, but they stay in
+    /// the hierarchy at zero opacity — removing the focused field would dismiss
+    /// the keyboard under the user mid-recording, and the strip is exactly the
+    /// state that has to survive that.
+    private var composerRow: some View {
+        HStack(alignment: .bottom, spacing: 2) {
+            // The plus sits outside the draft row so it stays visible — as the
+            // close X — while the pill is morphed into the attachment card. It
+            // collapses (never leaves the tree) while recording.
+            FeatureImageAttachmentPicker(
+                attachments: $attachments,
+                preparationState: $attachmentPreparation,
+                isPresentingSource: $isPickingAttachment,
+                requestedSource: $requestedAttachmentSource,
+                onToggleMenu: { isAttachMenuOpen.toggle() },
+                isMenuOpen: isAttachMenuOpen,
+                isEnabled: imagesAllowed
+            )
+            .frame(width: voice.state.isBusy ? 0 : T3Metrics.minimumTapTarget)
+            .opacity(voice.state.isBusy ? 0 : 1)
+            .allowsHitTesting(!voice.state.isBusy)
+            .clipped()
+
+            ZStack(alignment: .bottom) {
+                inputRow
+                    // Not zero: at zero UIKit treats the focused field as
+                    // hidden and resigns it, which is the keyboard closing
+                    // mid-recording. 0.02 is invisible and keeps it live.
+                    .opacity(pillContentHidden ? 0.02 : 1)
+                    .allowsHitTesting(!pillContentHidden)
+
+                if voice.state.isBusy {
+                    VoiceRecordingStrip(voice: voice)
+                        .transition(.opacity)
                 }
             }
+
+            // The trailing controls collapse instead of leaving the tree: the
+            // mic hosts the push-to-talk gesture, and removing views beside it
+            // mid-hold gives SwiftUI a reason to reset that gesture — which is
+            // a recording that never gets its release.
+            if voice.isAvailable {
+                VoiceMicButton(voice: voice)
+            }
+
+            sendButton
+                .frame(width: sendButtonHidden ? 0 : T3Metrics.minimumTapTarget)
+                .opacity(sendButtonHidden ? 0 : 1)
+                .allowsHitTesting(!sendButtonHidden)
+                .clipped()
         }
+        .padding(.leading, 6)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+    }
+
+    /// While recording, the mic itself is the send circle; while the attachment
+    /// menu is up, the row belongs to the menu.
+    private var sendButtonHidden: Bool {
+        voice.state.isBusy || isAttachMenuOpen
+    }
+
+    /// The plus and the draft stay in the hierarchy while the recording strip
+    /// or attachment menu covers them: the picker's presentations hang off the
+    /// plus, and removing the focused field would dismiss the keyboard.
+    private var pillContentHidden: Bool {
+        voice.state.isBusy || isAttachMenuOpen
+    }
+
+    private var showsFooter: Bool {
+        isExpanded && !pillContentHidden
+    }
+
+    private var inputRow: some View {
+        TextField(
+            isWorking ? "Message to queue…" : "Ask anything…",
+            text: $text,
+            axis: .vertical
+        )
+        .font(T3Typography.composer)
+        .lineLimit(1...7)
+        .focused(focused)
+        // Return is always editing input. Sending is deliberately button-only.
+        .submitLabel(.return)
+        .padding(.leading, 4)
+        .padding(.vertical, 12)
+    }
+
+    /// The card the pill morphs into when the plus is tapped: a vertical list
+    /// of sources, each a circular icon chip beside its label, growing up out
+    /// of the composer with the plus (now an X) still at the bottom-left.
+    private var attachmentMenuList: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            attachmentMenuOption(
+                "Camera",
+                systemImage: "camera",
+                source: .camera,
+                enabled: imagesAllowed && FeatureAttachmentSource.cameraAvailable
+            )
+            attachmentMenuOption(
+                "Photos",
+                systemImage: "photo",
+                source: .photoLibrary,
+                enabled: imagesAllowed
+            )
+            attachmentMenuOption(
+                "Files",
+                systemImage: "paperclip",
+                source: .files,
+                enabled: true
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 16)
+        .padding(.bottom, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("attachment-menu")
+    }
+
+    private func attachmentMenuOption(
+        _ title: String,
+        systemImage: String,
+        source: FeatureAttachmentSource,
+        enabled: Bool
+    ) -> some View {
+        Button {
+            isAttachMenuOpen = false
+            requestedAttachmentSource = source
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(T3Colors.subtleStrong, in: Circle())
+                Text(title)
+                    .font(.title3)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(T3Colors.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel("Add from \(title)")
     }
 
     private var composerFooter: some View {
         HStack(spacing: 2) {
-            FeatureImageAttachmentPicker(
-                attachments: $attachments,
-                preparationState: $attachmentPreparation,
-                isEnabled: imagesAllowed
-            )
-
             ProviderModelPicker(
                 providers: providers,
                 selection: $selection,
@@ -353,54 +484,33 @@ struct FeatureComposerView: View {
             if let contextUsage {
                 FeatureContextMeter(usage: contextUsage)
             }
-
-            submitButton
-                .padding(.leading, 4)
         }
-        .padding(.horizontal, 7)
-        .padding(.top, 2)
+        .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
 
-    /// The send affordance doubles as the record button wherever Voice Input is
-    /// reachable: tap sends (or starts hands-free dictation when the draft is
-    /// empty), hold dictates. The agent-stop button keeps the slot only while
-    /// nothing voice-related is in flight, so a recording is always stoppable
-    /// from the control that started it.
-    @ViewBuilder
-    private var submitButton: some View {
-        if voice.isAvailable, !(showsStop && !voice.state.isBusy) {
-            VoiceComboButton(
-                voice: voice,
-                canSend: canSend,
-                isSending: isSending,
-                morphNamespace: voiceMorph,
-                onSend: performPrimaryAction
-            )
-        } else {
-            plainSubmitButton
-        }
-    }
-
-    private var plainSubmitButton: some View {
+    /// Send only: the mic beside it owns everything voice. Inverted rather than
+    /// tinted — the filled circle is the composer's single strongest element,
+    /// like the reference.
+    private var sendButton: some View {
         Button(action: performPrimaryAction) {
             Group {
                 if isSending {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white)
+                        .tint(T3Colors.primaryActionForeground)
                 } else {
                     Image(systemName: showsStop ? "stop.fill" : "arrow.up")
-                        .font(.system(size: showsStop ? 11 : 14, weight: .bold))
+                        .font(.system(size: showsStop ? 12 : 15, weight: .bold))
                 }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(showsStop ? Color.white : T3Colors.primaryActionForeground)
             .frame(width: 34, height: 34)
-            .background(showsStop ? T3Colors.danger : T3Colors.accent, in: Circle())
+            .background(showsStop ? T3Colors.danger : T3Colors.primaryAction, in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(submitDisabled)
-        .opacity(submitDisabled ? 0.3 : 1)
+        .opacity(submitDisabled ? 0.35 : 1)
         .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
         .contentShape(Rectangle())
         .accessibilityLabel(showsStop ? "Stop agent" : "Send")
@@ -408,19 +518,17 @@ struct FeatureComposerView: View {
     }
 
     private var composerShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        // The pill relaxes into a card while it hosts the attachment menu.
+        RoundedRectangle(cornerRadius: isAttachMenuOpen ? 32 : 27, style: .continuous)
     }
 
     private var isExpanded: Bool {
         forceExpanded
-            || isManuallyExpanded
+            || isPickingAttachment
             || focused.wrappedValue
             || !textIsEmpty
             || !attachments.isEmpty
             || attachmentPreparation.isPreparing
-            // A collapsed composer has nowhere to show the level meter or the
-            // countdown, so recording expands it.
-            || voice.state.isBusy
     }
 
     private var showsStop: Bool {

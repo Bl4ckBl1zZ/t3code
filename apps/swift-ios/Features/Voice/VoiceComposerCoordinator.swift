@@ -64,7 +64,12 @@ public final class VoiceComposerCoordinator {
     /// keyboard-dismiss drag reads this: a push-to-talk hold is a drag, and
     /// without the guard sliding on the mic dismisses the keyboard under the
     /// user mid-recording.
-    public var isTouchActive: Bool { gestureState != .idle }
+    ///
+    /// A method, not a property, because it reads `@ObservationIgnored` state
+    /// deliberately — observing it would invalidate the whole thread view on
+    /// every touch-down and every move of a hold. Valid only for imperative
+    /// reads from a gesture callback; rendering from it gives a stale view.
+    public func ownsActiveTouch() -> Bool { gestureState != .idle }
     public private(set) var cancelArmed = false
     /// 0...1, quantized to 5% steps so a hold re-renders at most 20 times.
     public private(set) var cancelProgress: Double = 0
@@ -417,6 +422,10 @@ public final class VoiceComposerCoordinator {
 
         case let .cancelRecording(reason):
             stopOnRecording = false
+            if reason == .swipe {
+                // The discard the swipe armed is now real; say so in the hand.
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            }
             if reason == .tooShort, !holdOwnsSession {
                 // The hold grabbed a session it did not start: a graze-length
                 // release means "stop", never "throw away what was already

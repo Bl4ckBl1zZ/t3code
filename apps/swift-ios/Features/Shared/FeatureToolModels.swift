@@ -19,6 +19,16 @@ public protocol FeatureWorkspaceAssetResolving: AnyObject {
     func workspaceAssetURL(threadID: String, path: String) async throws -> URL
 }
 
+/// Optional project-favicon capability: the same signed asset route the desktop
+/// sidebar uses for its repo icons (`t3.json` `iconPath`, else well-known
+/// favicon files in the workspace).
+@MainActor
+public protocol FeatureProjectFaviconResolving: AnyObject {
+    /// `nil` when the project has no icon — the server answers with a fallback
+    /// marker rather than an error, and callers keep their letter badge.
+    func projectFaviconURL(environmentID: String, cwd: String) async throws -> URL?
+}
+
 public enum FeatureFileKind: String, Sendable, Codable {
     case file
     case directory

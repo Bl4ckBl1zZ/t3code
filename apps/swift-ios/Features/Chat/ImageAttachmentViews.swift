@@ -35,76 +35,79 @@ struct FeatureAttachmentPreparationState: Equatable {
     }
 }
 
-struct FeatureImageAttachmentPicker: View {
-    private enum Source {
-        case photoLibrary
-        case camera
-        case files
+/// The attachment sources, shared with the composer so its in-pill morph menu
+/// can name them. The pickers are mutually exclusive, so one optional value
+/// rather than three booleans.
+enum FeatureAttachmentSource: Equatable {
+    case photoLibrary
+    case camera
+    case files
+
+    static var cameraAvailable: Bool {
+        UIImagePickerController.isSourceTypeAvailable(.camera)
     }
+}
+
+struct FeatureImageAttachmentPicker: View {
+    private typealias Source = FeatureAttachmentSource
 
     @Binding var attachments: [FeatureDraftAttachment]
     @Binding var preparationState: FeatureAttachmentPreparationState
+    /// Mirrors whether any source is on screen, so the composer can keep this
+    /// view in the hierarchy while a picker is up. Presenting a picker resigns
+    /// the keyboard, and if the composer collapsed on that focus loss it would
+    /// remove this view -- and tear down the presentation it just started.
+    @Binding var isPresentingSource: Bool
+    /// The composer's morph menu asks for a source through this binding rather
+    /// than by calling into the view: the presentations live here, and the
+    /// menu's buttons live in the pill this view is hidden behind.
+    @Binding var requestedSource: FeatureAttachmentSource?
+    /// Set when the composer owns an in-pill morph menu: the plus toggles that
+    /// menu instead of opening a system context menu.
+    let onToggleMenu: (() -> Void)?
+    let isMenuOpen: Bool
     let maximumCount: Int
     /// Whether the selected model accepts *images*. Documents are read off disk
     /// by the agent rather than sent to the vision endpoint, so they stay
     /// available on a text-only model.
     let isEnabled: Bool
 
-    @State private var isPhotoLibraryPresented = false
-    @State private var isCameraPresented = false
-    @State private var isDocumentPickerPresented = false
-    @State private var sourcePresentationTask: Task<Void, Never>?
+    /// One optional source rather than three booleans: the pickers are mutually
+    /// exclusive, and three independent flags can each be set while another
+    /// cover is still on screen, which UIKit rejects.
+    @State private var activeSource: Source?
+    /// Debug-only identity probe: a fresh value here means SwiftUI rebuilt this
+    /// view and discarded its `@State`, which would also silently reset
+    /// `activeSource` and dismiss any picker mid-presentation.
+    @State private var instanceID = UUID().uuidString.prefix(8)
+    @State private var photoSelections: [PhotosPickerItem] = []
     @State private var errorMessage: String?
 
     init(
         attachments: Binding<[FeatureDraftAttachment]>,
         preparationState: Binding<FeatureAttachmentPreparationState>,
+        isPresentingSource: Binding<Bool> = .constant(false),
+        requestedSource: Binding<FeatureAttachmentSource?> = .constant(nil),
+        onToggleMenu: (() -> Void)? = nil,
+        isMenuOpen: Bool = false,
         maximumCount: Int = 8,
         isEnabled: Bool = true
     ) {
         _attachments = attachments
         _preparationState = preparationState
+        _isPresentingSource = isPresentingSource
+        _requestedSource = requestedSource
+        self.onToggleMenu = onToggleMenu
+        self.isMenuOpen = isMenuOpen
         self.maximumCount = maximumCount
         self.isEnabled = isEnabled
     }
 
     /// Matches the send button's disc so the two ends of the composer toolbar
     /// read as one control set: a glass secondary next to a filled primary.
-    private var glyphShape: Circle { Circle() }
 
     var body: some View {
-        Menu {
-            Button { present(.photoLibrary) } label: {
-                Label("Photo Library", systemImage: "photo.on.rectangle")
-            }
-            .disabled(!isEnabled)
-            Button { present(.camera) } label: {
-                Label("Camera", systemImage: "camera")
-            }
-            .disabled(!isEnabled || !UIImagePickerController.isSourceTypeAvailable(.camera))
-            Button { present(.files) } label: {
-                Label("Files", systemImage: "folder")
-            }
-        } label: {
-            Image(systemName: preparationState.isPreparing ? "hourglass" : "paperclip")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(T3Colors.textSecondary)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 34, height: 34)
-                // Liquid Glass on iOS 26, the closest pre-glass material below
-                // it. `.clear` because this floats over the draft the user is
-                // reading rather than over chrome.
-                .t3GlassEffect(.clear, in: glyphShape)
-                // A material alone all but disappears against the composer's own
-                // fill, so the rim is what makes the control legible on both
-                // paths.
-                .overlay { glyphShape.stroke(T3Colors.inputBorder, lineWidth: 1) }
-                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-                .contentShape(Rectangle())
-        }
-        // The composer sits at the bottom, so the menu opens upward; `.priority`
-        // ordering would flip the list and put Files on top.
-        .menuOrder(.fixed)
+        control
         .buttonStyle(.plain)
         .animation(
             .spring(response: 0.32, dampingFraction: 0.72),
@@ -115,32 +118,70 @@ struct FeatureImageAttachmentPicker: View {
         .accessibilityLabel(attachmentAccessibilityLabel)
         .accessibilityIdentifier("image-attachment-picker")
         .accessibilityHint(attachmentAccessibilityHint)
-        .fullScreenCover(isPresented: $isPhotoLibraryPresented) {
-            FeaturePhotoLibraryPicker(
-                maximumCount: max(1, remainingCount),
-                onSelect: { images in
-                    isPhotoLibraryPresented = false
-                    loadPhotoSelections(images)
-                },
-                onCancel: { isPhotoLibraryPresented = false }
-            )
-            .ignoresSafeArea()
+        .onAppear {
+            #if DEBUG
+            print("ATTACH appear instance=\(instanceID) source=\(String(describing: activeSource))")
+            #endif
         }
-        .fullScreenCover(isPresented: $isCameraPresented) {
+        .onChange(of: activeSource) { previous, next in
+            #if DEBUG
+            print("ATTACH source \(String(describing: previous)) -> \(String(describing: next)) instance=\(instanceID)")
+            #endif
+            isPresentingSource = next != nil
+        }
+        .onChange(of: requestedSource) { _, next in
+            guard let next else { return }
+            requestedSource = nil
+            present(next)
+        }
+        // Framework-managed presentations rather than PHPickerViewController /
+        // UIDocumentPickerViewController wrapped in a representable. Both of
+        // those are *remote* view controllers: their views proxy an
+        // out-of-process scene, and hosting them in a fullScreenCover meant
+        // this file owned a lifecycle it kept getting wrong -- dismissing from
+        // inside the delegate callback, or holding the picker on screen and
+        // mutating its view, both invalidated that scene and lost the
+        // selection. SwiftUI owns that lifecycle here.
+        .photosPicker(
+            isPresented: presentationBinding(for: .photoLibrary),
+            selection: $photoSelections,
+            maxSelectionCount: max(1, remainingCount),
+            matching: .images,
+            // Carried over from the PHPickerViewController this replaced: the
+            // composer re-encodes every upload to JPEG anyway, so asking Photos
+            // for a compatible representation avoids materializing and shipping
+            // a ProRAW/HEIF original across XPC first.
+            preferredItemEncoding: .compatible
+        )
+        .onChange(of: photoSelections) { _, items in
+            guard !items.isEmpty else { return }
+            photoSelections = []
+            loadPhotoItems(items)
+        }
+        // Ported from `pickComposerDocuments` in apps/mobile/src/lib/composerDocuments.ts:
+        // the type filter is deliberately unrestricted so PDFs, video and
+        // arbitrary documents share one affordance. The server validates the
+        // MIME against the contract, so a second allowlist here could only
+        // drift from it.
+        .fileImporter(
+            isPresented: presentationBinding(for: .files),
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .success(urls):
+                loadFiles(urls)
+            case let .failure(error):
+                errorMessage = error.localizedDescription
+            }
+        }
+        // No SwiftUI equivalent for capture, so the camera stays a
+        // representable -- but UIImagePickerController runs in-process, so it
+        // does not carry the remote-scene hazard the other two did.
+        .fullScreenCover(isPresented: presentationBinding(for: .camera)) {
             FeatureCameraPicker(
                 onCapture: loadCapturedImage,
-                onCancel: { isCameraPresented = false }
-            )
-            .ignoresSafeArea()
-        }
-        .fullScreenCover(isPresented: $isDocumentPickerPresented) {
-            FeatureDocumentPicker(
-                maximumCount: max(1, remainingCount),
-                onSelect: { urls in
-                    isDocumentPickerPresented = false
-                    loadFiles(urls)
-                },
-                onCancel: { isDocumentPickerPresented = false }
+                onCancel: { activeSource = nil }
             )
             .ignoresSafeArea()
         }
@@ -155,8 +196,90 @@ struct FeatureImageAttachmentPicker: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .onDisappear {
-            sourcePresentationTask?.cancel()
+    }
+
+    /// The plus. With a composer-owned morph menu it is a plain toggle that
+    /// rotates into an X while the menu is up; without one it falls back to a
+    /// system context menu.
+    @ViewBuilder
+    private var control: some View {
+        if let onToggleMenu {
+            Button(action: onToggleMenu) {
+                glyph
+                    .rotationEffect(.degrees(isMenuOpen ? 45 : 0))
+                    .animation(
+                        .spring(response: 0.32, dampingFraction: 0.72),
+                        value: isMenuOpen
+                    )
+            }
+        } else {
+            Menu {
+                Button { present(.photoLibrary) } label: {
+                    Label("Photo Library", systemImage: "photo.on.rectangle")
+                }
+                .disabled(!isEnabled)
+                Button { present(.camera) } label: {
+                    Label("Camera", systemImage: "camera")
+                }
+                .disabled(!isEnabled || !Source.cameraAvailable)
+                Button { present(.files) } label: {
+                    Label("Files", systemImage: "folder")
+                }
+            } label: {
+                glyph
+            }
+            // The composer sits at the bottom, so the menu opens upward;
+            // `.priority` ordering would flip the list and put Files on top.
+            .menuOrder(.fixed)
+        }
+    }
+
+    /// A bare glyph, not a chip: the plus is the pill's quietest control and
+    /// any container around it competes with the send circle at the other end
+    /// of the row.
+    private var glyph: some View {
+        Image(systemName: preparationState.isPreparing ? "hourglass" : "plus")
+            .font(.system(size: 21, weight: .regular))
+            .foregroundStyle(T3Colors.textPrimary)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+    }
+
+    /// Each presentation is driven by the one `activeSource`, so the sources
+    /// stay mutually exclusive without three independent flags that can each be
+    /// set while another is still on screen.
+    private func presentationBinding(for source: Source) -> Binding<Bool> {
+        Binding(
+            get: { activeSource == source },
+            set: { isPresented in
+                if isPresented {
+                    activeSource = source
+                } else if activeSource == source {
+                    activeSource = nil
+                }
+            }
+        )
+    }
+
+    private func loadPhotoItems(_ items: [PhotosPickerItem]) {
+        guard canAdd else { return }
+        let selected = Array(items.prefix(remainingCount))
+        let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
+        let operation = preparationState.begin(itemCount: selected.count)
+
+        Task {
+            defer { preparationState.finish(operation) }
+            for (offset, item) in selected.enumerated() {
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                        throw FeatureImageAttachmentError.invalidImage
+                    }
+                    try await appendImage(data, ordinal: firstOrdinal + offset)
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -183,44 +306,16 @@ struct FeatureImageAttachmentPicker: View {
     }
 
     private func present(_ source: Source) {
-        sourcePresentationTask?.cancel()
-        sourcePresentationTask = Task { @MainActor in
-            // The menu is still the active presenter while its action runs. Wait
-            // for its dismissal animation before presenting another controller or
-            // UIKit can reject (or race) the new presentation.
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, canAdd else { return }
-            switch source {
-            case .photoLibrary:
-                isPhotoLibraryPresented = true
-            case .camera:
-                isCameraPresented = true
-            case .files:
-                isDocumentPickerPresented = true
-            }
-        }
-    }
-
-    private func loadPhotoSelections(_ images: [Data]) {
-        guard !images.isEmpty, canAdd else { return }
-        let selected = Array(images.prefix(remainingCount))
-        let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
-        let operation = preparationState.begin(itemCount: selected.count)
-
-        Task {
-            defer { preparationState.finish(operation) }
-            for (offset, data) in selected.enumerated() {
-                do {
-                    try await appendImage(data, ordinal: firstOrdinal + offset)
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-            }
-        }
+        // A menu dismisses itself before running its action, unlike the
+        // confirmation dialog this replaced, which stayed the active presenter
+        // and forced a deferred hand-off. Setting the cover directly means
+        // nothing can cancel the presentation in between.
+        guard canAdd else { return }
+        activeSource = source
     }
 
     private func loadCapturedImage(_ image: UIImage) {
-        isCameraPresented = false
+        activeSource = nil
         guard canAdd else { return }
         let operation = preparationState.begin(itemCount: 1)
 
@@ -285,167 +380,6 @@ struct FeatureImageAttachmentPicker: View {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
         attachments.append(attachment)
-    }
-}
-
-/// The system document browser.
-///
-/// Ported from `pickComposerDocuments` in apps/mobile/src/lib/composerDocuments.ts:
-/// the type filter is deliberately unrestricted so PDFs, video and arbitrary
-/// documents share one affordance. The server validates the MIME against the
-/// contract, so a second allowlist here could only drift from it.
-private struct FeatureDocumentPicker: UIViewControllerRepresentable {
-    let maximumCount: Int
-    let onSelect: ([URL]) -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(maximumCount: maximumCount, onSelect: onSelect, onCancel: onCancel)
-    }
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        // `asCopy` puts a readable copy in the app's temporary directory, which
-        // is what makes the bytes available after the picker is dismissed.
-        let controller = UIDocumentPickerViewController(
-            forOpeningContentTypes: [.item],
-            asCopy: true
-        )
-        controller.allowsMultipleSelection = maximumCount > 1
-        controller.shouldShowFileExtensions = true
-        controller.delegate = context.coordinator
-        return controller
-    }
-
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        private let maximumCount: Int
-        private let onSelect: ([URL]) -> Void
-        private let onCancel: () -> Void
-
-        init(
-            maximumCount: Int,
-            onSelect: @escaping ([URL]) -> Void,
-            onCancel: @escaping () -> Void
-        ) {
-            self.maximumCount = maximumCount
-            self.onSelect = onSelect
-            self.onCancel = onCancel
-        }
-
-        func documentPicker(
-            _ controller: UIDocumentPickerViewController,
-            didPickDocumentsAt urls: [URL]
-        ) {
-            guard !urls.isEmpty else {
-                onCancel()
-                return
-            }
-            onSelect(Array(urls.prefix(maximumCount)))
-        }
-
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onCancel()
-        }
-    }
-}
-
-struct FeaturePhotoLibraryItem: @unchecked Sendable {
-    let provider: NSItemProvider
-
-    func loadData() async throws -> Data {
-        guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: { identifier in
-            UTType(identifier)?.conforms(to: .image) == true
-        }) else {
-            throw FeatureImageAttachmentError.invalidImage
-        }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
-                if let data {
-                    continuation.resume(returning: data)
-                } else {
-                    continuation.resume(
-                        throwing: error ?? FeatureImageAttachmentError.encodingFailed
-                    )
-                }
-            }
-        }
-    }
-}
-
-private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
-    let maximumCount: Int
-    let onSelect: ([Data]) -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect, onCancel: onCancel)
-    }
-
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var configuration = PHPickerConfiguration(photoLibrary: .shared())
-        configuration.filter = .images
-        configuration.selectionLimit = maximumCount
-        // The composer always normalizes uploads to JPEG, so asking Photos for
-        // a compatible representation avoids slow RAW/HEIF materialization.
-        configuration.preferredAssetRepresentationMode = .compatible
-        let controller = PHPickerViewController(configuration: configuration)
-        controller.delegate = context.coordinator
-        return controller
-    }
-
-    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        private let onSelect: ([Data]) -> Void
-        private let onCancel: () -> Void
-        private var didFinish = false
-
-        init(
-            onSelect: @escaping ([Data]) -> Void,
-            onCancel: @escaping () -> Void
-        ) {
-            self.onSelect = onSelect
-            self.onCancel = onCancel
-        }
-
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            guard !didFinish else { return }
-            didFinish = true
-            guard !results.isEmpty else {
-                Task { @MainActor in
-                    await Task.yield()
-                    onCancel()
-                }
-                return
-            }
-
-            // Keep the picker and its item providers alive until Photos has
-            // materialized every selection. Dismissing the SwiftUI cover from
-            // inside this delegate callback can tear down PhotosUI while its
-            // provider transition is still in flight.
-            picker.view.isUserInteractionEnabled = false
-            let activity = UIActivityIndicatorView(style: .large)
-            activity.translatesAutoresizingMaskIntoConstraints = false
-            activity.startAnimating()
-            picker.view.addSubview(activity)
-            NSLayoutConstraint.activate([
-                activity.centerXAnchor.constraint(equalTo: picker.view.centerXAnchor),
-                activity.centerYAnchor.constraint(equalTo: picker.view.centerYAnchor),
-            ])
-
-            let items = results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) }
-            Task { @MainActor in
-                var images: [Data] = []
-                for item in items {
-                    if let data = try? await item.loadData() {
-                        images.append(data)
-                    }
-                }
-                onSelect(images)
-            }
-        }
     }
 }
 

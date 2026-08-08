@@ -628,13 +628,27 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         let mixed = summary(["running", "failed", "completed", "completed"])
         XCTAssertEqual(mixed.workingCount, 1)
         XCTAssertEqual(mixed.failedCount, 1)
-        XCTAssertEqual(mixed.doneCount, 2)
         XCTAssertEqual(mixed.primaryLabel, "1 working")
         // Both states present, so the failure count rides alongside rather than
         // replacing the headline.
         XCTAssertEqual(mixed.secondaryFailedLabel, "1 failed")
-        XCTAssertEqual(mixed.trailingDoneLabel, "2 done")
-        XCTAssertFalse(mixed.isSettled)
+        // The two completed agents are not counted, not shown, and not spoken.
+        XCTAssertEqual(mixed.orbRows.count, 2)
+        XCTAssertFalse(mixed.isEmpty)
+    }
+
+    func testSubagentSummaryHidesItselfOnceEveryAgentIsDone() {
+        let settled = summary(["completed", "completed", "completed", "completed"])
+        XCTAssertTrue(settled.isEmpty, "a finished run has nothing to report")
+        XCTAssertTrue(settled.orbRows.isEmpty)
+        XCTAssertEqual(settled.workingCount, 0)
+
+        // A failure still holds the banner open: it is the one finished state
+        // the reader has to do something about.
+        let failed = summary(["completed", "failed"])
+        XCTAssertFalse(failed.isEmpty)
+        XCTAssertEqual(failed.primaryLabel, "1 failed")
+        XCTAssertNil(failed.secondaryFailedLabel)
     }
 
     func testSubagentSummaryCountsParkedAgentsAsWorking() {
@@ -650,13 +664,7 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         )
     }
 
-    func testSubagentSummarySettlesAndCollapsesDuplicateCounts() {
-        let done = summary(["completed", "completed"])
-        XCTAssertTrue(done.isSettled)
-        XCTAssertEqual(done.primaryLabel, "2 done")
-        // Already the headline, so it must not repeat on the trailing edge.
-        XCTAssertNil(done.trailingDoneLabel)
-
+    func testSubagentSummaryCollapsesDuplicateFailureCounts() {
         let failedOnly = summary(["failed", "error"])
         XCTAssertEqual(failedOnly.failedCount, 2)
         XCTAssertEqual(failedOnly.primaryLabel, "2 failed")
@@ -664,13 +672,14 @@ final class ThreadRelationshipRowsTests: XCTestCase {
     }
 
     func testSubagentSummaryOrdersOrbsByUrgencyAndCapsTheStack() {
-        let many = summary(["completed", "running", "failed", "completed", "running", "completed"])
-        XCTAssertEqual(many.orbRows.count, 4)
-        // Working first, then failed, then done -- regardless of graph order.
+        let many = summary([
+            "completed", "running", "failed", "running", "running", "failed", "running",
+        ])
+        XCTAssertEqual(many.orbRows.count, 4, "the stack caps at four")
+        // Working first, then failed -- regardless of graph order.
         XCTAssertEqual(
-            many.orbRows.prefix(2).map(\.threadID).sorted(), ["child-1", "child-4"]
+            many.orbRows.map(\.threadID), ["child-1", "child-3", "child-4", "child-6"]
         )
-        XCTAssertEqual(many.orbRows[2].threadID, "child-2")
     }
 
     func testSubagentSummaryExcludesIncomingLineageButCountsOutgoing() {
@@ -696,7 +705,6 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         XCTAssertEqual(model.primaryRow?.threadID, "thread-parent")
         let summary = model.subagentSummary
         XCTAssertEqual(summary.workingCount, 1)
-        XCTAssertEqual(summary.doneCount, 0)
         XCTAssertEqual(summary.orbRows.map(\.threadID), ["thread-grandchild"])
     }
 

@@ -22,6 +22,13 @@ public struct ThreadDetailView: View {
     @State private var draft = ""
     @State private var selection: FeatureSelection?
     @State private var attachments: [FeatureDraftAttachment] = []
+    @State private var bannerHeight: CGFloat = 0
+    /// The glass composer floats over the transcript instead of displacing it,
+    /// so the transcript needs its measured height as a bottom content inset.
+    @State private var composerHeight: CGFloat = 0
+    /// A provider change the user has sent but the server has not yet reflected
+    /// in a run. See `pendingHandoffItem`.
+    @State private var pendingProviderSwitch: PendingProviderSwitch?
     @State private var isSending = false
     @State private var isLoading = true
     @State private var sendFailed = false
@@ -80,9 +87,6 @@ public struct ThreadDetailView: View {
                 .accessibilityLabel("Thread details")
                 .accessibilityIdentifier("thread-details-button")
             }
-            ToolbarItem(placement: .primaryAction) {
-                threadActionsMenu
-            }
         }
         .task(id: thread.id) {
             let restoreBaseline = composerDraft
@@ -119,7 +123,29 @@ public struct ThreadDetailView: View {
                         turnItems: detail?.timelineItems.map(\.item) ?? [],
                         relationships: relationships,
                         onMergeBack: mergeBack,
-                        onDetachSession: detachSession
+                        onDetachSession: detachSession,
+                        onTogglePin: {
+                            Task {
+                                await model.setPinned(
+                                    thread.id,
+                                    pinned: currentThread.pinnedAt == nil
+                                )
+                            }
+                        },
+                        onReload: {
+                            Task { _ = await model.detail(for: thread.id, force: true) }
+                        },
+                        onToggleArchive: {
+                            // Dismiss first: an archived thread leaves the
+                            // stack this sheet is presented over.
+                            toolSurface = nil
+                            Task {
+                                await model.setArchived(
+                                    thread.id,
+                                    archived: !currentThread.isArchived
+                                )
+                            }
+                        }
                     )
                 case let .files(path, line):
                     FeatureFilesView(
@@ -262,66 +288,6 @@ public struct ThreadDetailView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var threadActionsMenu: some View {
-        Menu {
-            Section("Workspace") {
-                Button { toolSurface = .files(path: nil, line: nil) } label: {
-                    Label("Files", systemImage: "folder")
-                }
-                Button { toolSurface = .review(filePath: nil) } label: {
-                    Label("Review changes", systemImage: "doc.text.magnifyingglass")
-                }
-                Button { toolSurface = .sourceControl } label: {
-                    Label("Source Control", systemImage: "arrow.triangle.branch")
-                }
-                Button { toolSurface = .terminal } label: {
-                    Label("Terminal", systemImage: "terminal")
-                }
-            }
-            Section {
-                if currentThread.canTogglePin, !currentThread.isArchived {
-                    Button {
-                        Task {
-                            await model.setPinned(
-                                thread.id,
-                                pinned: currentThread.pinnedAt == nil
-                            )
-                        }
-                    } label: {
-                        Label(
-                            currentThread.pinnedAt == nil ? "Pin" : "Unpin",
-                            systemImage: currentThread.pinnedAt == nil ? "pin" : "pin.slash"
-                        )
-                    }
-                }
-                Button {
-                    Task { _ = await model.detail(for: thread.id, force: true) }
-                } label: {
-                    Label("Reload", systemImage: "arrow.clockwise")
-                }
-                Button {
-                    Task {
-                        await model.setArchived(thread.id, archived: !currentThread.isArchived)
-                    }
-                } label: {
-                    Label(
-                        currentThread.isArchived ? "Restore" : "Archive",
-                        systemImage: currentThread.isArchived
-                            ? "arrow.uturn.backward"
-                            : "archivebox"
-                    )
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.body.weight(.semibold))
-                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(T3Colors.textSecondary)
-        .accessibilityLabel("Thread actions")
-    }
-
     private var headerBranch: String {
         if let branch = currentThread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
            !branch.isEmpty {
@@ -380,10 +346,12 @@ public struct ThreadDetailView: View {
                             _ = await model.detail(for: thread.id, force: true)
                         }
                     },
-                    detail: detail,
+                    detail: detailWithPendingHandoff(detail),
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
                     isWorking: isWorking,
+                    topContentInset: bannerHeight,
+                    bottomContentInset: composerHeight,
                     canLoadEarlier: detail.page?.hasMore == true,
                     isLoadingEarlier: detail.page?.isLoading == true,
                     workspaceRoot: threadWorkspaceRoot,
@@ -397,25 +365,51 @@ public struct ThreadDetailView: View {
                     onOpenURL: { openURL($0) },
                     onOpenDiff: openDiff
                 )
+                // Container only: the transcript runs on under the glass
+                // composer to the screen edge, but still rises for the
+                // keyboard.
+                .ignoresSafeArea(.container, edges: .bottom)
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .overlay(alignment: .top) {
             relationshipsBanner
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: TranscriptBannerHeightKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                }
+        }
+        .onPreferenceChange(TranscriptBannerHeightKey.self) { height in
+            bannerHeight = height
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 queueSurfaces
                 composer(detail)
             }
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: TranscriptComposerHeightKey.self,
+                        value: proxy.size.height
+                    )
+                }
+            }
+        }
+        .onPreferenceChange(TranscriptComposerHeightKey.self) { height in
+            composerHeight = height
         }
     }
 
-    /// The lineage line above the transcript. A `safeAreaInset` rather than a
-    /// row in the feed: it summarises the whole thread, so it has to stay put
-    /// while the transcript scrolls under it.
+    /// The working-agents line above the transcript. A `safeAreaInset` rather
+    /// than a row in the feed: it summarises the whole thread, so it has to stay
+    /// put while the transcript scrolls under it.
     @ViewBuilder
     private var relationshipsBanner: some View {
-        if let relationships, !relationships.isEmpty {
+        if let relationships, relationships.showsCollapsedBanner {
             ThreadRelationshipsBanner(
                 model: relationships,
                 onOpenThread: onOpenRelatedThread,
@@ -424,83 +418,64 @@ public struct ThreadDetailView: View {
             )
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
-            .background(.bar)
         }
     }
 
     /// Queued runs, above the composer that will add to them.
     ///
-    /// `QueuedMessageStripView` is the surface: it lists every queued message
-    /// and owns reorder, edit and cancel. `ThreadQueueControlView` reads the
-    /// same rows, so showing both unconditionally would print the queue twice —
-    /// it appears only when the provider can actually promote a queued message
-    /// into a steer, which is the one affordance the strip does not have.
+    /// One surface, not two. `ThreadQueueControlView` used to appear alongside
+    /// this whenever the provider could promote a queued message, which printed
+    /// the same queue twice — a 168pt scroll card above a compact strip listing
+    /// identical rows. The strip wins because it owns edit and cancel as well as
+    /// reorder; steering, the card's one unique affordance, moved onto it.
     @ViewBuilder
     private var queueSurfaces: some View {
         let state = queueState
         if !state.queuedRuns.isEmpty {
-            VStack(spacing: 8) {
-                if state.canPromoteToSteer {
-                    ThreadQueueControlView(
-                        state: state,
-                        busyRunID: queueBusyRunID,
-                        onReorder: { target in
-                            performQueueAction(runID: target.runID) {
-                                try await model.client.reorderQueuedRun(
-                                    threadID: thread.id,
-                                    runID: target.runID,
-                                    beforeRunID: target.beforeRunID
-                                )
-                            }
-                        },
-                        onPromoteToSteer: { queuedRunID, targetRunID in
-                            performQueueAction(runID: queuedRunID) {
-                                try await model.client.promoteQueuedRun(
-                                    threadID: thread.id,
-                                    queuedRunID: queuedRunID,
-                                    targetRunID: targetRunID
-                                )
-                            }
-                        }
-                    )
-                }
-
-                QueuedMessageStripView(
-                    queuedRuns: state.queuedRuns,
-                    canReorder: state.canReorder,
-                    dispatchingRunID: nil,
-                    busyRunID: queueBusyRunID,
-                    onReorder: { target in
-                        performQueueAction(runID: target.runID) {
-                            try await model.client.reorderQueuedRun(
-                                threadID: thread.id,
-                                runID: target.runID,
-                                beforeRunID: target.beforeRunID
-                            )
-                        }
-                    },
-                    onEdit: { runID, text in
-                        performQueueAction(runID: runID) {
-                            try await model.client.editQueuedRun(
-                                threadID: thread.id,
-                                runID: runID,
-                                text: text
-                            )
-                        }
-                    },
-                    onDelete: { runID in
-                        performQueueAction(runID: runID) {
-                            try await model.client.cancelQueuedRun(
-                                threadID: thread.id,
-                                runID: runID
-                            )
-                        }
+            QueuedMessageStripView(
+                queuedRuns: state.queuedRuns,
+                canReorder: state.canReorder,
+                dispatchingRunID: nil,
+                busyRunID: queueBusyRunID,
+                steerTargetRunID: state.canPromoteToSteer ? state.activeRun?.id : nil,
+                onReorder: { target in
+                    performQueueAction(runID: target.runID) {
+                        try await model.client.reorderQueuedRun(
+                            threadID: thread.id,
+                            runID: target.runID,
+                            beforeRunID: target.beforeRunID
+                        )
                     }
-                )
-            }
+                },
+                onEdit: { runID, text in
+                    performQueueAction(runID: runID) {
+                        try await model.client.editQueuedRun(
+                            threadID: thread.id,
+                            runID: runID,
+                            text: text
+                        )
+                    }
+                },
+                onDelete: { runID in
+                    performQueueAction(runID: runID) {
+                        try await model.client.cancelQueuedRun(
+                            threadID: thread.id,
+                            runID: runID
+                        )
+                    }
+                },
+                onPromoteToSteer: { queuedRunID, targetRunID in
+                    performQueueAction(runID: queuedRunID) {
+                        try await model.client.promoteQueuedRun(
+                            threadID: thread.id,
+                            queuedRunID: queuedRunID,
+                            targetRunID: targetRunID
+                        )
+                    }
+                }
+            )
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
-            .background(.bar)
         }
     }
 
@@ -539,7 +514,7 @@ public struct ThreadDetailView: View {
                 // A push-to-talk hold is itself a drag over this view. Without
                 // this the keyboard closes the moment the finger drifts on the
                 // mic, mid-recording.
-                guard !VoiceComposerCoordinator.shared.isTouchActive else { return }
+                guard !VoiceComposerCoordinator.shared.ownsActiveTouch() else { return }
                 guard composerFocused,
                       value.translation.height > 8,
                       value.translation.height > abs(value.translation.width) else {
@@ -781,6 +756,89 @@ public struct ThreadDetailView: View {
         )
     }
 
+    /// A model switch across providers makes the next turn slow in a way the
+    /// transcript otherwise cannot explain: the orchestrator has to carry the
+    /// context across, which can itself be an AI call, and until the run starts
+    /// there is nothing on screen but a user bubble and a spinner.
+    ///
+    /// The server records this as a context handoff but never emits a `handoff`
+    /// turn item for it, so the row that already knows how to draw one never
+    /// fires. This synthesizes that item locally from what the client already
+    /// knows, and drops it the moment a real run on the new provider appears.
+    private struct PendingProviderSwitch: Equatable {
+        let fromInstanceID: String
+        let fromModel: String
+        let toInstanceID: String
+        let toModel: String
+    }
+
+    private func notePendingProviderSwitch() {
+        guard let selection,
+              let previous = detail?.timelineRuns.last,
+              !previous.providerInstanceID.isEmpty,
+              previous.providerInstanceID != selection.providerID else {
+            pendingProviderSwitch = nil
+            return
+        }
+        pendingProviderSwitch = PendingProviderSwitch(
+            fromInstanceID: previous.providerInstanceID,
+            fromModel: previous.model,
+            toInstanceID: selection.providerID,
+            toModel: selection.modelID
+        )
+    }
+
+    /// The synthetic row, or nil once the switch has landed. `status: .running`
+    /// is what makes `LifecyclePresentation` label it "Preparing context
+    /// handoff" and spin, exactly as a server-sent handoff would.
+    private var pendingHandoffItem: OrchestrationV2ProjectedTurnItem? {
+        guard let pending = pendingProviderSwitch, let detail else { return nil }
+        // A run on the target provider means the handoff is done, and a real
+        // handoff item means the server is now telling this story itself.
+        let landed = detail.timelineRuns.contains { $0.providerInstanceID == pending.toInstanceID }
+        let serverIsNarrating = detail.timelineItems.contains { $0.item.type == "handoff" }
+        guard !landed, !serverIsNarrating else { return nil }
+
+        let base = OrchestrationV2TurnItemBase(
+            id: "__t3-pending-handoff__",
+            threadId: thread.id,
+            ordinal: Int.max,
+            status: .running,
+            updatedAt: ISO8601DateFormatter().string(from: Date())
+        )
+        return OrchestrationV2ProjectedTurnItem(
+            position: Int.max,
+            visibility: .local,
+            sourceThreadId: thread.id,
+            sourceItemId: base.id,
+            item: OrchestrationV2TurnItem(
+                type: "handoff",
+                base: base,
+                payload: .handoff(
+                    contextHandoffID: base.id,
+                    fromProviderInstanceIDs: [pending.fromInstanceID],
+                    fromModelSelections: [
+                        ModelSelection(instanceId: pending.fromInstanceID, model: pending.fromModel),
+                    ],
+                    toProviderThreadID: "",
+                    toProviderInstanceID: pending.toInstanceID,
+                    toModel: pending.toModel,
+                    strategy: "full_thread_summary",
+                    summary: nil
+                )
+            )
+        )
+    }
+
+    /// Appends the synthetic handoff row so every existing renderer — grouping,
+    /// day dividers, the lifecycle row itself — treats it as any other item.
+    private func detailWithPendingHandoff(_ detail: FeatureThreadDetail) -> FeatureThreadDetail {
+        guard let pendingHandoffItem else { return detail }
+        var augmented = detail
+        augmented.timelineItems.append(pendingHandoffItem)
+        return augmented
+    }
+
     private func send() {
         let message = draft
         let pendingAttachments = attachments
@@ -789,6 +847,7 @@ public struct ThreadDetailView: View {
             return
         }
         draftSaveTask?.cancel()
+        notePendingProviderSwitch()
         isSending = true
         draft = ""
         attachments = []
@@ -1174,7 +1233,23 @@ enum ThreadTimelineFeed {
         // Optimistic sends have no projected item yet, and a client that carries
         // no projection at all has only messages. Both arrive here as plain
         // message rows, which is what keeps a just-sent bubble on screen.
-        let projectedItemIDs = Set(timelineItems.map(\.item.id))
+        // Two identifiers name the same bubble: an optimistic row carries the
+        // message id the client generated, while its projected row carries the
+        // turn item id the server assigned. Matching on the item id alone let a
+        // just-sent message through a second time the moment the echo landed —
+        // visible until a reload dropped the optimistic copy. Same distinction
+        // `OrchestrationV2ThreadProjection.containsUserMessage(id:)` draws.
+        var projectedItemIDs = Set(timelineItems.map(\.item.id))
+        for projected in timelineItems {
+            switch projected.item.payload {
+            case let .userMessage(messageID, _, _, _):
+                projectedItemIDs.insert(messageID)
+            case let .assistantMessage(messageID, _, _):
+                projectedItemIDs.insert(messageID)
+            default:
+                break
+            }
+        }
         for message in messages
         where !projectedItemIDs.contains(message.id) && !message.isEmptyBubble {
             entries.append(.message(message))
@@ -1307,6 +1382,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
     let isWorking: Bool
+    /// Keeps the first rows clear of the floating banner while still letting
+    /// them scroll underneath it, which is the whole point of the glass.
+    let topContentInset: CGFloat
+    let bottomContentInset: CGFloat
     let canLoadEarlier: Bool
     let isLoadingEarlier: Bool
     let workspaceRoot: String?
@@ -1343,6 +1422,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 
     func updateUIView(_ collectionView: UICollectionView, context: Context) {
+        // Assigned rather than left to `contentInsetAdjustmentBehavior`, which
+        // is `.never` here so the bottom-anchoring subclass owns its geometry.
+        // That subclass folds `adjustedContentInset.top` into its viewport
+        // model, so changing this restores the bottom anchor rather than
+        // jumping the scroll.
+        if abs(collectionView.contentInset.top - topContentInset) > 0.5 {
+            collectionView.contentInset.top = topContentInset
+        }
+        // The bottom inset goes through the subclass rather than being assigned
+        // here: the collection ignores the container safe area to run under the
+        // glass composer, and the home-indicator overlap it must add back is
+        // only current inside its own layout pass.
+        (collectionView as? BottomAnchoredTranscriptCollectionView)?
+            .floatingBottomInset = bottomContentInset
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -1935,11 +2028,55 @@ struct TranscriptViewportGeometry: Equatable {
 /// Self-sizing hosted Markdown can change the transcript height after a snapshot finishes,
 /// while presenting the keyboard changes the viewport without changing the content at all.
 /// Preserve the visual bottom only while the reader is already following the latest turn.
+/// The floating banner's measured height, so the transcript can inset for a
+/// view that overlays it rather than displaces it.
+private struct TranscriptBannerHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// The floating composer's measured height, same purpose from the other edge.
+private struct TranscriptComposerHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     var maintainsBottomAnchor = false
 
+    /// The measured height of the glass composer floating over the bottom of
+    /// the transcript. Folded into `contentInset.bottom` together with the
+    /// live safe-area overlap (the home indicator when no keyboard is up).
+    ///
+    /// Applied from the setter and from `safeAreaInsetsDidChange` — never from
+    /// `layoutSubviews`. Writing `contentInset` inside the layout pass makes
+    /// the compositional layout invalidate itself mid-visible-cells update,
+    /// which recurses until UIKit's re-entrancy assertion kills the app.
+    var floatingBottomInset: CGFloat = 0 {
+        didSet {
+            if abs(floatingBottomInset - oldValue) > 0.5 { applyBottomInset() }
+        }
+    }
+
     private var lastLaidOutGeometry: TranscriptViewportGeometry?
     private var isRestoringBottomAnchor = false
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        applyBottomInset()
+    }
+
+    private func applyBottomInset() {
+        let target = floatingBottomInset + safeAreaInsets.bottom
+        guard abs(contentInset.bottom - target) > 0.5 else { return }
+        contentInset.bottom = target
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
