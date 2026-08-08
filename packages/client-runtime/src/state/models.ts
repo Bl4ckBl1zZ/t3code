@@ -99,6 +99,9 @@ export interface EnvironmentThreadShell {
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
   readonly pinnedAt: string | null;
+  /** Fractional sort key for the user-arranged pinned run; null on threads
+      pinned before reordering existed (they sort below arranged ones). */
+  readonly pinOrderKey: string | null;
   readonly workInboxRole: "main" | null;
   readonly timelineClearedAt?: string | null;
   readonly snoozedUntil: string | null;
@@ -205,6 +208,7 @@ export function presentThreadShell(
     settledOverride: thread.settledOverride,
     settledAt: nullableIso(thread.settledAt),
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
+    pinOrderKey: thread.pinOrderKey ?? null,
     workInboxRole: thread.workInboxRole ?? null,
     timelineClearedAt: nullableIso(thread.timelineClearedAt ?? null),
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),

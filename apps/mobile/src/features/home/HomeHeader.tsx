@@ -22,6 +22,7 @@ import {
 } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import type { MobileWorkspace } from "../../lib/mobileWorkspace";
+import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
@@ -50,6 +51,7 @@ export function HomeHeader(props: {
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
 }) {
@@ -235,30 +237,40 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       >
         <View className="w-full max-w-[720px] self-center gap-3">
           <View className="flex-row items-center gap-2.5">
-            <ControlPillMenu actions={workspaceActions} onPressAction={handleWorkspaceAction}>
-              <Pressable
-                accessibilityLabel={`Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`}
-                accessibilityRole="button"
-                className="flex-1 flex-row items-center gap-2"
-              >
-                {/* Mirrors the desktop SidebarBrand: T3 mark + muted workspace name. */}
-                <T3Wordmark color={iconColor} height={15} />
-                <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
-                  {props.workspace === "work" ? "Work" : "Code"}
-                </RNText>
-                <SymbolView
-                  name="chevron.down"
-                  size={12}
-                  tintColor={mutedColor}
-                  type="monochrome"
-                />
-                <View className="rounded-full bg-subtle px-2 py-0.75">
-                  <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                    {stageLabel}
-                  </RNText>
-                </View>
-              </Pressable>
-            </ControlPillMenu>
+            {/* Brand slot doubles as the connection status surface: while an
+                environment reconnects, the lockup fades to a status label in
+                place (no layout shift in the list below). While connected it
+                stays the workspace switcher. */}
+            <WorkspaceConnectionTitle
+              grow
+              onPress={props.onOpenEnvironments}
+              brand={
+                <ControlPillMenu actions={workspaceActions} onPressAction={handleWorkspaceAction}>
+                  <Pressable
+                    accessibilityLabel={`Switch workspace. Current workspace: T3 ${props.workspace === "work" ? "Work" : "Code"}`}
+                    accessibilityRole="button"
+                    className="flex-1 flex-row items-center gap-2"
+                  >
+                    {/* Mirrors the desktop SidebarBrand: T3 mark + muted workspace name. */}
+                    <T3Wordmark color={iconColor} height={15} />
+                    <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
+                      {props.workspace === "work" ? "Work" : "Code"}
+                    </RNText>
+                    <SymbolView
+                      name="chevron.down"
+                      size={12}
+                      tintColor={mutedColor}
+                      type="monochrome"
+                    />
+                    <View className="rounded-full bg-subtle px-2 py-0.75">
+                      <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
+                        {stageLabel}
+                      </RNText>
+                    </View>
+                  </Pressable>
+                </ControlPillMenu>
+              }
+            />
 
             <ControlPillMenu
               actions={menuActions}
