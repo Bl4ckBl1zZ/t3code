@@ -235,14 +235,15 @@ struct ThreadActivityInspectorView: View {
 
     private func rollbackButton(_ target: ThreadActivityRollbackTarget) -> some View {
         Button {
-            isRollingBack = true
+            // Opens the restore preview sheet — the sheet owns progress and
+            // confirmation, so no local busy latch.
             onRollback(target)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: isRollingBack ? "hourglass" : "arrow.counterclockwise")
+                Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(T3Colors.textTertiary)
-                Text(verbatim: isRollingBack ? "Rolling back…" : "Roll back to checkpoint")
+                Text(verbatim: "Restore to this point…")
                     .font(ChatTimelineStyle.bodyStrong)
                     .foregroundStyle(T3Colors.textPrimary)
             }

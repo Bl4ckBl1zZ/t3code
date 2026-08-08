@@ -252,7 +252,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
               }
             >
               <RotateCcwIcon className="size-3" />
-              Roll back
+              Restore…
             </Button>
           ) : null}
         </div>

@@ -209,11 +209,12 @@ import { HermesImportOnboarding } from "./HermesImportOnboarding";
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 const SIDEBAR_WORKSPACE_STORAGE_KEY = "t3code:sidebar-workspace";
-const SIDEBAR_WORKSPACE_SCHEMA = Schema.Literals(["work", "code"]);
+const SIDEBAR_WORKSPACE_SCHEMA = Schema.Literals(["work", "code", "chat"]);
 const SIDEBAR_WORKSPACE_ROUTES_STORAGE_KEY = "t3code:sidebar-workspace-routes:v1";
 const SIDEBAR_WORKSPACE_ROUTES_SCHEMA = Schema.Struct({
   work: Schema.optional(Schema.String),
   code: Schema.optional(Schema.String),
+  chat: Schema.optional(Schema.String),
 });
 const SIDEBAR_WORKSPACE_OPTIONS: ReadonlyArray<{
   value: SidebarWorkspace;
@@ -221,14 +222,19 @@ const SIDEBAR_WORKSPACE_OPTIONS: ReadonlyArray<{
   description: string;
 }> = [
   {
+    value: "code",
+    label: "T3 Code",
+    description: "Build, debug, and ship",
+  },
+  {
     value: "work",
     label: "T3 Work",
     description: "Create, learn, and explore",
   },
   {
-    value: "code",
-    label: "T3 Code",
-    description: "Build, debug, and ship",
+    value: "chat",
+    label: "T3 Chat",
+    description: "Talk it through",
   },
 ];
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
@@ -272,7 +278,7 @@ function SidebarWorkspaceSelector(props: {
         <MenuRadioGroup
           value={props.workspace}
           onValueChange={(value) => {
-            if (value === "work" || value === "code") {
+            if (value === "work" || value === "code" || value === "chat") {
               props.onWorkspaceChange(value);
             }
           }}
@@ -1694,7 +1700,7 @@ export default function SidebarV2() {
   const [t3WorkCreateRetry, setT3WorkCreateRetry] = useState(0);
   useEffect(() => {
     if (
-      workspace !== "work" ||
+      (workspace !== "work" && workspace !== "chat") ||
       workTargetEnvironmentId === null ||
       t3WorkDirectory === null ||
       hermesProviderEntry === null ||
@@ -1993,7 +1999,7 @@ export default function SidebarV2() {
     const visible = threads.filter(
       (thread) =>
         isThreadVisibleInSidebarWorkspace(thread, workspace, providerDriverKindByInstance) &&
-        (workspace === "work"
+        (workspace === "work" || workspace === "chat"
           ? workEnvironmentScopeId === null || thread.environmentId === workEnvironmentScopeId
           : scopedProjectKeys === null ||
             scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
@@ -2217,8 +2223,8 @@ export default function SidebarV2() {
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
   const settledResetKey =
-    workspace === "work"
-      ? `work:${workEnvironmentScopeId ?? "all"}`
+    workspace === "work" || workspace === "chat"
+      ? `${workspace}:${workEnvironmentScopeId ?? "all"}`
       : `code:${projectScopeKey ?? "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
@@ -3267,7 +3273,7 @@ export default function SidebarV2() {
   // uses. The command palette already offers a "New thread in..." submenu
   // for multi-project setups.
   const handleNewThreadClick = useCallback(() => {
-    if (workspace === "work") {
+    if (workspace === "work" || workspace === "chat") {
       if (!openWorkComposer()) {
         toastManager.add({
           type: "warning",
@@ -3369,7 +3375,7 @@ export default function SidebarV2() {
                   </Button>
                 ) : null}
               </div>
-              {workspace === "work" ? (
+              {workspace === "work" || workspace === "chat" ? (
                 <div className="shrink-0">
                   <Tooltip>
                     <TooltipTrigger
@@ -3403,7 +3409,7 @@ export default function SidebarV2() {
                           className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                           onClick={handleNewThreadClick}
                           disabled={
-                            workspace === "work"
+                            workspace === "work" || workspace === "chat"
                               ? hermesProviderEntry === null || hermesBackingProject === null
                               : projects.length === 0
                           }
@@ -3521,7 +3527,7 @@ export default function SidebarV2() {
                 </Tooltip>
               </div>
             ) : null}
-            {workspace === "work" && environments.length > 1 ? (
+            {(workspace === "work" || workspace === "chat") && environments.length > 1 ? (
               <div className="flex items-center gap-1">
                 <Menu>
                   <MenuTrigger

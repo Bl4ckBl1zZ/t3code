@@ -107,7 +107,7 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   /** Kick off an async title regeneration for the thread. */
   readonly regenerateTitle?: boolean;
   readonly pinned?: boolean;
-  readonly workInboxRole?: "main" | null;
+  readonly workInboxRole?: "main" | "chat" | null;
   readonly clearTimeline?: true;
 }
 

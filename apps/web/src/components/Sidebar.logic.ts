@@ -135,7 +135,7 @@ export function isSidebarLifecycleThread(
   return thread.archivedAt === null && !isSidebarSubagentThread(thread);
 }
 
-export type SidebarWorkspace = "work" | "code";
+export type SidebarWorkspace = "work" | "code" | "chat";
 
 export function sidebarProviderInstanceKey(
   environmentId: EnvironmentId,
@@ -179,14 +179,23 @@ export function sidebarProjectKey(
 export function isThreadVisibleInSidebarWorkspace(
   thread: Pick<
     SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
+    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId" | "workInboxRole"
   >,
   workspace: SidebarWorkspace,
   providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>,
 ): boolean {
   if (!isSidebarLifecycleThread(thread)) return false;
-  const isWork = isHermesSidebarThread(thread, providerDriverKindByInstance);
-  return workspace === "work" ? isWork : !isWork;
+  const isHermes = isHermesSidebarThread(thread, providerDriverKindByInstance);
+  switch (workspace) {
+    case "code":
+      return !isHermes;
+    case "work":
+      // Work keeps its whole inbox — including Main — minus conversations
+      // born on the Chat surface.
+      return isHermes && thread.workInboxRole !== "chat";
+    case "chat":
+      return isHermes && thread.workInboxRole === "chat";
+  }
 }
 
 /**
@@ -212,7 +221,7 @@ export function resolveWorkspaceSwitchNavigation(input: {
   routeDraftWorkspace?: SidebarWorkspace | null;
   threads: readonly (Pick<
     SidebarThreadSummary,
-    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId"
+    "archivedAt" | "environmentId" | "lineage" | "providerInstanceId" | "workInboxRole"
   > & { readonly threadKey: string })[];
   providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
 }): WorkspaceSwitchNavigation {

@@ -35,6 +35,8 @@ public struct ThreadDetailView: View {
     @State private var didRestoreDraft = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var toolSurface: FeatureThreadToolSurface?
+    /// A pending checkpoint restore, previewed in a sheet before it commits.
+    @State private var restoreRequest: CheckpointRestoreRequest?
     /// The queued run a reorder, edit or cancel is in flight for. One at a time:
     /// two overlapping reorders would race for the same positions.
     @State private var queueBusyRunID: String?
@@ -106,6 +108,23 @@ public struct ThreadDetailView: View {
         .onDisappear {
             model.releaseThread(thread.id)
             persistDraftBeforeLeaving()
+        }
+        .sheet(item: $restoreRequest) { request in
+            CheckpointRestoreSheet(
+                request: request,
+                isWorking: currentThread.state == .working || currentThread.state == .queued,
+                onInterrupt: {
+                    Task { await model.cancelTurn(threadID: thread.id) }
+                },
+                onRestore: {
+                    try await model.client.rollBackToCheckpoint(
+                        threadID: request.target.threadID,
+                        scopeID: request.target.scopeID,
+                        checkpointID: request.target.checkpointID
+                    )
+                    _ = await model.detail(for: thread.id, force: true)
+                }
+            )
         }
         .sheet(item: $toolSurface) { surface in
             NavigationStack {
@@ -342,14 +361,13 @@ public struct ThreadDetailView: View {
                     // the rollback affordance has to compare against one.
                     wireThreadID: thread.wireID ?? thread.id,
                     onRollback: { target in
-                        Task {
-                            try? await model.client.rollBackToCheckpoint(
-                                threadID: target.threadID,
-                                scopeID: target.scopeID,
-                                checkpointID: target.checkpointID
-                            )
-                            _ = await model.detail(for: thread.id, force: true)
-                        }
+                        // Preview first, never fire-and-forget: the sheet
+                        // shows the computed blast radius, owns progress, and
+                        // surfaces failures instead of swallowing them.
+                        restoreRequest = CheckpointRestoreRequest.make(
+                            target: target,
+                            timelineItems: detail.timelineItems
+                        )
                     },
                     detail: detailWithPendingHandoff(detail),
                     renderUpdate: model.detailRenderUpdates[thread.id],

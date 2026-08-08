@@ -99,7 +99,7 @@ export interface EnvironmentThreadShell {
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
   readonly pinnedAt: string | null;
-  readonly workInboxRole: "main" | null;
+  readonly workInboxRole: "main" | "chat" | null;
   readonly timelineClearedAt?: string | null;
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;

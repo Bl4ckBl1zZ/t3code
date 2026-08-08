@@ -82,7 +82,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
-import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
@@ -252,6 +251,10 @@ import {
 import { environmentShell } from "../state/shell";
 import { HERMES_DRIVER_KIND, isT3WorkBackingProject } from "../t3WorkProject";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import {
+  CheckpointRestoreDialog,
+  type CheckpointRestoreFacts,
+} from "./chat/CheckpointRestoreDialog";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -476,6 +479,19 @@ const TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR = [
   '[data-slot="combobox-popup"]',
   '[data-slot="autocomplete-popup"]',
 ].join(",");
+
+type PendingCheckpointRestore =
+  | {
+      readonly kind: "checkpoint";
+      readonly checkpointId: string;
+      readonly scopeId: string;
+      readonly facts: CheckpointRestoreFacts;
+    }
+  | {
+      readonly kind: "turnCount";
+      readonly turnCount: number;
+      readonly facts: CheckpointRestoreFacts;
+    };
 
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
@@ -1357,6 +1373,8 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [pendingCheckpointRestore, setPendingCheckpointRestore] =
+    useState<PendingCheckpointRestore | null>(null);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -4968,127 +4986,133 @@ function ChatViewContent(props: ChatViewProps) {
     composerRef,
   ]);
 
-  const onRevertToTurnCount = useCallback(
-    async (turnCount: number) => {
-      const localApi = readLocalApi();
-      if (!localApi || !activeThread || isRevertingCheckpoint) return;
-
-      if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
-        setThreadError(
-          activeThread.id,
-          `Reconnect ${activeEnvironmentUnavailableLabel} before reverting checkpoints.`,
-        );
-        return;
-      }
-      if (phase === "running" || isSendBusy || isConnecting) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
-        return;
-      }
-      const confirmed = await localApi.dialogs.confirm(
-        [
-          `Revert this thread to checkpoint ${turnCount}?`,
-          "This will discard newer messages and turn diffs in this thread.",
-          "This action cannot be undone.",
-        ].join("\n"),
+  const guardCheckpointRestore = useCallback((): boolean => {
+    if (!activeThread || isRevertingCheckpoint) return false;
+    if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
+      setThreadError(
+        activeThread.id,
+        `Reconnect ${activeEnvironmentUnavailableLabel} before restoring checkpoints.`,
       );
-      if (!confirmed) {
-        return;
-      }
+      return false;
+    }
+    if (phase === "running" || isSendBusy || isConnecting) {
+      setThreadError(activeThread.id, "Interrupt the current turn before restoring checkpoints.");
+      return false;
+    }
+    return true;
+  }, [
+    activeEnvironmentUnavailable,
+    activeEnvironmentUnavailableLabel,
+    activeThread,
+    isConnecting,
+    isRevertingCheckpoint,
+    isSendBusy,
+    phase,
+    setThreadError,
+  ]);
 
-      setIsRevertingCheckpoint(true);
-      setThreadError(activeThread.id, null);
-      const result = await revertThreadCheckpoint({
-        environmentId,
-        input: {
-          threadId: activeThread.id,
-          turnCount,
-        },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(
-          activeThread.id,
-          error instanceof Error ? error.message : "Failed to revert thread state.",
-        );
-      }
-      setIsRevertingCheckpoint(false);
+  const buildCheckpointRestoreFacts = useCallback(
+    (summary: TurnDiffSummary | undefined): CheckpointRestoreFacts => {
+      if (!summary) return {};
+      const capturedAtMs = Date.parse(summary.completedAt);
+      const hasCapturedAt = Number.isFinite(capturedAtMs);
+      return {
+        capturedAtLabel: hasCapturedAt
+          ? new Date(capturedAtMs).toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : undefined,
+        files: summary.files,
+        exchangesAfter: hasCapturedAt
+          ? timelineEntries.filter(
+              (entry) =>
+                entry.kind === "message" &&
+                entry.message.role === "user" &&
+                Date.parse(entry.message.createdAt) > capturedAtMs,
+            ).length
+          : undefined,
+        newerRestorePoints:
+          summary.scopeId === undefined
+            ? undefined
+            : visibleTurnDiffSummaries.filter(
+                (candidate) =>
+                  candidate.scopeId === summary.scopeId &&
+                  candidate.status === "ready" &&
+                  candidate.checkpointTurnCount > summary.checkpointTurnCount,
+              ).length,
+      };
     },
-    [
-      activeThread,
-      activeEnvironmentUnavailable,
-      activeEnvironmentUnavailableLabel,
-      environmentId,
-      isConnecting,
-      isRevertingCheckpoint,
-      isSendBusy,
-      phase,
-      revertThreadCheckpoint,
-      setThreadError,
-    ],
+    [timelineEntries, visibleTurnDiffSummaries],
+  );
+
+  const onRevertToTurnCount = useCallback(
+    (turnCount: number) => {
+      if (!guardCheckpointRestore()) return;
+      const summary = visibleTurnDiffSummaries.find(
+        (candidate) => candidate.checkpointTurnCount === turnCount,
+      );
+      setPendingCheckpointRestore({
+        kind: "turnCount",
+        turnCount,
+        facts: buildCheckpointRestoreFacts(summary),
+      });
+    },
+    [buildCheckpointRestoreFacts, guardCheckpointRestore, visibleTurnDiffSummaries],
   );
 
   const onRollbackCheckpoint = useCallback(
-    async (input: { readonly checkpointId: string; readonly scopeId: string }) => {
-      if (!activeThread || isRevertingCheckpoint) return;
-      if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
-        setThreadError(
-          activeThread.id,
-          `Reconnect ${activeEnvironmentUnavailableLabel} before reverting checkpoints.`,
-        );
-        return;
-      }
-      if (phase === "running" || isSendBusy || isConnecting) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
-        return;
-      }
-      const localApi = readLocalApi();
-      const confirmed =
-        localApi == null
-          ? window.confirm("Roll back this thread to the selected checkpoint?")
-          : await localApi.dialogs.confirm(
-              "Roll back this thread to the selected checkpoint?\nThis action cannot be undone.",
-            );
-      if (!confirmed) return;
-
-      setIsRevertingCheckpoint(true);
-      setThreadError(activeThread.id, null);
-      const result = await revertThreadCheckpoint({
-        environmentId,
-        input: {
-          threadId: activeThread.id,
-          checkpointId: input.checkpointId,
-          scopeId: input.scopeId,
-        },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(
-          activeThread.id,
-          error instanceof Error ? error.message : "Failed to revert thread state.",
-        );
-      }
-      setIsRevertingCheckpoint(false);
-    },
-    [
-      activeEnvironmentUnavailable,
-      activeEnvironmentUnavailableLabel,
-      activeThread,
-      environmentId,
-      isConnecting,
-      isRevertingCheckpoint,
-      isSendBusy,
-      phase,
-      revertThreadCheckpoint,
-      setThreadError,
-    ],
-  );
-
-  const handleRollbackCheckpoint = useCallback(
     (input: { readonly checkpointId: string; readonly scopeId: string }) => {
-      void onRollbackCheckpoint(input);
+      if (!guardCheckpointRestore()) return;
+      const summary = visibleTurnDiffSummaries.find(
+        (candidate) => candidate.checkpointId === input.checkpointId,
+      );
+      setPendingCheckpointRestore({
+        kind: "checkpoint",
+        checkpointId: input.checkpointId,
+        scopeId: input.scopeId,
+        facts: buildCheckpointRestoreFacts(summary),
+      });
     },
-    [onRollbackCheckpoint],
+    [buildCheckpointRestoreFacts, guardCheckpointRestore, visibleTurnDiffSummaries],
   );
+
+  const onConfirmCheckpointRestore = useCallback(async () => {
+    const pending = pendingCheckpointRestore;
+    if (!pending || !activeThread || isRevertingCheckpoint) return;
+
+    setIsRevertingCheckpoint(true);
+    setThreadError(activeThread.id, null);
+    const result = await revertThreadCheckpoint({
+      environmentId,
+      input: {
+        threadId: activeThread.id,
+        ...(pending.kind === "checkpoint"
+          ? { checkpointId: pending.checkpointId, scopeId: pending.scopeId }
+          : { turnCount: pending.turnCount }),
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Failed to restore thread state.",
+      );
+    }
+    setIsRevertingCheckpoint(false);
+    setPendingCheckpointRestore(null);
+  }, [
+    activeThread,
+    environmentId,
+    isRevertingCheckpoint,
+    pendingCheckpointRestore,
+    revertThreadCheckpoint,
+    setThreadError,
+  ]);
+
+  const handleRollbackCheckpoint = onRollbackCheckpoint;
 
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
@@ -5662,6 +5686,34 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        // A Hermes draft submitted from the Chat workspace is a Chat
+        // conversation: stamp the role so the sidebar's workspace split can
+        // tell it apart from Work. Best-effort — an older server rejects the
+        // value and the thread simply lives in Work.
+        if (isLocalDraftThread && isHermesConversation) {
+          try {
+            const raw = window.localStorage.getItem("t3code:sidebar-workspace");
+            const storedWorkspace = (() => {
+              if (raw === null) return null;
+              try {
+                return JSON.parse(raw) as unknown;
+              } catch {
+                return raw;
+              }
+            })();
+            if (storedWorkspace === "chat") {
+              void updateThreadMetadata({
+                environmentId,
+                input: {
+                  threadId: threadIdForSend,
+                  workInboxRole: "chat",
+                },
+              });
+            }
+          } catch {
+            // Unreadable storage never blocks the send.
+          }
+        }
       }
     }
 
@@ -6955,6 +7007,15 @@ function ChatViewContent(props: ChatViewProps) {
                 bottomInset={isDraftHeroState ? 0 : composerOverlayHeight}
               />
             ) : null}
+
+            <CheckpointRestoreDialog
+              open={pendingCheckpointRestore !== null}
+              onOpenChange={(open) => {
+                if (!open) setPendingCheckpointRestore(null);
+              }}
+              onConfirm={onConfirmCheckpointRestore}
+              facts={pendingCheckpointRestore?.facts ?? {}}
+            />
 
             <AlertDialog open={branchRestoreConfirmOpen} onOpenChange={setBranchRestoreConfirmOpen}>
               <AlertDialogPopup>
