@@ -93,7 +93,10 @@ struct PlatformRootView: View {
     }
 
     private var incomingShareProjects: [FeatureProject] {
-        DailyUXCreationContext.projects(in: model.snapshot).sorted {
+        DailyUXCreationContext.projects(
+            in: model.snapshot,
+            serverConfigs: model.client.workspaceServerConfigs()
+        ).sorted {
             if $0.name.localizedStandardCompare($1.name) == .orderedSame {
                 return $0.environmentID < $1.environmentID
             }

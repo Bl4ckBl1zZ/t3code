@@ -23,6 +23,7 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { resolveThreadPreview } from "@t3tools/client-runtime/state/models";
 import {
   scopeProjectRef,
   scopeThreadRef,
@@ -677,6 +678,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
   const driverKind = providerEntry?.driverKind ?? null;
   const isHermes = driverKind === "hermes" || (driverKind === null && modelInstanceId === "hermes");
+  const preview = resolveThreadPreview(thread);
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -1265,6 +1267,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
               {!isHermes && thread.branch ? (
                 <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
+              ) : isHermes && preview ? (
+                /* Hermes rows have no branch, no repo and no diff — the whole
+                   line was blank. What differs between them is what was last
+                   said, so that is what fills it. */
+                <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                  {preview.fromUser ? <span className="opacity-60">You: </span> : null}
+                  {preview.text}
+                </span>
               ) : (
                 <span className="flex-1" />
               )}

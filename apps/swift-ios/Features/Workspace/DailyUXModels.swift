@@ -95,8 +95,24 @@ public struct FeatureMessageSubmission: Sendable, Equatable {
 }
 
 enum DailyUXCreationContext {
-    static func projects(in snapshot: FeatureSnapshot) -> [FeatureProject] {
-        guard !snapshot.environments.isEmpty else { return snapshot.projects }
+    /// The projects a task can be started in.
+    ///
+    /// `serverConfigs` is required rather than defaulted because it is the only
+    /// thing that identifies each server's T3 Work checkout, and a caller that
+    /// forgot it would silently offer that checkout as somewhere to start a
+    /// coding task.
+    static func projects(
+        in snapshot: FeatureSnapshot,
+        serverConfigs: [MobileWorkspaceEnvironmentConfig]
+    ) -> [FeatureProject] {
+        let creatable = snapshot.projects.filter { project in
+            !MobileWorkspaceRouting.isWorkBackingProject(
+                environmentID: project.environmentID,
+                workspaceRoot: project.path,
+                serverConfigs: serverConfigs
+            )
+        }
+        guard !snapshot.environments.isEmpty else { return creatable }
         let availableEnvironmentIDs = Set(
             snapshot.environments.compactMap { environment in
                 let state = environment.isActive
@@ -105,7 +121,7 @@ enum DailyUXCreationContext {
                 return state == .disconnected ? nil : environment.id
             }
         )
-        return snapshot.projects.filter {
+        return creatable.filter {
             availableEnvironmentIDs.contains($0.environmentID)
         }
     }
@@ -363,6 +379,30 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case ready
 }
 
+/// The T3 Work inbox row's leading lozenge. See ``FeatureThread/workInboxBadge``.
+enum WorkInboxBadge: String, Sendable, Equatable, CaseIterable {
+    case needsYou
+    case working
+    case failed
+    case done
+
+    var label: String {
+        switch self {
+        case .needsYou: "Needs you"
+        case .working: "Working"
+        case .failed: "Failed"
+        case .done: "Done"
+        }
+    }
+
+    /// Whether the row earns the accent rail down its leading edge. Only work
+    /// that is blocked on the user does: a rail on every row is a rail on none,
+    /// and the point is that the inbox can be triaged in one pass.
+    var wantsAttentionRail: Bool {
+        self == .needsYou
+    }
+}
+
 enum HomeWorkingDuration {
     static func compact(since date: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -388,6 +428,27 @@ extension FeatureThread {
             .done
         case .idle:
             .ready
+        }
+    }
+
+    /// The lozenge a T3 Work inbox row leads with, in place of the project name
+    /// a Code card carries there.
+    ///
+    /// Work is an inbox: every row is the same assistant on the same backing
+    /// checkout, so naming that is a constant, and what actually differs between
+    /// rows is state. Approval and input collapse into one "Needs you" because
+    /// the useful distinction is that it is blocked on you at all — *what* it
+    /// wants is the line underneath.
+    ///
+    /// `nil` for a thread with nothing to report, which leaves the row's meta
+    /// line as just its age rather than badging "Ready" on everything idle.
+    var workInboxBadge: WorkInboxBadge? {
+        switch homeStatus {
+        case .approval, .input: .needsYou
+        case .working: .working
+        case .failed: .failed
+        case .done: .done
+        case .ready: nil
         }
     }
 

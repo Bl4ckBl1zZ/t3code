@@ -393,7 +393,9 @@ public struct WorkspaceView: View {
         }
         .padding(.leading, 15)
         .padding(.trailing, 8)
-        .frame(height: 49)
+        // Sized off the switcher rather than fixed, so the row keeps its margin
+        // above and below the tallest thing in it.
+        .frame(height: Self.workspaceSwitcherHeight + 12)
         .background(T3Colors.background)
     }
 
@@ -477,39 +479,43 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// Both workspaces are always on screen: the wordmark names the product and
-    /// the segmented tabs beside it are the switcher — no menu to open first.
-    /// One glass thumb slides between the segments via matched geometry, so
-    /// switching reads as the selection travelling rather than two highlights
-    /// blinking.
-    /// Both workspaces are always on screen. The switcher is the native
-    /// segmented `Picker` — the system owns the sliding thumb, its animation
-    /// and its glass treatment, which a hand-rolled matched-geometry copy
-    /// never quite matched.
+    /// Every workspace is always on screen. The switcher is a hosted
+    /// `UISegmentedControl` — the system owns the sliding thumb, its animation
+    /// and its glass treatment, which a hand-rolled matched-geometry copy never
+    /// quite matched — sized up past what `.pickerStyle(.segmented)` allows,
+    /// because switching surfaces is the header's primary action and the
+    /// default segment font reads as a settings row.
     private var workspaceSwitcher: some View {
         HStack(spacing: 11) {
             Text("T3")
-                .font(.system(size: 17, weight: .bold))
+                .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(T3Colors.textPrimary)
 
-            Picker("Workspace", selection: workspaceSelection) {
-                ForEach(MobileWorkspace.allCases, id: \.self) { candidate in
-                    Text(WorkspaceSwitcher.shortTitle(candidate))
-                        .tag(candidate)
-                }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
+            WorkspaceSegmentedControl(
+                titles: MobileWorkspace.allCases.map(WorkspaceSwitcher.shortTitle),
+                selectedIndex: workspaceSelection,
+                font: .systemFont(ofSize: 16, weight: .semibold),
+                height: Self.workspaceSwitcherHeight,
+                segmentPadding: 14
+            )
         }
         .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar-workspace-switcher")
     }
 
-    private var workspaceSelection: Binding<MobileWorkspace> {
+    /// Tall enough to clear the 44pt tap target on its own rather than relying
+    /// on the header row's padding to make up the difference.
+    private static let workspaceSwitcherHeight: CGFloat = 44
+
+    private var workspaceSelection: Binding<Int> {
         Binding(
-            get: { workspace },
-            set: { storedWorkspace = $0.rawValue }
+            get: { MobileWorkspace.allCases.firstIndex(of: workspace) ?? 0 },
+            set: { index in
+                let candidates = MobileWorkspace.allCases
+                guard candidates.indices.contains(index) else { return }
+                storedWorkspace = candidates[index].rawValue
+            }
         )
     }
 
@@ -581,7 +587,7 @@ public struct WorkspaceView: View {
                         Text("All projects")
                     }
                 }
-                ForEach(model.snapshot.projects) { project in
+                ForEach(filterableProjects) { project in
                     Button {
                         selectedProjectID = project.id
                     } label: {
@@ -673,7 +679,7 @@ public struct WorkspaceView: View {
     }
 
     private var selectedProject: FeatureProject? {
-        model.snapshot.projects.first { $0.id == selectedProjectID }
+        filterableProjects.first { $0.id == selectedProjectID }
     }
 
     /// The conversation the Chat tab lands in: the most recently touched
@@ -695,7 +701,24 @@ public struct WorkspaceView: View {
     }
 
     private var creationProjects: [FeatureProject] {
-        DailyUXCreationContext.projects(in: model.snapshot)
+        DailyUXCreationContext.projects(
+            in: model.snapshot,
+            serverConfigs: workspaceServerConfigs
+        )
+    }
+
+    /// The projects the Code filter offers, which are the same ones a task can
+    /// be started in: filtering to the Work checkout could only ever empty the
+    /// list, since Work threads are not Code threads.
+    private var filterableProjects: [FeatureProject] {
+        let serverConfigs = workspaceServerConfigs
+        return model.snapshot.projects.filter { project in
+            !MobileWorkspaceRouting.isWorkBackingProject(
+                environmentID: project.environmentID,
+                workspaceRoot: project.path,
+                serverConfigs: serverConfigs
+            )
+        }
     }
 
     private var connectionEnvironmentName: String {
@@ -734,9 +757,12 @@ public struct WorkspaceView: View {
         return model.snapshot.threads.contains { $0.id == selectedThreadID }
     }
 
+    /// A filter remembered from before the Work checkout became identifiable
+    /// reads as unavailable, so the existing reset clears it rather than leaving
+    /// the list filtered to a project it no longer offers.
     private var selectedProjectIsAvailable: Bool {
         guard let selectedProjectID else { return true }
-        return model.snapshot.projects.contains { $0.id == selectedProjectID }
+        return filterableProjects.contains { $0.id == selectedProjectID }
     }
 
     private func openThread(_ id: String) {
@@ -1129,9 +1155,13 @@ struct FeatureThreadRow: View, Equatable {
     enum Style: Equatable {
         case rich
         case slim
-        /// Chat rows: a conversation, not a task — title and a quiet
-        /// model + time line, no repo badge, no branch, no status machinery.
+        /// Chat rows: a conversation, not a task — title and the last thing
+        /// said, no repo badge, no branch, no provenance.
         case conversation
+        /// T3 Work rows: an inbox item, not a checkout — a status lozenge
+        /// where a Code card names its repo, and what the work is doing where
+        /// a Code card names its branch.
+        case inbox
     }
 
     let thread: FeatureThread
@@ -1174,6 +1204,7 @@ struct FeatureThreadRow: View, Equatable {
             case .rich: richRow(at: now)
             case .slim: slimRow(at: now)
             case .conversation: conversationRow(at: now)
+            case .inbox: inboxRow(at: now)
             }
         }
         .contentShape(Rectangle())
@@ -1280,11 +1311,14 @@ struct FeatureThreadRow: View, Equatable {
         )
     }
 
-    /// The Chat row: no repo badge, no branch, no status machinery — a
-    /// conversation title over a quiet model + time line.
+    /// The Chat row: title and time on one line, the last thing said underneath.
+    ///
+    /// There is no meta line above the title, because every row in Chat would
+    /// have filled it with the same word. What differs between conversations is
+    /// what was last said, which is what every message list leads with.
     private func conversationRow(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(thread.title)
                     .font(T3Typography.homeTitle)
                     .tracking(-0.14)
@@ -1296,20 +1330,21 @@ struct FeatureThreadRow: View, Equatable {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(T3Colors.textSecondary)
                 }
-            }
-
-            HStack(spacing: 6) {
-                providerIcon(size: 14)
                 Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
                     .font(T3Typography.homeMetadata.monospacedDigit())
-                if thread.homeStatus == .working {
-                    Text("· responding…")
-                        .font(T3Typography.homeMetadata)
-                        .foregroundStyle(T3Colors.statusRunning)
-                }
-                Spacer(minLength: 0)
+                    .foregroundStyle(T3Colors.textTertiary)
             }
-            .foregroundStyle(T3Colors.textTertiary)
+
+            if thread.homeStatus == .working {
+                Text("responding…")
+                    .font(T3Typography.homeMetadata)
+                    .foregroundStyle(T3Colors.statusRunning)
+            } else if let preview = previewLine {
+                preview
+                    .font(T3Typography.homeMetadata)
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .lineLimit(1)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -1319,6 +1354,82 @@ struct FeatureThreadRow: View, Equatable {
             in: RoundedRectangle(cornerRadius: 8)
         )
         .padding(.horizontal, 8)
+    }
+
+    /// The T3 Work row: a status lozenge where a Code card names its repo, and
+    /// the last thing that happened where a Code card names its branch.
+    ///
+    /// Work threads all sit on one hidden backing checkout, so repo, branch and
+    /// harness are identical on every row — three constants where the inbox
+    /// needs to show which item is blocked on the user.
+    private func inboxRow(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                if let badge = thread.workInboxBadge {
+                    WorkInboxLozenge(badge: badge, tint: statusColor)
+                }
+                if let duration = thread.homeWorkingDuration(at: now) {
+                    Text(duration)
+                        .font(.system(.footnote, design: .monospaced, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(statusColor)
+                }
+                Spacer(minLength: 8)
+                if thread.pinnedAt != nil {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
+                Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
+                    .font(T3Typography.homeMetadata.monospacedDigit())
+                    .foregroundStyle(T3Colors.textTertiary)
+            }
+            .frame(minHeight: 20)
+
+            Text(thread.title)
+                .font(T3Typography.homeTitle)
+                .tracking(-0.14)
+                .foregroundStyle(T3Colors.textPrimary)
+                .lineLimit(allowsMultilineTitle ? 2 : 1)
+                .padding(.top, 3)
+
+            if let preview = previewLine {
+                preview
+                    .font(T3Typography.homeMetadata)
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .lineLimit(1)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.leading, thread.workInboxBadge?.wantsAttentionRail == true ? 13 : 10)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .frame(minHeight: 72)
+        .background(
+            isSelected ? T3Colors.subtleStrong : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(alignment: .leading) {
+            if thread.workInboxBadge?.wantsAttentionRail == true {
+                Capsule()
+                    .fill(statusColor)
+                    .frame(width: 3)
+                    .padding(.vertical, 8)
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+
+    /// The last thing said, prefixed when it was the user who said it. Returns
+    /// `Text` rather than a view so the prefix can be dimmed inside one
+    /// truncating line instead of competing with it for width.
+    private var previewLine: Text? {
+        guard let preview = thread.preview?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !preview.isEmpty
+        else { return nil }
+        guard thread.previewIsFromUser else { return Text(preview) }
+        return Text("You: ").foregroundStyle(T3Colors.textTertiary.opacity(0.65))
+            + Text(preview)
     }
 
     @ViewBuilder
@@ -1415,21 +1526,66 @@ struct FeatureThreadRow: View, Equatable {
     }
 
     private func accessibilityValue(at now: Date) -> String {
-        var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
-        values.append("Harness \(context.providerName)")
-        if let duration = thread.homeWorkingDuration(at: now) {
-            values.append("for \(duration)")
+        // Work and Chat rows say the same thing about project, branch and
+        // harness on every row, so VoiceOver reads what the row actually
+        // carries instead of three constants before the useful part.
+        switch style {
+        case .conversation:
+            var values: [String] = []
+            if thread.homeStatus == .working {
+                values.append("Responding")
+            }
+            if let preview = thread.preview, !preview.isEmpty {
+                values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
+            }
+            values.append(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
+            return values.joined(separator: ". ")
+        case .inbox:
+            var values = [thread.workInboxBadge?.label ?? "Ready"]
+            if let duration = thread.homeWorkingDuration(at: now) {
+                values.append("for \(duration)")
+            }
+            if let preview = thread.preview, !preview.isEmpty {
+                values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
+            }
+            if isConnectionStale {
+                values.append("last known state")
+            }
+            return values.joined(separator: ". ")
+        case .rich, .slim:
+            var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
+            values.append("Harness \(context.providerName)")
+            if let duration = thread.homeWorkingDuration(at: now) {
+                values.append("for \(duration)")
+            }
+            values.append("Branch \(branchLabel)")
+            if let environmentLabel {
+                values.append("on \(environmentLabel)")
+            }
+            if isConnectionStale {
+                values.append("last known state")
+            }
+            return values.joined(separator: ". ")
         }
-        values.append("Branch \(branchLabel)")
-        if let environmentLabel {
-            values.append("on \(environmentLabel)")
-        }
-        if isConnectionStale {
-            values.append("last known state")
-        }
-        return values.joined(separator: ". ")
     }
 
+}
+
+/// The T3 Work inbox row's status lozenge.
+private struct WorkInboxLozenge: View {
+    let badge: WorkInboxBadge
+    let tint: Color
+
+    var body: some View {
+        Text(badge.label.uppercased())
+            .font(.system(size: 10, weight: .bold))
+            .tracking(0.4)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(tint.opacity(0.14), in: Capsule())
+            .accessibilityHidden(true)
+    }
 }
 
 private struct ProjectBadge: View {

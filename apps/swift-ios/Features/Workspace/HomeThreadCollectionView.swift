@@ -498,6 +498,27 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
     }
 
+    /// The row this workspace's list is made of.
+    ///
+    /// Only Code's row names a project and a branch, because only Code's threads
+    /// have either. Work and Chat share one backing checkout, so the same three
+    /// fields would repeat down the whole list.
+    private var primaryRowStyle: FeatureThreadRow.Style {
+        switch workspace {
+        case .code: .rich
+        case .work: .inbox
+        case .chat: .conversation
+        }
+    }
+
+    /// The parked and archived shelves. Code compacts them to a slim row, which
+    /// leads with the project favicon — no use to a workspace whose rows all
+    /// share one project, so Work and Chat keep their own row there instead.
+    private var shelfRowStyle: FeatureThreadRow.Style {
+        guard workspace == .code else { return primaryRowStyle }
+        return forceRichRows ? .rich : .slim
+    }
+
     var collectionItems: [HomeCollectionItem] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalizedQuery.isEmpty {
@@ -508,14 +529,14 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 .thread(
                     $0,
                     presentation.rowContexts[$0.id] ?? .fallback,
-                    .rich,
+                    primaryRowStyle,
                     $0.isArchived,
                     forceRichRows
                 )
             }
         }
 
-        let mainStyle: FeatureThreadRow.Style = workspace == .chat ? .conversation : .rich
+        let mainStyle = primaryRowStyle
         var items = presentation.pinned.map {
             HomeCollectionItem.thread(
                 $0,
@@ -544,7 +565,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     .thread(
                         $0,
                         presentation.rowContexts[$0.id] ?? .fallback,
-                        .rich,
+                        primaryRowStyle,
                         false,
                         forceRichRows
                     )
@@ -573,7 +594,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                         .thread(
                             $0,
                             presentation.rowContexts[$0.id] ?? .fallback,
-                            forceRichRows ? .rich : .slim,
+                            shelfRowStyle,
                             false,
                             forceRichRows
                         )
@@ -586,7 +607,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     .thread(
                         $0,
                         presentation.rowContexts[$0.id] ?? .fallback,
-                        forceRichRows ? .rich : .slim,
+                        shelfRowStyle,
                         false,
                         forceRichRows
                     )
@@ -604,7 +625,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     .thread(
                         $0,
                         presentation.rowContexts[$0.id] ?? .fallback,
-                        forceRichRows ? .rich : .slim,
+                        shelfRowStyle,
                         true,
                         forceRichRows
                     )

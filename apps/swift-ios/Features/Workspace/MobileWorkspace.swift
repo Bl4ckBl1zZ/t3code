@@ -259,6 +259,28 @@ public enum MobileWorkspaceRouting {
         isWorkConversation ? .local : requestedMode
     }
 
+    /// Whether a project is a server's T3 Work checkout — the backing project
+    /// every Hermes conversation is routed through.
+    ///
+    /// It exists only to own those threads: Work never shows it, and its
+    /// conversations are directory-based rather than project-based. T3 Code must
+    /// not offer it either — picking it would start a coding task inside the
+    /// assistant's own checkout, and filtering to it could only ever produce an
+    /// empty list, because no Code thread lives there.
+    ///
+    /// A config with no `t3WorkDirectory` matches nothing: `nil` never equals a
+    /// workspace root, so a server that is not set up for Work hides no project.
+    public static func isWorkBackingProject(
+        environmentID: String,
+        workspaceRoot: String,
+        serverConfigs: [MobileWorkspaceEnvironmentConfig]
+    ) -> Bool {
+        serverConfigs.contains { config in
+            config.environmentID == environmentID
+                && config.t3WorkDirectory == workspaceRoot
+        }
+    }
+
     /// Resolves the existing project shell used only to route a Hermes launch.
     /// Work UI never exposes this backing project, and `prepareWorkspace: false`
     /// prevents project/worktree setup from leaking into the conversation.

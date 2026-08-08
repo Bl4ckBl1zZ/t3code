@@ -383,8 +383,18 @@ public struct AutomationEditSheet: View {
 
     // MARK: - Derived state
 
+    /// An automation starts threads, so it offers the same projects the new-task
+    /// sheet does — the server's T3 Work checkout is not one of them.
     private var environmentProjects: [FeatureProject] {
-        model.snapshot.projects.filter { $0.environmentID == environmentID }
+        let serverConfigs = model.client.workspaceServerConfigs()
+        return model.snapshot.projects.filter { project in
+            project.environmentID == environmentID
+                && !MobileWorkspaceRouting.isWorkBackingProject(
+                    environmentID: project.environmentID,
+                    workspaceRoot: project.path,
+                    serverConfigs: serverConfigs
+                )
+        }
     }
 
     private func wireID(_ project: FeatureProject) -> String {

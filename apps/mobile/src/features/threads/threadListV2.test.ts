@@ -22,6 +22,7 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
+  resolveWorkInboxBadge,
   sortThreadsForListV2,
 } from "./threadListV2";
 
@@ -969,5 +970,30 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
+  });
+});
+
+describe("resolveWorkInboxBadge", () => {
+  it("collapses approval and input into one blocked-on-you badge", () => {
+    // What the Work inbox needs to scan for is that a row wants a human at
+    // all; which of the two things it wants is the line underneath.
+    expect(resolveWorkInboxBadge({ status: "approval", hasUnseenCompletion: false })).toBe(
+      "needs-you",
+    );
+    expect(resolveWorkInboxBadge({ status: "input", hasUnseenCompletion: false })).toBe(
+      "needs-you",
+    );
+  });
+
+  it("badges a finished thread only until it has been opened", () => {
+    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: true })).toBe("done");
+    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: false })).toBeNull();
+  });
+
+  it("carries working and failed through", () => {
+    expect(resolveWorkInboxBadge({ status: "working", hasUnseenCompletion: false })).toBe(
+      "working",
+    );
+    expect(resolveWorkInboxBadge({ status: "failed", hasUnseenCompletion: false })).toBe("failed");
   });
 });

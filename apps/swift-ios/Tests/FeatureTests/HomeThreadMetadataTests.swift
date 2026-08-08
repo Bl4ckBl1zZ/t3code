@@ -31,6 +31,40 @@ struct HomeThreadMetadataTests {
     }
 
     @Test
+    func workInboxBadgeCollapsesTheTwoBlockedStatesAndRestsSilent() {
+        let expected: [(FeatureThreadState, WorkInboxBadge?)] = [
+            // Approval and input both mean "blocked on you"; which of the two
+            // it is belongs on the line underneath, not in the lozenge.
+            (.waitingForApproval, .needsYou),
+            (.waitingForInput, .needsYou),
+            (.working, .working),
+            (.queued, .working),
+            (.failed, .failed),
+            (.completed, .done),
+            // Idle earns no lozenge: a badge on every row is a badge on none.
+            (.idle, nil),
+        ]
+
+        for (state, badge) in expected {
+            let thread = FeatureThread(
+                id: state.rawValue,
+                projectID: "project",
+                title: "Task",
+                state: state
+            )
+            #expect(thread.workInboxBadge == badge)
+        }
+    }
+
+    @Test
+    func onlyBlockedWorkEarnsTheAttentionRail() {
+        #expect(WorkInboxBadge.needsYou.wantsAttentionRail)
+        for badge in WorkInboxBadge.allCases where badge != .needsYou {
+            #expect(!badge.wantsAttentionRail)
+        }
+    }
+
+    @Test
     func workingDurationMatchesTheCompactWebFormatAndClampsFutureDates() {
         let thread = FeatureThread(
             id: "working",

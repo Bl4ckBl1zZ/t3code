@@ -83,6 +83,16 @@ export interface EnvironmentThreadShell {
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
   readonly latestUserMessageAt: string | null;
+  /**
+   * The most recent visible message, for list rows that lead with what was
+   * last said rather than with where the work lives. `role` rides along so a
+   * conversation row can mark its own turns — without it there is no telling
+   * the last word apart from the last answer.
+   */
+  readonly latestVisibleMessage: {
+    readonly role: string;
+    readonly text: string;
+  } | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
   readonly hasActionableProposedPlan: boolean;
@@ -116,6 +126,27 @@ export interface EnvironmentThreadShell {
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
   readonly deletedAt: string | null;
   readonly source: OrchestrationV2ThreadShell;
+}
+
+/**
+ * The last thing said in a thread, flattened to one line for a list row.
+ *
+ * Shared by every client: a row that leads with the last message rather than
+ * with a repo it does not have is the same idea on web, iOS and Android, and
+ * the flattening rules (collapse whitespace, cap the length) have to agree or
+ * the same thread reads differently per platform.
+ */
+export function resolveThreadPreview(
+  thread: Pick<EnvironmentThreadShell, "latestVisibleMessage">,
+): { readonly text: string; readonly fromUser: boolean } | null {
+  const message = thread.latestVisibleMessage;
+  if (!message) return null;
+  const text = message.text.split(/\s+/u).filter(Boolean).join(" ");
+  if (text.length === 0) return null;
+  return {
+    text: text.length > 160 ? `${text.slice(0, 157)}...` : text,
+    fromUser: message.role === "user",
+  };
 }
 
 function iso(value: DateTime.Utc): string {
@@ -193,6 +224,13 @@ export function presentThreadShell(
     latestRun,
     runtime: shellRuntime(thread),
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
+    latestVisibleMessage:
+      thread.latestVisibleMessage === null || thread.latestVisibleMessage === undefined
+        ? null
+        : {
+            role: thread.latestVisibleMessage.role,
+            text: thread.latestVisibleMessage.text,
+          },
     hasPendingApprovals:
       thread.pendingRuntimeRequest !== null &&
       thread.pendingRuntimeRequest.kind !== "user_input" &&
