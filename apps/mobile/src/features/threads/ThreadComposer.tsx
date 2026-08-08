@@ -83,7 +83,6 @@ import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerComm
 import { AnimatedSymbolSwap, SymbolView } from "../../components/AppSymbol";
 import {
   voiceComboButtonProps,
-  VoiceCancelTarget,
   VoiceComboBadge,
   VoiceRecordingBar,
 } from "../voice/VoiceComposerControls";
@@ -811,17 +810,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           />
         ) : null}
 
-        {/* The one recording HUD for both modes: it sits above the pill/card so the draft and
-            attachments stay visible and mounted while Voice Input is active. */}
-        <VoiceRecordingBar
-          state={voice.state}
-          subscribeLevel={voice.subscribeLevel}
-          onCancel={() => void voice.cancel()}
-          onCleanupChange={voice.setCleanup}
-          holdActive={voice.holdActive}
-          cancelArmed={voice.cancelArmed}
-        />
-
         <QueuedMessageStrip
           messages={props.queuedMessages}
           dispatchingMessageId={props.dispatchingQueuedMessageId}
@@ -831,187 +819,210 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           onEditingChange={props.onQueuedMessageEditingChange}
         />
 
-        <ComposerSurface
-          isDarkMode={isDarkMode}
-          style={
-            isExpanded
-              ? {
-                  borderRadius: 20,
-                  overflow: "hidden" as const,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                }
-              : {
-                  borderRadius: 999,
-                  overflow: "hidden" as const,
-                  flexDirection: "row" as const,
-                  alignItems: "center" as const,
-                  paddingLeft: 5,
-                  paddingRight: 5,
-                  paddingVertical: 5,
-                }
-          }
-        >
-          {/* Attachment strip — inside the card, above the text input */}
-          {isExpanded ? (
-            <Animated.View
-              className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
-              entering={FadeIn.duration(160)}
-              exiting={FadeOut.duration(120)}
-            >
-              <ComposerAttachmentStrip
-                attachments={props.draftAttachments}
-                onRemove={props.onRemoveDraftImage}
-                onPressImage={onPressImage}
-              />
-            </Animated.View>
-          ) : null}
+        <View className="relative">
+          <ComposerSurface
+            isDarkMode={isDarkMode}
+            style={
+              isExpanded
+                ? {
+                    borderRadius: 20,
+                    overflow: "hidden" as const,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                  }
+                : {
+                    borderRadius: 999,
+                    overflow: "hidden" as const,
+                    flexDirection: "row" as const,
+                    alignItems: "center" as const,
+                    paddingLeft: 5,
+                    paddingRight: 5,
+                    paddingVertical: 5,
+                  }
+            }
+          >
+            {/* Attachment strip — inside the card, above the text input */}
+            {isExpanded ? (
+              <Animated.View
+                className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
+                entering={FadeIn.duration(160)}
+                exiting={FadeOut.duration(120)}
+              >
+                <ComposerAttachmentStrip
+                  attachments={props.draftAttachments}
+                  onRemove={props.onRemoveDraftImage}
+                  onPressImage={onPressImage}
+                />
+              </Animated.View>
+            ) : null}
 
-          {!isExpanded ? (
-            <ControlPillMenu
-              actions={attachmentMenuActions}
-              onPressAction={({ nativeEvent }) => onAttachmentMenuSelect(nativeEvent.event)}
-            >
-              <ControlPill glass icon="plus" accessibilityLabel="Add attachment" />
-            </ControlPillMenu>
-          ) : null}
-          <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
-            <ComposerEditor
-              ref={inputRef}
-              multiline
-              value={props.draftMessage}
-              skills={selectedProviderStatus?.skills ?? []}
-              selection={composerSelection}
-              onChangeText={props.onChangeDraftMessage}
-              onSelectionChange={handleSelectionChange}
-              onPasteImages={(uris) => void props.onNativePasteImages(uris)}
-              placeholder={props.placeholder}
-              onFocus={handleFocus}
-              onBlur={handleBlur}
-              onSubmit={handleSend}
-              scrollEnabled={isExpanded}
-              // Android: collapsed single line centers natively (gravity) in
-              // a pill-height box matching the send button; iOS keeps insets.
-              singleLineCentered={!isExpanded}
-              contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
-              style={
-                isExpanded
-                  ? {
-                      minHeight: 80,
-                      maxHeight: 160,
-                      paddingHorizontal: 4,
-                      paddingVertical: 4,
-                    }
-                  : {
-                      height: 36,
-                    }
-              }
-              textStyle={{
-                ...bodyText,
-                color: foregroundColor,
-              }}
-            />
-          </View>
-          {!isExpanded && props.draftAttachments.length > 0 ? (
-            <View className="flex-row gap-1 pl-1">
-              {props.draftAttachments.slice(0, 3).map((attachment) =>
-                isDraftComposerImageAttachment(attachment) ? (
-                  <Pressable
-                    key={attachment.id}
-                    onPress={() => onPressImage(attachment.previewUri)}
-                  >
-                    <Image
-                      source={{ uri: attachment.previewUri }}
-                      className="size-[30px] rounded-lg bg-subtle"
-                      resizeMode="cover"
-                    />
-                  </Pressable>
-                ) : (
-                  // No thumbnail for documents: a glyph tile keeps the
-                  // collapsed strip's 30pt rhythm.
-                  <View
-                    key={attachment.id}
-                    className="size-[30px] items-center justify-center rounded-lg bg-subtle"
-                  >
-                    <SymbolView
-                      name={
-                        attachment.type === "pdf"
-                          ? "doc.richtext"
-                          : attachment.type === "video"
-                            ? "play.rectangle"
-                            : "doc"
-                      }
-                      size={14}
-                      tintColor={foregroundColor}
-                      type="monochrome"
-                    />
-                  </View>
-                ),
-              )}
-              {props.draftAttachments.length > 3 ? (
-                <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
-                  <Text className="text-foreground-muted text-2xs font-t3-bold">
-                    +{props.draftAttachments.length - 3}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-          {!isExpanded ? (
-            <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
-              <View className="flex-row items-center gap-1">
-                {/* Mic drives the full gesture: tap toggles hands-free, hold is
-                  push-to-talk, slide up cancels. The recording HUD renders above the pill.
-                  A running thread swaps the send pill for a stop pill. */}
-                <GestureDetector
-                  gesture={voice.comboGesture({ canSend: false, onSend: () => undefined })}
+            {!isExpanded ? (
+              <ControlPillMenu
+                actions={attachmentMenuActions}
+                onPressAction={({ nativeEvent }) => onAttachmentMenuSelect(nativeEvent.event)}
+              >
+                {/* Bare glyph instead of a bordered circle: the pill's chrome is the container,
+                    matching the reference composer. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Add attachment"
+                  className="h-11 w-10 items-center justify-center"
                 >
-                  <Animated.View style={voice.comboPressStyle}>
+                  <SymbolView name="plus" size={20} tintColor={iconColor} type="monochrome" />
+                </Pressable>
+              </ControlPillMenu>
+            ) : null}
+            <View className={isExpanded ? undefined : "min-w-0 flex-1 pl-1"}>
+              <ComposerEditor
+                ref={inputRef}
+                multiline
+                value={props.draftMessage}
+                skills={selectedProviderStatus?.skills ?? []}
+                selection={composerSelection}
+                onChangeText={props.onChangeDraftMessage}
+                onSelectionChange={handleSelectionChange}
+                onPasteImages={(uris) => void props.onNativePasteImages(uris)}
+                placeholder={props.placeholder}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                onSubmit={handleSend}
+                scrollEnabled={isExpanded}
+                // Android: collapsed single line centers natively (gravity) in
+                // a pill-height box matching the send button; iOS keeps insets.
+                singleLineCentered={!isExpanded}
+                contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
+                style={
+                  isExpanded
+                    ? {
+                        minHeight: 80,
+                        maxHeight: 160,
+                        paddingHorizontal: 4,
+                        paddingVertical: 4,
+                      }
+                    : {
+                        height: 36,
+                      }
+                }
+                textStyle={{
+                  ...bodyText,
+                  color: foregroundColor,
+                }}
+              />
+            </View>
+            {!isExpanded && props.draftAttachments.length > 0 ? (
+              <View className="flex-row gap-1 pl-1">
+                {props.draftAttachments.slice(0, 3).map((attachment) =>
+                  isDraftComposerImageAttachment(attachment) ? (
                     <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        voice.state.type === "recording"
-                          ? "Stop recording and transcribe"
-                          : "Dictate message"
-                      }
-                      accessibilityHint="Hold to record, release to send, slide up and release to cancel"
-                      disabled={voiceBusy && voice.state.type !== "recording"}
-                      onPress={() =>
-                        voice.comboActivate({ canSend: false, onSend: () => undefined })
-                      }
-                      className="h-11 w-9 items-center justify-center"
+                      key={attachment.id}
+                      onPress={() => onPressImage(attachment.previewUri)}
                     >
-                      <AnimatedSymbolSwap
-                        name={voice.state.type === "recording" ? "stop.fill" : "mic"}
-                        size={18}
-                        tintColor={voice.state.type === "recording" ? dangerColor : iconColor}
-                        type="monochrome"
+                      <Image
+                        source={{ uri: attachment.previewUri }}
+                        className="size-[30px] rounded-lg bg-subtle"
+                        resizeMode="cover"
                       />
                     </Pressable>
-                  </Animated.View>
-                </GestureDetector>
-                {showStopAction ? (
-                  <ControlPill
-                    glass
-                    icon="stop.fill"
-                    variant="danger"
-                    accessibilityLabel="Stop"
-                    onPress={props.onStopThread}
-                  />
-                ) : (
-                  <ControlPill
-                    glass
-                    icon="arrow.up"
-                    variant="primary"
-                    disabled={!canSend || voiceBusy}
-                    accessibilityLabel="Send"
-                    onPress={() => void handleSend()}
-                  />
+                  ) : (
+                    // No thumbnail for documents: a glyph tile keeps the
+                    // collapsed strip's 30pt rhythm.
+                    <View
+                      key={attachment.id}
+                      className="size-[30px] items-center justify-center rounded-lg bg-subtle"
+                    >
+                      <SymbolView
+                        name={
+                          attachment.type === "pdf"
+                            ? "doc.richtext"
+                            : attachment.type === "video"
+                              ? "play.rectangle"
+                              : "doc"
+                        }
+                        size={14}
+                        tintColor={foregroundColor}
+                        type="monochrome"
+                      />
+                    </View>
+                  ),
                 )}
+                {props.draftAttachments.length > 3 ? (
+                  <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
+                    <Text className="text-foreground-muted text-2xs font-t3-bold">
+                      +{props.draftAttachments.length - 3}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
-            </Animated.View>
-          ) : null}
-        </ComposerSurface>
+            ) : null}
+            {!isExpanded ? (
+              <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
+                <View className="flex-row items-center gap-1">
+                  {/* Mic drives the full gesture: tap toggles hands-free, hold is
+                    push-to-talk, slide up cancels. The recording HUD renders above the pill.
+                    A running thread swaps the send pill for a stop pill. */}
+                  <GestureDetector
+                    gesture={voice.comboGesture({ canSend: false, onSend: () => undefined })}
+                  >
+                    <Animated.View style={voice.comboPressStyle}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          voice.state.type === "recording"
+                            ? "Stop recording and transcribe"
+                            : "Dictate message"
+                        }
+                        accessibilityHint="Hold to record, release to send, slide up and release to cancel"
+                        disabled={voiceBusy && voice.state.type !== "recording"}
+                        onPress={() =>
+                          voice.comboActivate({ canSend: false, onSend: () => undefined })
+                        }
+                        className="h-11 w-9 items-center justify-center"
+                      >
+                        <AnimatedSymbolSwap
+                          name={voice.state.type === "recording" ? "stop.fill" : "mic"}
+                          size={20}
+                          tintColor={voice.state.type === "recording" ? dangerColor : iconColor}
+                          type="monochrome"
+                        />
+                      </Pressable>
+                    </Animated.View>
+                  </GestureDetector>
+                  {/* Solid circles (no glass) so the send button reads as the filled primary
+                      circle from the reference design. */}
+                  {showStopAction ? (
+                    <ControlPill
+                      icon="stop.fill"
+                      variant="danger"
+                      accessibilityLabel="Stop"
+                      onPress={props.onStopThread}
+                    />
+                  ) : (
+                    <ControlPill
+                      icon="arrow.up"
+                      variant="primary"
+                      disabled={!canSend || voiceBusy}
+                      accessibilityLabel="Send"
+                      onPress={() => void handleSend()}
+                    />
+                  )}
+                </View>
+              </Animated.View>
+            ) : null}
+          </ComposerSurface>
+
+          {/* Recording HUD covers the surface in place (ChatGPT-style pill takeover): the editor
+              and keyboard stay mounted underneath, and the release hint floats above. */}
+          <VoiceRecordingBar
+            state={voice.state}
+            subscribeLevel={voice.subscribeLevel}
+            onCancel={() => void voice.cancel()}
+            onStop={voice.toggle}
+            onCleanupChange={voice.setCleanup}
+            holdActive={voice.holdActive}
+            cancelArmed={voice.cancelArmed}
+            overlay={{ borderRadius: isExpanded ? 20 : 999 }}
+          />
+        </View>
 
         {isExpanded ? (
           // Toolbar row — matches draft page layout (expanded only)
@@ -1092,11 +1103,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     </Animated.View>
                   </GestureDetector>
                 </VoiceComboBadge>
-                <VoiceCancelTarget
-                  holdActive={voice.holdActive}
-                  cancelArmed={voice.cancelArmed}
-                  cancelProgress={voice.cancelProgress}
-                />
               </View>
             </ComposerToolbarRow>
           </Animated.View>
