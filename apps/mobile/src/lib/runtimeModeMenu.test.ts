@@ -28,4 +28,22 @@ describe("runtimeModeMenu", () => {
     expect(menu.selected.mode).toBe("approval-required");
     expect(menu.options).toContain(menu.selected);
   });
+
+  // The composer's settings pill summarizes the thread in one line, so every
+  // offered mode needs a short form — including the Hermes pair, which the
+  // thread settings sheet reads through this menu rather than its own list.
+  it("gives every offered mode a short label for the summary pill", () => {
+    const code = runtimeModeMenu({ isHermes: false, runtimeMode: "auto" });
+    expect(code.options.map((option) => option.shortLabel)).toEqual([
+      "Approve",
+      "Edits",
+      "Auto",
+      "Full",
+    ]);
+    expect(code.selected.shortLabel).toBe("Auto");
+
+    const hermes = runtimeModeMenu({ isHermes: true, runtimeMode: "full-access" });
+    expect(hermes.options.map((option) => option.shortLabel)).toEqual(["Approve", "Full"]);
+    expect(hermes.selected.shortLabel).toBe("Full");
+  });
 });
