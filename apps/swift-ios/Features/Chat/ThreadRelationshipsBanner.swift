@@ -62,7 +62,7 @@ struct ThreadRelationshipsBanner: View {
                 collapsedLabel
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(model.summary). Show thread relationships")
+            .accessibilityLabel(collapsedAccessibilityLabel)
             .accessibilityIdentifier("thread-relationships-banner")
             .task(id: model.rows) {
                 await trackDecay()
@@ -78,6 +78,73 @@ struct ThreadRelationshipsBanner: View {
     // MARK: Collapsed
 
     private var collapsedLabel: some View {
+        Group {
+            // Lineage is the fallback, not the headline: a thread with agents
+            // running has something to report, and where it was forked from
+            // does not change while you read it.
+            if model.subagentSummary.isEmpty {
+                lineageRow
+            } else {
+                agentRow(model.subagentSummary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(minHeight: 44)
+        .background(T3Colors.surface, in: collapsedShape)
+        .overlay { collapsedShape.stroke(T3Colors.border, lineWidth: 1) }
+        .contentShape(collapsedShape)
+    }
+
+    private func agentRow(_ summary: ThreadSubagentSummary) -> some View {
+        HStack(spacing: 8) {
+            // Negative spacing overlaps the orbs; the halo behind each one is
+            // the banner's own fill, so it cuts the orb behind it the way the
+            // desktop stack's ring does.
+            HStack(spacing: -5) {
+                ForEach(summary.orbRows) { row in
+                    ThreadRelationshipOrb(
+                        seed: orbSeed(for: row),
+                        size: 16,
+                        state: ThreadRelationships.subagentOrbState(row.edge.status)
+                    )
+                    .background { Circle().fill(T3Colors.surface).padding(-1.5) }
+                }
+            }
+            .fixedSize()
+
+            HStack(spacing: 0) {
+                Text(summary.primaryLabel)
+                    .font(T3Typography.supportingStrong)
+                    .foregroundStyle(
+                        summary.isSettled ? T3Colors.textSecondary : T3Colors.textPrimary
+                    )
+                if let failedLabel = summary.secondaryFailedLabel {
+                    Text(" · \(failedLabel)")
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.danger)
+                }
+            }
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let doneLabel = summary.trailingDoneLabel {
+                Text(doneLabel)
+                    .font(T3Typography.supporting)
+                    .monospacedDigit()
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .fixedSize()
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(T3Colors.textTertiary)
+        }
+    }
+
+    private var lineageRow: some View {
         HStack(spacing: 8) {
             if let primaryRow = model.primaryRow, primaryRow.edge.kind == .subagent {
                 ThreadRelationshipOrb(
@@ -109,12 +176,19 @@ struct ThreadRelationshipsBanner: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(T3Colors.textTertiary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .frame(minHeight: 44)
-        .background(T3Colors.surface, in: collapsedShape)
-        .overlay { collapsedShape.stroke(T3Colors.border, lineWidth: 1) }
-        .contentShape(collapsedShape)
+    }
+
+    private var collapsedAccessibilityLabel: String {
+        let summary = model.subagentSummary
+        guard !summary.isEmpty else {
+            return "\(model.summary). Show thread relationships"
+        }
+        let parts = [
+            summary.primaryLabel,
+            summary.secondaryFailedLabel,
+            summary.trailingDoneLabel,
+        ].compactMap { $0 }
+        return "Agents: \(parts.joined(separator: ", ")). Show thread relationships"
     }
 
     private var collapsedShape: RoundedRectangle {

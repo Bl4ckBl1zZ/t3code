@@ -584,6 +584,71 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
     }
 }
 
+/// What the collapsed banner says about the agents this thread is running.
+///
+/// Mirrors the desktop thread details panel
+/// (apps/web/src/components/chat/ThreadRelationshipsControl.tsx): an orb stack
+/// plus a count that leads with work in progress, because that is the only part
+/// a glance needs to act on.
+public struct ThreadSubagentSummary: Equatable, Sendable {
+    /// Working, then failed, then done — capped at the four the stack shows.
+    public let orbRows: [ThreadRelationshipRow]
+    public let workingCount: Int
+    public let failedCount: Int
+    public let doneCount: Int
+
+    public var isEmpty: Bool { workingCount == 0 && failedCount == 0 && doneCount == 0 }
+
+    /// Nothing is running, so the row reports a result rather than progress and
+    /// is styled down accordingly.
+    public var isSettled: Bool { workingCount == 0 && failedCount == 0 }
+
+    public var primaryLabel: String {
+        if isSettled, doneCount > 0 { return "\(doneCount) done" }
+        // A pure-failure set leads with the failure; otherwise the working
+        // count leads even at zero, so the row keeps a stable shape as agents
+        // finish rather than reordering under the reader.
+        if workingCount > 0 || failedCount == 0 { return "\(workingCount) working" }
+        return "\(failedCount) failed"
+    }
+
+    /// Only when both states are present — otherwise the failure count is
+    /// already the primary label and repeating it reads as two separate sets.
+    public var secondaryFailedLabel: String? {
+        workingCount > 0 && failedCount > 0 ? "\(failedCount) failed" : nil
+    }
+
+    /// Withheld when "N done" is already the primary label.
+    public var trailingDoneLabel: String? {
+        doneCount > 0 && (workingCount > 0 || failedCount > 0) ? "\(doneCount) done" : nil
+    }
+}
+
+public extension ThreadRelationshipsModel {
+    /// Subagents this thread spawned. Incoming edges are lineage — where the
+    /// thread came from, not what it is running — so they are excluded.
+    var subagentSummary: ThreadSubagentSummary {
+        let subagentRows = rows.filter {
+            $0.edge.kind == .subagent && $0.edge.sourceThreadID == currentThreadID
+        }
+        let done = subagentRows.filter { $0.edge.status == "completed" }
+        let failed = subagentRows.filter {
+            $0.edge.status == "failed" || $0.edge.status == "error"
+        }
+        // Anything not finished counts as working, including `pending` and
+        // `waiting`. That is deliberately looser than `subagentOrbState`, which
+        // will not animate a parked agent: the count answers "is this thread
+        // still waiting on anyone", where a parked agent is still outstanding.
+        let working = subagentRows.filter { !done.contains($0) && !failed.contains($0) }
+        return ThreadSubagentSummary(
+            orbRows: Array((working + failed + done).prefix(4)),
+            workingCount: working.count,
+            failedCount: failed.count,
+            doneCount: done.count
+        )
+    }
+}
+
 public extension ThreadRelationships {
     /// - Parameters:
     ///   - threads: Live shells first, then archived snapshots.

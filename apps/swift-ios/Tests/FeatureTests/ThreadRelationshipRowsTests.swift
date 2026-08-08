@@ -605,4 +605,114 @@ final class ThreadRelationshipRowsTests: XCTestCase {
     private static func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T {
         try! JSONDecoder.t3.decode(type, from: Data(json.utf8))
     }
+    // MARK: Active-agent summary
+
+    private func summary(_ statuses: [String]) -> ThreadSubagentSummary {
+        let children = statuses.enumerated().map { index, status in
+            shell("child-\(index)", status: status)
+        }
+        let model = ThreadRelationships.build(
+            currentThreadID: "thread-root",
+            currentThread: shell("thread-root", status: "running"),
+            threads: [shell("thread-root", status: "running")] + children,
+            subagents: statuses.enumerated().map { index, status in
+                ThreadRelationshipSubagentLink(
+                    id: "subagent-\(index)", childThreadID: "child-\(index)", status: status
+                )
+            }
+        )
+        return model.subagentSummary
+    }
+
+    func testSubagentSummaryLeadsWithWorkAndKeepsFailuresVisible() {
+        let mixed = summary(["running", "failed", "completed", "completed"])
+        XCTAssertEqual(mixed.workingCount, 1)
+        XCTAssertEqual(mixed.failedCount, 1)
+        XCTAssertEqual(mixed.doneCount, 2)
+        XCTAssertEqual(mixed.primaryLabel, "1 working")
+        // Both states present, so the failure count rides alongside rather than
+        // replacing the headline.
+        XCTAssertEqual(mixed.secondaryFailedLabel, "1 failed")
+        XCTAssertEqual(mixed.trailingDoneLabel, "2 done")
+        XCTAssertFalse(mixed.isSettled)
+    }
+
+    func testSubagentSummaryCountsParkedAgentsAsWorking() {
+        // Looser than `subagentOrbState`, which will not animate a parked
+        // agent: the count answers whether anyone is still outstanding.
+        let parked = summary(["pending", "waiting"])
+        XCTAssertEqual(parked.workingCount, 2)
+        XCTAssertEqual(parked.primaryLabel, "2 working")
+        XCTAssertEqual(
+            ThreadRelationships.subagentOrbState("pending"),
+            .done,
+            "orb state and the working count deliberately disagree here"
+        )
+    }
+
+    func testSubagentSummarySettlesAndCollapsesDuplicateCounts() {
+        let done = summary(["completed", "completed"])
+        XCTAssertTrue(done.isSettled)
+        XCTAssertEqual(done.primaryLabel, "2 done")
+        // Already the headline, so it must not repeat on the trailing edge.
+        XCTAssertNil(done.trailingDoneLabel)
+
+        let failedOnly = summary(["failed", "error"])
+        XCTAssertEqual(failedOnly.failedCount, 2)
+        XCTAssertEqual(failedOnly.primaryLabel, "2 failed")
+        XCTAssertNil(failedOnly.secondaryFailedLabel)
+    }
+
+    func testSubagentSummaryOrdersOrbsByUrgencyAndCapsTheStack() {
+        let many = summary(["completed", "running", "failed", "completed", "running", "completed"])
+        XCTAssertEqual(many.orbRows.count, 4)
+        // Working first, then failed, then done -- regardless of graph order.
+        XCTAssertEqual(
+            many.orbRows.prefix(2).map(\.threadID).sorted(), ["child-1", "child-4"]
+        )
+        XCTAssertEqual(many.orbRows[2].threadID, "child-2")
+    }
+
+    func testSubagentSummaryExcludesIncomingLineageButCountsOutgoing() {
+        // This thread is itself a subagent of thread-parent, and runs one of
+        // its own. Only the outgoing edge is an agent it is waiting on.
+        let currentThread = shell(
+            "thread-child", parent: "thread-parent", relationship: "subagent"
+        )
+        let model = ThreadRelationships.build(
+            currentThreadID: "thread-child",
+            currentThread: currentThread,
+            threads: [
+                currentThread,
+                shell("thread-parent", title: "Parent thread"),
+                shell(
+                    "thread-grandchild",
+                    status: "running",
+                    parent: "thread-child",
+                    relationship: "subagent"
+                ),
+            ]
+        )
+        XCTAssertEqual(model.primaryRow?.threadID, "thread-parent")
+        let summary = model.subagentSummary
+        XCTAssertEqual(summary.workingCount, 1)
+        XCTAssertEqual(summary.doneCount, 0)
+        XCTAssertEqual(summary.orbRows.map(\.threadID), ["thread-grandchild"])
+    }
+
+    func testSubagentSummaryIsEmptyForALeafSubagent() {
+        let currentThread = shell(
+            "thread-child", parent: "thread-parent", relationship: "subagent"
+        )
+        let model = ThreadRelationships.build(
+            currentThreadID: "thread-child",
+            currentThread: currentThread,
+            threads: [currentThread, shell("thread-parent", title: "Parent thread")]
+        )
+        // There is a relationship to show, so the banner still appears -- it
+        // just falls back to the lineage row rather than an agent count.
+        XCTAssertFalse(model.rows.isEmpty)
+        XCTAssertTrue(model.subagentSummary.isEmpty)
+    }
+
 }
