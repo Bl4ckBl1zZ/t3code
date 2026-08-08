@@ -65,7 +65,6 @@ import { resolveDraftProjectSelection } from "./new-task-project-selection";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import {
   voiceComboButtonProps,
-  VoiceCancelTarget,
   VoiceComboBadge,
   VoiceRecordingBar,
 } from "../voice/VoiceComposerControls";
@@ -1183,11 +1182,6 @@ export function NewTaskDraftScreen(props: {
           </Animated.View>
         </GestureDetector>
       </VoiceComboBadge>
-      <VoiceCancelTarget
-        holdActive={voice.holdActive}
-        cancelArmed={voice.cancelArmed}
-        cancelProgress={voice.cancelProgress}
-      />
     </View>
   );
 
@@ -1196,6 +1190,7 @@ export function NewTaskDraftScreen(props: {
       state={voice.state}
       subscribeLevel={voice.subscribeLevel}
       onCancel={() => void voice.cancel()}
+      onStop={voice.toggle}
       onCleanupChange={voice.setCleanup}
       holdActive={voice.holdActive}
       cancelArmed={voice.cancelArmed}
@@ -1235,54 +1230,65 @@ export function NewTaskDraftScreen(props: {
                 : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.85) 40%, rgba(255,255,255,0.95) 100%)",
             }}
           >
-            {/* The recording HUD sits above the pill/card in both modes so a collapsed
-                push-to-talk hold still gets meter, clock, and the slide-to-cancel hint. */}
-            {voiceRecordingBar}
-            <ComposerSurface
-              isDarkMode={isDarkMode}
-              style={
-                isExpanded
-                  ? {
-                      borderRadius: 20,
-                      overflow: "hidden",
-                      paddingHorizontal: 14,
-                      paddingVertical: 12,
-                    }
-                  : {
-                      borderRadius: 999,
-                      overflow: "hidden",
-                      flexDirection: "row",
-                      alignItems: "center",
-                      paddingLeft: 18,
-                      paddingRight: 5,
-                      paddingVertical: 5,
-                    }
-              }
-            >
-              {isExpanded && flow.attachments.length > 0 ? (
-                <View className="pb-2.5">
-                  <ComposerAttachmentStrip
-                    attachments={flow.attachments}
-                    onRemove={
-                      isIncomingShareTransferPending ? () => undefined : flow.removeAttachment
-                    }
-                  />
-                </View>
-              ) : null}
-              <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
-              {!isExpanded ? (
-                <VoiceComboBadge visible={canStart}>
-                  <GestureDetector gesture={voice.comboGesture(comboButton)}>
-                    <Animated.View style={voice.comboPressStyle}>
-                      <ControlPill
-                        {...comboVisual}
-                        onPress={() => voice.comboActivate(comboButton)}
-                      />
-                    </Animated.View>
-                  </GestureDetector>
-                </VoiceComboBadge>
-              ) : null}
-            </ComposerSurface>
+            <View className="relative">
+              <ComposerSurface
+                isDarkMode={isDarkMode}
+                style={
+                  isExpanded
+                    ? {
+                        borderRadius: 20,
+                        overflow: "hidden",
+                        paddingHorizontal: 14,
+                        paddingVertical: 12,
+                      }
+                    : {
+                        borderRadius: 999,
+                        overflow: "hidden",
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingLeft: 18,
+                        paddingRight: 5,
+                        paddingVertical: 5,
+                      }
+                }
+              >
+                {isExpanded && flow.attachments.length > 0 ? (
+                  <View className="pb-2.5">
+                    <ComposerAttachmentStrip
+                      attachments={flow.attachments}
+                      onRemove={
+                        isIncomingShareTransferPending ? () => undefined : flow.removeAttachment
+                      }
+                    />
+                  </View>
+                ) : null}
+                <View className={isExpanded ? undefined : "min-w-0 flex-1"}>{promptEditor}</View>
+                {!isExpanded ? (
+                  <VoiceComboBadge visible={canStart}>
+                    <GestureDetector gesture={voice.comboGesture(comboButton)}>
+                      <Animated.View style={voice.comboPressStyle}>
+                        <ControlPill
+                          {...comboVisual}
+                          onPress={() => voice.comboActivate(comboButton)}
+                        />
+                      </Animated.View>
+                    </GestureDetector>
+                  </VoiceComboBadge>
+                ) : null}
+              </ComposerSurface>
+
+              {/* Recording HUD covers the pill/card in place; the release hint floats above. */}
+              <VoiceRecordingBar
+                state={voice.state}
+                subscribeLevel={voice.subscribeLevel}
+                onCancel={() => void voice.cancel()}
+                onStop={voice.toggle}
+                onCleanupChange={voice.setCleanup}
+                holdActive={voice.holdActive}
+                cancelArmed={voice.cancelArmed}
+                overlay={{ borderRadius: isExpanded ? 20 : 999 }}
+              />
+            </View>
 
             {isExpanded ? (
               <>
