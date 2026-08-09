@@ -34,12 +34,12 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const outputPath = join(
+const repoRoot = NodePath.join(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
+const outputPath = NodePath.join(
   repoRoot,
   "apps/swift-ios/Tests/CoreTests/Fixtures/orchestrationV2Projection.json",
 );
@@ -342,7 +342,7 @@ try {
 const serialized = `${JSON.stringify(encoded, null, 2)}\n`;
 
 if (process.argv.includes("--check")) {
-  const existing = existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "";
+  const existing = NodeFS.existsSync(outputPath) ? NodeFS.readFileSync(outputPath, "utf8") : "";
   if (existing !== serialized) {
     console.error(
       `[swift-fixtures] ${outputPath} is stale.\n` +
@@ -352,7 +352,7 @@ if (process.argv.includes("--check")) {
   }
   console.log("[swift-fixtures] up to date");
 } else {
-  mkdirSync(dirname(outputPath), { recursive: true });
-  writeFileSync(outputPath, serialized);
+  NodeFS.mkdirSync(NodePath.dirname(outputPath), { recursive: true });
+  NodeFS.writeFileSync(outputPath, serialized);
   console.log(`[swift-fixtures] wrote ${outputPath} (${turnItems.length} turn items)`);
 }
