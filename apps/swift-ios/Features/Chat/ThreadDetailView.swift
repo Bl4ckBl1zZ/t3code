@@ -1500,7 +1500,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
-        UICollectionViewCompositionalLayout { _, environment in
+        StormGuardedCompositionalLayout { _, environment in
             let width = environment.container.effectiveContentSize.width
             let sideInset = max(18, (width - T3Metrics.readingWidth) / 2)
             let itemSize = NSCollectionLayoutSize(
@@ -2095,6 +2095,52 @@ private struct TranscriptComposerHeightKey: PreferenceKey {
     }
 }
 
+/// Bounds how often the layout may invalidate itself inside a single layout
+/// pass of the transcript.
+///
+/// Opening a long thread lands the scroll at the bottom of a layout where
+/// every row above is still `.estimated(120)`. Each visible-cells pass then
+/// measures cells, shifts the content offset, reveals more unmeasured rows,
+/// and invalidates — and UIKit re-enters the pass recursively. Around a
+/// hundred nested passes UIKit's re-entrancy assertion aborts the app (the
+/// dominant crash in the field). Rows here cannot be pre-measured (markdown,
+/// embeds), so past a generous bound the remaining invalidations are deferred
+/// to the next runloop turn: the layout converges across frames instead of
+/// recursing to death.
+private final class StormGuardedCompositionalLayout: UICollectionViewCompositionalLayout {
+    /// Well below UIKit's ~100-pass abort, well above the handful of passes a
+    /// legitimately converging layout needs.
+    private static let maximumInvalidationsPerPass = 40
+
+    fileprivate var invalidationsThisPass = 0
+    private var recoveryScheduled = false
+
+    override func invalidateLayout(with context: UICollectionViewLayoutInvalidationContext) {
+        // Structural invalidations (reloads, count changes) must always land;
+        // only the self-sizing feedback loop inside a layout pass is bounded.
+        guard let host = collectionView as? BottomAnchoredTranscriptCollectionView,
+              host.isInLayoutPass,
+              !context.invalidateEverything,
+              !context.invalidateDataSourceCounts else {
+            super.invalidateLayout(with: context)
+            return
+        }
+        invalidationsThisPass += 1
+        guard invalidationsThisPass > Self.maximumInvalidationsPerPass else {
+            super.invalidateLayout(with: context)
+            return
+        }
+        if !recoveryScheduled {
+            recoveryScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.recoveryScheduled = false
+                self.collectionView?.setNeedsLayout()
+            }
+        }
+    }
+}
+
 private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     var maintainsBottomAnchor = false {
         didSet {
@@ -2121,7 +2167,7 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
 
     private var lastLaidOutGeometry: TranscriptViewportGeometry?
     private var isRestoringBottomAnchor = false
-    private var isInLayoutPass = false
+    fileprivate var isInLayoutPass = false
     /// Offset writes made while the transcript height was still moving, reset
     /// the moment it stops. See `maximumConsecutiveRestores`.
     private var consecutiveAnchorRestores = 0
@@ -2146,6 +2192,7 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     }
 
     override func layoutSubviews() {
+        (collectionViewLayout as? StormGuardedCompositionalLayout)?.invalidationsThisPass = 0
         isInLayoutPass = true
         super.layoutSubviews()
         isInLayoutPass = false
