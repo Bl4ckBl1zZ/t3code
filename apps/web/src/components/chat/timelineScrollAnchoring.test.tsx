@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { getAnchoredTurnMetrics, getRowBottom } from "./timelineScrollAnchoring";
+import {
+  getAnchoredTurnMetrics,
+  getRowBottom,
+  isTimelineUserScrollUp,
+  shouldPositionTimelineAnchor,
+} from "./timelineScrollAnchoring";
 
 function buildState({
   positions,
@@ -134,5 +139,103 @@ describe("timeline scroll anchoring", () => {
 
     expect(withoutComposer?.overflowsUsableViewport).toBe(false);
     expect(withComposer?.overflowsUsableViewport).toBe(true);
+  });
+});
+
+describe("timeline anchor positioning", () => {
+  it("positions a freshly anchored turn", () => {
+    expect(
+      shouldPositionTimelineAnchor({
+        mode: "anchoring-new-turn",
+        positionedAnchorMessageId: null,
+        messageId: "m1",
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores the repeat ready callbacks each streamed row triggers", () => {
+    expect(
+      shouldPositionTimelineAnchor({
+        mode: "anchoring-new-turn",
+        positionedAnchorMessageId: "m1",
+        messageId: "m1",
+      }),
+    ).toBe(false);
+  });
+
+  it("never repositions once the reader is driving the scroller", () => {
+    // The user-navigation cancel clears the positioned anchor, so the id check
+    // alone would let every streamed row re-run the positioning scroll.
+    expect(
+      shouldPositionTimelineAnchor({
+        mode: "free-scrolling",
+        positionedAnchorMessageId: null,
+        messageId: "m1",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("timeline user scroll-up detection", () => {
+  const previous = { scrollTop: 900, contentHeight: 4000 };
+
+  it("detects a scroll away from the end that emitted no gesture event", () => {
+    expect(
+      isTimelineUserScrollUp({
+        previous,
+        next: { scrollTop: 700, contentHeight: 4000 },
+        programmaticScrollInFlight: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores sub-threshold jitter from row remeasurement", () => {
+    expect(
+      isTimelineUserScrollUp({
+        previous,
+        next: { scrollTop: 896, contentHeight: 4000 },
+        programmaticScrollInFlight: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores scrolling toward the end", () => {
+    expect(
+      isTimelineUserScrollUp({
+        previous,
+        next: { scrollTop: 1200, contentHeight: 4200 },
+        programmaticScrollInFlight: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores offsets pulled up by shrinking content", () => {
+    expect(
+      isTimelineUserScrollUp({
+        previous,
+        next: { scrollTop: 700, contentHeight: 3800 },
+        programmaticScrollInFlight: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores our own imperative scrolls", () => {
+    expect(
+      isTimelineUserScrollUp({
+        previous,
+        next: { scrollTop: 700, contentHeight: 4000 },
+        programmaticScrollInFlight: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("needs a baseline sample before it can judge", () => {
+    expect(
+      isTimelineUserScrollUp({
+        previous: null,
+        next: { scrollTop: 0, contentHeight: 4000 },
+        programmaticScrollInFlight: false,
+      }),
+    ).toBe(false);
   });
 });
