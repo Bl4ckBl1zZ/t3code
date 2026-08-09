@@ -34,6 +34,7 @@ import {
   HermesProactiveEventRepository,
   layer as HermesProactiveEventRepositoryLayer,
 } from "./hermes/HermesProactiveEventRepository.ts";
+import { layer as HermesProactiveInboxLayer } from "./hermes/HermesProactiveInbox.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
 import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -247,8 +248,14 @@ const PlatformServicesLive = Layer.unwrap(
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 const HermesPersistenceLayerLive = Layer.mergeAll(
   HermesSessionBindingRepositoryLayer,
-  HermesProactiveEventRepositoryLayer,
+  // Shared rather than per-connection: the Hermes adapter writes witnessed runs
+  // into it while the ws layer reads and streams them, and both have to be
+  // looking at the same outbox for a notification to arrive exactly once.
+  HermesProactiveInboxLayer.pipe(Layer.provideMerge(HermesProactiveEventRepositoryLayer)),
 ).pipe(Layer.provideMerge(PersistenceLayerLive)) satisfies Layer.Layer<
+  // HermesProactiveInbox is a Context.Reference with a drop-everything default,
+  // so it never shows up as a requirement — providing it here is what upgrades
+  // every consumer from that default to the shared, database-backed one.
   HermesSessionBindingRepository | HermesProactiveEventRepository | SqlClient.SqlClient,
   unknown,
   ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path

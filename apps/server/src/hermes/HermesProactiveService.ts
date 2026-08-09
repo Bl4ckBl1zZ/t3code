@@ -1,7 +1,9 @@
 import {
+  HermesProactiveEventKinds,
   ProviderInstanceId,
   ThreadId,
   type HermesGatewayCompatibility,
+  type HermesGatewayCronJob,
   type HermesGatewayCronListResult,
   type HermesProactiveProviderStatus,
   type HermesProactiveResidentThread,
@@ -16,8 +18,17 @@ import * as Ref from "effect/Ref";
 
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { projectHermesCronJob } from "./HermesCron.ts";
 import { HermesGatewayClient } from "./HermesGatewayClient.ts";
-import { HermesProactiveEventRepository } from "./HermesProactiveEventRepository.ts";
+import {
+  HermesProactiveEventRepository,
+  type HermesCronRunWatermark,
+} from "./HermesProactiveEventRepository.ts";
+import {
+  describeWitnessedRun,
+  HermesProactiveInbox,
+  type HermesProactiveInboxShape,
+} from "./HermesProactiveInbox.ts";
 import {
   resolveHermesProviderConnections,
   type HermesProviderConnection,
@@ -72,7 +83,27 @@ export interface HermesProactiveServiceOptions {
     readonly threadId: string;
     readonly providerInstanceId: string;
   }) => Effect.Effect<boolean>;
+  readonly inbox?: HermesProactiveInboxShape;
+  /**
+   * Overrides the process-wide first-sweep memory. Tests use it to stand up two
+   * services that behave like two separate runs of the server.
+   */
+  readonly sweptSources?: Set<string>;
 }
+
+/**
+ * Bindings read per sweep. Residency only subscribes the newest few, but the
+ * rest are needed to name the thread a missed run belongs to.
+ */
+const PROFILE_BINDING_LOOKUP_LIMIT = 200;
+
+/**
+ * Shared by every service instance in the process, because "T3 was closed" is a
+ * fact about the process and not about one websocket session. A service is
+ * built per connection, so keeping this per-instance would let a second client
+ * connecting mid-run report a live run as a missed one.
+ */
+const processSweptSources = new Set<string>();
 
 const EMPTY_REPORT: HermesProactiveStatusResult = { providers: [], sweptAt: null };
 
@@ -106,7 +137,11 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const proactiveRepository = yield* HermesProactiveEventRepository;
   const bindings = yield* HermesSessionBindingRepository;
+  const inbox = options.inbox ?? (yield* HermesProactiveInbox);
   const orchestrator = yield* Effect.serviceOption(OrchestratorV2);
+  // Sources already swept. Only the first pass can attribute a moved watermark
+  // to T3 having been closed.
+  const sweptSources = options.sweptSources ?? processSweptSources;
   const clientFactory =
     options.clientFactory ??
     ((input: { readonly endpoint: string; readonly authToken: string }) =>
@@ -149,6 +184,103 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
         Effect.logWarning("hermes.proactive.residency-failed", { cause }).pipe(Effect.as(false)),
       ),
     );
+
+  /**
+   * Turns a cron job whose last run time moved into an inbox entry, for the
+   * runs T3 had no way of seeing happen.
+   *
+   * Two cases qualify, and nothing else does. The first sweep of a process
+   * covers everything that ran while T3 was closed. After that, a job is only
+   * reported when it names a session T3 is not subscribed to — a run on a
+   * resident session arrives live through the adapter, and reporting it here
+   * as well would ping twice for one run.
+   */
+  const reconcileMissedRuns = Effect.fn("HermesProactiveService.reconcileMissedRuns")(
+    function* (input: {
+      readonly connection: HermesProviderConnection;
+      readonly jobs: ReadonlyArray<HermesGatewayCronJob>;
+      readonly threadBySessionKey: ReadonlyMap<string, string>;
+      readonly residentSessionKeys: ReadonlySet<string>;
+      readonly now: string;
+    }) {
+      const { connection } = input;
+      const sourceKey = `${connection.providerInstanceId}\u0000${connection.profileKey}`;
+      const firstSweep = !sweptSources.has(sourceKey);
+      sweptSources.add(sourceKey);
+
+      const known = yield* proactiveRepository
+        .listCronWatermarks({
+          providerInstanceId: connection.providerInstanceId,
+          profileKey: connection.profileKey,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("hermes.proactive.watermark-read-failed", {
+              providerInstanceId: connection.providerInstanceId,
+              cause,
+            }).pipe(Effect.as([])),
+          ),
+        );
+      const previous = new Map(known.map((entry) => [entry.jobIdentity, entry] as const));
+
+      let reported = 0;
+      const watermarks: Array<HermesCronRunWatermark> = [];
+      for (const [ordinal, gatewayJob] of input.jobs.entries()) {
+        const job = projectHermesCronJob(
+          connection.providerInstanceId,
+          connection.profileKey,
+          gatewayJob,
+          ordinal,
+        );
+        const sessionKey = hermesCronJobSessionKey(gatewayJob);
+        const threadId =
+          sessionKey === null ? null : (input.threadBySessionKey.get(sessionKey) ?? null);
+        const lastRunAt = job.lastRunAt === null ? null : String(job.lastRunAt);
+        watermarks.push({
+          providerInstanceId: connection.providerInstanceId,
+          profileKey: connection.profileKey,
+          jobIdentity: job.identity,
+          jobName: job.name,
+          lastRunAt,
+          threadId,
+        });
+
+        const seen = previous.get(job.identity);
+        // A job discovered for the first time reports nothing: its last run
+        // predates T3 knowing the job exists, and announcing it would be noise on
+        // every fresh install.
+        if (lastRunAt === null || seen === undefined || seen.lastRunAt === lastRunAt) continue;
+        const witnessedLive = sessionKey !== null && input.residentSessionKeys.has(sessionKey);
+        if (!firstSweep && witnessedLive) continue;
+
+        yield* inbox.witness({
+          providerInstanceId: connection.providerInstanceId,
+          profileKey: connection.profileKey,
+          runIdentity: `${job.identity}:${lastRunAt}`,
+          eventKind: HermesProactiveEventKinds.cronRunMissed,
+          title: describeWitnessedRun({ jobName: job.name, missed: true }),
+          body:
+            threadId === null
+              ? "T3 was not connected when this run finished, so its transcript is only in Hermes."
+              : "T3 was not connected when this run finished. Open the thread for whatever Hermes kept.",
+          threadId,
+          projectId: null,
+          occurredAt: input.now,
+        });
+        reported += 1;
+      }
+
+      yield* proactiveRepository.upsertCronWatermarks({ watermarks, now: input.now }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("hermes.proactive.watermark-write-failed", {
+            providerInstanceId: connection.providerInstanceId,
+            cause,
+          }),
+        ),
+      );
+      return reported;
+    },
+  );
 
   const sweepProvider = Effect.fn("HermesProactiveService.sweepProvider")(function* (
     connection: HermesProviderConnection,
@@ -234,11 +366,14 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
       } satisfies HermesProactiveProviderStatus;
     }
 
+    // Read wider than residency needs: the extra rows are what turn a job's
+    // session key into the thread a missed-run notification should open, and
+    // residency still only keeps the newest few subscribed.
     const profileBindings = yield* bindings
       .listProfileBindings({
         providerInstanceId: connection.providerInstanceId,
         profileKey: connection.profileKey,
-        limit: MAX_RESIDENT_THREADS_PER_PROFILE,
+        limit: PROFILE_BINDING_LOOKUP_LIMIT,
       })
       .pipe(
         Effect.catchCause((cause) =>
@@ -248,7 +383,11 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
           }).pipe(Effect.as([])),
         ),
       );
-    const targeted = profileBindings.filter((binding) =>
+    const threadBySessionKey = new Map(
+      profileBindings.map((binding) => [binding.storedSessionKey, binding.threadId] as const),
+    );
+    const residencyCandidates = profileBindings.slice(0, MAX_RESIDENT_THREADS_PER_PROFILE);
+    const targeted = residencyCandidates.filter((binding) =>
       jobSessionKeys.has(binding.storedSessionKey),
     );
     if (jobSessionKeys.size === 0) {
@@ -258,7 +397,7 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
     }
     // Falling back to recency keeps the feature working on gateways whose cron
     // rows carry no session identity, which is the pinned-protocol default.
-    const candidates = targeted.length > 0 ? targeted : profileBindings;
+    const candidates = targeted.length > 0 ? targeted : residencyCandidates;
     const selectedBy = targeted.length > 0 ? ("job" as const) : ("recent" as const);
 
     const resident: Array<HermesProactiveResidentThread> = [];
@@ -277,6 +416,19 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
     }
     if (resident.length === 0 && candidates.length > 0) {
       diagnostics.push("No Hermes thread could be kept subscribed for this profile.");
+    }
+
+    const missed = yield* reconcileMissedRuns({
+      connection,
+      jobs: enabledJobs,
+      threadBySessionKey,
+      residentSessionKeys: new Set(resident.map((thread) => thread.storedSessionKey)),
+      now,
+    });
+    if (missed > 0) {
+      diagnostics.push(
+        `${missed} scheduled run(s) finished without T3 watching and were added to the inbox.`,
+      );
     }
 
     return {

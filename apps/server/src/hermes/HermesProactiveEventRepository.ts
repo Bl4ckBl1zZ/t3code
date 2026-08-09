@@ -8,6 +8,8 @@ import {
   type HermesGatewayCompatibility,
   type HermesNotificationOutboxEntry as HermesNotificationOutboxEntryType,
   type HermesProactiveDiagnosticCode,
+  type HermesProactiveInboxSnapshot,
+  type HermesProactiveNotificationStatus,
   type HermesProactiveSourceStatus as HermesProactiveSourceStatusType,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
@@ -81,6 +83,36 @@ export type IngestHermesProactivePageResult =
       readonly diagnosticCode: HermesProactiveDiagnosticCode;
     };
 
+/**
+ * A run T3 saw for itself, rather than one replayed from a durable cursor.
+ *
+ * These bypass the source checkpoint entirely. The checkpoint exists so a
+ * restart can resume a page-by-page replay, and there is nothing to resume
+ * here: if this event is not recorded at the moment it is noticed, the pinned
+ * protocol offers no way to ask for it again.
+ */
+export interface RecordWitnessedHermesEventInput {
+  readonly sourceId: string;
+  readonly externalEventId: string;
+  readonly eventKind: string;
+  readonly title: string;
+  readonly body: string;
+  readonly projectId: string | null;
+  readonly threadId: string | null;
+  readonly occurredAt: string;
+  readonly receivedAt: string;
+  readonly gatewayRevision: string | null;
+}
+
+export interface HermesCronRunWatermark {
+  readonly providerInstanceId: string;
+  readonly profileKey: string;
+  readonly jobIdentity: string;
+  readonly jobName: string | null;
+  readonly lastRunAt: string | null;
+  readonly threadId: string | null;
+}
+
 export interface ClaimHermesNotificationInput {
   readonly workerId: string;
   readonly now: string;
@@ -113,6 +145,14 @@ export interface HermesProactiveEventRepositoryShape {
   readonly ingestPage: (
     input: IngestHermesProactivePageInput,
   ) => Effect.Effect<IngestHermesProactivePageResult, HermesProactiveEventRepositoryError>;
+  /**
+   * Records an event T3 witnessed and queues its notification. Idempotent on
+   * the external event id, so replaying the same run is a no-op rather than a
+   * duplicate ping. Returns false when the event was already known.
+   */
+  readonly recordWitnessedEvent: (
+    input: RecordWitnessedHermesEventInput,
+  ) => Effect.Effect<boolean, HermesProactiveEventRepositoryError>;
   readonly claimNotification: (
     input: ClaimHermesNotificationInput,
   ) => Effect.Effect<
@@ -141,10 +181,30 @@ export interface HermesProactiveEventRepositoryShape {
     ReadonlyArray<HermesProactiveWorkItem>,
     HermesProactiveEventRepositoryError
   >;
-  readonly listInAppNotifications: () => Effect.Effect<
-    ReadonlyArray<HermesInAppNotification>,
-    HermesProactiveEventRepositoryError
-  >;
+  readonly listInAppNotifications: (input?: {
+    readonly limit?: number;
+  }) => Effect.Effect<ReadonlyArray<HermesInAppNotification>, HermesProactiveEventRepositoryError>;
+  readonly inboxSnapshot: (input?: {
+    readonly limit?: number;
+  }) => Effect.Effect<HermesProactiveInboxSnapshot, HermesProactiveEventRepositoryError>;
+  /**
+   * Sets the status of the named notifications and their work items together,
+   * so the badge and the work list never disagree. Every status is reachable
+   * from every other one; dismissing is not a one-way door.
+   */
+  readonly markNotifications: (input: {
+    readonly notificationIds: ReadonlyArray<string>;
+    readonly status: HermesProactiveNotificationStatus;
+    readonly now: string;
+  }) => Effect.Effect<number, HermesProactiveEventRepositoryError>;
+  readonly listCronWatermarks: (input: {
+    readonly providerInstanceId: string;
+    readonly profileKey: string;
+  }) => Effect.Effect<ReadonlyArray<HermesCronRunWatermark>, HermesProactiveEventRepositoryError>;
+  readonly upsertCronWatermarks: (input: {
+    readonly watermarks: ReadonlyArray<HermesCronRunWatermark>;
+    readonly now: string;
+  }) => Effect.Effect<void, HermesProactiveEventRepositoryError>;
 }
 
 export class HermesProactiveEventRepository extends Context.Service<
@@ -201,6 +261,15 @@ interface WorkItemRow {
   readonly updated_at: string;
 }
 
+interface CronWatermarkRow {
+  readonly provider_instance_id: string;
+  readonly profile_key: string;
+  readonly job_identity: string;
+  readonly job_name: string | null;
+  readonly last_run_at: string | null;
+  readonly thread_id: string | null;
+}
+
 interface NotificationRow {
   readonly notification_id: string;
   readonly event_id: string;
@@ -214,11 +283,27 @@ interface NotificationRow {
   readonly updated_at: string;
 }
 
+/**
+ * Bounds what one inbox read costs. A four-hourly job produces a handful of
+ * rows a day, so this is deep enough to look like "everything" while keeping a
+ * pathological history off the wire.
+ */
+const DEFAULT_NOTIFICATION_PAGE_SIZE = 200;
+
 function stableId(namespace: string, ...parts: ReadonlyArray<string>): string {
   const digest = NodeCrypto.createHash("sha256")
     .update([namespace, ...parts].map((part) => `${part.length}:${part}`).join("|"))
     .digest("hex");
   return `${namespace}:${digest}`;
+}
+
+/**
+ * One source per Hermes profile, covering every cron job on it. Callers that
+ * only hold a provider instance and profile — the adapter witnessing a run, for
+ * instance — derive the id rather than looking the row up first.
+ */
+export function hermesProactiveSourceId(providerInstanceId: string, profileKey: string): string {
+  return stableId("hermes-source", providerInstanceId, profileKey, "global-cron-events");
 }
 
 export function classifyHermesProactiveCapability(compatibility: HermesGatewayCompatibility): {
@@ -342,12 +427,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
 
       const registerSource: HermesProactiveEventRepositoryShape["registerSource"] = (input) =>
         Effect.gen(function* () {
-          const sourceId = stableId(
-            "hermes-source",
-            input.providerInstanceId,
-            input.profileKey,
-            "global-cron-events",
-          );
+          const sourceId = hermesProactiveSourceId(input.providerInstanceId, input.profileKey);
           const classification = classifyHermesProactiveCapability(input.compatibility);
           yield* sql`
           INSERT INTO hermes_proactive_sources (
@@ -542,6 +622,109 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
             }),
           )
           .pipe(Effect.mapError(mapRepositoryError("ingestPage", "Could not ingest the page.")));
+
+      const recordWitnessedEvent: HermesProactiveEventRepositoryShape["recordWitnessedEvent"] = (
+        input,
+      ) =>
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              if (input.externalEventId.length === 0) {
+                return yield* repositoryError(
+                  "recordWitnessedEvent",
+                  "A witnessed event requires a stable id.",
+                );
+              }
+              const sourceOption = yield* loadSource(input.sourceId);
+              if (Option.isNone(sourceOption)) {
+                return yield* repositoryError("recordWitnessedEvent", "Source is not registered.");
+              }
+              const source = sourceOption.value;
+              const eventId = stableId("hermes-event", input.sourceId, input.externalEventId);
+              const provenance = yield* encodeProvenance({
+                provider: "hermes",
+                providerInstanceId: source.providerInstanceId,
+                profileKey: source.profileKey,
+                sourceId: source.sourceId,
+                externalEventId: input.externalEventId,
+                // A witnessed event is its own cursor. It identifies the run,
+                // but nothing can be resumed from it, which is exactly why the
+                // source checkpoint is left where it is.
+                externalCursor: input.externalEventId,
+                gatewayRevision: input.gatewayRevision,
+                protocolMajor: null,
+                protocolMinor: null,
+                ingestedAt: input.receivedAt,
+              });
+              const rows = yield* sql<{ event_id: string }>`
+                INSERT INTO hermes_proactive_events (
+                  event_id,
+                  source_id,
+                  external_event_id,
+                  external_cursor,
+                  event_kind,
+                  title,
+                  body,
+                  project_id,
+                  thread_id,
+                  occurred_at,
+                  received_at,
+                  provenance_json
+                )
+                VALUES (
+                  ${eventId},
+                  ${input.sourceId},
+                  ${input.externalEventId},
+                  ${input.externalEventId},
+                  ${input.eventKind},
+                  ${input.title},
+                  ${input.body},
+                  ${input.projectId},
+                  ${input.threadId},
+                  ${input.occurredAt},
+                  ${input.receivedAt},
+                  ${encodeProvenanceJson(provenance)}
+                )
+                ON CONFLICT(source_id, external_event_id) DO NOTHING
+                RETURNING event_id
+              `;
+              if (rows.length === 0) return false;
+              yield* sql`
+                INSERT INTO hermes_notification_outbox (
+                  outbox_id,
+                  event_id,
+                  state,
+                  attempt_count,
+                  available_at,
+                  lease_owner,
+                  lease_expires_at,
+                  last_error_code,
+                  created_at,
+                  updated_at,
+                  delivered_at
+                )
+                VALUES (
+                  ${stableId("hermes-outbox", eventId)},
+                  ${eventId},
+                  'pending',
+                  0,
+                  ${input.receivedAt},
+                  NULL,
+                  NULL,
+                  NULL,
+                  ${input.receivedAt},
+                  ${input.receivedAt},
+                  NULL
+                )
+              `;
+              return true;
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              mapRepositoryError("recordWitnessedEvent", "Could not record the witnessed event."),
+            ),
+          );
 
       const claimNotification: HermesProactiveEventRepositoryShape["claimNotification"] = (input) =>
         sql
@@ -767,11 +950,12 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
         );
 
       const listInAppNotifications: HermesProactiveEventRepositoryShape["listInAppNotifications"] =
-        () =>
+        (input) =>
           sql<NotificationRow>`
         SELECT *
         FROM hermes_in_app_notifications
         ORDER BY created_at DESC, notification_id ASC
+        LIMIT ${input?.limit ?? DEFAULT_NOTIFICATION_PAGE_SIZE}
       `.pipe(
             Effect.flatMap((rows) =>
               Effect.forEach(
@@ -797,10 +981,137 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
             ),
           );
 
+      const inboxSnapshot: HermesProactiveEventRepositoryShape["inboxSnapshot"] = (input) =>
+        Effect.gen(function* () {
+          const notifications = yield* listInAppNotifications(input);
+          const unread = yield* sql<{ unread_count: number }>`
+            SELECT COUNT(*) AS unread_count
+            FROM hermes_in_app_notifications
+            WHERE status = 'unread'
+          `;
+          const dead = yield* sql<{ dead_letter_count: number }>`
+            SELECT COUNT(*) AS dead_letter_count
+            FROM hermes_notification_outbox
+            WHERE state = 'dead_letter'
+          `;
+          return {
+            notifications,
+            unreadCount: unread[0]?.unread_count ?? 0,
+            deadLetterCount: dead[0]?.dead_letter_count ?? 0,
+          } satisfies HermesProactiveInboxSnapshot;
+        }).pipe(Effect.mapError(mapRepositoryError("inboxSnapshot", "Could not read the inbox.")));
+
+      const markNotifications: HermesProactiveEventRepositoryShape["markNotifications"] = (input) =>
+        input.notificationIds.length === 0
+          ? Effect.succeed(0)
+          : sql
+              .withTransaction(
+                Effect.gen(function* () {
+                  const updated = yield* sql<{ work_item_id: string }>`
+                    UPDATE hermes_in_app_notifications
+                    SET status = ${input.status},
+                        updated_at = ${input.now}
+                    WHERE notification_id IN ${sql.in(input.notificationIds)}
+                      AND status <> ${input.status}
+                    RETURNING work_item_id
+                  `;
+                  if (updated.length === 0) return 0;
+                  yield* sql`
+                    UPDATE hermes_proactive_work_items
+                    SET status = ${input.status},
+                        updated_at = ${input.now}
+                    WHERE work_item_id IN ${sql.in(updated.map((row) => row.work_item_id))}
+                  `;
+                  return updated.length;
+                }),
+              )
+              .pipe(
+                Effect.mapError(
+                  mapRepositoryError("markNotifications", "Could not update the notifications."),
+                ),
+              );
+
+      const listCronWatermarks: HermesProactiveEventRepositoryShape["listCronWatermarks"] = (
+        input,
+      ) =>
+        sql<CronWatermarkRow>`
+        SELECT
+          provider_instance_id,
+          profile_key,
+          job_identity,
+          job_name,
+          last_run_at,
+          thread_id
+        FROM hermes_cron_run_watermarks
+        WHERE provider_instance_id = ${input.providerInstanceId}
+          AND profile_key = ${input.profileKey}
+      `.pipe(
+          Effect.map((rows) =>
+            rows.map((row) => ({
+              providerInstanceId: row.provider_instance_id,
+              profileKey: row.profile_key,
+              jobIdentity: row.job_identity,
+              jobName: row.job_name,
+              lastRunAt: row.last_run_at,
+              threadId: row.thread_id,
+            })),
+          ),
+          Effect.mapError(
+            mapRepositoryError("listCronWatermarks", "Could not read the cron watermarks."),
+          ),
+        );
+
+      const upsertCronWatermarks: HermesProactiveEventRepositoryShape["upsertCronWatermarks"] = (
+        input,
+      ) =>
+        sql
+          .withTransaction(
+            Effect.forEach(
+              input.watermarks,
+              (watermark) => sql`
+                INSERT INTO hermes_cron_run_watermarks (
+                  provider_instance_id,
+                  profile_key,
+                  job_identity,
+                  job_name,
+                  last_run_at,
+                  thread_id,
+                  updated_at
+                )
+                VALUES (
+                  ${watermark.providerInstanceId},
+                  ${watermark.profileKey},
+                  ${watermark.jobIdentity},
+                  ${watermark.jobName},
+                  ${watermark.lastRunAt},
+                  ${watermark.threadId},
+                  ${input.now}
+                )
+                ON CONFLICT(provider_instance_id, profile_key, job_identity)
+                DO UPDATE SET
+                  job_name = excluded.job_name,
+                  last_run_at = excluded.last_run_at,
+                  thread_id = excluded.thread_id,
+                  updated_at = excluded.updated_at
+              `,
+              { concurrency: 1, discard: true },
+            ),
+          )
+          .pipe(
+            Effect.mapError(
+              mapRepositoryError("upsertCronWatermarks", "Could not store the cron watermarks."),
+            ),
+          );
+
       return HermesProactiveEventRepository.of({
         registerSource,
         getSource,
         ingestPage,
+        recordWitnessedEvent,
+        inboxSnapshot,
+        markNotifications,
+        listCronWatermarks,
+        upsertCronWatermarks,
         claimNotification,
         deliverInApp,
         retryNotification,

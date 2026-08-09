@@ -192,7 +192,15 @@ import {
   HermesCronMutationInput,
   HermesCronMutationResponse,
 } from "./hermesGateway.ts";
-import { HermesProactiveStatusInput, HermesProactiveStatusResult } from "./hermesProactive.ts";
+import {
+  HermesProactiveInboxError,
+  HermesProactiveInboxInput,
+  HermesProactiveInboxSnapshot,
+  HermesProactiveMarkNotificationsInput,
+  HermesProactiveMarkNotificationsResult,
+  HermesProactiveStatusInput,
+  HermesProactiveStatusResult,
+} from "./hermesProactive.ts";
 import {
   HermesSkillsError,
   HermesSkillsInspectInput,
@@ -315,6 +323,8 @@ export const WS_METHODS = {
   hermesCronList: "hermesCron.list",
   hermesCronMutate: "hermesCron.mutate",
   hermesProactiveStatus: "hermesProactive.status",
+  hermesProactiveMarkNotifications: "hermesProactive.markNotifications",
+  subscribeHermesProactiveInbox: "hermesProactive.subscribeInbox",
   hermesSkillsList: "hermesSkills.list",
   hermesSkillsSearch: "hermesSkills.search",
   hermesSkillsInspect: "hermesSkills.inspect",
@@ -988,6 +998,29 @@ export const WsHermesProactiveStatusRpc = Rpc.make(WS_METHODS.hermesProactiveSta
   error: EnvironmentAuthorizationError,
 });
 
+export const WsHermesProactiveMarkNotificationsRpc = Rpc.make(
+  WS_METHODS.hermesProactiveMarkNotifications,
+  {
+    payload: HermesProactiveMarkNotificationsInput,
+    success: HermesProactiveMarkNotificationsResult,
+    error: Schema.Union([HermesProactiveInboxError, EnvironmentAuthorizationError]),
+  },
+);
+
+/**
+ * Pushed rather than polled: a cron run can land at any hour, and the badge it
+ * feeds sits in the sidebar of every connected client.
+ */
+export const WsSubscribeHermesProactiveInboxRpc = Rpc.make(
+  WS_METHODS.subscribeHermesProactiveInbox,
+  {
+    payload: HermesProactiveInboxInput,
+    success: HermesProactiveInboxSnapshot,
+    error: Schema.Union([HermesProactiveInboxError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
 export const WsHermesSkillsListRpc = Rpc.make(WS_METHODS.hermesSkillsList, {
   payload: HermesSkillsListInput,
   success: HermesSkillsListResult,
@@ -1067,6 +1100,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsHermesCronListRpc,
   WsHermesCronMutateRpc,
   WsHermesProactiveStatusRpc,
+  WsHermesProactiveMarkNotificationsRpc,
+  WsSubscribeHermesProactiveInboxRpc,
   WsHermesSkillsListRpc,
   WsHermesSkillsSearchRpc,
   WsHermesSkillsInspectRpc,

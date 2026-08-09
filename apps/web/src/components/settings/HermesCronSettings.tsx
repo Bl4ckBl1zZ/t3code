@@ -1,5 +1,6 @@
 import {
   Clock3Icon,
+  InboxIcon,
   PauseIcon,
   PencilIcon,
   PlayIcon,
@@ -7,14 +8,18 @@ import {
   RadioIcon,
   Trash2Icon,
 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, useState } from "react";
 import type {
   HermesCronJob,
   HermesCronMutationInput,
   HermesCronOperation,
   HermesCronProviderProjection,
+  HermesProactiveNotificationStatus,
+  ThreadId,
 } from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -42,6 +47,7 @@ import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { randomUUID } from "../../lib/utils";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { T3_WORK_BACKING_PROJECT_ID } from "../../t3WorkProject";
 
 interface Draft {
@@ -133,6 +139,178 @@ function HermesProactiveStatus() {
       {query.data?.sweptAt ? (
         <div className="border-t border-border/60 px-5 py-2 text-[11px] text-muted-foreground">
           Last checked {new Date(query.data.sweptAt).toLocaleTimeString()}
+        </div>
+      ) : null}
+    </SettingsSection>
+  );
+}
+
+/**
+ * Runs that finished without anyone waiting on them. The thread they landed in
+ * already has the transcript; this is the part that says so anywhere else.
+ */
+function HermesProactiveInboxSection() {
+  const environment = usePrimaryEnvironment();
+  const navigate = useNavigate();
+  const [showDismissed, setShowDismissed] = useState(false);
+  const query = useEnvironmentQuery(
+    environment
+      ? serverEnvironment.hermesProactiveInbox({
+          environmentId: environment.environmentId,
+          input: {},
+        })
+      : null,
+  );
+  const mark = useAtomCommand(serverEnvironment.markHermesProactiveNotifications, {
+    label: "Hermes notification update",
+  });
+  const notifications = query.data?.notifications ?? [];
+  const visible = useMemo(
+    () =>
+      showDismissed
+        ? notifications
+        : notifications.filter((notification) => notification.status !== "dismissed"),
+    [notifications, showDismissed],
+  );
+  const dismissedCount = notifications.length - visible.length;
+  const unreadIds = useMemo(
+    () =>
+      notifications
+        .filter((notification) => notification.status === "unread")
+        .map((notification) => notification.notificationId),
+    [notifications],
+  );
+
+  const setStatus = useCallback(
+    (notificationIds: ReadonlyArray<string>, status: HermesProactiveNotificationStatus) => {
+      if (!environment || notificationIds.length === 0) return;
+      void (async () => {
+        const result = await mark({
+          environmentId: environment.environmentId,
+          input: { notificationIds: [...notificationIds], status },
+        });
+        // The server pushes the new snapshot down the subscription, so a
+        // success needs no local refresh.
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          reportFailure("Could not update the notification", squashAtomCommandFailure(result));
+        }
+      })();
+    },
+    [environment, mark],
+  );
+
+  const openThread = useCallback(
+    (notification: { readonly notificationId: string; readonly threadId: string | null }) => {
+      setStatus([notification.notificationId], "read");
+      if (!environment || notification.threadId === null) return;
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(
+          scopeThreadRef(environment.environmentId, notification.threadId as ThreadId),
+        ),
+      });
+    },
+    [environment, navigate, setStatus],
+  );
+
+  return (
+    <SettingsSection
+      title="Runs you did not start"
+      icon={<InboxIcon className="size-3.5" />}
+      headerAction={
+        <div className="flex items-center gap-2">
+          {query.data && query.data.unreadCount > 0 ? (
+            <Badge variant="success">{query.data.unreadCount} unread</Badge>
+          ) : null}
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={unreadIds.length === 0}
+            onClick={() => setStatus(unreadIds, "read")}
+          >
+            Mark all read
+          </Button>
+        </div>
+      }
+    >
+      <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+        Scheduled Hermes jobs and prompts from other Hermes clients land in their thread on their
+        own. They are listed here so a run that finished overnight is not something you have to go
+        looking for.
+      </div>
+      {query.error ? (
+        <div className="px-5 py-4 text-xs text-destructive">{query.error}</div>
+      ) : visible.length === 0 ? (
+        <div className="px-5 py-8 text-center text-xs text-muted-foreground">
+          {query.isPending ? "Loading…" : "Nothing has run on its own yet."}
+        </div>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {visible.map((notification) => (
+            <div
+              key={notification.notificationId}
+              className="flex items-start gap-3 px-5 py-3 text-left"
+            >
+              <button
+                type="button"
+                className="min-w-0 flex-1 text-left"
+                onClick={() => openThread(notification)}
+              >
+                <div className="flex items-center gap-2">
+                  {notification.status === "unread" ? (
+                    <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-primary" />
+                  ) : null}
+                  <span className="truncate text-sm font-medium">{notification.title}</span>
+                </div>
+                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                  {notification.body}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {new Date(notification.createdAt).toLocaleString()}
+                  {notification.threadId === null ? " · no thread in T3" : ""}
+                </p>
+              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() =>
+                    setStatus(
+                      [notification.notificationId],
+                      notification.status === "unread" ? "read" : "unread",
+                    )
+                  }
+                >
+                  {notification.status === "unread" ? "Mark read" : "Mark unread"}
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() =>
+                    setStatus(
+                      [notification.notificationId],
+                      notification.status === "dismissed" ? "read" : "dismissed",
+                    )
+                  }
+                >
+                  {notification.status === "dismissed" ? "Restore" : "Dismiss"}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {dismissedCount > 0 || showDismissed ? (
+        <div className="border-t border-border/60 px-5 py-2">
+          <Button size="xs" variant="ghost" onClick={() => setShowDismissed((shown) => !shown)}>
+            {showDismissed ? "Hide dismissed" : `Show ${dismissedCount} dismissed`}
+          </Button>
+        </div>
+      ) : null}
+      {query.data && query.data.deadLetterCount > 0 ? (
+        <div className="border-t border-border/60 px-5 py-2 text-[11px] text-destructive">
+          {query.data.deadLetterCount} notification
+          {query.data.deadLetterCount === 1 ? "" : "s"} could not be delivered and were given up on.
         </div>
       ) : null}
     </SettingsSection>
@@ -304,6 +482,7 @@ export function HermesCronSettings() {
 
   return (
     <SettingsPageContainer className="max-w-4xl">
+      <HermesProactiveInboxSection />
       <HermesProactiveStatus />
       <SettingsSection
         title="Hermes native cron"
