@@ -3875,7 +3875,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               const artifacts = yield* buildProposedPlanArtifacts({
                 context,
                 nativeItemId: payload.item.id,
-                status: "completed",
+                // "active" is what makes the plan actionable: the follow-up
+                // Implement actions only render for an active proposed_plan.
+                status: "active",
                 markdown,
                 completed: true,
               });
