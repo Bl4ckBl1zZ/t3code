@@ -115,6 +115,7 @@ function nonRepositoryLocalStatus(): VcsStatusLocalResult {
       insertions: 0,
       deletions: 0,
     },
+    branchDiff: null,
   };
 }
 

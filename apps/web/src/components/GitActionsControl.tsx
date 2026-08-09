@@ -14,6 +14,7 @@ import type {
   SourceControlRepositoryVisibility,
   VcsStatusResult,
 } from "@t3tools/contracts";
+import { resolveThreadChangeStat } from "@t3tools/shared/git";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
@@ -1139,6 +1140,13 @@ export default function GitActionsControl({
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
 
+  // The panel row labels whichever diff it opens, which is the branch range
+  // once the working tree is clean.
+  const changeStat = useMemo(
+    () => resolveThreadChangeStat(gitStatusForActions),
+    [gitStatusForActions],
+  );
+
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
@@ -1825,16 +1833,17 @@ export default function GitActionsControl({
           className={THREAD_DETAILS_PANEL_ROW_CLASS}
           disabled={!onOpenChanges}
           onClick={onOpenChanges}
+          title={
+            changeStat?.scope === "branch"
+              ? "Committed on this branch, versus its base"
+              : "Uncommitted working tree changes"
+          }
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className="flex-1 text-left">Changes</span>
           <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
-            <span className="text-success">
-              +{gitStatusForActions?.workingTree.insertions ?? 0}
-            </span>
-            <span className="text-destructive">
-              -{gitStatusForActions?.workingTree.deletions ?? 0}
-            </span>
+            <span className="text-success">+{changeStat?.insertions ?? 0}</span>
+            <span className="text-destructive">-{changeStat?.deletions ?? 0}</span>
           </span>
         </Button>
       ) : null}

@@ -233,6 +233,46 @@ it.effect("re-reads origin remote status after cache TTL expiry and bypassed inv
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("reports branch diff totals for work already committed on the ref", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+
+    // The default branch is its own base, so there is no range to measure.
+    assert.equal((yield* driver.statusDetailsLocal(cwd)).branchDiff, null);
+
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    assert.equal((yield* driver.statusDetailsLocal(cwd)).branchDiff, null);
+
+    yield* writeTextFile(cwd, "feature.txt", "one\ntwo\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "feature work"]);
+
+    // The committing agent's working tree is clean; the changes are the range.
+    const committed = yield* driver.statusDetailsLocal(cwd);
+    assert.equal(committed.hasWorkingTreeChanges, false);
+    assert.equal(committed.workingTree.insertions, 0);
+    assert.deepStrictEqual(committed.branchDiff, {
+      baseRef: initialBranch,
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 0,
+    });
+
+    yield* writeTextFile(cwd, "feature.txt", "one\ntwo\nthree\n");
+    const dirty = yield* driver.statusDetailsLocal(cwd);
+    assert.equal(dirty.hasWorkingTreeChanges, true);
+    assert.equal(dirty.workingTree.insertions, 1);
+    assert.deepStrictEqual(dirty.branchDiff, {
+      baseRef: initialBranch,
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 0,
+    });
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {

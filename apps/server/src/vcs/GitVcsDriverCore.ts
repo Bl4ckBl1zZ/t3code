@@ -93,6 +93,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetail
   upstreamRef: null,
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
+  branchDiff: null,
   hasUpstream: false,
   aheadCount: 0,
   behindCount: 0,
@@ -1625,15 +1626,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return null;
   });
 
-  const computeAheadCountAgainstBase = Effect.fn("computeAheadCountAgainstBase")(function* (
+  const countCommitsAgainstBase = Effect.fn("countCommitsAgainstBase")(function* (
     cwd: string,
-    refName: string,
+    baseRef: string,
   ) {
-    const baseRef = yield* resolveBaseBranchForNoUpstream(cwd, refName);
-    if (!baseRef) {
-      return 0;
-    }
-
     const result = yield* executeGit(
       "GitVcsDriver.computeAheadCountAgainstBase",
       cwd,
@@ -1646,6 +1642,51 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     const parsed = Number.parseInt(result.stdout.trim(), 10);
     return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  });
+
+  /**
+   * Totals for `git diff <baseRef>...HEAD` — the same range the review diff
+   * panel renders as "Branch changes", so the two always agree.
+   */
+  const readBranchDiffStat = Effect.fn("readBranchDiffStat")(function* (
+    cwd: string,
+    baseRef: string,
+  ) {
+    const result = yield* executeGit(
+      "GitVcsDriver.statusDetails.branchNumstat",
+      cwd,
+      ["diff", "--numstat", `${baseRef}...HEAD`],
+      { allowNonZeroExit: true },
+    );
+    if (result.exitCode !== 0) {
+      return null;
+    }
+
+    const entries = parseNumstatEntries(result.stdout);
+    let insertions = 0;
+    let deletions = 0;
+    for (const entry of entries) {
+      insertions += entry.insertions;
+      deletions += entry.deletions;
+    }
+    return {
+      baseRef,
+      filesChanged: entries.length,
+      insertions,
+      deletions,
+    };
+  });
+
+  const computeAheadCountAgainstBase = Effect.fn("computeAheadCountAgainstBase")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const baseRef = yield* resolveBaseBranchForNoUpstream(cwd, refName);
+    if (!baseRef) {
+      return 0;
+    }
+
+    return yield* countCommitsAgainstBase(cwd, baseRef);
   });
 
   const readStatusDetailsRemote = Effect.fn("readStatusDetailsRemote")(function* (cwd: string) {
@@ -1879,9 +1920,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
+    const isDefaultBranch =
+      refName !== null &&
+      (refName === defaultBranch ||
+        (defaultBranch === null && (refName === "main" || refName === "master")));
+
+    // Resolved once and shared by the ahead counts and the branch diff stat,
+    // under the same conditions that used to resolve it inside
+    // `computeAheadCountAgainstBase`: a ref with no upstream to count against,
+    // or any ref that is not the default one.
+    const baseRef =
+      refName !== null && (upstreamRef === null || !isDefaultBranch)
+        ? yield* resolveBaseBranchForNoUpstream(cwd, refName).pipe(Effect.orElseSucceed(() => null))
+        : null;
+
     const fallbackAheadCount =
       !upstreamRef && refName
-        ? yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0))
+        ? baseRef === null
+          ? 0
+          : yield* countCommitsAgainstBase(cwd, baseRef).pipe(Effect.orElseSucceed(() => 0))
         : null;
 
     if (fallbackAheadCount !== null) {
@@ -1889,16 +1946,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       behindCount = 0;
     }
 
-    const isDefaultBranch =
-      refName !== null &&
-      (refName === defaultBranch ||
-        (defaultBranch === null && (refName === "main" || refName === "master")));
     if (refName && !isDefaultBranch) {
       aheadOfDefaultCount =
         fallbackAheadCount !== null
           ? fallbackAheadCount
-          : yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0));
+          : baseRef === null
+            ? 0
+            : yield* countCommitsAgainstBase(cwd, baseRef).pipe(Effect.orElseSucceed(() => 0));
     }
+
+    // Nothing committed on top of the base means an empty range diff, so the
+    // extra numstat is skipped rather than run for a guaranteed zero.
+    const branchDiff =
+      baseRef !== null && aheadOfDefaultCount > 0
+        ? yield* readBranchDiffStat(cwd, baseRef).pipe(Effect.orElseSucceed(() => null))
+        : null;
 
     const fileStatMap = new Map<string, NumstatEntry>();
     for (const entry of numstatEntries) {
@@ -1950,6 +2012,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         insertions,
         deletions,
       },
+      branchDiff,
       hasUpstream: upstreamRef !== null,
       aheadCount,
       behindCount,

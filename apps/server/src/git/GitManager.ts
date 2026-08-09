@@ -855,6 +855,7 @@ export const make = Effect.gen(function* () {
     upstreamRef: null,
     hasWorkingTreeChanges: false,
     workingTree: { files: [], insertions: 0, deletions: 0 },
+    branchDiff: null,
     hasUpstream: false,
     aheadCount: 0,
     behindCount: 0,
@@ -878,6 +879,7 @@ export const make = Effect.gen(function* () {
       refName: details.branch,
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
       workingTree: details.workingTree,
+      branchDiff: details.branchDiff,
     } satisfies VcsStatusLocalResult;
   });
   const localStatusResultCache = yield* Cache.makeWith(readLocalStatus, {
