@@ -569,7 +569,21 @@ public struct ThreadDetailView: View {
         )
     }
 
+    /// A Hermes thread — T3 Work or T3 Chat — offers Hermes models only. Which
+    /// side the thread is on comes from the thread's own provider instance,
+    /// never from the picker, so the scope cannot be resolved through
+    /// ``currentSelection`` (which resolves against this list in turn).
     private var threadProviders: [FeatureProvider] {
+        let providers = environmentProviders
+        // Same fallback chain as `currentSelection`: a detail that has not
+        // resolved its provider yet must not demote the thread out of Hermes.
+        let providerID = detail?.thread.providerID ?? thread.providerID
+        return ModelOptions.isHermesProvider(providerID, in: providers)
+            ? ModelOptions.scoped(providers, to: .hermesOnly)
+            : providers
+    }
+
+    private var environmentProviders: [FeatureProvider] {
         DailyUXCreationContext.providers(for: threadProject, in: model.snapshot)
     }
 

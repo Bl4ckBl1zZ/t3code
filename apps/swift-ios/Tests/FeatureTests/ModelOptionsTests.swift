@@ -288,4 +288,58 @@ final class ModelOptionsTests: XCTestCase {
             ["codex:gpt-5.6-sol", "hermes:default"]
         )
     }
+
+    // MARK: - Feature-layer provider scope
+
+    private static let scopedFeatureProviders: [FeatureProvider] = [
+        FeatureProvider(
+            id: "codex",
+            name: "Codex",
+            driver: "codex",
+            models: [FeatureModel(id: "gpt-5.6-sol", name: "GPT-5.6 Sol")]
+        ),
+        FeatureProvider(
+            id: "hermes",
+            name: "Hermes",
+            driver: "hermes",
+            models: [FeatureModel(id: "default", name: "Default")]
+        ),
+        FeatureProvider(
+            id: "hermes_personal",
+            name: "Hermes Personal",
+            driver: "hermes",
+            models: [FeatureModel(id: "default", name: "Default")]
+        ),
+    ]
+
+    func testScopedKeepsEveryHermesInstanceForAWorkOrChatPicker() {
+        XCTAssertEqual(
+            ModelOptions.scoped(Self.scopedFeatureProviders, to: .hermesOnly).map(\.id),
+            ["hermes", "hermes_personal"]
+        )
+    }
+
+    func testScopedKeepsHermesOutOfACodePicker() {
+        XCTAssertEqual(
+            ModelOptions.scoped(Self.scopedFeatureProviders, to: .excludeHermes).map(\.id),
+            ["codex"]
+        )
+    }
+
+    func testScopedLeavesSurfacesThatAreNeitherWithTheFullList() {
+        XCTAssertEqual(
+            ModelOptions.scoped(Self.scopedFeatureProviders, to: .all).map(\.id),
+            ["codex", "hermes", "hermes_personal"]
+        )
+    }
+
+    func testIsHermesProviderResolvesCustomInstancesByDriver() {
+        XCTAssertTrue(
+            ModelOptions.isHermesProvider("hermes_personal", in: Self.scopedFeatureProviders)
+        )
+        XCTAssertFalse(ModelOptions.isHermesProvider("codex", in: Self.scopedFeatureProviders))
+        // Unknown or absent instance: nothing says Hermes, so nothing is scoped.
+        XCTAssertFalse(ModelOptions.isHermesProvider("gone", in: Self.scopedFeatureProviders))
+        XCTAssertFalse(ModelOptions.isHermesProvider(nil, in: Self.scopedFeatureProviders))
+    }
 }
