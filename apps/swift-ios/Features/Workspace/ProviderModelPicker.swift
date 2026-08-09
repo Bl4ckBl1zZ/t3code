@@ -177,7 +177,6 @@ private struct ModelPickerSheet: View {
     @AppStorage("swift-ios.model-picker.favorites") private var favoriteStorage = ""
     @AppStorage("swift-ios.model-picker.recents") private var recentStorage = ""
     @State private var query = ""
-    @State private var configuring: DailyUXModelOption?
     @State private var legacyModelsExpanded = false
 
     var body: some View {
@@ -208,16 +207,6 @@ private struct ModelPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                }
-            }
-            .navigationDestination(item: $configuring) { option in
-                ModelConfigurationView(
-                    option: option,
-                    currentSelection: selection
-                ) { configuredSelection in
-                    selection = configuredSelection
-                    recordRecent(option.id)
-                    dismiss()
                 }
             }
             .t3NavigationChrome()
@@ -376,15 +365,32 @@ private struct ModelPickerSheet: View {
         )
     }
 
+    /// Tapping a model commits it immediately. Models that expose options keep the
+    /// user's current values when the same model is re-selected, and otherwise take
+    /// the catalog defaults.
     private func select(_ option: DailyUXModelOption) {
         guard !isLocked(option) else { return }
-        if option.model.options.isEmpty {
-            selection = FeatureSelection(providerID: option.provider.id, modelID: option.model.id)
-            recordRecent(option.id)
-            dismiss()
-        } else {
-            configuring = option
+        selection = FeatureSelection(
+            providerID: option.provider.id,
+            modelID: option.model.id,
+            options: optionSelections(for: option)
+        )
+        recordRecent(option.id)
+        dismiss()
+    }
+
+    private func optionSelections(
+        for option: DailyUXModelOption
+    ) -> [FeatureModelOptionSelection] {
+        guard !option.model.options.isEmpty else { return [] }
+        guard selection?.providerID == option.provider.id,
+              selection?.modelID == option.model.id else {
+            return DailyUXModelOptions.defaults(for: option.model)
         }
+        return ProviderModelConfiguration.materializedOptions(
+            for: option.model,
+            preserving: selection?.options ?? []
+        )
     }
 
     private func recordRecent(_ id: String) {
@@ -609,134 +615,6 @@ struct ProviderModelDisplaySections {
 enum ProviderModelFamilyClassifier {
     static func isCurrent(_ model: FeatureModel, provider _: FeatureProvider) -> Bool {
         model.isLegacy != true
-    }
-}
-
-private struct ModelConfigurationView: View {
-    let option: DailyUXModelOption
-    let onConfirm: (FeatureSelection) -> Void
-    @State private var optionSelections: [FeatureModelOptionSelection]
-
-    init(
-        option: DailyUXModelOption,
-        currentSelection: FeatureSelection?,
-        onConfirm: @escaping (FeatureSelection) -> Void
-    ) {
-        self.option = option
-        self.onConfirm = onConfirm
-        if currentSelection?.providerID == option.provider.id,
-           currentSelection?.modelID == option.model.id {
-            _optionSelections = State(initialValue: ProviderModelConfiguration.materializedOptions(
-                for: option.model,
-                preserving: currentSelection?.options ?? []
-            ))
-        } else {
-            _optionSelections = State(initialValue: DailyUXModelOptions.defaults(for: option.model))
-        }
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                ModelOptionLabel(option: option, isSelected: false)
-            }
-
-            ForEach(option.model.options) { descriptor in
-                Section {
-                    switch descriptor.kind {
-                    case .select:
-                        Picker(
-                            descriptor.label,
-                            selection: stringBinding(for: descriptor)
-                        ) {
-                            ForEach(descriptor.choices) { choice in
-                                VStack(alignment: .leading) {
-                                    Text(choice.label)
-                                    if let detail = choice.detail {
-                                        Text(detail)
-                                    }
-                                }
-                                .tag(choice.id)
-                            }
-                        }
-                        .pickerStyle(.navigationLink)
-                    case .boolean:
-                        Toggle(
-                            descriptor.label,
-                            isOn: booleanBinding(for: descriptor)
-                        )
-                    }
-                } footer: {
-                    if let detail = descriptor.detail {
-                        Text(detail)
-                    }
-                }
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .background(T3Colors.background)
-        .navigationTitle("Model options")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Use model") {
-                    onConfirm(
-                        FeatureSelection(
-                            providerID: option.provider.id,
-                            modelID: option.model.id,
-                            options: optionSelections
-                        )
-                    )
-                }
-                .fontWeight(.semibold)
-            }
-        }
-    }
-
-    private func stringBinding(
-        for descriptor: FeatureModelOptionDescriptor
-    ) -> Binding<String> {
-        Binding(
-            get: {
-                guard case let .string(value) = DailyUXModelOptions.value(
-                    for: descriptor,
-                    in: optionSelections
-                ) else {
-                    return ""
-                }
-                return value
-            },
-            set: { value in
-                optionSelections = DailyUXModelOptions.updating(
-                    optionSelections,
-                    id: descriptor.id,
-                    value: .string(value)
-                )
-            }
-        )
-    }
-
-    private func booleanBinding(
-        for descriptor: FeatureModelOptionDescriptor
-    ) -> Binding<Bool> {
-        Binding(
-            get: {
-                guard case let .boolean(value) = DailyUXModelOptions.value(
-                    for: descriptor,
-                    in: optionSelections
-                ) else {
-                    return false
-                }
-                return value
-            },
-            set: { value in
-                optionSelections = DailyUXModelOptions.updating(
-                    optionSelections,
-                    id: descriptor.id,
-                    value: .boolean(value)
-                )
-            }
-        )
     }
 }
 
