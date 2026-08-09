@@ -79,4 +79,30 @@ describe("resolveDraftProjectSelection", () => {
       project,
     });
   });
+
+  it("resumes the project the last task was started in", () => {
+    const projects = [makeProject("t3code"), makeProject("t3code-2"), makeProject("t3code-3")];
+    expect(
+      resolveDraftProjectSelection(null, projects, [makeScope(projects)], "environment:t3code-2"),
+    ).toEqual({ kind: "select", project: projects[1] });
+  });
+
+  it("keeps an explicit selection ahead of the remembered project", () => {
+    const projects = [makeProject("t3code"), makeProject("t3code-2")];
+    expect(
+      resolveDraftProjectSelection(
+        "environment:t3code",
+        projects,
+        [makeScope(projects)],
+        "environment:t3code-2",
+      ),
+    ).toEqual({ kind: "preserve" });
+  });
+
+  it("opens the picker when the remembered project is gone", () => {
+    const projects = [makeProject("t3code"), makeProject("t3code-2")];
+    expect(
+      resolveDraftProjectSelection(null, projects, [makeScope(projects)], "environment:removed"),
+    ).toEqual({ kind: "pick" });
+  });
 });

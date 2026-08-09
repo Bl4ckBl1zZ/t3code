@@ -8,7 +8,7 @@ import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useNewThreadHandler, useRememberedNewThreadProjectRef } from "../hooks/useHandleNewThread";
 import {
   useAllEnvironmentShellsBootstrapped,
   useProjects,
@@ -34,8 +34,9 @@ function ChatIndexRouteView() {
 }
 
 /**
- * Landing on the index route drops straight into a draft thread for the most
- * recently active project, so the first screen is a prompt instead of a dead
+ * Landing on the index route drops straight into a draft thread for the
+ * project the user last started a thread in (most recently active project when
+ * nothing is remembered yet), so the first screen is a prompt instead of a dead
  * end. Falls back to an add-project hero when no project exists yet.
  */
 function IndexDraftLanding() {
@@ -44,6 +45,7 @@ function IndexDraftLanding() {
   const serverConfigs = useServerConfigs();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
+  const rememberedProjectRef = useRememberedNewThreadProjectRef();
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
@@ -53,37 +55,48 @@ function IndexDraftLanding() {
     () => projects.filter((project) => !isT3WorkBackingProject(project, serverConfigs)),
     [projects, serverConfigs],
   );
-  const mostRecentProject = useMemo(
-    () =>
-      bootstrapped
-        ? (sortScopedProjectsForSidebar(codeProjects, threads, "updated_at")[0] ?? null)
-        : null,
-    [bootstrapped, codeProjects, threads],
-  );
+  // Picking up where the user left off beats recency: they may have opened a
+  // handful of older threads since, which would otherwise reshuffle the
+  // landing target under them.
+  const landingProject = useMemo(() => {
+    if (!bootstrapped) {
+      return null;
+    }
+    const remembered = rememberedProjectRef
+      ? codeProjects.find(
+          (project) =>
+            project.id === rememberedProjectRef.projectId &&
+            project.environmentId === rememberedProjectRef.environmentId,
+        )
+      : undefined;
+    return (
+      remembered ?? sortScopedProjectsForSidebar(codeProjects, threads, "updated_at")[0] ?? null
+    );
+  }, [bootstrapped, codeProjects, rememberedProjectRef, threads]);
 
   useEffect(() => {
-    if (mostRecentProject === null || startingRef.current) {
+    if (landingProject === null || startingRef.current) {
       return;
     }
     // Until the environment's server config arrives, the Work-backing check
     // above cannot classify this project; starting the draft now could latch
     // onto the T3 Work project. The effect re-runs once configs load.
-    if (!serverConfigs.has(mostRecentProject.environmentId)) {
+    if (!serverConfigs.has(landingProject.environmentId)) {
       return;
     }
     startingRef.current = true;
-    void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
+    void handleNewThread(scopeProjectRef(landingProject.environmentId, landingProject.id), {
       replace: true,
     }).catch(() => {
       startingRef.current = false;
       setStartState((state) => ({ ...state, failed: true }));
     });
-  }, [handleNewThread, mostRecentProject, serverConfigs, startState.retryRequest]);
+  }, [handleNewThread, landingProject, serverConfigs, startState.retryRequest]);
 
   if (!bootstrapped) {
     return null;
   }
-  if (mostRecentProject !== null) {
+  if (landingProject !== null) {
     return startState.failed ? (
       <DraftStartError
         onRetry={() => {

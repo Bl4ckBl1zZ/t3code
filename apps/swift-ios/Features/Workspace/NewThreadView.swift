@@ -7,6 +7,7 @@ public struct NewThreadView: View {
     let onCreated: (FeatureThread) -> Void
     let onCreateProject: @MainActor () -> Void
     private let draftStore: FeatureComposerDraftStore
+    private let projectMemoryStore: NewTaskProjectMemoryStore
     private let initialProjectID: String?
 
     @State private var projectID = ""
@@ -14,7 +15,7 @@ public struct NewThreadView: View {
     @State private var selection: FeatureSelection?
     @State private var selectionIsExplicit = false
     @State private var preferredSelection: FeatureSelection?
-    @State private var recentProjectByEnvironment: [String: String] = [:]
+    @State private var projectMemory: NewTaskProjectMemory
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var workspaceMode: FeatureWorkspaceMode = .local
     @State private var workspaceSelectionIsExplicit = false
@@ -39,7 +40,8 @@ public struct NewThreadView: View {
         onCreated: @escaping (FeatureThread) -> Void,
         onCreateProject: @escaping @MainActor () -> Void = {},
         initialProjectID: String? = nil,
-        draftStore: FeatureComposerDraftStore = .shared
+        draftStore: FeatureComposerDraftStore = .shared,
+        projectMemoryStore: NewTaskProjectMemoryStore = .shared
     ) {
         self.model = model
         self.submit = submit
@@ -47,6 +49,8 @@ public struct NewThreadView: View {
         self.onCreateProject = onCreateProject
         self.initialProjectID = initialProjectID
         self.draftStore = draftStore
+        self.projectMemoryStore = projectMemoryStore
+        _projectMemory = State(initialValue: projectMemoryStore.memory())
     }
 
     public var body: some View {
@@ -95,7 +99,10 @@ public struct NewThreadView: View {
         }
         .onAppear {
             if projectID.isEmpty {
+                // A caller-supplied project is an explicit destination and wins;
+                // otherwise reopen on the project this sheet was last used for.
                 let initialID = creationProjects.first(where: { $0.id == initialProjectID })?.id
+                    ?? projectMemory.preferredProjectID(in: creationProjects)
                     ?? creationProjects.first?.id
                     ?? ""
                 selectInitialProject(initialID)
@@ -105,7 +112,9 @@ public struct NewThreadView: View {
         .onChange(of: creationProjectIDs) { _, ids in
             guard !ids.contains(projectID) else { return }
             persistCurrentDraftImmediately()
-            selectInitialProject(ids.first ?? "")
+            selectInitialProject(
+                projectMemory.preferredProjectID(in: creationProjects) ?? ids.first ?? ""
+            )
         }
         .onChange(of: prompt) { scheduleDraftSave() }
         .onChange(of: selection) { scheduleDraftSave() }
@@ -566,7 +575,7 @@ public struct NewThreadView: View {
 
     private func selectEnvironment(_ id: String) {
         guard selectedProject?.environmentID != id else { return }
-        let project = recentProjectByEnvironment[id].flatMap { recentID in
+        let project = projectMemory.rememberedProjectID(forEnvironment: id).flatMap { recentID in
             creationProjects.first { $0.id == recentID && $0.environmentID == id }
         } ?? creationProjects.first { $0.environmentID == id }
         guard let project else { return }
@@ -605,7 +614,8 @@ public struct NewThreadView: View {
             return
         }
 
-        recentProjectByEnvironment[project.environmentID] = project.id
+        projectMemory.record(projectID: project.id, environmentID: project.environmentID)
+        projectMemoryStore.record(projectID: project.id, environmentID: project.environmentID)
 
         let providers = ProviderModelCatalogNormalizer.normalized(
             DailyUXCreationContext.providers(for: project, in: model.snapshot)

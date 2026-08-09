@@ -15,18 +15,36 @@ export function getOnlySelectableProject(
   return onlyScope?.projects.length === 1 ? (onlyScope.projects[0] ?? null) : null;
 }
 
+export function findProjectByScopedKey(
+  projectKey: string | null,
+  projects: ReadonlyArray<EnvironmentProject>,
+): EnvironmentProject | null {
+  if (projectKey === null) {
+    return null;
+  }
+  return (
+    projects.find(
+      (project) => scopedProjectKey(project.environmentId, project.id) === projectKey,
+    ) ?? null
+  );
+}
+
 export function resolveDraftProjectSelection(
   selectedProjectKey: string | null,
   projects: ReadonlyArray<EnvironmentProject>,
   projectScopes: ReadonlyArray<HomeProjectScope>,
+  rememberedProjectKey: string | null = null,
 ): DraftProjectSelectionResolution {
-  const hasExplicitProjectSelection =
-    selectedProjectKey !== null &&
-    projects.some(
-      (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
-    );
-  if (hasExplicitProjectSelection) {
+  if (findProjectByScopedKey(selectedProjectKey, projects) !== null) {
     return { kind: "preserve" };
+  }
+
+  // Entering the composer without a named project resumes the project the last
+  // task was started in, so a new task does not ask the same question again.
+  // A project that has since been removed falls through to the picker.
+  const rememberedProject = findProjectByScopedKey(rememberedProjectKey, projects);
+  if (rememberedProject !== null) {
+    return { kind: "select", project: rememberedProject };
   }
 
   const onlyProject = getOnlySelectableProject(projectScopes);

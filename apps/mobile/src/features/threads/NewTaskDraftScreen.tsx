@@ -111,7 +111,8 @@ export function NewTaskDraftScreen(props: {
   const colorScheme = useColorScheme();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const controlsBottomPadding = isKeyboardVisible ? 8 : Math.max(insets.bottom, 10);
-  const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
+  const { lastNewTaskProjectKey, projectScopes, selectedProject, selectedProjectKey, setProject } =
+    flow;
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
     selectedProject?.environmentId ?? null,
@@ -361,7 +362,12 @@ export function NewTaskDraftScreen(props: {
       return;
     }
 
-    const selection = resolveDraftProjectSelection(selectedProjectKey, projects, projectScopes);
+    const selection = resolveDraftProjectSelection(
+      selectedProjectKey,
+      projects,
+      projectScopes,
+      lastNewTaskProjectKey,
+    );
     if (selection.kind === "preserve") {
       return;
     }
@@ -372,6 +378,7 @@ export function NewTaskDraftScreen(props: {
 
     navigation.dispatch(StackActions.replace("NewTask"));
   }, [
+    lastNewTaskProjectKey,
     projectScopes,
     projects,
     props.initialProjectRef,

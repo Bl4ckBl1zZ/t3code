@@ -28,11 +28,16 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpansionVersion?: typeof THREAD_CHANGED_FILES_EXPANSION_VERSION;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
+  lastNewThreadProjectKey?: string | null;
 }
 
 export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
+  /** Scoped project key (`environmentId:projectId`) of the project the user
+      last started a thread in. New-thread surfaces preselect it so composing
+      picks up where the previous thread left off. */
+  lastNewThreadProjectKey: string | null;
 }
 
 export interface UiThreadState {
@@ -50,6 +55,7 @@ export interface UiState extends UiProjectState, UiThreadState, UiEndpointState 
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
+  lastNewThreadProjectKey: null,
   threadOrder: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
@@ -128,6 +134,11 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
   return {
     projectExpandedById,
     projectOrder,
+    lastNewThreadProjectKey:
+      typeof parsed.lastNewThreadProjectKey === "string" &&
+      parsed.lastNewThreadProjectKey.length > 0
+        ? parsed.lastNewThreadProjectKey
+        : null,
     threadOrder: sanitizeStringArray(parsed.threadOrder),
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
     threadChangedFilesExpandedById:
@@ -207,6 +218,7 @@ export function persistState(state: UiState): void {
       JSON.stringify({
         projectExpandedById,
         projectOrder: state.projectOrder,
+        lastNewThreadProjectKey: state.lastNewThreadProjectKey,
         threadOrder: state.threadOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
@@ -306,6 +318,16 @@ export function setDefaultAdvertisedEndpointKey(state: UiState, key: string | nu
   return {
     ...state,
     defaultAdvertisedEndpointKey: nextKey,
+  };
+}
+
+export function setLastNewThreadProjectKey(state: UiState, projectKey: string): UiState {
+  if (projectKey.length === 0 || state.lastNewThreadProjectKey === projectKey) {
+    return state;
+  }
+  return {
+    ...state,
+    lastNewThreadProjectKey: projectKey,
   };
 }
 
@@ -449,6 +471,7 @@ interface UiStateStore extends UiState {
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
+  setLastNewThreadProjectKey: (projectKey: string) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
@@ -472,6 +495,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
+  setLastNewThreadProjectKey: (projectKey) =>
+    set((state) => setLastNewThreadProjectKey(state, projectKey)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>
