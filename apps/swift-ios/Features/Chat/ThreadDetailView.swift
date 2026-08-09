@@ -2024,12 +2024,23 @@ struct TranscriptViewportGeometry: Equatable {
         max(-topInset, contentHeight - viewportHeight + bottomInset)
     }
 
+    /// How many times running the anchor may move the offset before the
+    /// transcript has to have settled. Self-sizing rows legitimately need a
+    /// couple of passes to swap their estimate for a measured height; a
+    /// transcript still moving after that is not converging, and chasing it
+    /// further is what recurses into UIKit's re-entrancy assertion.
+    static let maximumConsecutiveRestores = 4
+
     func restoredBottomOffset(
         after previous: Self?,
         maintainsBottomAnchor: Bool,
-        isInteracting: Bool
+        isInteracting: Bool,
+        consecutiveRestores: Int = 0
     ) -> CGFloat? {
         guard maintainsBottomAnchor, !isInteracting else {
+            return nil
+        }
+        guard consecutiveRestores < Self.maximumConsecutiveRestores else {
             return nil
         }
 
@@ -2071,7 +2082,14 @@ private struct TranscriptComposerHeightKey: PreferenceKey {
 }
 
 private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
-    var maintainsBottomAnchor = false
+    var maintainsBottomAnchor = false {
+        didSet {
+            // Following the latest turn again is a fresh reason to anchor, so
+            // it starts from a fresh budget rather than inheriting whatever
+            // the last burst of growth spent.
+            if maintainsBottomAnchor, !oldValue { consecutiveAnchorRestores = 0 }
+        }
+    }
 
     /// The measured height of the glass composer floating over the bottom of
     /// the transcript. Folded into `contentInset.bottom` together with the
@@ -2089,6 +2107,10 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
 
     private var lastLaidOutGeometry: TranscriptViewportGeometry?
     private var isRestoringBottomAnchor = false
+    private var isInLayoutPass = false
+    /// Offset writes made while the transcript height was still moving, reset
+    /// the moment it stops. See `maximumConsecutiveRestores`.
+    private var consecutiveAnchorRestores = 0
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
@@ -2098,11 +2120,21 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     private func applyBottomInset() {
         let target = floatingBottomInset + safeAreaInsets.bottom
         guard abs(contentInset.bottom - target) > 0.5 else { return }
+        // The invariant documented on `floatingBottomInset`, actually enforced:
+        // UIKit calls `safeAreaInsetsDidChange` from inside the layout pass
+        // whenever the keyboard moves, so the setter alone does not keep inset
+        // writes out of it. Land the write on the next turn instead.
+        guard !isInLayoutPass else {
+            DispatchQueue.main.async { [weak self] in self?.applyBottomInset() }
+            return
+        }
         contentInset.bottom = target
     }
 
     override func layoutSubviews() {
+        isInLayoutPass = true
         super.layoutSubviews()
+        isInLayoutPass = false
 
         let geometry = TranscriptViewportGeometry(
             contentHeight: contentSize.height,
@@ -2110,17 +2142,27 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
             topInset: adjustedContentInset.top,
             bottomInset: adjustedContentInset.bottom
         )
-        defer { lastLaidOutGeometry = geometry }
+        let previous = lastLaidOutGeometry
+        lastLaidOutGeometry = geometry
+
+        // Settled: rows have stopped swapping estimates for measured heights,
+        // so the next genuine growth gets the full budget again.
+        if previous == geometry {
+            consecutiveAnchorRestores = 0
+            return
+        }
 
         guard let bottomY = geometry.restoredBottomOffset(
-            after: lastLaidOutGeometry,
+            after: previous,
             maintainsBottomAnchor: maintainsBottomAnchor,
-            isInteracting: isDragging || isDecelerating || isRestoringBottomAnchor
+            isInteracting: isDragging || isDecelerating || isRestoringBottomAnchor,
+            consecutiveRestores: consecutiveAnchorRestores
         ) else {
             return
         }
         guard abs(contentOffset.y - bottomY) > 0.5 else { return }
 
+        consecutiveAnchorRestores += 1
         isRestoringBottomAnchor = true
         contentOffset = CGPoint(x: contentOffset.x, y: bottomY)
         isRestoringBottomAnchor = false
