@@ -270,6 +270,21 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     });
   });
 
+  it("installs the permission callback for full-access plan mode", () => {
+    const queryPolicy = claudeRuntimeQueryPolicyForRuntimePolicy(
+      ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        cwd: "/workspace",
+      }),
+    );
+
+    assert.deepEqual(queryPolicy, {
+      permissionMode: "plan",
+      installPermissionCallback: true,
+    });
+  });
+
   it("installs the permission callback for approval-required plan mode", () => {
     const queryPolicy = claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapterV2RuntimePolicy.make({

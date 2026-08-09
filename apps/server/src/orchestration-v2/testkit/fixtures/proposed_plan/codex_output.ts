@@ -31,6 +31,9 @@ export function assertProposedPlanOutput(
   const proposedPlans = projection.plans.filter((plan) => plan.kind === "proposed_plan");
   assert.isAtLeast(proposedPlans.length, 1);
   assert.include(proposedPlans.at(-1)?.markdown, "Deterministic Replay Fixtures");
+  // A settled proposal must stay active — that is what renders the
+  // Implement follow-up actions in the composer.
+  assert.equal(proposedPlans.at(-1)?.status, "active");
 
   const proposedPlanItems = projection.turnItems.filter((item) => item.type === "proposed_plan");
   assert.isAtLeast(proposedPlanItems.length, 1);

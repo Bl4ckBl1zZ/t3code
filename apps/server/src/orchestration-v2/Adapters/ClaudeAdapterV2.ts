@@ -33,8 +33,10 @@ import {
   type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
+  type PlanId,
   type OrchestrationV2Subagent,
   type OrchestrationV2RunHandles,
   type OrchestrationV2TaskUsage,
@@ -196,7 +198,7 @@ export const ClaudeProviderCapabilitiesV2 = {
   planning: {
     emitsPlanUpdated: false,
     emitsTodoList: false,
-    emitsProposedPlan: false,
+    emitsProposedPlan: true,
     supportsStructuredQuestions: false,
     planDeltasHaveItemIds: false,
   },
@@ -1250,7 +1252,9 @@ export function claudeRuntimeQueryPolicyForRuntimePolicy(
       permissionMode,
       ...(readOnlyTools === undefined ? {} : { tools: readOnlyTools }),
       ...(allowedTools === undefined ? {} : { allowedTools }),
-      installPermissionCallback,
+      // The ExitPlanMode proposal arrives through the permission callback;
+      // without it the plan can never surface, so plan mode always installs it.
+      installPermissionCallback: true,
     };
   }
 
@@ -1363,6 +1367,15 @@ export function classifyClaudeNativeTool(toolName: string): ClaudeToolClassifica
 function providerRequestKindFromClaudeTool(toolName: string): ProviderRequestKind {
   return classifyClaudeNativeTool(toolName).requestKind;
 }
+
+function isClaudeExitPlanModeTool(toolName: string): boolean {
+  return normalizedClaudeToolName(toolName) === "exitplanmode";
+}
+
+// The user reviews the plan in T3 and implements it as a fresh turn, so the
+// CLI must not switch itself out of plan mode and start implementing.
+const CLAUDE_EXIT_PLAN_MODE_DENY_MESSAGE =
+  "The proposed plan has been shared with the user for review. Stay in plan mode and end your turn now without implementing anything; the user will follow up with approval or feedback.";
 
 function isClaudeWebSearchOutput(output: unknown): output is WebSearchOutput {
   return (
@@ -2205,6 +2218,8 @@ interface ActiveClaudeBackgroundTask {
 interface ActiveClaudeToolCall {
   readonly nativeItemId: string;
   readonly toolName: string;
+  /** ExitPlanMode projects as a proposed_plan artifact, not a tool item. */
+  readonly isProposedPlan: boolean;
   readonly classification: ClaudeToolClassification;
   readonly input: ClaudeNativeToolInput;
   readonly threadId: ThreadId;
@@ -2266,6 +2281,7 @@ export function makeClaudeAdapterV2(
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const itemOrdinals = yield* Ref.make(new Map<string, number>());
+        const planIds = yield* Ref.make(new Map<string, PlanId>());
         const nextItemOrdinalsByTurn = yield* Ref.make(new Map<string, number>());
         const providerRetries = yield* Ref.make(
           new Map<OrchestrationV2ProviderTurn["id"], ActiveClaudeProviderRetry>(),
@@ -2514,6 +2530,131 @@ export function makeClaudeAdapterV2(
             type: "turn_item.updated",
             driver: CLAUDE_PROVIDER,
             turnItem: artifacts.turnItem,
+          });
+        });
+
+        const resolvePlanId = Effect.fnUntraced(function* (
+          context: ActiveClaudeTurnContext,
+          nativeItemId: string,
+        ) {
+          const existing = (yield* Ref.get(planIds)).get(nativeItemId);
+          if (existing !== undefined) {
+            return existing;
+          }
+          const planId = yield* idAllocator.allocate
+            .plan({
+              threadId: context.input.threadId,
+              runId: context.input.runId,
+              driver: CLAUDE_PROVIDER,
+            })
+            .pipe(Effect.orDie);
+          yield* Ref.update(planIds, (current) => {
+            const updated = new Map(current);
+            updated.set(nativeItemId, planId);
+            return updated;
+          });
+          return planId;
+        });
+
+        // An ExitPlanMode call projects as a proposed_plan artifact — the same
+        // shape Codex and Cursor emit — so the plan follow-up actions
+        // (implement here / in a new thread) light up for Claude plan turns.
+        const emitProposedPlanArtifacts = Effect.fnUntraced(function* (input: {
+          readonly context: ActiveClaudeTurnContext;
+          readonly nativeItemId: string;
+          readonly markdown: string;
+          readonly ordinal: number;
+          readonly startedAt: DateTime.Utc;
+          readonly completed: boolean;
+        }) {
+          const now = yield* DateTime.now;
+          const planId = yield* resolvePlanId(input.context, input.nativeItemId);
+          const nodeId = idAllocator.derive.nodeFromProviderItem({
+            driver: CLAUDE_PROVIDER,
+            nativeItemId: input.nativeItemId,
+          });
+          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+            driver: CLAUDE_PROVIDER,
+            nativeItemId: input.nativeItemId,
+          });
+          const nativeItemRef = {
+            driver: CLAUDE_PROVIDER,
+            nativeId: input.nativeItemId,
+            strength: "strong" as const,
+          };
+          const status = input.completed ? ("completed" as const) : ("running" as const);
+          const plan: OrchestrationV2PlanArtifact = {
+            id: planId,
+            threadId: input.context.input.threadId,
+            runId: input.context.input.runId,
+            nodeId,
+            kind: "proposed_plan",
+            status: input.completed ? "active" : "draft",
+            markdown: input.markdown,
+          };
+          yield* emitProviderEvent({
+            type: "node.updated",
+            driver: CLAUDE_PROVIDER,
+            node: {
+              id: nodeId,
+              threadId: input.context.input.threadId,
+              runId: input.context.input.runId,
+              parentNodeId: input.context.input.rootNodeId,
+              rootNodeId: input.context.input.rootNodeId,
+              kind: "plan",
+              status,
+              countsForRun: false,
+              providerThreadId: input.context.input.providerThread.id,
+              providerTurnId: input.context.providerTurnId,
+              nativeItemRef,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: input.startedAt,
+              completedAt: input.completed ? now : null,
+            },
+          });
+          yield* emitProviderEvent({
+            type: "plan.updated",
+            driver: CLAUDE_PROVIDER,
+            plan,
+          });
+          yield* emitProviderEvent({
+            type: "turn_item.updated",
+            driver: CLAUDE_PROVIDER,
+            turnItem: {
+              id: turnItemId,
+              threadId: input.context.input.threadId,
+              runId: input.context.input.runId,
+              nodeId,
+              providerThreadId: input.context.input.providerThread.id,
+              providerTurnId: input.context.providerTurnId,
+              nativeItemRef,
+              parentItemId: null,
+              ordinal: input.ordinal,
+              status,
+              title: null,
+              startedAt: input.startedAt,
+              completedAt: input.completed ? now : null,
+              updatedAt: now,
+              type: "proposed_plan",
+              planId,
+              markdown: input.markdown,
+              streaming: !input.completed,
+            },
+          });
+        });
+
+        const completeProposedPlanToolCall = Effect.fnUntraced(function* (input: {
+          readonly context: ActiveClaudeTurnContext;
+          readonly toolCall: ActiveClaudeToolCall;
+        }) {
+          yield* emitProposedPlanArtifacts({
+            context: input.context,
+            nativeItemId: input.toolCall.nativeItemId,
+            markdown: firstStringInputField(input.toolCall.input, ["plan"]) ?? "",
+            ordinal: input.toolCall.ordinal,
+            startedAt: input.toolCall.startedAt,
+            completed: true,
           });
         });
 
@@ -3353,9 +3494,11 @@ export function makeClaudeAdapterV2(
             subagent === undefined
               ? yield* resolveItemOrdinal(input.context, input.nativeItemId)
               : ++subagent.nextChildItemOrdinal;
+          const isProposedPlan = subagent === undefined && isClaudeExitPlanModeTool(input.toolName);
           const toolCall: ActiveClaudeToolCall = {
             nativeItemId: input.nativeItemId,
             toolName: input.toolName,
+            isProposedPlan,
             classification,
             input: input.toolInput,
             threadId,
@@ -3366,6 +3509,17 @@ export function makeClaudeAdapterV2(
             startedAt,
           };
           input.context.toolCalls.set(input.nativeItemId, toolCall);
+          if (isProposedPlan) {
+            yield* emitProposedPlanArtifacts({
+              context: input.context,
+              nativeItemId: input.nativeItemId,
+              markdown: firstStringInputField(input.toolInput, ["plan"]) ?? "",
+              ordinal,
+              startedAt,
+              completed: false,
+            });
+            return toolCall;
+          }
           yield* emitToolCallArtifacts(
             buildToolCallArtifacts({
               context: input.context,
@@ -3489,6 +3643,10 @@ export function makeClaudeAdapterV2(
           readonly threadDisposition?: "reusable" | "broken";
         }) {
           for (const toolCall of input.context.toolCalls.values()) {
+            if (toolCall.isProposedPlan) {
+              yield* completeProposedPlanToolCall({ context: input.context, toolCall });
+              continue;
+            }
             const artifacts = buildToolCallArtifacts({
               context: input.context,
               nativeItemId: toolCall.nativeItemId,
@@ -4110,6 +4268,13 @@ export function makeClaudeAdapterV2(
                 toolInput: EMPTY_CLAUDE_NATIVE_TOOL_INPUT,
                 parentToolUseId,
               }));
+            // The deny that answers ExitPlanMode is synthetic — the plan still
+            // settles as active so the follow-up actions render.
+            if (toolCall.isProposedPlan) {
+              yield* completeProposedPlanToolCall({ context, toolCall });
+              context.toolCalls.delete(toolCall.nativeItemId);
+              continue;
+            }
             const completedAt = yield* DateTime.now;
             // A backgrounded command and a monitor both resolve their tool_use
             // immediately with an acknowledgement while the work keeps running.
@@ -4284,6 +4449,17 @@ export function makeClaudeAdapterV2(
               toolInput: nativeToolInput,
               parentToolUseId: null,
             });
+          }
+
+          // ExitPlanMode never becomes an approval request: the plan artifact
+          // is already emitted, and the deny keeps the CLI in plan mode so the
+          // turn settles and the user answers via the plan follow-up actions.
+          if (isClaudeExitPlanModeTool(toolName)) {
+            return {
+              behavior: "deny",
+              message: CLAUDE_EXIT_PLAN_MODE_DENY_MESSAGE,
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
           }
 
           const requestKind = providerRequestKindFromClaudeTool(toolName);
