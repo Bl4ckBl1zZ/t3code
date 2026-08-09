@@ -241,6 +241,30 @@ public enum ModelOptions {
         }
     }
 
+    /// Narrow a feature-layer provider list to one side of the Hermes split.
+    ///
+    /// ``build(config:fallbackSelection:scope:)`` scopes the wire snapshot for
+    /// menu-shaped pickers; the daily-UX sheet reads `[FeatureProvider]`
+    /// instead, so it scopes the provider list itself and every derived view —
+    /// catalog, groups, favourites, recents, selection resolution — narrows
+    /// with it.
+    public static func scoped(
+        _ providers: [FeatureProvider],
+        to scope: ModelOptionProviderScope
+    ) -> [FeatureProvider] {
+        providers.filter { matches($0.driver, scope) }
+    }
+
+    /// Whether a provider instance is the Hermes assistant, resolved against a
+    /// feature-layer provider list.
+    public static func isHermesProvider(
+        _ providerID: String?,
+        in providers: [FeatureProvider]
+    ) -> Bool {
+        guard let providerID else { return false }
+        return providers.first { $0.id == providerID }?.driver == hermesDriver
+    }
+
     // MARK: - Menu
 
     private static func isSelected(_ option: ModelOption, _ selected: ModelSelection?) -> Bool {

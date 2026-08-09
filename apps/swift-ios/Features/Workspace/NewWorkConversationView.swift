@@ -255,14 +255,22 @@ public struct NewWorkConversationView: View {
 
     // MARK: - Selection
 
+    /// Hermes is the T3 Work and T3 Chat assistant and the only thing these
+    /// two surfaces run on, so the picker lists Hermes and nothing else. The
+    /// coding providers are a Code concern; offering them here would let a
+    /// conversation start on a harness this screen cannot route to.
     private var targetProviders: [FeatureProvider] {
+        ModelOptions.scoped(environmentProviders, to: .hermesOnly)
+    }
+
+    private var environmentProviders: [FeatureProvider] {
         guard let target = activeTarget else { return model.snapshot.providers }
         return model.snapshot.providersByEnvironment?[target.environmentID]
             ?? model.snapshot.providers
     }
 
     /// Hermes resolves its own default model; the picker starts there and the
-    /// user can still switch within the environment's providers.
+    /// user can still switch between Hermes models.
     private var defaultSelection: FeatureSelection? {
         guard let target = activeTarget else { return nil }
         return FeatureSelection(
