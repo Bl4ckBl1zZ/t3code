@@ -11,6 +11,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   ProviderThreadId,
   RunId,
   ThreadId,
@@ -602,6 +603,79 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         [MessageId.make("message:hydrated:user"), MessageId.make("message:hydrated:assistant")],
       );
       assert.equal(reopened.turnItems.length, 1);
+    }),
+  );
+
+  it.effect("settle detaches the thread's live provider session", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("runtime-layer-settle-detach-thread");
+      const providerSessionId = ProviderSessionId.make("runtime-layer-settle-detach-session");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-detach-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-settle-detach-project"),
+        title: "Settle detach",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-settle-detach",
+      });
+
+      // A settled thread can still own an idle-but-live provider session
+      // hosting background work (monitors, dev servers); settle must detach
+      // it so that work stops with the thread.
+      yield* eventSink.write({
+        commandId: CommandId.make("runtime-layer-settle-detach-seed"),
+        events: [
+          {
+            id: EventId.make("runtime-layer-settle-detach-session-attached"),
+            type: "provider-session.attached",
+            threadId,
+            driver,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              id: providerSessionId,
+              driver,
+              providerInstanceId: modelSelection.instanceId,
+              status: "ready",
+              cwd: "/tmp/runtime-layer-settle-detach",
+              model: modelSelection.model,
+              capabilities: CodexProviderCapabilitiesV2,
+              createdAt: now,
+              updatedAt: now,
+              lastError: null,
+            },
+          },
+        ],
+      });
+      const beforeSettle = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(beforeSettle.providerSessions[0]?.status, "ready");
+
+      const settle = yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-layer-settle-detach-settle"),
+        threadId,
+      });
+      const eventTypes = settle.storedEvents.map((stored) => stored.event.type);
+      assert.include(eventTypes, "thread.settled");
+      assert.include(eventTypes, "provider-session.detached");
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.thread.settledOverride, "settled");
+      assert.lengthOf(projection.providerSessions, 0);
+      // Settled threads stay reachable, so unlike archive/delete no terminal
+      // cleanup effect is produced (asserted implicitly: settle succeeds and
+      // the thread is not archived).
+      assert.isNull(projection.thread.archivedAt);
     }),
   );
 

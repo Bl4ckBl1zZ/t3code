@@ -1410,8 +1410,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
 
+    // Settle means "done with this thread", so a live provider session must
+    // not keep running background work (PR monitors, dev servers, subagent
+    // fleets) after it lands. Commands are decided serially against the
+    // current projection, and settle is rejected while runs are active or
+    // runtime requests are pending, so this can never race a re-engagement
+    // the way a separate post-settle stop command could. Terminals stay up:
+    // a settled thread remains reachable and may be un-settled.
     const detachSessionIds = new Set(
-      command.type === "thread.archive" || command.type === "thread.delete"
+      command.type === "thread.archive" ||
+        command.type === "thread.delete" ||
+        command.type === "thread.settle"
         ? projection.providerSessions.map((session) => session.id)
         : command.type === "thread.metadata.update" &&
             command.worktreePath !== undefined &&
@@ -1453,11 +1462,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     ? "Thread archived."
                     : command.type === "thread.delete"
                       ? "Thread deleted."
-                      : command.type === "thread.metadata.update"
-                        ? "Workspace changed."
-                        : command.type === "thread.runtime-mode.set"
-                          ? "Runtime mode changed."
-                          : "Provider or model selection changed.",
+                      : command.type === "thread.settle"
+                        ? "Thread settled."
+                        : command.type === "thread.metadata.update"
+                          ? "Workspace changed."
+                          : command.type === "thread.runtime-mode.set"
+                            ? "Runtime mode changed."
+                            : "Provider or model selection changed.",
               },
             });
             const pendingEffect = {
@@ -1472,11 +1483,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     ? "Thread archived."
                     : command.type === "thread.delete"
                       ? "Thread deleted."
-                      : command.type === "thread.metadata.update"
-                        ? "Workspace changed."
-                        : command.type === "thread.runtime-mode.set"
-                          ? "Runtime mode changed."
-                          : "Provider or model selection changed.",
+                      : command.type === "thread.settle"
+                        ? "Thread settled."
+                        : command.type === "thread.metadata.update"
+                          ? "Workspace changed."
+                          : command.type === "thread.runtime-mode.set"
+                            ? "Runtime mode changed."
+                            : "Provider or model selection changed.",
                 // Terminal detaches revoke the thread's MCP credentials; other
                 // detach reasons keep them so a re-attaching provider process
                 // stays authorized.

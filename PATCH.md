@@ -40,7 +40,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `038_ProjectionThreadsPinOrderKey` are dropped: they target the retired V1
   `projection_threads`/`projection_turns` tables, and the fork already implements thread pinning
   (and its ordering key) in orchestration V2, whose thread state is a JSON projection rather than
-  those columns.
+  those columns. Upstream's `039_ProjectionProjectsDefaultThreadEnvMode` targets the project
+  aggregate the fork keeps, so it is carried but renumbered to
+  `052_ProjectionProjectsDefaultThreadEnvMode`.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.
