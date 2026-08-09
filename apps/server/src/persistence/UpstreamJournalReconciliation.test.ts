@@ -3,7 +3,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { runMigrations, UpstreamMigrationJournalError } from "./Migrations.ts";
+import {
+  forkMigrationMarkers,
+  migrationManifest,
+  runMigrations,
+  UpstreamMigrationJournalError,
+} from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 
 const freshDatabase = () => it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -109,6 +114,115 @@ freshDatabase()("unaudited upstream journal", (it) => {
         SELECT COUNT(*) AS n FROM effect_sql_migrations WHERE migration_id >= 36
       `;
       assert.deepStrictEqual(journal, [{ n: 6 }]);
+    }),
+  );
+});
+
+freshDatabase()("fork migration markers", (it) => {
+  it.effect("cover every fork migration and match the real schema", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+
+      const markerIds = new Set(forkMigrationMarkers.map(([id]) => id));
+      const missing = migrationManifest
+        .filter(([id]) => id >= 36 && !markerIds.has(id))
+        .map(([id, name]) => `${id}_${name}`);
+      assert.deepStrictEqual(missing, []);
+
+      for (const [id, marker] of forkMigrationMarkers) {
+        const rows =
+          marker.kind === "column"
+            ? yield* sql`
+                SELECT 1 FROM pragma_table_info(${marker.table}) WHERE name = ${marker.column}
+              `
+            : yield* sql`
+                SELECT 1 FROM sqlite_master
+                WHERE type = ${marker.kind}
+                  AND name = ${marker.kind === "table" ? marker.table : marker.index}
+              `;
+        assert.strictEqual(rows.length, 1, `marker for migration ${id} not found in schema`);
+      }
+    }),
+  );
+});
+
+freshDatabase()("journal lost after fork migrations ran", (it) => {
+  it.effect("re-stamps the journal from schema markers instead of re-running", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      yield* sql`
+        INSERT INTO orchestration_v2_events (
+          event_id, thread_id, event_type, occurred_at, payload_json
+        ) VALUES ('evt-1', 'thread-1', 'test', '2026-08-01T00:00:00.000Z', '{}')
+      `;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 36`;
+
+      yield* runMigrations();
+
+      const journal = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations
+        WHERE migration_id IN (36, 52) ORDER BY migration_id
+      `;
+      assert.deepStrictEqual(journal, [
+        { migration_id: 36, name: "OrchestrationV2" },
+        { migration_id: 52, name: "ProjectionProjectsDefaultThreadEnvMode" },
+      ]);
+
+      const events = yield* sql<{ readonly event_id: string }>`
+        SELECT event_id FROM orchestration_v2_events
+      `;
+      assert.deepStrictEqual(events, [{ event_id: "evt-1" }]);
+    }),
+  );
+});
+
+freshDatabase()("renumbered fork journal", (it) => {
+  it.effect("drops fork rows journaled under wrong ids and re-stamps from markers", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+      // A patched build renumbered the fork migrations to 56+ in the journal.
+      yield* sql`
+        UPDATE effect_sql_migrations SET migration_id = migration_id + 20
+        WHERE migration_id >= 36
+      `;
+
+      yield* runMigrations();
+
+      const journal = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations
+        WHERE migration_id >= 36 ORDER BY migration_id
+      `;
+      assert.strictEqual(journal.length, 17);
+      assert.deepStrictEqual(journal[0], { migration_id: 36, name: "OrchestrationV2" });
+      assert.deepStrictEqual(journal[16], {
+        migration_id: 52,
+        name: "ProjectionProjectsDefaultThreadEnvMode",
+      });
+    }),
+  );
+});
+
+freshDatabase()("partially migrated fork database", (it) => {
+  it.effect("adopts only the contiguous prefix and runs the rest", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 44 });
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 36`;
+
+      yield* runMigrations();
+
+      const journal = yield* sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM effect_sql_migrations WHERE migration_id >= 36
+      `;
+      assert.deepStrictEqual(journal, [{ n: 17 }]);
+
+      const hermes = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hermes_session_bindings'
+      `;
+      assert.strictEqual(hermes.length, 1);
     }),
   );
 });

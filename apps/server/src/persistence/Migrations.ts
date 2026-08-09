@@ -174,6 +174,114 @@ const forkMigrationNames = new Map<number, string>(
   migrationEntries.map(([id, name]) => [id, name]),
 );
 
+const knownForkMigrationNames: ReadonlySet<string> = new Set(
+  migrationEntries.map(([, name]) => name),
+);
+
+type SchemaMarker =
+  | { readonly kind: "table"; readonly table: string }
+  | { readonly kind: "index"; readonly index: string }
+  | { readonly kind: "column"; readonly table: string; readonly column: string };
+
+/**
+ * One provable schema artifact per fork migration from the divergence point on.
+ * If the marker exists but the journal row does not, the migration already ran
+ * on this database under a journal the fork can no longer trust (official app,
+ * manual repair, renumbered build) — the journal row is restored instead of
+ * re-running the migration, which would crash on the existing schema.
+ * Every entry in migrationEntries at or past forkDivergenceId must have a
+ * marker; a test enforces this.
+ */
+export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]> = [
+  [36, { kind: "table", table: "orchestration_v2_events" }],
+  [37, { kind: "table", table: "orchestration_v2_projection_subagents" }],
+  [38, { kind: "column", table: "orchestration_v2_events", column: "driver" }],
+  [39, { kind: "table", table: "orchestration_v2_projection_provider_session_bindings" }],
+  [40, { kind: "table", table: "orchestration_v2_thread_launch_workflows" }],
+  [41, { kind: "index", index: "idx_orchestration_events_application_sequence" }],
+  // Not claim_idx/command_idx: 038 creates those too on the pre-rebuild table.
+  [42, { kind: "index", index: "orchestration_v2_effect_outbox_thread_status_idx" }],
+  [43, { kind: "table", table: "scheduled_tasks" }],
+  [44, { kind: "table", table: "orchestration_v2_legacy_imports" }],
+  [45, { kind: "table", table: "hermes_session_bindings" }],
+  [46, { kind: "table", table: "hermes_proactive_sources" }],
+  [47, { kind: "column", table: "hermes_session_bindings", column: "title_revision" }],
+  [48, { kind: "table", table: "hermes_session_imports" }],
+  [49, { kind: "column", table: "hermes_session_imports", column: "project_id" }],
+  [50, { kind: "column", table: "hermes_session_imports", column: "inherited_message_count" }],
+  [51, { kind: "table", table: "hermes_cron_run_watermarks" }],
+  [52, { kind: "column", table: "projection_projects", column: "default_thread_env_mode" }],
+];
+
+const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {
+  const sql = yield* SqlClient.SqlClient;
+  switch (marker.kind) {
+    case "table": {
+      const rows = yield* sql`
+        SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ${marker.table}
+      `;
+      return rows.length > 0;
+    }
+    case "index": {
+      const rows = yield* sql`
+        SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ${marker.index}
+      `;
+      return rows.length > 0;
+    }
+    case "column": {
+      const rows = yield* sql`
+        SELECT 1 FROM pragma_table_info(${marker.table}) WHERE name = ${marker.column}
+      `;
+      return rows.length > 0;
+    }
+  }
+});
+
+/**
+ * Restore journal rows for fork migrations whose schema is already present but
+ * whose journal rows were lost (reset by reconciliation, stripped by a manual
+ * repair, or written under renumbered ids by a patched build). Migrations run
+ * contiguously, so adoption walks up from the divergence point and stops at the
+ * first migration whose marker is absent — everything past that point runs
+ * normally. Without this, the migrator re-runs the base orchestration_v2
+ * migration and crashes with "table orchestration_v2_events already exists"
+ * on every launch.
+ */
+export const adoptAppliedForkMigrations = Effect.fn("adoptAppliedForkMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  const journalTable = yield* sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (journalTable.length === 0) return;
+
+  const rows = yield* sql<{ readonly migration_id: number }>`
+    SELECT migration_id FROM effect_sql_migrations
+    WHERE migration_id >= ${forkDivergenceId}
+  `;
+  const journaled = new Set(rows.map((row) => row.migration_id));
+
+  const adopted: Array<string> = [];
+  for (const [id, marker] of forkMigrationMarkers) {
+    if (journaled.has(id)) continue;
+    if (!(yield* markerExists(marker))) break;
+    const name = forkMigrationNames.get(id);
+    if (name === undefined) break;
+    yield* sql`
+      INSERT INTO effect_sql_migrations (migration_id, name, created_at)
+      VALUES (${id}, ${name}, ${new Date().toISOString()})
+    `;
+    adopted.push(`${id}_${name}`);
+  }
+
+  if (adopted.length > 0) {
+    yield* Effect.log("Adopted already-applied fork migrations into the journal").pipe(
+      Effect.annotateLogs({ adopted }),
+    );
+  }
+});
+
 export class UpstreamMigrationJournalError extends Error {
   override readonly name = "UpstreamMigrationJournalError";
 }
@@ -204,7 +312,14 @@ export const reconcileUpstreamMigrationJournal = Effect.fn("reconcileUpstreamMig
     );
     if (upstreamRows.length === 0) return;
 
-    const unknown = upstreamRows.filter((row) => !reconcilableUpstreamMigrations.has(row.name));
+    const unknown = upstreamRows.filter(
+      (row) =>
+        !reconcilableUpstreamMigrations.has(row.name) &&
+        // A fork migration name journaled under the wrong id comes from a
+        // patched/renumbered build; dropping the row is safe because adoption
+        // re-stamps it at the correct id from the schema itself.
+        !knownForkMigrationNames.has(row.name),
+    );
     if (unknown.length > 0) {
       return yield* Effect.fail(
         new UpstreamMigrationJournalError(
@@ -218,8 +333,7 @@ export const reconcileUpstreamMigrationJournal = Effect.fn("reconcileUpstreamMig
 
     yield* sql`
       DELETE FROM effect_sql_migrations
-      WHERE migration_id >= ${forkDivergenceId}
-        AND name IN ${sql.in(upstreamRows.map((row) => row.name))}
+      WHERE migration_id IN ${sql.in(upstreamRows.map((row) => row.migration_id))}
     `;
     yield* Effect.log("Reconciled official-app migration journal").pipe(
       Effect.annotateLogs({
@@ -253,6 +367,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
   yield* reconcileUpstreamMigrationJournal();
+  yield* adoptAppliedForkMigrations();
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
