@@ -139,6 +139,19 @@ export function buildAgentsPanelModel(
   };
 }
 
+/**
+ * Running subagents (delegated and background alike) without building the full
+ * roster; feeds the panel-toggle and empty-state badges. Matches the model's
+ * `activeCount`: `waiting` is idle, not live.
+ */
+export function countActiveAgents(subagents: ReadonlyArray<OrchestrationV2Subagent>): number {
+  let count = 0;
+  for (const subagent of subagents) {
+    if (agentRowState(subagent.status) === "active") count += 1;
+  }
+  return count;
+}
+
 // Phase/token presentation is shared with mobile so both surfaces report the
 // same numbers; see @t3tools/shared/workflowObservability.
 export { formatTokenCount, workflowPhaseProgress } from "@t3tools/shared/workflowObservability";

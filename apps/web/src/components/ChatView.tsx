@@ -163,6 +163,7 @@ import {
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
 import { RightPanelTabs } from "./RightPanelTabs";
+import { countActiveAgents } from "./agentsPanel.logic";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -1302,6 +1303,10 @@ function ChatViewContent(props: ChatViewProps) {
   });
   const serverThreadProjection = useThreadProjection(routeThreadDetailRef);
   const serverProjection = serverThreadProjection?.projection ?? null;
+  const liveAgentCount = useMemo(
+    () => countActiveAgents(serverProjection?.subagents ?? []),
+    [serverProjection],
+  );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
   const committedServerMessageIds = useMemo(
     () => deriveCommittedServerUserMessageIds(serverVisibleTurnItems),
@@ -6665,6 +6670,10 @@ function ChatViewContent(props: ChatViewProps) {
     rightPanelAvailable: activeProject !== null && !isHermesConversation,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
+    // Suppressed while the Agents surface is visible: the roster itself is
+    // on screen, so the toggle badge would be pointing at nothing.
+    liveAgentCount:
+      rightPanelOpen && activeRightPanelSurface?.kind === "agents" ? 0 : liveAgentCount,
     onToggleTerminal: toggleTerminalVisibility,
     onToggleThreadPanel: toggleThreadPanel,
     onToggleRightPanel: toggleRightPanel,
@@ -7175,6 +7184,7 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          liveAgentCount={liveAgentCount}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -7204,6 +7214,7 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            liveAgentCount={liveAgentCount}
           >
             {rightPanelContent}
           </RightPanelTabs>
