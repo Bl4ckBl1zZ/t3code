@@ -17,6 +17,7 @@ import { useWorkspaceState } from "../../state/workspace";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
+import { findProjectByScopedKey } from "./new-task-project-selection";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 
 type NewTaskRouteParams = {
@@ -80,7 +81,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
   const projects = useProjects();
-  const { projectScopes } = useNewTaskFlow();
+  const { lastNewTaskProjectKey, projectScopes } = useNewTaskFlow();
   const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -104,6 +105,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const screenTitle = incomingShare ? "Start a task" : "Choose project";
   const projectEmptyState = deriveProjectEmptyState(catalogState);
   const resumedDestinationKeyRef = useRef<string | null>(null);
+  const resumedRememberedProjectRef = useRef(false);
+  const rememberedProject = findProjectByScopedKey(lastNewTaskProjectKey, projects);
   const reservedDestinationProject = incomingShare?.destination
     ? (projects.find(
         (project) =>
@@ -179,6 +182,28 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
       },
     });
   }, [incomingShare, isFocused, navigation, reservedDestinationProject]);
+
+  // Opening the flow again goes straight to the composer for the project the
+  // last task was started in — the picker stays underneath, so choosing a
+  // different project is one back-swipe away. Only once per presentation:
+  // coming back from the draft is the user asking for the list.
+  useEffect(() => {
+    if (incomingShare || resumedRememberedProjectRef.current || !isFocused) {
+      return;
+    }
+    if (!rememberedProject) {
+      return;
+    }
+    resumedRememberedProjectRef.current = true;
+    navigation.navigate("NewTaskSheet", {
+      screen: "NewTaskDraft",
+      params: {
+        environmentId: rememberedProject.environmentId,
+        projectId: rememberedProject.id,
+        title: rememberedProject.title,
+      },
+    });
+  }, [incomingShare, isFocused, navigation, rememberedProject]);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">

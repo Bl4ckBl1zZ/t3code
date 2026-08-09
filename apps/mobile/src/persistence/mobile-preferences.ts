@@ -35,6 +35,12 @@ export interface Preferences {
    * default flat list — see `resolveThreadListV2Enabled`.
    */
   readonly legacyThreadListEnabled?: boolean;
+  /**
+   * Scoped project key (`environmentId:projectId`) of the project the user last
+   * started a task in. The new-task flow preselects it so composing picks up
+   * where the previous task left off instead of asking again every time.
+   */
+  readonly lastNewTaskProjectKey?: string;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -88,6 +94,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     legacyThreadListEnabled?: boolean;
     workspace?: "work" | "code";
+    lastNewTaskProjectKey?: string;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -129,6 +136,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (parsed.workspace === "work" || parsed.workspace === "code") {
     preferences.workspace = parsed.workspace;
+  }
+  if (typeof parsed.lastNewTaskProjectKey === "string" && parsed.lastNewTaskProjectKey.length > 0) {
+    preferences.lastNewTaskProjectKey = parsed.lastNewTaskProjectKey;
   }
   return preferences;
 }

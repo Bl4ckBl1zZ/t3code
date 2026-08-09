@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  parseScopedProjectKey,
   scopedProjectKey,
   scopeProjectRef,
   scopeThreadRef,
@@ -134,6 +135,13 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
+      // Every new-thread surface funnels through here, so this is the one
+      // place that has to remember the choice: the next composer the user
+      // opens without naming a project lands back on this one. Unknown refs
+      // are skipped so a deleted project can't become the sticky default.
+      if (project) {
+        useUiStateStore.getState().setLastNewThreadProjectKey(scopedProjectKey(projectRef));
+      }
       // The shared resolver owns the priority order. The t3.json read is
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
@@ -393,6 +401,20 @@ export function useNewThreadHandler() {
   );
 }
 
+/**
+ * The project the user last started a thread in, or `null` when nothing has
+ * been remembered yet. Callers resolve it against their own candidate list so a
+ * project that has since been removed (or is filtered out of that surface)
+ * falls through to the surface's own default.
+ */
+export function useRememberedNewThreadProjectRef(): ScopedProjectRef | null {
+  const lastProjectKey = useUiStateStore((store) => store.lastNewThreadProjectKey);
+  return useMemo(
+    () => (lastProjectKey === null ? null : parseScopedProjectKey(lastProjectKey)),
+    [lastProjectKey],
+  );
+}
+
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useParams({
@@ -422,12 +444,23 @@ export function useHandleNewThread() {
     });
   }, [projectOrder, projects]);
   const handleNewThread = useNewThreadHandler();
+  const rememberedProjectRef = useRememberedNewThreadProjectRef();
+  // The remembered project outranks the user's drag order: it is the more
+  // recent signal about where they intend to work.
+  const defaultProject =
+    (rememberedProjectRef
+      ? projects.find(
+          (project) =>
+            project.id === rememberedProjectRef.projectId &&
+            project.environmentId === rememberedProjectRef.environmentId,
+        )
+      : undefined) ?? orderedProjects[0];
 
   return {
     activeDraftThread,
     activeThread,
-    defaultProjectRef: orderedProjects[0]
-      ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
+    defaultProjectRef: defaultProject
+      ? scopeProjectRef(defaultProject.environmentId, defaultProject.id)
       : null,
     handleNewThread,
     routeThreadRef,

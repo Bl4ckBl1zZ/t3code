@@ -38,6 +38,7 @@ import {
 import { resolveDraftWorkspaceMode } from "../../lib/mobileWorkspace";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { useLastNewTaskProjectKey } from "../../state/preferences";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import {
@@ -129,6 +130,9 @@ type NewTaskFlowContextValue = {
   readonly projectScopes: ReadonlyArray<HomeProjectScope>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  /** Scoped project key of the project the last task was started in, so
+      entering the flow without a named project can preselect it. */
+  readonly lastNewTaskProjectKey: string | null;
   readonly selectedModelKey: string | null;
   readonly workspaceMode: WorkspaceMode;
   readonly selectedBranchName: string | null;
@@ -219,6 +223,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       ? selectedEnvironmentIdOverride
       : (projects[0]?.environmentId ?? null);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const [lastNewTaskProjectKey, setLastNewTaskProjectKey] = useLastNewTaskProjectKey();
   const [submitting, setSubmitting] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
@@ -572,11 +577,17 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     );
   }, [availableBranches, branchQuery]);
 
-  const setProject = useCallback((project: EnvironmentProject) => {
-    const nextProjectKey = scopedProjectKey(project.environmentId, project.id);
-    setSelectedEnvironmentId(project.environmentId);
-    setSelectedProjectKey(nextProjectKey);
-  }, []);
+  const setProject = useCallback(
+    (project: EnvironmentProject) => {
+      const nextProjectKey = scopedProjectKey(project.environmentId, project.id);
+      setSelectedEnvironmentId(project.environmentId);
+      setSelectedProjectKey(nextProjectKey);
+      // Every project choice in this flow lands here, so this is the one place
+      // that has to remember it for the next task the user starts.
+      setLastNewTaskProjectKey(nextProjectKey);
+    },
+    [setLastNewTaskProjectKey],
+  );
 
   const selectEnvironment = useCallback(
     (environmentId: EnvironmentId) => {
@@ -604,9 +615,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ? projectsOnTarget.find((project) => project.title === selectedProject.title)
           : undefined);
       setSelectedEnvironmentId(environmentId);
-      setSelectedProjectKey(match ? scopedProjectKey(match.environmentId, match.id) : null);
+      if (!match) {
+        setSelectedProjectKey(null);
+        return;
+      }
+      const nextProjectKey = scopedProjectKey(match.environmentId, match.id);
+      setSelectedProjectKey(nextProjectKey);
+      setLastNewTaskProjectKey(nextProjectKey);
     },
-    [projects, selectedProject],
+    [projects, selectedProject, setLastNewTaskProjectKey],
   );
 
   const setWorkspaceMode = useCallback(
@@ -915,6 +932,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       projectScopes,
       selectedEnvironmentId,
       selectedProjectKey,
+      lastNewTaskProjectKey,
       selectedModelKey,
       workspaceMode,
       selectedBranchName,
@@ -999,6 +1017,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setDraftScope,
       selectedProject,
       selectedProjectKey,
+      lastNewTaskProjectKey,
       selectedWorktreePath,
       setProject,
       selectBranch,
