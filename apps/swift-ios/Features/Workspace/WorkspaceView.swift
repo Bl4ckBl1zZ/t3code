@@ -248,15 +248,11 @@ public struct WorkspaceView: View {
         }
         // A different workspace is a different list, so the settled shelf starts
         // from its own first page rather than inheriting the other's.
+        // Every workspace lands on its own list. Chat used to auto-open its most
+        // recent conversation here, which read as the tab opening a thread on
+        // its own; picking the thread is the user's call.
         .onChange(of: storedWorkspace) {
             settledLimit = 12
-            // Chat lands in the conversation, not on a list: switching to the
-            // tab opens the most recent chat so "continue talking" is zero
-            // taps. The list stays one back-swipe away.
-            if workspace == .chat, selectedThreadID == nil,
-               let latest = latestChatThreadID {
-                openThread(latest)
-            }
         }
     }
 
@@ -699,24 +695,6 @@ public struct WorkspaceView: View {
 
     private var selectedProject: FeatureProject? {
         filterableProjects.first { $0.id == selectedProjectID }
-    }
-
-    /// The conversation the Chat tab lands in: the most recently touched
-    /// chat-role thread, if any exist yet.
-    private var latestChatThreadID: String? {
-        let providerDrivers = WorkspaceSwitcher.providerDrivers(in: model.snapshot)
-        let fallback = WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
-        return WorkspaceSwitcher.threads(
-            model.snapshot.threads,
-            in: .chat,
-            providerDrivers: providerDrivers,
-            fallbackEnvironmentID: fallback
-        )
-        .max { lhs, rhs in
-            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt < rhs.updatedAt }
-            return lhs.id > rhs.id
-        }?
-        .id
     }
 
     private var creationProjects: [FeatureProject] {
