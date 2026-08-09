@@ -120,6 +120,42 @@ final class TransportReliabilityTests: XCTestCase {
         )
     }
 
+    /// Project-scoped thread ids carry colons, and the server matches the path
+    /// segment after exactly one round of percent-decoding. Escaping the id
+    /// before it reaches `URLComponents.path` encoded it twice and turned every
+    /// open of such a thread into `thread_not_found`.
+    func testThreadSnapshotSendsProjectScopedIdWithoutDoubleEncoding() async throws {
+        let environment = Environment(
+            id: "environment-1",
+            label: "Studio",
+            httpBaseURL: URL(string: "https://studio.example")!,
+            webSocketBaseURL: URL(string: "wss://studio.example")!
+        )
+        let credentials = InMemoryCredentialStore(credentials: [
+            environment.id: EnvironmentCredential(accessToken: "access-token"),
+        ])
+        let body = try JSONEncoder.t3.encode(
+            OrchestrationV2ThreadDetailSnapshot(
+                snapshotSequence: 1,
+                projection: windowedProjectionFixture(truncatedVisibleItemCount: 0)
+            )
+        )
+        let transport = RecordingHTTPTransport { request in
+            (body, transportResponse(request))
+        }
+        let api = EnvironmentAPI(transport: transport, credentials: credentials)
+        let threadID = "thread:project:6848ee2d-f2cc-43d6-ad8a-7a669b24120c:"
+            + "c3214a51-04d5-48f2-9a26-97b8b9f41338"
+
+        _ = try await api.threadSnapshot(id: threadID, environment: environment)
+
+        let requests = await transport.requests
+        let url = try XCTUnwrap(requests.first?.url)
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertFalse(components.percentEncodedPath.contains("%25"))
+        XCTAssertEqual(components.path, "/api/orchestration/threads/\(threadID)")
+    }
+
     func testWebSocketHandshakeOffersPerMessageDeflate() {
         let url = URL(string: "wss://studio.example/ws?wsTicket=secret")!
         let compressed = WebSocketHandshakeRequest.make(url: url)
