@@ -15,14 +15,17 @@ import { readWorkflowScript } from "./WorkflowScriptQuery.ts";
  */
 const root = NodePath.join(NodeOS.homedir(), ".claude", "projects");
 
-async function withScriptDir<A>(name: string, run: (dir: string) => Promise<A>): Promise<A> {
-  const dir = await NodeFSP.mkdtemp(NodePath.join(root, `wfq-${name}-`));
-  try {
-    return await run(dir);
-  } finally {
-    await NodeFSP.rm(dir, { recursive: true, force: true });
-  }
-}
+// acquireUseRelease keeps the cleanup guarantee of the old try/finally without
+// a nested runtime: the body stays an Effect the test can yield directly.
+const withScriptDir = <A, E, R>(
+  name: string,
+  use: (dir: string) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.acquireUseRelease(
+    Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(root, `wfq-${name}-`))),
+    use,
+    (dir) => Effect.promise(() => NodeFSP.rm(dir, { recursive: true, force: true })),
+  );
 
 // flip swaps the channels: a success here means the call did NOT fail, which
 // is itself the test failure, so the success type stays in the error slot.
@@ -33,17 +36,17 @@ const failureReason = <A>(
 
 describe("readWorkflowScript", () => {
   it.effect("reads a contained .js script", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.promise(() =>
-        withScriptDir("ok", async (dir) => {
-          const scriptPath = NodePath.join(dir, "script.js");
-          await NodeFSP.writeFile(scriptPath, "export const meta = {}\n", "utf8");
-          return Effect.runPromise(readWorkflowScript({ scriptPath }));
-        }),
-      );
-      expect(result.contents).toContain("export const meta");
-      expect(result.truncated).toBe(false);
-    }),
+    withScriptDir("ok", (dir) =>
+      Effect.gen(function* () {
+        const scriptPath = NodePath.join(dir, "script.js");
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(scriptPath, "export const meta = {}\n", "utf8"),
+        );
+        const result = yield* readWorkflowScript({ scriptPath });
+        expect(result.contents).toContain("export const meta");
+        expect(result.truncated).toBe(false);
+      }),
+    ),
   );
 
   it.effect("rejects a relative path without touching the filesystem", () =>
@@ -76,17 +79,15 @@ describe("readWorkflowScript", () => {
     Effect.gen(function* () {
       // The case that motivates realpathing the FILE and not just its parent:
       // the link itself sits inside a contained directory.
-      const reason = yield* Effect.promise(() =>
-        withScriptDir("escape", async (dir) => {
+      const reason = yield* withScriptDir("escape", (dir) =>
+        Effect.gen(function* () {
           const target = NodePath.join(NodeOS.tmpdir(), `wfq-secret-${process.pid}.js`);
-          await NodeFSP.writeFile(target, "secret", "utf8");
+          yield* Effect.promise(() => NodeFSP.writeFile(target, "secret", "utf8"));
           const link = NodePath.join(dir, "innocent.js");
-          await NodeFSP.symlink(target, link);
-          const outcome = await Effect.runPromise(
-            Effect.flip(readWorkflowScript({ scriptPath: link })),
+          yield* Effect.promise(() => NodeFSP.symlink(target, link));
+          return yield* failureReason(readWorkflowScript({ scriptPath: link })).pipe(
+            Effect.ensuring(Effect.promise(() => NodeFSP.rm(target, { force: true }))),
           );
-          await NodeFSP.rm(target, { force: true });
-          return outcome.reason;
         }),
       );
       expect(reason).toBe("outside-root");
@@ -95,14 +96,11 @@ describe("readWorkflowScript", () => {
 
   it.effect("rejects a directory that ends in .js", () =>
     Effect.gen(function* () {
-      const reason = yield* Effect.promise(() =>
-        withScriptDir("dir", async (dir) => {
+      const reason = yield* withScriptDir("dir", (dir) =>
+        Effect.gen(function* () {
           const fake = NodePath.join(dir, "bundle.js");
-          await NodeFSP.mkdir(fake);
-          const outcome = await Effect.runPromise(
-            Effect.flip(readWorkflowScript({ scriptPath: fake })),
-          );
-          return outcome.reason;
+          yield* Effect.promise(() => NodeFSP.mkdir(fake));
+          return yield* failureReason(readWorkflowScript({ scriptPath: fake }));
         }),
       );
       expect(reason).toBe("not-regular-file");
@@ -119,30 +117,28 @@ describe("readWorkflowScript", () => {
   );
 
   it.effect("truncates an oversized script instead of failing", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.promise(() =>
-        withScriptDir("big", async (dir) => {
-          const scriptPath = NodePath.join(dir, "big.js");
-          await NodeFSP.writeFile(scriptPath, "x".repeat(300 * 1024), "utf8");
-          return Effect.runPromise(readWorkflowScript({ scriptPath }));
-        }),
-      );
-      expect(result.truncated).toBe(true);
-      expect(result.contents.length).toBe(256 * 1024);
-    }),
+    withScriptDir("big", (dir) =>
+      Effect.gen(function* () {
+        const scriptPath = NodePath.join(dir, "big.js");
+        yield* Effect.promise(() => NodeFSP.writeFile(scriptPath, "x".repeat(300 * 1024), "utf8"));
+        const result = yield* readWorkflowScript({ scriptPath });
+        expect(result.truncated).toBe(true);
+        expect(result.contents.length).toBe(256 * 1024);
+      }),
+    ),
   );
 
   it.effect("returns the resolved realpath, not the requested hint", () =>
     Effect.gen(function* () {
       // A contained symlink is legitimate; the caller should learn what was
       // actually read so the UI does not display a misleading path.
-      const result = yield* Effect.promise(() =>
-        withScriptDir("resolve", async (dir) => {
+      const result = yield* withScriptDir("resolve", (dir) =>
+        Effect.gen(function* () {
           const real = NodePath.join(dir, "real.js");
-          await NodeFSP.writeFile(real, "ok", "utf8");
+          yield* Effect.promise(() => NodeFSP.writeFile(real, "ok", "utf8"));
           const link = NodePath.join(dir, "alias.js");
-          await NodeFSP.symlink(real, link);
-          return Effect.runPromise(readWorkflowScript({ scriptPath: link }));
+          yield* Effect.promise(() => NodeFSP.symlink(real, link));
+          return yield* readWorkflowScript({ scriptPath: link });
         }),
       );
       expect(NodePath.basename(result.scriptPath)).toBe("real.js");
