@@ -720,6 +720,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:hermes-proactive",
       tag: WS_METHODS.hermesProactiveStatus,
     }),
+    /** Hermes runs that happened without a T3 turn: snapshot, then every change. */
+    hermesProactiveInbox: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:hermes-proactive-inbox",
+      tag: WS_METHODS.subscribeHermesProactiveInbox,
+    }),
     hermesSkills: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:hermes-skills",
       tag: WS_METHODS.hermesSkillsList,
@@ -827,6 +832,10 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.hermesCronMutate,
       scheduler: configScheduler,
       concurrency: configConcurrency,
+    }),
+    markHermesProactiveNotifications: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hermes-proactive:mark",
+      tag: WS_METHODS.hermesProactiveMarkNotifications,
     }),
     searchHermesSkills: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:hermes-skills:search",

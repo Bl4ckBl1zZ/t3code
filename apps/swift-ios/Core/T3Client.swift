@@ -669,6 +669,36 @@ public actor T3Client {
         )
     }
 
+    // MARK: - Hermes proactive inbox
+    //
+    // Runs a Hermes gateway performed on its own schedule. Pushed rather than
+    // polled: a cron job can finish at any hour, and the server emits the whole
+    // snapshot on subscribe and again after every change.
+
+    public func hermesProactiveInboxEvents() async
+        -> AsyncThrowingStream<HermesProactiveInboxSnapshot, Error>
+    {
+        await rpc.subscribe(
+            RPCMethod.subscribeHermesProactiveInbox.rawValue,
+            payload: .object([:]),
+            as: HermesProactiveInboxSnapshot.self
+        )
+    }
+
+    public func markHermesProactiveNotifications(
+        ids: [String],
+        status: String
+    ) async throws -> HermesProactiveMarkResult {
+        try await rpc.request(
+            RPCMethod.hermesProactiveMarkNotifications.rawValue,
+            payload: .object([
+                "notificationIds": .array(ids.map { .string($0) }),
+                "status": .string(status),
+            ]),
+            as: HermesProactiveMarkResult.self
+        )
+    }
+
     public func listProjectEntries(cwd: String) async throws -> ProjectEntriesResult {
         try await rpc.request(
             RPCMethod.projectsListEntries.rawValue,
@@ -1584,6 +1614,42 @@ public enum RPCMethod: String, Sendable {
     case scheduledTasksSetEnabled = "scheduledTasks.setEnabled"
     case scheduledTasksDelete = "scheduledTasks.delete"
     case scheduledTasksRunNow = "scheduledTasks.runNow"
+    case hermesProactiveMarkNotifications = "hermesProactive.markNotifications"
+    case subscribeHermesProactiveInbox = "hermesProactive.subscribeInbox"
+}
+
+/// One Hermes run that happened without a T3 turn, as
+/// `packages/contracts/src/hermesProactive.ts` reports it. `threadId` is absent
+/// when the gateway never told T3 which session the job runs in, so a row is
+/// not always openable.
+public struct HermesProactiveNotification: Decodable, Equatable, Sendable, Identifiable {
+    public let notificationId: String
+    public let eventId: String
+    public let workItemId: String
+    public let projectId: String?
+    public let threadId: String?
+    public let title: String
+    public let body: String
+    /// `unread`, `read`, or `dismissed`. Kept as the wire string so a status a
+    /// future server adds cannot fail the whole list.
+    public let status: String
+    public let createdAt: String
+    public let updatedAt: String
+
+    public var id: String { notificationId }
+}
+
+public struct HermesProactiveInboxSnapshot: Decodable, Equatable, Sendable {
+    public let notifications: [HermesProactiveNotification]
+    public let unreadCount: Int
+    /// Notifications the server's delivery outbox gave up on. Reported rather
+    /// than hidden, so a broken delivery path does not read as a quiet inbox.
+    public let deadLetterCount: Int
+}
+
+public struct HermesProactiveMarkResult: Decodable, Equatable, Sendable {
+    public let updated: Int
+    public let snapshot: HermesProactiveInboxSnapshot
 }
 
 /// A persisted automation, as `packages/contracts/src/scheduledTask.ts` reports

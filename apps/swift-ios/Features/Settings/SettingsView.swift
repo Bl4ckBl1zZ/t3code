@@ -12,6 +12,10 @@ public struct SettingsView: View {
     @State private var showingIntegrations = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
+    @State private var showingHermesRuns = false
+    /// Lives here rather than in the runs screen so the badge on the row stays
+    /// live without opening it, and so both read one subscription.
+    @State private var hermesInboxStore = HermesInboxStore()
     @State private var removalTarget: FeatureEnvironment?
     @State private var saveErrorMessage: String?
 
@@ -145,6 +149,22 @@ public struct SettingsView: View {
                 }
                 .presentationDragIndicator(.visible)
             }
+            .sheet(isPresented: $showingHermesRuns) {
+                NavigationStack {
+                    SettingsHermesRunsView(
+                        model: model,
+                        manager: hermesInboxManager,
+                        store: hermesInboxStore,
+                        onOpenThread: openThreadFromHermesRun
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showingHermesRuns = false }
+                        }
+                    }
+                }
+                .presentationDragIndicator(.visible)
+            }
             .sheet(isPresented: $showingT3Connect) {
                 if let capability = model.client as? any T3ConnectCapable {
                     NavigationStack {
@@ -164,8 +184,33 @@ public struct SettingsView: View {
             .onDisappear {
                 model.setConnectionManagementPresented(false)
             }
+            // Follows every environment's Hermes inbox for as long as Settings
+            // is open, which is what keeps the row's badge honest before anyone
+            // taps into the list.
+            .task(id: model.snapshot.environments.map(\.id)) {
+                await hermesInboxStore.observe(
+                    environments: model.snapshot.environments,
+                    manager: hermesInboxManager
+                )
+            }
         }
         .presentationDragIndicator(.visible)
+    }
+
+    /// Leaves Settings behind before routing: the thread opens in the workspace
+    /// underneath, and a sheet still covering it would look like nothing
+    /// happened.
+    private func openThreadFromHermesRun(environmentID: String, threadID: String) {
+        showingHermesRuns = false
+        dismiss()
+        NotificationCenter.default.post(
+            name: .platformRouteReceived,
+            object: nil,
+            userInfo: ["route": PlatformRoute.thread(
+                environmentID: environmentID,
+                threadID: threadID
+            )]
+        )
     }
 
     private var settingsHeader: some View {
@@ -387,6 +432,19 @@ public struct SettingsView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                settingsDivider
+
+                Button {
+                    showingHermesRuns = true
+                } label: {
+                    SettingsNavigationRow(
+                        title: "Hermes Runs",
+                        systemImage: "clock.arrow.circlepath",
+                        badge: HermesRunLabels.badgeText(unreadCount: hermesInboxStore.totalUnreadCount)
+                    )
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -537,6 +595,11 @@ public struct SettingsView: View {
             ?? EmptyFeatureScheduledTaskManager.shared
     }
 
+    private var hermesInboxManager: any FeatureHermesInboxManaging {
+        (model.client as? any FeatureHermesInboxManaging)
+            ?? EmptyFeatureHermesInboxManager.shared
+    }
+
     private var selectedProvider: FeatureProvider? {
         guard let selection = settings.defaultSelection else { return nil }
         return model.snapshot.providers.first { $0.id == selection.providerID }
@@ -683,6 +746,9 @@ struct SettingsNavigationRow: View {
     let title: String
     let systemImage: String
     var trailingSystemImage = "chevron.right"
+    /// Unread-style count shown before the chevron. `nil` draws no badge, so a
+    /// row that has nothing waiting keeps its plain shape.
+    var badge: String?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -691,6 +757,15 @@ struct SettingsNavigationRow: View {
                 .font(T3Typography.threadBody)
                 .foregroundStyle(T3Colors.textPrimary)
             Spacer(minLength: 8)
+            if let badge {
+                Text(badge)
+                    .font(T3Typography.supportingStrong)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(T3Colors.accent, in: Capsule())
+                    .accessibilityLabel("\(badge) unread")
+            }
             Image(systemName: trailingSystemImage)
                 .font(T3Typography.supportingStrong)
                 .foregroundStyle(T3Colors.textTertiary)

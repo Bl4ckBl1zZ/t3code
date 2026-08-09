@@ -7,11 +7,13 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { layer as proactiveRepositoryLayer } from "./HermesProactiveEventRepository.ts";
+import type { HermesProactiveInboxShape, HermesWitnessedRun } from "./HermesProactiveInbox.ts";
 import { hermesCronJobIsEnabled, hermesCronJobSessionKey, make } from "./HermesProactiveService.ts";
 import {
   HermesSessionBindingRepository,
@@ -285,5 +287,157 @@ describe("HermesProactiveService", () => {
         ),
       );
     }),
+  );
+});
+
+describe("HermesProactiveService missed runs", () => {
+  interface MutableGateway {
+    compatibility?: HermesGatewayCompatibility;
+    capabilities?: ReadonlyArray<string>;
+    jobs?: HermesGatewayCronListResult["jobs"];
+  }
+
+  /**
+   * Records what the sweep decided to announce. The real inbox is exercised in
+   * HermesProactiveInbox.test.ts; here only the decision matters.
+   */
+  function recordingInbox() {
+    const witnessed: Array<HermesWitnessedRun> = [];
+    const empty = { notifications: [], unreadCount: 0, deadLetterCount: 0 } as const;
+    const inbox: HermesProactiveInboxShape = {
+      witness: (run) =>
+        Effect.sync(() => {
+          witnessed.push(run);
+        }),
+      snapshot: Effect.succeed(empty),
+      subscribe: Effect.succeed({ latest: empty, changes: Stream.never }),
+      mark: () => Effect.succeed({ updated: 0, snapshot: empty }),
+      drain: Effect.succeed({ delivered: 0, retried: 0, deadLettered: 0 }),
+    };
+    return { inbox, witnessed };
+  }
+
+  /**
+   * One database across every sweep in a scenario, which is what makes the
+   * watermark from an earlier process visible to a later one.
+   */
+  const scenario = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provide(Layer.mergeAll(repositories, settingsLayer(true))),
+      Effect.orDie,
+    ) as Effect.Effect<A>;
+
+  /**
+   * A service instance with its own first-sweep memory, which is what
+   * distinguishes "this process has looked before" from a fresh server start.
+   */
+  const sweepWith = Effect.fn("sweepWith")(function* (input: {
+    readonly gateway: MutableGateway;
+    readonly inbox: HermesProactiveInboxShape;
+    readonly resident: boolean;
+  }) {
+    return yield* make({
+      clientFactory: fakeClientFactory(input.gateway),
+      ensureResident: () => Effect.succeed(input.resident),
+      inbox: input.inbox,
+      sweptSources: new Set<string>(),
+    });
+  });
+
+  it.effect("announces a run that finished while T3 was closed", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        yield* seedBinding({ threadId: "thread:b", storedSessionKey: "stored-b" });
+        const gateway: MutableGateway = {
+          jobs: [{ name: "inbox", enabled: true, session_key: "stored-b", last_run_at: "t1" }],
+        };
+        const first = recordingInbox();
+
+        // The process that was running when the job last ran learns the
+        // watermark and says nothing: it has no earlier value to compare to.
+        const before = yield* sweepWith({ gateway, inbox: first.inbox, resident: true });
+        yield* before.sweep();
+        assert.deepEqual(first.witnessed, []);
+
+        // T3 restarts, and by then Hermes has run the job again.
+        gateway.jobs = [
+          { name: "inbox", enabled: true, session_key: "stored-b", last_run_at: "t2" },
+        ];
+        const after = recordingInbox();
+        const restarted = yield* sweepWith({ gateway, inbox: after.inbox, resident: true });
+        const report = yield* restarted.sweep();
+
+        assert.equal(after.witnessed.length, 1);
+        assert.equal(after.witnessed[0]?.eventKind, "cron.run.missed");
+        assert.equal(after.witnessed[0]?.threadId, "thread:b");
+        assert.equal(after.witnessed[0]?.runIdentity, "inbox:t2");
+        assert.isTrue(
+          report.providers[0]?.diagnostics.some((diagnostic) =>
+            diagnostic.includes("without T3 watching"),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("stays quiet for a run that arrived live on a subscribed session", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        yield* seedBinding({ threadId: "thread:b", storedSessionKey: "stored-b" });
+        const gateway: MutableGateway = {
+          jobs: [{ name: "inbox", enabled: true, session_key: "stored-b", last_run_at: "t1" }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: true });
+        yield* service.sweep();
+
+        // Same process, same subscribed session: the adapter already announced
+        // this one as it streamed, so the sweep must not announce it again.
+        gateway.jobs = [
+          { name: "inbox", enabled: true, session_key: "stored-b", last_run_at: "t2" },
+        ];
+        yield* service.sweep();
+        assert.deepEqual(witnessed, []);
+      }),
+    ),
+  );
+
+  it.effect("announces a run on a session it never managed to subscribe to", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        yield* seedBinding({ threadId: "thread:b", storedSessionKey: "stored-b" });
+        const gateway: MutableGateway = {
+          jobs: [{ name: "inbox", enabled: true, session_key: "stored-b", last_run_at: "t1" }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: false });
+        yield* service.sweep();
+
+        gateway.jobs = [
+          { name: "inbox", enabled: true, session_key: "stored-b", last_run_at: "t2" },
+        ];
+        yield* service.sweep();
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.runIdentity, "inbox:t2");
+      }),
+    ),
+  );
+
+  it.effect("says nothing about a job it is meeting for the first time", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        const gateway: MutableGateway = {
+          jobs: [{ name: "inbox", enabled: true, last_run_at: "t1" }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: true });
+        yield* service.sweep();
+        assert.deepEqual(witnessed, []);
+      }),
+    ),
   );
 });

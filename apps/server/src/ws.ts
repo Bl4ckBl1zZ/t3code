@@ -78,6 +78,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
+import { HermesProactiveInbox } from "./hermes/HermesProactiveInbox.ts";
 import * as HermesProactive from "./hermes/HermesProactiveService.ts";
 import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as HermesSessionImport from "./hermes/HermesSessionImportService.ts";
@@ -446,7 +447,8 @@ const makeWsRpcLayer = (
       const hermesCron = yield* HermesCron.HermesCron;
       const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
-      const hermesProactive = yield* HermesProactive.make();
+      const hermesProactiveInbox = yield* HermesProactiveInbox;
+      const hermesProactive = yield* HermesProactive.make({ inbox: hermesProactiveInbox });
       // Hermes only streams a cron run to clients that are connected when it
       // fires, so residency is re-established on an interval for as long as
       // the server runs.
@@ -1362,6 +1364,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.hermesProactiveStatus, hermesProactive.report(), {
             "rpc.aggregate": "hermesProactive",
           }),
+        [WS_METHODS.hermesProactiveMarkNotifications]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.hermesProactiveMarkNotifications,
+            hermesProactiveInbox.mark(input),
+            { "rpc.aggregate": "hermesProactive" },
+          ),
+        [WS_METHODS.subscribeHermesProactiveInbox]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeHermesProactiveInbox,
+            Stream.unwrap(
+              Effect.map(hermesProactiveInbox.subscribe, ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "hermesProactive" },
+          ),
         [WS_METHODS.hermesSkillsList]: (_input) =>
           observeRpcEffect(WS_METHODS.hermesSkillsList, hermesSkills.list(), {
             "rpc.aggregate": "hermesSkills",

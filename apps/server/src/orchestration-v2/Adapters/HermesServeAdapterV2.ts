@@ -1,5 +1,6 @@
 import {
   type ChatAttachment,
+  HermesProactiveEventKinds,
   type HermesGatewayCompatibility,
   type HermesGatewayApprovalRespondResult,
   type HermesGatewayClarificationRespondResult,
@@ -86,6 +87,10 @@ import {
   resolveHermesServeEndpoint,
   type HermesServeRuntimeShape,
 } from "../../hermes/HermesServeRuntime.ts";
+import {
+  HermesProactiveInbox,
+  type HermesWitnessedRun,
+} from "../../hermes/HermesProactiveInbox.ts";
 import {
   HermesSessionBindingRepository,
   type HermesMutationIntent,
@@ -379,6 +384,13 @@ export interface HermesServeAdapterV2Options {
    */
   readonly continuationRequests?: {
     readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
+  };
+  /**
+   * Where a finished external run is announced outside its thread. Defaults to
+   * dropping it, for the same reason as `continuationRequests`.
+   */
+  readonly proactiveInbox?: {
+    readonly witness: (run: HermesWitnessedRun) => Effect.Effect<void>;
   };
 }
 
@@ -767,6 +779,34 @@ function isHermesProviderContinuationTurn(input: ProviderAdapterV2TurnInput): bo
 export const HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL = "Hermes ran this session outside T3.";
 
 /**
+ * How much of a run's reply travels with its notification. Long enough to say
+ * what happened at a glance, short enough that a chatty job does not push a
+ * wall of text through the websocket to every connected client.
+ */
+const HERMES_EXTERNAL_RUN_SUMMARY_LIMIT = 400;
+
+function hermesExternalRunTitle(status: "completed" | "interrupted" | "failed"): string {
+  switch (status) {
+    case "completed":
+      return "Hermes finished a run you did not start";
+    case "interrupted":
+      return "A Hermes run you did not start was interrupted";
+    case "failed":
+      return "A Hermes run you did not start failed";
+  }
+}
+
+function hermesExternalRunBody(assistantText: string, failureMessage: string | undefined): string {
+  const summary = assistantText.trim();
+  if (summary.length > 0) {
+    return summary.length > HERMES_EXTERNAL_RUN_SUMMARY_LIMIT
+      ? `${summary.slice(0, HERMES_EXTERNAL_RUN_SUMMARY_LIMIT).trimEnd()}…`
+      : summary;
+  }
+  return failureMessage ?? "The run produced no message. Open the thread for the full transcript.";
+}
+
+/**
  * Ceiling on events held for a continuation that never attaches (a thread the
  * orchestrator refuses to wake). Dropping the tail keeps a long-running
  * external session from growing the buffer without bound; the turn still shows
@@ -1115,6 +1155,7 @@ export function makeHermesServeAdapterV2(
     },
   };
   const continuationRequests = options.continuationRequests ?? { offer: () => Effect.void };
+  const proactiveInbox = options.proactiveInbox ?? { witness: () => Effect.void };
   const makeClient =
     options.clientFactory ??
     ((input) =>
@@ -2655,6 +2696,23 @@ export function makeHermesServeAdapterV2(
         );
         yield* Deferred.succeed(active.completion, undefined);
         state.settledRunId = active.gatewayRunId ?? active.sourceRunId ?? state.settledRunId;
+        // The transcript now has the run, but only someone already looking at
+        // this thread would know. An external run is by definition one nobody
+        // was waiting on, so it is announced here as well.
+        if (active.external) {
+          yield* proactiveInbox.witness({
+            providerInstanceId: String(options.instanceId),
+            profileKey: state.binding.profileKey,
+            runIdentity:
+              active.gatewayRunId ?? active.sourceRunId ?? String(active.providerTurn.id),
+            eventKind: HermesProactiveEventKinds.cronRunWitnessed,
+            title: hermesExternalRunTitle(projectedStatus),
+            body: hermesExternalRunBody(active.assistantText, projectedFailureMessage),
+            threadId: String(active.input.threadId),
+            projectId: null,
+            occurredAt: DateTime.formatIso(now),
+          });
+        }
         state.activeTurn = null;
       });
 
@@ -4779,6 +4837,7 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
     const serverConfig = yield* ServerConfig;
     const hostPlatform = yield* HostProcessPlatform;
     const continuationRequests = yield* ProviderContinuationRequests;
+    const proactiveInbox = yield* HermesProactiveInbox;
     const configuredHermesHome = input.environment.find(
       (variable) => variable.name === "HERMES_HOME" && variable.value.trim().length > 0,
     )?.value;
@@ -4810,6 +4869,7 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
       idAllocator,
       repository,
       continuationRequests,
+      proactiveInbox,
       readAttachment: (attachment) =>
         Effect.gen(function* () {
           const attachmentPath = resolveAttachmentPath({

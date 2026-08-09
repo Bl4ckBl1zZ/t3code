@@ -119,6 +119,21 @@ export const HermesProactiveEventProvenance = Schema.Struct({
 });
 export type HermesProactiveEventProvenance = typeof HermesProactiveEventProvenance.Type;
 
+/**
+ * How T3 came to know an event happened.
+ *
+ * `durable` events were replayed from the gateway's global cron cursor and can
+ * be re-read after a restart. `witnessed` events were seen live on a session T3
+ * had subscribed, or inferred on the next sweep from a job whose last run time
+ * advanced while T3 was away. Only the durable kind moves the source
+ * checkpoint; a witnessed event is recorded exactly once, when T3 notices it,
+ * because the pinned protocol offers nothing to replay it from.
+ */
+export const HermesProactiveEventKinds = {
+  cronRunWitnessed: "cron.run.witnessed",
+  cronRunMissed: "cron.run.missed",
+} as const;
+
 export const HermesProactiveEvent = Schema.Struct({
   eventId: Schema.String,
   sourceId: Schema.String,
@@ -186,3 +201,52 @@ export const HermesNotificationOutboxEntry = Schema.Struct({
   deliveredAt: Schema.NullOr(IsoDateTime),
 });
 export type HermesNotificationOutboxEntry = typeof HermesNotificationOutboxEntry.Type;
+
+/**
+ * What a client renders for Hermes work that happened without anyone asking.
+ * `unreadCount` counts the notifications, not the work items: the two tables
+ * are written together and a client that only shows a badge should not have to
+ * load the list to draw it.
+ */
+export const HermesProactiveInboxSnapshot = Schema.Struct({
+  notifications: Schema.Array(HermesInAppNotification),
+  unreadCount: NonNegativeInt,
+  /**
+   * Entries the outbox gave up on. Surfaced rather than hidden so a broken
+   * delivery path is visible instead of looking like a quiet inbox.
+   */
+  deadLetterCount: NonNegativeInt,
+});
+export type HermesProactiveInboxSnapshot = typeof HermesProactiveInboxSnapshot.Type;
+
+export const HermesProactiveInboxInput = Schema.Struct({});
+export type HermesProactiveInboxInput = typeof HermesProactiveInboxInput.Type;
+
+export const HermesProactiveNotificationStatus = Schema.Literals(["unread", "read", "dismissed"]);
+export type HermesProactiveNotificationStatus = typeof HermesProactiveNotificationStatus.Type;
+
+/**
+ * Every status is reachable in both directions, so a dismissed notification can
+ * be brought back rather than being a one-way door.
+ */
+export const HermesProactiveMarkNotificationsInput = Schema.Struct({
+  notificationIds: Schema.Array(Schema.String),
+  status: HermesProactiveNotificationStatus,
+});
+export type HermesProactiveMarkNotificationsInput =
+  typeof HermesProactiveMarkNotificationsInput.Type;
+
+export const HermesProactiveMarkNotificationsResult = Schema.Struct({
+  updated: NonNegativeInt,
+  snapshot: HermesProactiveInboxSnapshot,
+});
+export type HermesProactiveMarkNotificationsResult =
+  typeof HermesProactiveMarkNotificationsResult.Type;
+
+export class HermesProactiveInboxError extends Schema.TaggedErrorClass<HermesProactiveInboxError>()(
+  "HermesProactiveInboxError",
+  {
+    operation: Schema.String,
+    message: Schema.String,
+  },
+) {}

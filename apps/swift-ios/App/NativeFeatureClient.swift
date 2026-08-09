@@ -5546,6 +5546,67 @@ extension NativeFeatureClient: FeatureScheduledTaskManaging {
     }
 }
 
+// MARK: - Hermes proactive inbox
+
+/// Hermes runs nobody asked for are environment state for the same reason
+/// automations are: each paired server reaches its own Hermes gateway and
+/// answers for its own inbox, so every call routes through that environment's
+/// client rather than the active one.
+extension NativeFeatureClient: FeatureHermesInboxManaging {
+    func hermesInboxUpdates(
+        environmentID: String
+    ) async -> AsyncThrowingStream<FeatureHermesInbox, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { @MainActor in
+                do {
+                    let client = try await environmentClient(id: environmentID)
+                    for try await snapshot in await client.hermesProactiveInboxEvents() {
+                        continuation.yield(Self.mapHermesInbox(snapshot))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func markHermesRuns(
+        environmentID: String,
+        ids: [String],
+        status: FeatureHermesRunStatus
+    ) async throws -> FeatureHermesInbox {
+        let client = try await environmentClient(id: environmentID)
+        let result = try await client.markHermesProactiveNotifications(
+            ids: ids,
+            status: status.rawValue
+        )
+        return Self.mapHermesInbox(result.snapshot)
+    }
+
+    private static func mapHermesInbox(
+        _ snapshot: HermesProactiveInboxSnapshot
+    ) -> FeatureHermesInbox {
+        FeatureHermesInbox(
+            runs: snapshot.notifications.map { notification in
+                FeatureHermesRun(
+                    id: notification.notificationId,
+                    title: notification.title,
+                    body: notification.body,
+                    threadID: notification.threadId,
+                    // A status this build cannot name reads as already-read
+                    // rather than failing the list or inflating the badge.
+                    status: FeatureHermesRunStatus(rawValue: notification.status) ?? .read,
+                    createdAt: notification.createdAt
+                )
+            },
+            unreadCount: snapshot.unreadCount,
+            deadLetterCount: snapshot.deadLetterCount
+        )
+    }
+}
+
 // MARK: - Voice Input
 
 /// Voice Input and its OpenRouter credential are *account* state, not

@@ -49,6 +49,7 @@ import {
   HermesSessionBindingRepository,
   layer as HermesSessionBindingRepositoryLayer,
 } from "../../hermes/HermesSessionBindingRepository.ts";
+import type { HermesWitnessedRun } from "../../hermes/HermesProactiveInbox.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { IdAllocatorV2, layer as IdAllocatorV2Layer } from "../IdAllocator.ts";
@@ -562,6 +563,7 @@ const makeRuntime = Effect.fnUntraced(function* (
   resolveHistoryMedia?: Parameters<typeof makeHermesServeAdapterV2>[0]["resolveHistoryMedia"],
   continuationRequests?: Parameters<typeof makeHermesServeAdapterV2>[0]["continuationRequests"],
   proactiveEnabled = false,
+  proactiveInbox?: Parameters<typeof makeHermesServeAdapterV2>[0]["proactiveInbox"],
 ) {
   const idAllocator = yield* IdAllocatorV2;
   const repository = yield* HermesSessionBindingRepository;
@@ -587,6 +589,7 @@ const makeRuntime = Effect.fnUntraced(function* (
     ...(readAttachment === undefined ? {} : { readAttachment }),
     ...(resolveHistoryMedia === undefined ? {} : { resolveHistoryMedia }),
     ...(continuationRequests === undefined ? {} : { continuationRequests }),
+    ...(proactiveInbox === undefined ? {} : { proactiveInbox }),
     clientFactory: () => fake,
   });
   return yield* adapter.openSession({
@@ -3749,6 +3752,92 @@ describe("HermesServeAdapterV2 proactive runs", () => {
         assert.equal(fake.prompts.length, 0);
         assert.include(assistantText.at(-1) ?? "", "inbox report");
         assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "completed");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("announces the finished external run outside its thread", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const continuations = recordContinuations();
+        const witnessed: Array<HermesWitnessedRun> = [];
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          continuations.sink,
+          true,
+          {
+            witness: (run) =>
+              Effect.sync(() => {
+                witnessed.push(run);
+              }),
+          },
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "inbox report", status: "complete" }),
+        );
+        yield* runtime.startTurn(continuationTurnInput(providerThread));
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.eventKind, "cron.run.witnessed");
+        assert.equal(witnessed[0]?.threadId, String(threadId));
+        assert.equal(witnessed[0]?.profileKey, "real-profile");
+        assert.equal(witnessed[0]?.title, "Hermes finished a run you did not start");
+        assert.include(witnessed[0]?.body ?? "", "inbox report");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("leaves a turn T3 asked for out of the inbox", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const witnessed: Array<HermesWitnessedRun> = [];
+        const runtime = yield* makeRuntime(
+          fake,
+          true,
+          undefined,
+          false,
+          undefined,
+          undefined,
+          true,
+          {
+            witness: (run) =>
+              Effect.sync(() => {
+                witnessed.push(run);
+              }),
+          },
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "asked for", status: "complete" }),
+        );
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+
+        assert.deepEqual(witnessed, []);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
