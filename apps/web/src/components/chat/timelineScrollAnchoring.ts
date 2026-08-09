@@ -19,6 +19,65 @@ export interface AnchoredTurnMetrics {
   readonly scrollDeltaToRevealEnd: number;
 }
 
+export interface TimelineScrollSample {
+  readonly scrollTop: number;
+  readonly contentHeight: number;
+}
+
+// Small enough that a deliberate wheel notch or arrow-key press counts, large
+// enough that sub-pixel scroll jitter from row remeasurement does not.
+export const TIMELINE_USER_SCROLL_UP_THRESHOLD_PX = 8;
+
+/**
+ * Backstop for detecting that the reader scrolled away from the live end by
+ * means that emit no gesture event on the list (scrollbar drag, keyboard paging,
+ * find-in-page). Wheel/touch/pointer gestures are handled directly; this only
+ * looks at where the scroller ended up.
+ *
+ * Shrinking content is never attributed to the user: LegendList's
+ * maintainVisibleContentPosition and the browser's own max-scroll clamp both
+ * pull the offset up on their own when rows above collapse or the anchored end
+ * space is reclaimed.
+ */
+export function isTimelineUserScrollUp({
+  previous,
+  next,
+  programmaticScrollInFlight,
+}: {
+  readonly previous: TimelineScrollSample | null;
+  readonly next: TimelineScrollSample;
+  readonly programmaticScrollInFlight: boolean;
+}): boolean {
+  if (previous === null || programmaticScrollInFlight) {
+    return false;
+  }
+  if (next.contentHeight < previous.contentHeight - 1) {
+    return false;
+  }
+  return next.scrollTop <= previous.scrollTop - TIMELINE_USER_SCROLL_UP_THRESHOLD_PX;
+}
+
+/**
+ * The list re-reports "anchor ready" every time the anchored end space resizes,
+ * which is once per streamed message or tool call. Positioning is a one-shot at
+ * turn start: repeat callbacks must not re-run it, and once the reader has taken
+ * over the scroller it must not run at all.
+ */
+export function shouldPositionTimelineAnchor({
+  mode,
+  positionedAnchorMessageId,
+  messageId,
+}: {
+  readonly mode: TimelineScrollMode;
+  readonly positionedAnchorMessageId: string | null;
+  readonly messageId: string;
+}): boolean {
+  if (mode === "free-scrolling") {
+    return false;
+  }
+  return positionedAnchorMessageId !== messageId;
+}
+
 export function getRowBottom(state: TimelineListMeasurementState, index: number): number | null {
   const top = state.positionAtIndex(index);
   const height = state.sizeAtIndex(index);

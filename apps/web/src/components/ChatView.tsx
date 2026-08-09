@@ -103,7 +103,13 @@ import {
 import { type LegendListRef } from "@legendapp/list/react";
 import { WorkingTreeStatusBadge } from "./chat/WorkingTreeStatusBadge";
 import { deriveWorkingTreeBadgeState } from "./chat/WorkingTreeStatusBadge.logic";
-import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
+import {
+  getAnchoredTurnMetrics,
+  isTimelineUserScrollUp,
+  shouldPositionTimelineAnchor,
+  type TimelineScrollMode,
+  type TimelineScrollSample,
+} from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -3989,6 +3995,37 @@ function ChatViewContent(props: ChatViewProps) {
     readonly userScrollGeneration: number;
   } | null>(null);
   const anchorScrollRestoreFrameRef = useRef<number | null>(null);
+  // Backstop for scrolling that reaches the scroller without emitting a gesture
+  // event we can listen for: scrollbar drags and keyboard paging are handled by
+  // the compositor, so wheel/touchmove/pointerdown never fire and the reader
+  // would otherwise stay in a programmatic scroll mode while visibly scrolled
+  // away.
+  //
+  // Only upward movement counts, and every scroll we issue ourselves moves
+  // toward the end (or, for the anchor restore, by at most a couple of pixels),
+  // so ordinary streaming needs no suppression window at all. The exceptions are
+  // the bursts where LegendList re-derives offsets from scratch: opening a thread
+  // and the animated turn-anchor positioning.
+  const lastTimelineScrollSampleRef = useRef<TimelineScrollSample | null>(null);
+  const programmaticTimelineScrollUntilRef = useRef(0);
+  // A growing composer re-sticks to the end only while the timeline is still
+  // following it. isAtEndRef alone is not enough: it stays true through an
+  // anchored turn and through a pointerdown that opted out of live-follow
+  // without producing a scroll event.
+  const composerShouldStickToEndRef = useMemo(
+    () => ({
+      get current(): boolean {
+        return isAtEndRef.current && timelineScrollModeRef.current !== "free-scrolling";
+      },
+    }),
+    [],
+  );
+  const markProgrammaticTimelineScroll = useCallback((durationMs: number) => {
+    programmaticTimelineScrollUntilRef.current = Math.max(
+      programmaticTimelineScrollUntilRef.current,
+      performance.now() + durationMs,
+    );
+  }, []);
   const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
     anchorUserScrollGenerationRef.current += 1;
     const wasProgrammaticScrollMode = timelineScrollModeRef.current !== "free-scrolling";
@@ -4148,6 +4185,27 @@ function ChatViewContent(props: ChatViewProps) {
       const handleManualNavigation = () => {
         cancelTimelineLiveFollowForUserNavigationRef.current();
       };
+      const handleScrollSample = () => {
+        const next: TimelineScrollSample = {
+          scrollTop: scrollNode.scrollTop,
+          contentHeight: scrollNode.scrollHeight,
+        };
+        const previous = lastTimelineScrollSampleRef.current;
+        lastTimelineScrollSampleRef.current = next;
+        if (timelineScrollModeRef.current === "free-scrolling") {
+          return;
+        }
+        if (
+          isTimelineUserScrollUp({
+            previous,
+            next,
+            programmaticScrollInFlight:
+              performance.now() < programmaticTimelineScrollUntilRef.current,
+          })
+        ) {
+          cancelTimelineLiveFollowForUserNavigationRef.current();
+        }
+      };
       scrollNode.addEventListener("wheel", handleManualNavigation, {
         passive: true,
       });
@@ -4157,10 +4215,14 @@ function ChatViewContent(props: ChatViewProps) {
       scrollNode.addEventListener("pointerdown", handleManualNavigation, {
         passive: true,
       });
+      scrollNode.addEventListener("scroll", handleScrollSample, {
+        passive: true,
+      });
       removeListeners = () => {
         scrollNode.removeEventListener("wheel", handleManualNavigation);
         scrollNode.removeEventListener("touchmove", handleManualNavigation);
         scrollNode.removeEventListener("pointerdown", handleManualNavigation);
+        scrollNode.removeEventListener("scroll", handleScrollSample);
       };
     });
 
@@ -4170,56 +4232,81 @@ function ChatViewContent(props: ChatViewProps) {
     };
   }, [activeThread?.id]);
 
-  const onTimelineAnchorReady = useCallback((messageId: MessageId, anchorIndex: number) => {
-    if (pendingTimelineAnchorRef.current === messageId) {
-      pendingTimelineAnchorRef.current = null;
-    }
-    activeTimelineAnchorIndexRef.current = anchorIndex;
-    if (positionedTimelineAnchorRef.current === messageId) {
-      return;
-    }
-    positionedTimelineAnchorRef.current = messageId;
-    settledTimelineAnchorRef.current = null;
-    const positionAnchor = (remainingAttempts: number) => {
-      requestAnimationFrame(() => {
-        if (positionedTimelineAnchorRef.current !== messageId) {
-          return;
-        }
-        const list = legendListRef.current;
-        if (!list) {
-          if (remainingAttempts > 0) {
-            positionAnchor(remainingAttempts - 1);
-          }
-          return;
-        }
-        const scrollNode = list.getScrollableNode();
-        let finished = false;
-        const finishAnimatedPositioning = () => {
-          if (finished) {
+  const onTimelineAnchorReady = useCallback(
+    (messageId: MessageId, anchorIndex: number) => {
+      if (pendingTimelineAnchorRef.current === messageId) {
+        pendingTimelineAnchorRef.current = null;
+      }
+      const mode = timelineScrollModeRef.current;
+      if (mode !== "free-scrolling") {
+        activeTimelineAnchorIndexRef.current = anchorIndex;
+      }
+      // This fires again on every streamed message and tool call, because each
+      // one resizes the anchored end space. cancelTimelineLiveFollowForUserNavigation
+      // clears positionedTimelineAnchorRef, so without the free-scrolling check
+      // each of those callbacks would look like a fresh anchor and re-run the
+      // animated positioning scroll, yanking a reader who scrolled up back down
+      // to the running turn.
+      if (
+        !shouldPositionTimelineAnchor({
+          mode,
+          positionedAnchorMessageId: positionedTimelineAnchorRef.current,
+          messageId,
+        })
+      ) {
+        return;
+      }
+      positionedTimelineAnchorRef.current = messageId;
+      settledTimelineAnchorRef.current = null;
+      const positionAnchor = (remainingAttempts: number) => {
+        requestAnimationFrame(() => {
+          if (
+            positionedTimelineAnchorRef.current !== messageId ||
+            timelineScrollModeRef.current === "free-scrolling"
+          ) {
             return;
           }
-          finished = true;
-          window.clearTimeout(fallbackTimer);
-          scrollNode.removeEventListener("scrollend", finishAnimatedPositioning);
-          if (positionedTimelineAnchorRef.current !== messageId) {
+          const list = legendListRef.current;
+          if (!list) {
+            if (remainingAttempts > 0) {
+              positionAnchor(remainingAttempts - 1);
+            }
             return;
           }
-          const scrollOffset = list.getState().scroll;
-          void list.scrollToOffset({ offset: scrollOffset, animated: false });
-          settledTimelineAnchorRef.current = messageId;
-        };
-        const fallbackTimer = window.setTimeout(finishAnimatedPositioning, 750);
-        scrollNode.addEventListener("scrollend", finishAnimatedPositioning, { once: true });
-        void list.scrollToIndex({
-          index: anchorIndex,
-          animated: true,
-          viewPosition: 0,
-          viewOffset: CHAT_LIST_ANCHOR_OFFSET,
+          const scrollNode = list.getScrollableNode();
+          let finished = false;
+          const finishAnimatedPositioning = () => {
+            if (finished) {
+              return;
+            }
+            finished = true;
+            window.clearTimeout(fallbackTimer);
+            scrollNode.removeEventListener("scrollend", finishAnimatedPositioning);
+            if (
+              positionedTimelineAnchorRef.current !== messageId ||
+              timelineScrollModeRef.current === "free-scrolling"
+            ) {
+              return;
+            }
+            const scrollOffset = list.getState().scroll;
+            void list.scrollToOffset({ offset: scrollOffset, animated: false });
+            settledTimelineAnchorRef.current = messageId;
+          };
+          const fallbackTimer = window.setTimeout(finishAnimatedPositioning, 750);
+          scrollNode.addEventListener("scrollend", finishAnimatedPositioning, { once: true });
+          markProgrammaticTimelineScroll(900);
+          void list.scrollToIndex({
+            index: anchorIndex,
+            animated: true,
+            viewPosition: 0,
+            viewOffset: CHAT_LIST_ANCHOR_OFFSET,
+          });
         });
-      });
-    };
-    requestAnimationFrame(() => positionAnchor(12));
-  }, []);
+      };
+      requestAnimationFrame(() => positionAnchor(12));
+    },
+    [markProgrammaticTimelineScroll],
+  );
   const onTimelineAnchorSizeChanged = useCallback((messageId: MessageId) => {
     if (settledTimelineAnchorRef.current !== messageId) {
       return;
@@ -4360,6 +4447,10 @@ function ChatViewContent(props: ChatViewProps) {
     positionedTimelineAnchorRef.current = null;
     settledTimelineAnchorRef.current = null;
     activeTimelineAnchorIndexRef.current = null;
+    // Opening a thread replays a burst of offset corrections while LegendList
+    // measures rows and settles initialScrollAtEnd; none of them are the reader.
+    lastTimelineScrollSampleRef.current = null;
+    markProgrammaticTimelineScroll(1000);
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     if (planSidebarOpenOnNextThreadRef.current) {
@@ -4370,7 +4461,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     planSidebarDismissedForTurnRef.current = null;
     // activeThreadRef resets transitively with the active thread.
-  }, [activeThread?.id]);
+  }, [activeThread?.id, markProgrammaticTimelineScroll]);
 
   // Auto-open the plan sidebar when plan/todo steps arrive for the current turn.
   // Don't auto-open for plans carried over from a previous turn (the user can open manually).
@@ -6971,7 +7062,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerImagesRef={composerImagesRef}
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
-                            shouldAutoScrollRef={isAtEndRef}
+                            shouldAutoScrollRef={composerShouldStickToEndRef}
                             scheduleStickToBottom={scrollToEnd}
                             onSend={onSend}
                             onStartFreshChat={() => {
