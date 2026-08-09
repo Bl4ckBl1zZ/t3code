@@ -11,6 +11,7 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -143,6 +144,92 @@ export const makeMigrationLoader = (throughId?: number) =>
   );
 
 /**
+ * The fork's migration ids diverge from the official app at 36: upstream keeps
+ * shipping its own migrations under 36+ while the fork owns those numbers for
+ * the orchestration-v2 schema. A database last opened by the official app has
+ * journal rows for 36+ that name upstream migrations, which makes the migrator
+ * skip the fork's 36-38 (the ones that create the orchestration_v2_* tables)
+ * and crash at the first fork migration that reads them.
+ */
+const forkDivergenceId = 36;
+
+/**
+ * Upstream migrations 36+ whose schema changes are safe to leave in place when
+ * their journal rows are dropped: guarded ALTER TABLE ADD COLUMNs and a
+ * CREATE INDEX IF NOT EXISTS, none of which conflict with fork migrations
+ * (the fork's own copy under 052 checks for the column before adding it).
+ * An upstream journal row 36+ with a name outside this set means the official
+ * app applied a migration we have not audited, so we refuse to touch the
+ * database instead of guessing.
+ */
+const reconcilableUpstreamMigrations = new Set([
+  "ProjectionThreadsPinned",
+  "ProjectionTurnsKeysetIndex",
+  "ProjectionThreadsPinOrderKey",
+  "ProjectionProjectsDefaultThreadEnvMode",
+  "ProjectionProjectFaviconPath",
+]);
+
+const forkMigrationNames = new Map<number, string>(
+  migrationEntries.map(([id, name]) => [id, name]),
+);
+
+export class UpstreamMigrationJournalError extends Error {
+  override readonly name = "UpstreamMigrationJournalError";
+}
+
+/**
+ * Detect a journal written by the official app and reset it back to the shared
+ * prefix (ids < 36) so the fork's own migrations run from the divergence point.
+ * The data those upstream migrations touched is preserved; only their journal
+ * rows are removed.
+ */
+export const reconcileUpstreamMigrationJournal = Effect.fn("reconcileUpstreamMigrationJournal")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    const journalTable = yield* sql<{ readonly name: string }>`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'effect_sql_migrations'
+    `;
+    if (journalTable.length === 0) return;
+
+    const rows = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations
+      WHERE migration_id >= ${forkDivergenceId}
+      ORDER BY migration_id
+    `;
+    const upstreamRows = rows.filter(
+      (row) => forkMigrationNames.get(row.migration_id) !== row.name,
+    );
+    if (upstreamRows.length === 0) return;
+
+    const unknown = upstreamRows.filter((row) => !reconcilableUpstreamMigrations.has(row.name));
+    if (unknown.length > 0) {
+      return yield* Effect.fail(
+        new UpstreamMigrationJournalError(
+          "This database was migrated by the official app past the point this fork can " +
+            "automatically reconcile. Unrecognized migrations: " +
+            unknown.map((row) => `${row.migration_id}_${row.name}`).join(", ") +
+            ". Back up the database and resolve the journal manually, or update the fork.",
+        ),
+      );
+    }
+
+    yield* sql`
+      DELETE FROM effect_sql_migrations
+      WHERE migration_id >= ${forkDivergenceId}
+        AND name IN ${sql.in(upstreamRows.map((row) => row.name))}
+    `;
+    yield* Effect.log("Reconciled official-app migration journal").pipe(
+      Effect.annotateLogs({
+        removed: upstreamRows.map((row) => `${row.migration_id}_${row.name}`),
+      }),
+    );
+  },
+);
+
+/**
  * Migrator run function - no schema dumping needed
  * Uses the base Migrator.make without platform dependencies
  */
@@ -165,6 +252,7 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  yield* reconcileUpstreamMigrationJournal();
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
