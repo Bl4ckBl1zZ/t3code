@@ -17,6 +17,7 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { Project, ProjectScript } from "./project.ts";
 import {
@@ -65,6 +66,8 @@ export const ProjectMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  // Absent = leave unchanged; null = clear the override.
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 

@@ -18,6 +18,7 @@ import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
+import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
 import { Route as SettingsHermesSkillsRouteImport } from './routes/settings.hermes-skills'
@@ -28,6 +29,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
+import { Route as SettingsProjectsProjectKeyRouteImport } from './routes/settings.projects_.$projectKey'
 import { Route as SettingsIntegrationsOpenrouterRouteImport } from './routes/settings.integrations_.openrouter'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
@@ -74,6 +76,11 @@ const SettingsScheduledTasksRoute = SettingsScheduledTasksRouteImport.update({
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: '/providers',
   path: '/providers',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
@@ -126,6 +133,12 @@ const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
   path: '/connect/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsProjectsProjectKeyRoute =
+  SettingsProjectsProjectKeyRouteImport.update({
+    id: '/projects_/$projectKey',
+    path: '/projects/$projectKey',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsIntegrationsOpenrouterRoute =
   SettingsIntegrationsOpenrouterRouteImport.update({
     id: '/integrations_/openrouter',
@@ -160,12 +173,14 @@ export interface FileRoutesByFullPath {
   '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/integrations/openrouter': typeof SettingsIntegrationsOpenrouterRoute
+  '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
@@ -182,6 +197,7 @@ export interface FileRoutesByTo {
   '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -189,6 +205,7 @@ export interface FileRoutesByTo {
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/integrations/openrouter': typeof SettingsIntegrationsOpenrouterRoute
+  '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -207,6 +224,7 @@ export interface FileRoutesById {
   '/settings/hermes-skills': typeof SettingsHermesSkillsRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -214,6 +232,7 @@ export interface FileRoutesById {
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/integrations_/openrouter': typeof SettingsIntegrationsOpenrouterRoute
+  '/settings/projects_/$projectKey': typeof SettingsProjectsProjectKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -233,12 +252,14 @@ export interface FileRouteTypes {
     | '/settings/hermes-skills'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/settings/integrations/openrouter'
+    | '/settings/projects/$projectKey'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
@@ -255,6 +276,7 @@ export interface FileRouteTypes {
     | '/settings/hermes-skills'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
@@ -262,6 +284,7 @@ export interface FileRouteTypes {
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/settings/integrations/openrouter'
+    | '/settings/projects/$projectKey'
   id:
     | '__root__'
     | '/_chat'
@@ -279,6 +302,7 @@ export interface FileRouteTypes {
     | '/settings/hermes-skills'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
@@ -286,6 +310,7 @@ export interface FileRouteTypes {
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
     | '/settings/integrations_/openrouter'
+    | '/settings/projects_/$projectKey'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -362,6 +387,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProvidersRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/projects': {
+      id: '/settings/projects'
+      path: '/projects'
+      fullPath: '/settings/projects'
+      preLoaderRoute: typeof SettingsProjectsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/keybindings': {
       id: '/settings/keybindings'
       path: '/keybindings'
@@ -432,6 +464,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/projects_/$projectKey': {
+      id: '/settings/projects_/$projectKey'
+      path: '/projects/$projectKey'
+      fullPath: '/settings/projects/$projectKey'
+      preLoaderRoute: typeof SettingsProjectsProjectKeyRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/integrations_/openrouter': {
       id: '/settings/integrations_/openrouter'
       path: '/integrations/openrouter'
@@ -480,10 +519,12 @@ interface SettingsRouteChildren {
   SettingsHermesSkillsRoute: typeof SettingsHermesSkillsRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsIntegrationsOpenrouterRoute: typeof SettingsIntegrationsOpenrouterRoute
+  SettingsProjectsProjectKeyRoute: typeof SettingsProjectsProjectKeyRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
@@ -496,10 +537,12 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsHermesSkillsRoute: SettingsHermesSkillsRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsIntegrationsOpenrouterRoute: SettingsIntegrationsOpenrouterRoute,
+  SettingsProjectsProjectKeyRoute: SettingsProjectsProjectKeyRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(

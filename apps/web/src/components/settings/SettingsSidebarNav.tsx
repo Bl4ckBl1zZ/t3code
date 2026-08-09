@@ -13,6 +13,7 @@ import {
   BotIcon,
   CalendarClockIcon,
   Clock3Icon,
+  FolderIcon,
   GitBranchIcon,
   BlocksIcon,
   GraduationCapIcon,
@@ -52,6 +53,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
+  "/settings/projects": FolderIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
@@ -291,7 +293,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 ))
               : SETTINGS_NAV_ITEMS.map((item) => {
                   const Icon = item.icon;
-                  const isActive = pathname === item.to;
+                  // Prefix match keeps the section active on nested routes
+                  // like /settings/projects/$projectKey.
+                  const isActive = pathname === item.to || pathname.startsWith(`${item.to}/`);
                   return (
                     <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton
