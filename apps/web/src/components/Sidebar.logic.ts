@@ -680,6 +680,40 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   return "ready";
 }
 
+/**
+ * The lozenge a T3 Work row leads with, in place of the project name a Code
+ * card carries there.
+ *
+ * Work is an inbox: every row is the same assistant on the same backing
+ * checkout, so naming that is a constant and what differs between rows is
+ * state. Approval and input collapse into one "Needs you" because the useful
+ * distinction is that it is blocked on you at all — what it wants is the line
+ * underneath. `null` for a resting thread, which leaves the row as title + age
+ * rather than badging "Ready" on everything idle.
+ *
+ * Mirrors the mobile clients' `resolveWorkInboxBadge` / `workInboxBadge`, so a
+ * Work row reads the same on every surface.
+ */
+export type WorkInboxBadge = "needs-you" | "working" | "failed" | "done";
+
+export function resolveWorkInboxBadge(input: {
+  readonly status: SidebarThreadStatus;
+  readonly hasUnseenCompletion: boolean;
+}): WorkInboxBadge | null {
+  switch (input.status) {
+    case "approval":
+    case "input":
+      return "needs-you";
+    case "working":
+      return "working";
+    case "failed":
+      return "failed";
+    case "monitoring":
+    case "ready":
+      return input.hasUnseenCompletion ? "done" : null;
+  }
+}
+
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
 export function parseTimestampMs(isoDate: string): number {

@@ -141,6 +141,7 @@ import {
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
   resolveWorkingStartedAt,
+  resolveWorkInboxBadge,
   searchSidebarThreadsByTitle,
   sidebarProjectKey,
   sidebarProviderInstanceKey,
@@ -149,6 +150,7 @@ import {
   sortThreadsForSidebar,
   workInboxActiveSection,
   type SidebarWorkspace,
+  type WorkInboxBadge,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -494,6 +496,41 @@ function SnoozePopoverButton(props: {
     </Popover>
   );
 }
+
+// The Work lozenge reuses the status hues, as a filled pill rather than a bare
+// word: it stands where a Code card puts its project favicon and name, so it
+// has to carry that slot's visual weight. The rail is the same hue down the
+// row's leading edge, and only "Needs you" earns one — a rail on every row is a
+// rail on none, and the point is that the inbox triages in one pass.
+const WORK_INBOX_BADGE_STYLE: Record<
+  WorkInboxBadge,
+  {
+    label: string;
+    className: string;
+    railClassName: string | null;
+  }
+> = {
+  "needs-you": {
+    label: "Needs you",
+    className: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+    railClassName: "bg-amber-500/70",
+  },
+  working: {
+    label: "Working",
+    className: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+    railClassName: null,
+  },
+  failed: {
+    label: "Failed",
+    className: "bg-red-500/15 text-red-700 dark:text-red-300",
+    railClassName: null,
+  },
+  done: {
+    label: "Done",
+    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+    railClassName: null,
+  },
+};
 
 // Drag plumbing handed down by SortableSidebarThreadRow: the row owns its <li>
 // (no wrapper element — li>li nesting is invalid), so the sortable ref,
@@ -879,6 +916,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
   const driverKind = providerEntry?.driverKind ?? null;
   const isHermes = driverKind === "hermes" || (driverKind === null && modelInstanceId === "hermes");
+  // Chat conversations are Hermes threads born on the Chat surface; the rest of
+  // Hermes is the Work inbox. Same split the workspace filter makes, so a row
+  // renders as what its workspace says it is.
+  const isChat = isHermes && thread.workInboxRole === "chat";
+  const isWork = isHermes && !isChat;
+  const workBadge = isWork
+    ? resolveWorkInboxBadge({ status, hasUnseenCompletion: isUnread })
+    : null;
+  const workBadgeStyle = workBadge === null ? null : WORK_INBOX_BADGE_STYLE[workBadge];
   const preview = resolveThreadPreview(thread);
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
@@ -1307,6 +1353,170 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const diff = latestTurnDiff(thread);
 
+  // Where the row already carries its state, the right slot goes back to being
+  // the row's age: Work says it in the leading lozenge and Chat says it as
+  // "responding…" under the title, the way a message list does. Woke survives
+  // both — a wake is a lifecycle signal neither the lozenge nor the preview
+  // line models.
+  const headStatus = isWokeStatus
+    ? topStatus
+    : isWork && workBadge !== null
+      ? null
+      : isChat && status === "working"
+        ? null
+        : topStatus;
+
+  // The visible state owns this slot's width: status at rest, actions on
+  // hover/keyboard focus or while the popover is open. Keeping the hidden state
+  // out of flow lets the label beside it reclaim space without either state
+  // overlapping it. Code and Work hang it off the meta line; Chat has no meta
+  // line, so it hangs off the title.
+  const statusSlot = (
+    <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
+      {/* Read-only status labels yield to the hover actions. Woke is
+          itself an action, so it stays pointer-enabled and visible
+          while the other controls appear beside it. */}
+      <span
+        className={cn(
+          isWokeStatus
+            ? "pointer-events-auto"
+            : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0",
+          "self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
+          snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
+        )}
+      >
+        {headStatus ? (
+          <span className={cn("inline-flex items-center gap-1 font-medium", headStatus.className)}>
+            {headStatus.icon === "working" ? (
+              <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
+            ) : headStatus.icon === "done" ? (
+              <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
+            ) : headStatus.icon === "woke" ? (
+              <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+            ) : null}
+            {/* The label alone is the live region: a role="status"
+                wrapper around the ticking duration would make
+                screen readers announce every second. */}
+            <span role="status">{headStatus.label}</span>
+            {status === "working" ? (
+              <span aria-hidden>
+                <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          threadTimeLabel(thread)
+        )}
+      </span>
+      {props.settlementSupported || showSnoozeButton || variant === "card" ? (
+        <span
+          className={cn(
+            // focus-visible, not focus-within: a mouse click leaves
+            // the Settle button focused, and a plain focus-within
+            // would keep the controls pinned over the status label
+            // once the pointer moves away (e.g. after a failed
+            // settle) instead of cross-fading back.
+            "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
+            snoozeMenuOpen && "pointer-events-auto static opacity-100",
+          )}
+        >
+          {thread.workInboxRole === "main" ? (
+            <span
+              aria-label="Main thread is always pinned"
+              title="Main thread is always pinned"
+              className="inline-flex items-center px-1.5 text-muted-foreground"
+            >
+              <PinIcon aria-hidden className="size-3" />
+            </span>
+          ) : props.canPin ? (
+            <button
+              type="button"
+              aria-label={props.isPinned ? "Unpin thread" : "Pin thread"}
+              onClick={handleTogglePinClick}
+              className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              {props.isPinned ? (
+                <PinOffIcon aria-hidden className="size-3" />
+              ) : (
+                <PinIcon aria-hidden className="size-3" />
+              )}
+            </button>
+          ) : null}
+          {showSnoozeButton ? (
+            <SnoozePopoverButton
+              open={snoozeMenuOpen}
+              onOpenChange={setSnoozeMenuOpen}
+              onSnooze={handleSnoozePreset}
+            />
+          ) : null}
+          {props.settlementSupported ? (
+            <button
+              type="button"
+              aria-label="Settle thread"
+              onClick={handleSettleClick}
+              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <CheckIcon className="size-3.5" />
+              Settle
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  const titleLine = (
+    <>
+      {title}
+      {isRegeneratingTitle ? (
+        <span role="status" className="sr-only">
+          Regenerating title
+        </span>
+      ) : null}
+    </>
+  );
+
+  // The last thing said, dimmed where the user is the one who said it. Hermes
+  // rows have no branch, no repo and no diff, so this is what differs between
+  // them — the same line every message list leads with.
+  const previewLine = preview ? (
+    <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+      {preview.fromUser ? <span className="opacity-60">You: </span> : null}
+      {preview.text}
+    </span>
+  ) : (
+    <span className="flex-1" />
+  );
+
+  const rowIconCluster = (
+    <span
+      aria-hidden
+      className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+    >
+      {isRemote ? (
+        <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+          <ServerIcon aria-hidden className="size-3.5" />
+        </span>
+      ) : null}
+      {props.isPinned ? (
+        <span
+          className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70"
+          title="Pinned"
+        >
+          <PinIcon aria-hidden className="size-3.5" />
+        </span>
+      ) : driverKind && !isHermes ? (
+        <span className="inline-flex shrink-0 items-center opacity-60">
+          <ProviderInstanceIcon
+            driverKind={driverKind}
+            displayName={thread.runtime?.providerName ?? modelInstanceId}
+            iconClassName="size-3.5"
+          />
+        </span>
+      ) : null}
+    </span>
+  );
+
   const sortable = props.sortable;
   return (
     <li
@@ -1315,7 +1525,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       {...props.sortable?.listeners}
       data-thread-item
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        "list-none py-0.5 [content-visibility:auto]",
+        isChat ? "[contain-intrinsic-size:auto_66px]" : "[contain-intrinsic-size:auto_96px]",
         props.sortable?.isDragging && "relative z-20 opacity-80",
       )}
     >
@@ -1335,202 +1546,125 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             />
           }
         >
-          <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
-            <div className="flex h-5 min-w-0 items-center gap-1.5">
-              {isHermes ? (
-                <ProviderInstanceIcon
-                  driverKind={ProviderDriverKind.make("hermes")}
-                  displayName="Hermes"
-                  iconClassName="size-4"
-                />
-              ) : (
-                <ProjectFavicon
-                  environmentId={thread.environmentId}
-                  cwd={props.projectCwd ?? ""}
-                  className="size-4 shrink-0"
-                />
+          {workBadgeStyle?.railClassName != null ? (
+            <span
+              aria-hidden
+              className={cn(
+                "absolute inset-y-1.5 left-0 z-10 w-[3px] rounded-full",
+                workBadgeStyle.railClassName,
               )}
-              {isHermes ? (
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
-                    shouldRecede ? "font-normal" : "font-medium",
+            />
+          ) : null}
+          <div
+            className={cn(
+              "relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]",
+              // Chat is two lines, not three: it has no meta line to fill.
+              isChat ? "h-[3.375rem]" : "h-[4.875rem]",
+              workBadgeStyle?.railClassName != null &&
+                "pl-[calc(var(--sidebar-row-content-inset)+0.25rem)]",
+            )}
+          >
+            {isChat ? (
+              /* T3 Chat: a conversation, so title and time share one line and
+                 the last thing said sits under it. There is no meta line above
+                 the title, because every row in Chat would have filled it with
+                 the same word. */
+              <>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {titleLine}
+                  {statusSlot}
+                </div>
+                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
+                  {status === "working" ? (
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap text-sky-600 dark:text-sky-400">
+                      responding…
+                    </span>
+                  ) : (
+                    previewLine
                   )}
-                >
-                  Hermes
-                </span>
-              ) : props.projectTitle ? (
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
-                    shouldRecede ? "font-normal" : "font-medium",
-                  )}
-                >
-                  {props.projectTitle}
-                </span>
-              ) : (
-                <span className="flex-1" />
-              )}
-              {/* The visible state owns this slot's width: status at rest,
-                  actions on hover/keyboard focus or while the popover is open. Keeping
-                  the hidden state out of flow lets the project label reclaim
-                  space without either state overlapping it. */}
-              <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
-                {/* Read-only status labels yield to the hover actions. Woke is
-                    itself an action, so it stays pointer-enabled and visible
-                    while the other controls appear beside it. */}
-                <span
-                  className={cn(
-                    isWokeStatus
-                      ? "pointer-events-auto"
-                      : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0",
-                    "self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
-                    snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
-                  )}
-                >
-                  {topStatus ? (
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 font-medium",
-                        topStatus.className,
-                      )}
-                    >
-                      {topStatus.icon === "working" ? (
-                        <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
-                      ) : topStatus.icon === "done" ? (
-                        <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
-                      ) : topStatus.icon === "woke" ? (
-                        <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+                  {terminalStatusIcon}
+                  {rowIconCluster}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex h-5 min-w-0 items-center gap-1.5">
+                  {isWork ? (
+                    /* T3 Work: an inbox item, so the row leads with its state
+                       instead of the backing checkout's name. Every Work row
+                       runs the same assistant on the same hidden checkout, so
+                       naming that is a constant; what differs is state. */
+                    <>
+                      {workBadgeStyle ? (
+                        <span
+                          className={cn(
+                            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
+                            workBadgeStyle.className,
+                          )}
+                        >
+                          {workBadgeStyle.label}
+                        </span>
                       ) : null}
-                      {/* The label alone is the live region: a role="status"
-                          wrapper around the ticking duration would make
-                          screen readers announce every second. */}
-                      <span role="status">{topStatus.label}</span>
-                      {status === "working" ? (
-                        <span aria-hidden>
+                      {workBadge === "working" ? (
+                        <span
+                          aria-hidden
+                          className="shrink-0 text-xs text-sky-600 tabular-nums dark:text-sky-400"
+                        >
                           <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
                         </span>
                       ) : null}
+                      <span className="flex-1" />
+                    </>
+                  ) : (
+                    <>
+                      <ProjectFavicon
+                        environmentId={thread.environmentId}
+                        cwd={props.projectCwd ?? ""}
+                        className="size-4 shrink-0"
+                      />
+                      {props.projectTitle ? (
+                        <span
+                          className={cn(
+                            "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
+                            shouldRecede ? "font-normal" : "font-medium",
+                          )}
+                        >
+                          {props.projectTitle}
+                        </span>
+                      ) : (
+                        <span className="flex-1" />
+                      )}
+                    </>
+                  )}
+                  {statusSlot}
+                </div>
+                <div className="mt-1 flex min-w-0">{titleLine}</div>
+                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
+                  {isWork ? (
+                    previewLine
+                  ) : prLine ? (
+                    prLine
+                  ) : thread.branch ? (
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                      {thread.branch}
                     </span>
                   ) : (
-                    threadTimeLabel(thread)
+                    <span className="flex-1" />
                   )}
-                </span>
-                {props.settlementSupported || showSnoozeButton || variant === "card" ? (
-                  <span
-                    className={cn(
-                      // focus-visible, not focus-within: a mouse click leaves
-                      // the Settle button focused, and a plain focus-within
-                      // would keep the controls pinned over the status label
-                      // once the pointer moves away (e.g. after a failed
-                      // settle) instead of cross-fading back.
-                      "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
-                      snoozeMenuOpen && "pointer-events-auto static opacity-100",
-                    )}
-                  >
-                    {variant === "card" && thread.workInboxRole === "main" ? (
-                      <span
-                        aria-label="Main thread is always pinned"
-                        title="Main thread is always pinned"
-                        className="inline-flex items-center px-1.5 text-muted-foreground"
-                      >
-                        <PinIcon aria-hidden className="size-3" />
-                      </span>
-                    ) : variant === "card" && props.canPin ? (
-                      <button
-                        type="button"
-                        aria-label={props.isPinned ? "Unpin thread" : "Pin thread"}
-                        onClick={handleTogglePinClick}
-                        className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        {props.isPinned ? (
-                          <PinOffIcon aria-hidden className="size-3" />
-                        ) : (
-                          <PinIcon aria-hidden className="size-3" />
-                        )}
-                      </button>
-                    ) : null}
-                    {showSnoozeButton ? (
-                      <SnoozePopoverButton
-                        open={snoozeMenuOpen}
-                        onOpenChange={setSnoozeMenuOpen}
-                        onSnooze={handleSnoozePreset}
-                      />
-                    ) : null}
-                    {props.settlementSupported ? (
-                      <button
-                        type="button"
-                        aria-label="Settle thread"
-                        onClick={handleSettleClick}
-                        className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        <CheckIcon className="size-3.5" />
-                        Settle
-                      </button>
-                    ) : null}
-                  </span>
-                ) : null}
-              </span>
-            </div>
-            <div className="mt-1 flex min-w-0">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-            </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-              {prLine ? (
-                prLine
-              ) : !isHermes && thread.branch ? (
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
-              ) : isHermes && preview ? (
-                /* Hermes rows have no branch, no repo and no diff — the whole
-                   line was blank. What differs between them is what was last
-                   said, so that is what fills it. */
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-                  {preview.fromUser ? <span className="opacity-60">You: </span> : null}
-                  {preview.text}
-                </span>
-              ) : (
-                <span className="flex-1" />
-              )}
-              {terminalStatusIcon}
-              {prLine ? null : prBadge}
-              {!isHermes && diff ? (
-                <span className="shrink-0 font-mono">
-                  <span className="text-emerald-600 dark:text-emerald-400">+{diff.insertions}</span>{" "}
-                  <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
-                </span>
-              ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
-                {isRemote ? (
-                  <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                    <ServerIcon aria-hidden className="size-3.5" />
-                  </span>
-                ) : null}
-                {props.isPinned ? (
-                  <span
-                    className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70"
-                    title="Pinned"
-                  >
-                    <PinIcon aria-hidden className="size-3.5" />
-                  </span>
-                ) : driverKind && !isHermes ? (
-                  <span className="inline-flex shrink-0 items-center opacity-60">
-                    <ProviderInstanceIcon
-                      driverKind={driverKind}
-                      displayName={thread.runtime?.providerName ?? modelInstanceId}
-                      iconClassName="size-3.5"
-                    />
-                  </span>
-                ) : null}
-              </span>
-            </div>
+                  {terminalStatusIcon}
+                  {isWork || prLine ? null : prBadge}
+                  {!isHermes && diff ? (
+                    <span className="shrink-0 font-mono">
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        +{diff.insertions}
+                      </span>{" "}
+                      <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
+                    </span>
+                  ) : null}
+                  {rowIconCluster}
+                </div>
+              </>
+            )}
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>

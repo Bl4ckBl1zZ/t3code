@@ -26,6 +26,7 @@ import {
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
+  resolveWorkInboxBadge,
   searchSidebarThreadsByTitle,
   resolveWorkspaceSwitchNavigation,
   sidebarProjectKey,
@@ -2195,5 +2196,31 @@ describe("resolveThreadLastVisitedAt", () => {
 
   it("treats an explicit server-side null as never visited", () => {
     expect(resolveThreadLastVisitedAt(null, "2026-07-30T10:00:00.000Z")).toBeUndefined();
+  });
+});
+
+describe("resolveWorkInboxBadge", () => {
+  it("collapses approval and input into one blocked-on-you badge", () => {
+    // What the Work inbox needs to scan for is that a row wants a human at
+    // all; which of the two things it wants is the line underneath.
+    expect(resolveWorkInboxBadge({ status: "approval", hasUnseenCompletion: false })).toBe(
+      "needs-you",
+    );
+    expect(resolveWorkInboxBadge({ status: "input", hasUnseenCompletion: false })).toBe(
+      "needs-you",
+    );
+  });
+
+  it("badges a finished thread only until it has been opened", () => {
+    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: true })).toBe("done");
+    expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: false })).toBeNull();
+    expect(resolveWorkInboxBadge({ status: "monitoring", hasUnseenCompletion: true })).toBe("done");
+  });
+
+  it("carries working and failed through", () => {
+    expect(resolveWorkInboxBadge({ status: "working", hasUnseenCompletion: false })).toBe(
+      "working",
+    );
+    expect(resolveWorkInboxBadge({ status: "failed", hasUnseenCompletion: false })).toBe("failed");
   });
 });
