@@ -100,14 +100,16 @@ enum NativeWorkspaceMapper {
             insertions: status.workingTree.insertions,
             deletions: status.workingTree.deletions,
             files: status.workingTree.files.map(sourceControlFile),
-            pullRequest: status.pr.map {
-                FeaturePullRequest(
-                    number: $0.number,
-                    title: $0.title,
-                    state: $0.state,
-                    url: URL(string: $0.url)
-                )
-            }
+            pullRequest: status.pr.map(pullRequest)
+        )
+    }
+
+    static func pullRequest(_ changeRequest: VCSChangeRequest) -> FeaturePullRequest {
+        FeaturePullRequest(
+            number: changeRequest.number,
+            title: changeRequest.title,
+            state: changeRequest.state,
+            url: URL(string: changeRequest.url)
         )
     }
 

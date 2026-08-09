@@ -270,12 +270,15 @@ public struct WorkspaceView: View {
             now: sidebarBoundaryNow
         )
 
+        let changeRequestThreadIDs = changeRequestThreadIDs(in: presentation)
+
         return VStack(spacing: 0) {
             if WorkspaceSwitcher.showsProjectFilter(workspace) {
                 projectFilter
             }
             HomeThreadCollectionView(
                 presentation: presentation,
+                changeRequests: model.changeRequestsByThreadID,
                 workspace: workspace,
                 query: searchText,
                 selectedThreadID: selectedThreadID,
@@ -313,6 +316,22 @@ public struct WorkspaceView: View {
             )
         }
         .background(T3Colors.background)
+        .task(id: changeRequestThreadIDs) {
+            model.observeChangeRequests(threadIDs: changeRequestThreadIDs)
+        }
+    }
+
+    /// Only the Code workspace labels a row with its change request, and each
+    /// subscribed thread costs one status stream on the server — so this covers
+    /// the live rows a Code list leads with, newest first, and stops there. The
+    /// parked shelves below use the slim row, which shows no branch to replace.
+    private static let changeRequestRowLimit = 30
+
+    private func changeRequestThreadIDs(in presentation: HomePresentation) -> [String] {
+        guard workspace == .code else { return [] }
+        return (presentation.pinned + presentation.active)
+            .prefix(Self.changeRequestRowLimit)
+            .map(\.id)
     }
 
     @ViewBuilder
@@ -1078,6 +1097,10 @@ struct HomeThreadRowContext: Equatable {
     let providerDriver: String
     let providerName: String
     let connectionState: FeatureConnection.State?
+    /// The change request for this thread's branch, when it has one. Overlaid
+    /// after the fact by whoever builds the rows: it arrives on its own
+    /// subscription, long after the snapshot this context is indexed from.
+    var pullRequest: FeaturePullRequest?
 
     static let fallback = HomeThreadRowContext(
         projectName: "Project",
@@ -1236,10 +1259,24 @@ struct FeatureThreadRow: View, Equatable {
                 .padding(.top, 4)
 
             HStack(spacing: 6) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 10, weight: .medium))
-                Text(branchLabel)
-                    .lineLimit(1)
+                // A t3-generated branch ("t3code/ffeef775") names nothing the
+                // row does not already say. Once the work has a change request,
+                // that is what this line reports instead.
+                if let pullRequest = context.pullRequest {
+                    Image(systemName: "arrow.triangle.pull")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Self.pullRequestColor(pullRequest.state))
+                    Text("#\(pullRequest.number)")
+                        .monospacedDigit()
+                        .foregroundStyle(Self.pullRequestColor(pullRequest.state))
+                    Text(pullRequest.title)
+                        .lineLimit(1)
+                } else {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10, weight: .medium))
+                    Text(branchLabel)
+                        .lineLimit(1)
+                }
                 if context.providerLooksTerminal {
                     Text(">_")
                         .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -1512,6 +1549,17 @@ struct FeatureThreadRow: View, Equatable {
         return "workspace"
     }
 
+    /// Open reads as live and merged as landed, matching how the other clients
+    /// rank the two. Closed recedes: the palette has no violet, so merged takes
+    /// the accent and a closed PR is simply quiet rather than alarming.
+    static func pullRequestColor(_ state: String) -> Color {
+        switch state {
+        case "open": T3Colors.success
+        case "merged": T3Colors.accent
+        default: T3Colors.textTertiary
+        }
+    }
+
     private var environmentLabel: String? {
         context.environmentLabel
     }
@@ -1558,7 +1606,13 @@ struct FeatureThreadRow: View, Equatable {
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
-            values.append("Branch \(branchLabel)")
+            if let pullRequest = context.pullRequest {
+                values.append(
+                    "Pull request #\(pullRequest.number) \(pullRequest.state). \(pullRequest.title)"
+                )
+            } else {
+                values.append("Branch \(branchLabel)")
+            }
             if let environmentLabel {
                 values.append("on \(environmentLabel)")
             }

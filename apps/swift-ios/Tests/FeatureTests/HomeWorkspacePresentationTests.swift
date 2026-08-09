@@ -79,10 +79,12 @@ final class HomeWorkspacePresentationTests: XCTestCase {
 
     private func collectionView(
         _ presentation: HomePresentation,
-        workspace: MobileWorkspace
+        workspace: MobileWorkspace,
+        changeRequests: [String: FeaturePullRequest] = [:]
     ) -> HomeThreadCollectionView {
         HomeThreadCollectionView(
             presentation: presentation,
+            changeRequests: changeRequests,
             workspace: workspace,
             query: "",
             selectedThreadID: nil,
@@ -105,6 +107,53 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             onCopyHandoffScript: { _ in },
             onRegenerateTitle: { _ in }
         )
+    }
+
+    // MARK: - Change requests on rows
+
+    /// Change requests arrive on their own subscription, well after the cached
+    /// presentation is built, so the row has to pick them up from the overlay
+    /// rather than from the snapshot the presentation was indexed from.
+    func testAChangeRequestReachesItsRowWithoutRebuildingThePresentation() {
+        let snapshot = snapshot(threads: [
+            thread(id: "code", providerID: "claude"),
+            thread(id: "other", providerID: "claude"),
+        ])
+        let presentation = presentation(snapshot, workspace: .code)
+        let pullRequest = FeaturePullRequest(
+            number: 184,
+            title: "fix: TestFlight version regression",
+            state: "open"
+        )
+
+        let items = collectionView(
+            presentation,
+            workspace: .code,
+            changeRequests: ["code": pullRequest]
+        ).collectionItems
+
+        XCTAssertEqual(rowContext(for: "code", in: items)?.pullRequest, pullRequest)
+        XCTAssertNil(rowContext(for: "other", in: items)?.pullRequest)
+    }
+
+    /// Without a change request the row keeps its branch, so the overlay must
+    /// stay empty rather than leaving a previous thread's PR behind it.
+    func testARowWithoutAChangeRequestCarriesNone() {
+        let snapshot = snapshot(threads: [thread(id: "code", providerID: "claude")])
+        let items = collectionView(presentation(snapshot, workspace: .code), workspace: .code)
+            .collectionItems
+
+        XCTAssertNil(rowContext(for: "code", in: items)?.pullRequest)
+    }
+
+    private func rowContext(
+        for threadID: String,
+        in items: [HomeCollectionItem]
+    ) -> HomeThreadRowContext? {
+        for case let .thread(thread, context, _, _, _) in items where thread.id == threadID {
+            return context
+        }
+        return nil
     }
 
     // MARK: - Which rows a workspace shows

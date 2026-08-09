@@ -1824,6 +1824,85 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    /// One subscription per checkout, not per thread: threads that share a
+    /// worktree share a status, and the server keeps one cached status per cwd.
+    private struct ChangeRequestSubscription: Hashable {
+        let environmentID: String
+        let cwd: String
+    }
+
+    func threadChangeRequests(threadIDs: [String]) -> AsyncStream<[String: FeaturePullRequest]> {
+        AsyncStream { continuation in
+            let task = Task { @MainActor [weak self] in
+                await self?.streamChangeRequests(threadIDs: threadIDs, into: continuation)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func streamChangeRequests(
+        threadIDs: [String],
+        into continuation: AsyncStream<[String: FeaturePullRequest]>.Continuation
+    ) async {
+        var branchesByThreadID: [String: String] = [:]
+        var threadIDsBySubscription: [ChangeRequestSubscription: [String]] = [:]
+        for threadID in threadIDs {
+            guard let route = try? threadRoute(for: threadID),
+                  let context = try? workspaceContext(route: route),
+                  let shell = shellsByEnvironmentID[route.environmentID],
+                  let thread = shell.threads.first(where: { $0.id == route.wireID }),
+                  let branch = thread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !branch.isEmpty else { continue }
+            branchesByThreadID[threadID] = branch
+            let subscription = ChangeRequestSubscription(
+                environmentID: route.environmentID,
+                cwd: context.cwd
+            )
+            threadIDsBySubscription[subscription, default: []].append(threadID)
+        }
+        guard !threadIDsBySubscription.isEmpty else { return }
+
+        let accumulator = ChangeRequestAccumulator()
+        await withTaskGroup(of: Void.self) { group in
+            for (subscription, subscribedThreadIDs) in threadIDsBySubscription {
+                guard let client = environmentClients[subscription.environmentID] else { continue }
+                group.addTask { @MainActor in
+                    // A snapshot carries both halves; the deltas carry one each,
+                    // so the last seen value of the other half has to survive.
+                    var refName: String?
+                    var pullRequest: FeaturePullRequest?
+                    let events = await client.vcsStatusEvents(cwd: subscription.cwd)
+                    do {
+                        for try await event in events {
+                            switch event {
+                            case let .snapshot(local, remote):
+                                refName = local.refName
+                                pullRequest = remote?.pr.map(NativeWorkspaceMapper.pullRequest)
+                            case let .localUpdated(local):
+                                refName = local.refName
+                            case let .remoteUpdated(remote):
+                                pullRequest = remote?.pr.map(NativeWorkspaceMapper.pullRequest)
+                            }
+                            if let merged = accumulator.apply(
+                                threadIDs: subscribedThreadIDs,
+                                branches: branchesByThreadID,
+                                refName: refName,
+                                pullRequest: pullRequest
+                            ) {
+                                continuation.yield(merged)
+                            }
+                        }
+                    } catch {
+                        // A workspace that cannot report status has no change
+                        // request to show; the row keeps its branch label.
+                    }
+                }
+            }
+            await group.waitForAll()
+        }
+    }
+
     func performSourceControlAction(
         threadID: String,
         action: FeatureSourceControlAction,
@@ -5168,6 +5247,37 @@ private struct NativeThreadRoute {
     let wireID: String
     let environmentID: String
     let client: T3Client
+}
+
+/// Folds the per-checkout VCS statuses back into one map the thread list reads.
+@MainActor
+private final class ChangeRequestAccumulator {
+    private var pullRequestsByThreadID: [String: FeaturePullRequest] = [:]
+
+    /// Returns the merged map only when it actually changed. Remote status is
+    /// polled, so most events restate what the list already shows, and a row
+    /// that re-renders on every poll is a row that drops frames.
+    func apply(
+        threadIDs: [String],
+        branches: [String: String],
+        refName: String?,
+        pullRequest: FeaturePullRequest?
+    ) -> [String: FeaturePullRequest]? {
+        var changed = false
+        for threadID in threadIDs {
+            // The status describes one checkout, so it only speaks for a thread
+            // whose branch is the one checked out there. A thread parked on a
+            // branch someone else has since switched away from shows no PR
+            // rather than the wrong one.
+            let checkedOut = refName != nil && refName == branches[threadID]
+            let next = checkedOut ? pullRequest : nil
+            if pullRequestsByThreadID[threadID] != next {
+                pullRequestsByThreadID[threadID] = next
+                changed = true
+            }
+        }
+        return changed ? pullRequestsByThreadID : nil
+    }
 }
 
 private struct ProvisionalThreadRoute {

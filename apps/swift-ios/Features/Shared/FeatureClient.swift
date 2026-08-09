@@ -152,6 +152,12 @@ public protocol FeatureClient: AnyObject {
     ) async throws -> FeatureReviewFileContents?
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus
+    /// Streams the change request matching each thread's branch, keyed by
+    /// thread id, for the threads a list is currently showing. Rows label
+    /// themselves with the PR rather than a generated branch name, and the
+    /// server holds one cached status per workspace, so the caller scopes this
+    /// to what is on screen instead of every thread it knows about.
+    func threadChangeRequests(threadIDs: [String]) -> AsyncStream<[String: FeaturePullRequest]>
     func performSourceControlAction(
         threadID: String,
         action: FeatureSourceControlAction,
@@ -414,6 +420,10 @@ public extension FeatureClient {
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus {
         throw FeatureCapabilityUnavailable("Source control")
+    }
+
+    func threadChangeRequests(threadIDs _: [String]) -> AsyncStream<[String: FeaturePullRequest]> {
+        AsyncStream { $0.finish() }
     }
 
     func performSourceControlAction(

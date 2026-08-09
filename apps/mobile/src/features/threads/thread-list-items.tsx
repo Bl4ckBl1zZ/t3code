@@ -463,8 +463,10 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
   const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
-  const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
-    Boolean(part),
+  // A t3-generated branch ("t3code/ffeef775") names nothing; the change
+  // request it produced does. The icon + number still trail the line.
+  const subtitleParts = [props.environmentLabel, pr ? pr.title : thread.branch].filter(
+    (part): part is string => Boolean(part),
   );
 
   const backgroundColor = compact ? screenColor : drawerColor;
