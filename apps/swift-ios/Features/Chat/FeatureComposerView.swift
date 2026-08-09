@@ -460,6 +460,13 @@ struct FeatureComposerView: View {
         )
         .font(T3Typography.composer)
         .lineLimit(1...7)
+        // Ideal height, not proposed height: with the attachment strip in the
+        // pill and the keyboard up (the new-thread sheet), the field's height
+        // proposal gets squeezed and a vertical TextField answers that by
+        // collapsing to one scrolling line. Fixing the vertical size keeps it
+        // at content height, and the lineLimit ceiling above keeps a pasted
+        // wall of text to seven lines that scroll within the field.
+        .fixedSize(horizontal: false, vertical: true)
         .focused(focused)
         // Return is always editing input. Sending is deliberately button-only.
         .submitLabel(.return)
