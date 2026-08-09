@@ -875,6 +875,47 @@ function normalizeMarkdownLinkHrefKey(href: string): string {
   return rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
 }
 
+const HREF_WINDOWS_DRIVE_PATTERN = /^[A-Za-z]:[\\/]/;
+const HREF_SCHEME_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/**
+ * A scheme-less, non-web href in a chat transcript is a filesystem path the
+ * agent emitted that we failed to resolve into a file link — usually because
+ * there is no cwd to anchor a relative path to.
+ */
+function pathLikeHref(href: string | undefined): string | null {
+  if (!href || href.startsWith("//")) return null;
+  if (!HREF_WINDOWS_DRIVE_PATTERN.test(href) && HREF_SCHEME_PATTERN.test(href)) return null;
+  try {
+    return decodeURIComponent(href);
+  } catch {
+    return href;
+  }
+}
+
+function copyUnresolvedPathHref(path: string): void {
+  void writeTextToClipboard(path, "path").then(
+    (didCopy) => {
+      if (!didCopy) return;
+      toastManager.add({
+        type: "success",
+        title: "Path copied",
+        description: path,
+      });
+    },
+    (cause: unknown) => {
+      reportMarkdownActionFailure({ operation: "copy-unresolved-file-path", target: path }, cause);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy path",
+          description: cause instanceof Error ? cause.message : "An error occurred.",
+        }),
+      );
+    },
+  );
+}
+
 const MARKDOWN_LINK_FAVICON_CLASS_NAME = "block size-full shrink-0 select-none";
 
 /** Hosts whose favicon request already failed this session — skip straight to the globe. */
@@ -1455,10 +1496,17 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
     },
     a({ node, href, children, ...props }) {
       const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
-      const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
+      // The href map is built by regex-scanning the markdown source, which
+      // misses destinations the regex can't express (spaces, parentheses);
+      // resolving the rendered href directly covers those.
+      const fileLinkMeta = normalizedHref
+        ? (markdownFileLinkMetaByHref.get(normalizedHref) ??
+          resolveMarkdownFileLinkMeta(normalizedHref, cwd))
+        : null;
       if (!fileLinkMeta) {
         const faviconHost = resolveExternalWebLinkHost(href);
         const isSameDocumentLink = href?.startsWith("#") ?? false;
+        const unresolvedPathHref = faviconHost || isSameDocumentLink ? null : pathLikeHref(href);
         const onClick = props.onClick;
         const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
         const link = (
@@ -1471,10 +1519,40 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
               onClick?.(event);
               if (isSameDocumentLink && href) {
                 handleMarkdownFragmentClick(event, href);
+                return;
+              }
+              // A path we couldn't resolve to a file has nowhere to navigate
+              // (the desktop shell denies it; a browser tab 404s), so the
+              // click's best effort is handing the user the path itself.
+              if (unresolvedPathHref && !event.defaultPrevented) {
+                event.preventDefault();
+                copyUnresolvedPathHref(unresolvedPathHref);
               }
             }}
             onContextMenu={(event) => {
-              if (!canOpenInPreview || !href || !faviconHost) return;
+              if (!href) return;
+              if (unresolvedPathHref) {
+                const api = readLocalApi();
+                if (!api) return;
+                event.preventDefault();
+                event.stopPropagation();
+                void api.contextMenu
+                  .show([{ id: "copy-path", label: "Copy path" }] as const, {
+                    x: event.clientX,
+                    y: event.clientY,
+                  })
+                  .then((clicked) => {
+                    if (clicked === "copy-path") copyUnresolvedPathHref(unresolvedPathHref);
+                  })
+                  .catch((cause: unknown) => {
+                    reportMarkdownActionFailure(
+                      { operation: "show-file-context-menu", target: href },
+                      cause,
+                    );
+                  });
+                return;
+              }
+              if (!canOpenInPreview || !faviconHost) return;
               event.preventDefault();
               event.stopPropagation();
               const api = readLocalApi();
@@ -1509,7 +1587,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
             )}
           </a>
         );
-        if (!faviconHost || !href) {
+        if (!href || (!faviconHost && !unresolvedPathHref)) {
           return link;
         }
         return (
@@ -1519,7 +1597,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
               side="top"
               className="max-w-[min(36rem,calc(100vw-2rem))] whitespace-normal leading-tight wrap-anywhere"
             >
-              {href}
+              {unresolvedPathHref ?? href}
             </TooltipPopup>
           </Tooltip>
         );
