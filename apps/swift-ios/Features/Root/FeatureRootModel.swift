@@ -26,6 +26,9 @@ public final class FeatureRootModel {
     /// The latest detail revision for each loaded thread.
     public private(set) var detailRevisions: [String: UInt64] = [:]
     private(set) var detailRenderUpdates: [String: FeatureDetailRenderUpdate] = [:]
+    /// The change request behind each listed thread's branch, keyed by thread
+    /// id. Only threads passed to `observeChangeRequests` appear here.
+    public private(set) var changeRequestsByThreadID: [String: FeaturePullRequest] = [:]
     public private(set) var isLoading = true
     public private(set) var isPerformingAction = false
     public private(set) var isManagingConnections = false
@@ -44,6 +47,8 @@ public final class FeatureRootModel {
     private var outboxDrainTask: Task<Void, Never>?
     private var outboxRetryAttempt = 0
     private var outboxGeneration: UInt64 = 0
+    private var changeRequestThreadIDs: [String] = []
+    private var changeRequestTask: Task<Void, Never>?
 
     public init(
         client: any FeatureClient,
@@ -67,6 +72,29 @@ public final class FeatureRootModel {
 
         for await event in client.events() {
             apply(event)
+        }
+    }
+
+    /// Points the change-request subscriptions at the threads a list is
+    /// showing. Safe to call whenever that list is rebuilt: an unchanged set of
+    /// threads keeps the existing subscriptions rather than restarting them.
+    public func observeChangeRequests(threadIDs: [String]) {
+        guard threadIDs != changeRequestThreadIDs else { return }
+        changeRequestThreadIDs = threadIDs
+        changeRequestTask?.cancel()
+
+        let observed = Set(threadIDs)
+        changeRequestsByThreadID = changeRequestsByThreadID.filter { observed.contains($0.key) }
+        guard !threadIDs.isEmpty else {
+            changeRequestTask = nil
+            return
+        }
+        changeRequestTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await pullRequests in client.threadChangeRequests(threadIDs: threadIDs) {
+                if Task.isCancelled { return }
+                changeRequestsByThreadID = pullRequests
+            }
         }
     }
 

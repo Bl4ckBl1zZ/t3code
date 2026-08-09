@@ -941,6 +941,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         #{pr.number}
       </button>
     ) : null;
+  // A t3-generated branch ("t3code/ffeef775") tells you nothing the row does
+  // not already say. Once the work has a change request, that is the thing
+  // worth naming, so it takes the branch's slot and absorbs the badge.
+  const prLine =
+    !isHermes && prStatus && pr ? (
+      <button
+        type="button"
+        onClick={handlePrClick}
+        className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left hover:underline"
+        aria-label={prStatus.tooltip}
+      >
+        <span className={cn("shrink-0 tabular-nums", prStatus.colorClass)}>#{pr.number}</span>
+        <span className="min-w-0 truncate whitespace-nowrap">{pr.title}</span>
+      </button>
+    ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
       role="img"
@@ -1265,7 +1280,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               ) : null}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-              {!isHermes && thread.branch ? (
+              {prLine ? (
+                prLine
+              ) : !isHermes && thread.branch ? (
                 <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
               ) : isHermes && preview ? (
                 /* Hermes rows have no branch, no repo and no diff — the whole
@@ -1279,7 +1296,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <span className="flex-1" />
               )}
               {terminalStatusIcon}
-              {prBadge}
+              {prLine ? null : prBadge}
               {!isHermes && diff ? (
                 <span className="shrink-0 font-mono">
                   <span className="text-emerald-600 dark:text-emerald-400">+{diff.insertions}</span>{" "}

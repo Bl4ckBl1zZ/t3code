@@ -9,6 +9,8 @@ export interface ThreadPrPresentation {
   readonly url: string;
   /** Compact pull request number label, e.g. "3774". */
   readonly label: string;
+  /** The change request's own title, shown in place of the branch on rows. */
+  readonly title: string;
   /** Full, provider-aware label for assistive technologies. */
   readonly accessibilityLabel: string;
   readonly textClassName: string;
@@ -30,6 +32,7 @@ export function presentThreadPr(
     state: pr.state,
     url: pr.url,
     label: String(pr.number),
+    title: pr.title,
     accessibilityLabel: `#${pr.number} ${presentation.longName} ${pr.state}`,
     textClassName: PR_STATE_TEXT_CLASS[pr.state],
   };

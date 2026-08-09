@@ -923,6 +923,38 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {thread.runtime.lastError}
           </Text>
+        ) : pr ? (
+          /* A t3-generated branch ("t3code/ffeef775") names nothing the row
+             does not already say. Once the work has a change request, that is
+             what the line reports — number, then title, then machine. */
+          <Text
+            accessibilityLabel={pr.accessibilityLabel}
+            className={cn(
+              "flex-1 text-xs",
+              selected ? "text-user-bubble-foreground-muted" : "text-foreground-muted",
+            )}
+            numberOfLines={1}
+          >
+            <Text
+              className={cn("text-xs", selected ? "text-white" : pr.textClassName)}
+              style={{ fontFamily: MONO_FONT }}
+            >
+              #{pr.label}
+            </Text>
+            {pr.title ? "  " : null}
+            {pr.title}
+            {props.environmentLabel ? "  ·  " : null}
+            {props.environmentLabel ? (
+              <Text
+                className={cn(
+                  "text-xs",
+                  selected ? "text-user-bubble-foreground-muted" : "text-foreground-tertiary",
+                )}
+              >
+                {props.environmentLabel}
+              </Text>
+            ) : null}
+          </Text>
         ) : thread.branch || props.environmentLabel ? (
           /* "branch · machine" share one truncating line. The machine sits
              last so a tight fit cuts the repetitive label, not the branch —
@@ -960,7 +992,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ) : (
           <View className="flex-1" />
         )}
-        {pr ? (
+        {/* The trailing badge only carries the number, so it is redundant
+            once the line above leads with it — it comes back for a failed
+            row, where the error text owns that line instead. */}
+        {pr && status === "failed" && thread.runtime?.lastError ? (
           <Text
             accessibilityLabel={pr.accessibilityLabel}
             className={cn("text-xs", selected ? "text-white" : pr.textClassName)}

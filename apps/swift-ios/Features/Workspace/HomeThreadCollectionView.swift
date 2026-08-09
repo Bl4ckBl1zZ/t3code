@@ -5,6 +5,10 @@ import UIKit
 /// while UIKit keeps row creation and updates proportional to visible threads.
 struct HomeThreadCollectionView: UIViewRepresentable {
     let presentation: HomePresentation
+    /// Change requests arrive on their own subscription, long after the
+    /// presentation is built, so they are overlaid onto row contexts here
+    /// rather than folded into it — a PR landing must not rebuild every shelf.
+    let changeRequests: [String: FeaturePullRequest]
     /// Only T3 Work splits its active block into inbox sections, so the rows a
     /// workspace shows and the dividers between them are decided together.
     let workspace: MobileWorkspace
@@ -519,6 +523,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         return forceRichRows ? .rich : .slim
     }
 
+    private func rowContext(for thread: FeatureThread) -> HomeThreadRowContext {
+        var context = presentation.rowContexts[thread.id] ?? .fallback
+        context.pullRequest = changeRequests[thread.id]
+        return context
+    }
+
     var collectionItems: [HomeCollectionItem] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalizedQuery.isEmpty {
@@ -528,7 +538,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             return presentation.searchResults.map {
                 .thread(
                     $0,
-                    presentation.rowContexts[$0.id] ?? .fallback,
+                    rowContext(for: $0),
                     primaryRowStyle,
                     $0.isArchived,
                     forceRichRows
@@ -540,7 +550,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         var items = presentation.pinned.map {
             HomeCollectionItem.thread(
                 $0,
-                presentation.rowContexts[$0.id] ?? .fallback,
+                rowContext(for: $0),
                 mainStyle,
                 false,
                 forceRichRows
@@ -564,7 +574,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 items.append(contentsOf: group.rows.map {
                     .thread(
                         $0,
-                        presentation.rowContexts[$0.id] ?? .fallback,
+                        rowContext(for: $0),
                         primaryRowStyle,
                         false,
                         forceRichRows
@@ -575,7 +585,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             items.append(contentsOf: presentation.active.map {
                 .thread(
                     $0,
-                    presentation.rowContexts[$0.id] ?? .fallback,
+                    rowContext(for: $0),
                     mainStyle,
                     false,
                     forceRichRows
@@ -593,7 +603,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     : presentation.snoozed.map {
                         .thread(
                             $0,
-                            presentation.rowContexts[$0.id] ?? .fallback,
+                            rowContext(for: $0),
                             shelfRowStyle,
                             false,
                             forceRichRows
@@ -606,7 +616,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 items.append(contentsOf: presentation.settled.prefix(settledLimit).map {
                     .thread(
                         $0,
-                        presentation.rowContexts[$0.id] ?? .fallback,
+                        rowContext(for: $0),
                         shelfRowStyle,
                         false,
                         forceRichRows
@@ -624,7 +634,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 items.append(contentsOf: presentation.archived.map {
                     .thread(
                         $0,
-                        presentation.rowContexts[$0.id] ?? .fallback,
+                        rowContext(for: $0),
                         shelfRowStyle,
                         true,
                         forceRichRows
