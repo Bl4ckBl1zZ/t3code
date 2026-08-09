@@ -294,7 +294,9 @@ struct ComposerPhotoLibraryWindow: View {
         .frame(height: 52)
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 6)
+            // Global space, not local: the drag offsets this very view, so a
+            // local-space translation would chase its own movement and jitter.
+            DragGesture(minimumDistance: 6, coordinateSpace: .global)
                 .onChanged { value in
                     dragOffset = value.translation.height
                 }
