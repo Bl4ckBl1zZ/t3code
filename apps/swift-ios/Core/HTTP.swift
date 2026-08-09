@@ -154,7 +154,10 @@ public actor EnvironmentAPI {
         environment: Environment,
         maxVisibleItems: Int? = nil
     ) async throws -> OrchestrationV2ThreadDetailSnapshot {
-        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        // The id goes in unescaped: `endpoint` assigns it to `URLComponents.path`,
+        // which percent-encodes the segment itself. Pre-escaping here would be
+        // encoded a second time — a project-scoped id's colons became `%253A`,
+        // and the server decoded that back to a literal `%3A` and answered 404.
         var queryItems: [URLQueryItem] = []
         if let maxVisibleItems {
             queryItems.append(
@@ -163,7 +166,7 @@ public actor EnvironmentAPI {
         }
         return try await authorized(
             environment: environment,
-            path: "/api/orchestration/threads/\(encodedID)",
+            path: "/api/orchestration/threads/\(id)",
             queryItems: queryItems,
             method: "GET",
             as: OrchestrationV2ThreadDetailSnapshot.self
