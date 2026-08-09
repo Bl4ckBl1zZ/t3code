@@ -5,6 +5,7 @@ import {
   type GitQuickAction,
 } from "@t3tools/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import { resolveThreadChangeStat } from "@t3tools/shared/git";
 import { CommonActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import type { SFSymbol } from "expo-symbols";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -221,8 +222,11 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
     selectedThreadProject?.title ??
     basename(selectedThreadProject?.workspaceRoot ?? null) ??
     "Workspace";
-  const insertions = status?.workingTree.insertions ?? 0;
-  const deletions = status?.workingTree.deletions ?? 0;
+  // Counts whichever diff "Review changes" leads with: uncommitted edits, or
+  // what the branch has committed once the working tree is clean.
+  const changeStat = resolveThreadChangeStat(status ?? null);
+  const insertions = changeStat?.insertions ?? 0;
+  const deletions = changeStat?.deletions ?? 0;
 
   const content = (
     <ScrollView

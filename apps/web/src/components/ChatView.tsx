@@ -2864,6 +2864,8 @@ function ChatViewContent(props: ChatViewProps) {
     hasActiveProject: activeProject !== null,
     isProjectlessConversation: isHermesConversation,
   });
+  // Mirrors resolveThreadChangeStat: a clean working tree means the panel opens
+  // the branch range, which is what the "Changes" row then counts.
   const initialDiffPanelGitScope =
     gitStatusQuery.data?.hasWorkingTreeChanges === true ? "unstaged" : "branch";
   const diffPanelGitStatusResolutionKey = gitStatusQuery.data ? "resolved" : "pending";

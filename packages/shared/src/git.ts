@@ -213,6 +213,45 @@ export function detectSourceControlProviderFromGitRemoteUrl(
   return detectSourceControlProviderFromRemoteUrl(remoteUrl);
 }
 
+/**
+ * The diff a thread's "Changes" affordance opens, and the stat that labels it.
+ *
+ * `working-tree` covers uncommitted edits; `branch` covers what the ref has
+ * committed on top of its base. A thread that committed its work has a clean
+ * working tree, so labelling that row from `workingTree` alone reports +0 −0
+ * over a branch full of changes — and contradicts the diff the row opens.
+ */
+export type ThreadChangeScope = "working-tree" | "branch";
+
+export interface ThreadChangeStat {
+  readonly scope: ThreadChangeScope;
+  readonly filesChanged: number;
+  readonly insertions: number;
+  readonly deletions: number;
+}
+
+export function resolveThreadChangeStat(
+  status: Pick<VcsStatusLocalResult, "hasWorkingTreeChanges" | "workingTree" | "branchDiff"> | null,
+): ThreadChangeStat | null {
+  if (!status) {
+    return null;
+  }
+  if (status.hasWorkingTreeChanges || !status.branchDiff) {
+    return {
+      scope: "working-tree",
+      filesChanged: status.workingTree.files.length,
+      insertions: status.workingTree.insertions,
+      deletions: status.workingTree.deletions,
+    };
+  }
+  return {
+    scope: "branch",
+    filesChanged: status.branchDiff.filesChanged,
+    insertions: status.branchDiff.insertions,
+    deletions: status.branchDiff.deletions,
+  };
+}
+
 const EMPTY_GIT_STATUS_REMOTE: VcsStatusRemoteResult = {
   hasUpstream: false,
   aheadCount: 0,
@@ -254,6 +293,7 @@ function toLocalStatusPart(status: VcsStatusResult): VcsStatusLocalResult {
     refName: status.refName,
     hasWorkingTreeChanges: status.hasWorkingTreeChanges,
     workingTree: status.workingTree,
+    ...(status.branchDiff === undefined ? {} : { branchDiff: status.branchDiff }),
   };
 }
 

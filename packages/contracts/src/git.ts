@@ -259,6 +259,23 @@ export const VcsWorkingTreeFile = Schema.Struct({
 });
 export type VcsWorkingTreeFile = typeof VcsWorkingTreeFile.Type;
 
+/**
+ * What this ref has committed on top of its base, from
+ * `git diff <baseRef>...HEAD --numstat`.
+ *
+ * The working-tree stat goes to zero the moment an agent commits, so it cannot
+ * answer "what did this thread change" on its own. This is the other half, and
+ * it is what the diff panel shows once the working tree is clean.
+ */
+export const VcsBranchDiffStat = Schema.Struct({
+  /** The ref the range was measured against, e.g. `origin/main`. */
+  baseRef: TrimmedNonEmptyStringSchema,
+  filesChanged: NonNegativeInt,
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type VcsBranchDiffStat = typeof VcsBranchDiffStat.Type;
+
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
@@ -271,6 +288,13 @@ const VcsStatusLocalShape = {
     insertions: NonNegativeInt,
     deletions: NonNegativeInt,
   }),
+  /**
+   * Null when no base ref resolves (a default branch, a detached HEAD, a repo
+   * with no remote) or when the ref has no commits of its own. Optional because
+   * a server older than this field omits it entirely; clients must not read its
+   * absence as "nothing changed".
+   */
+  branchDiff: Schema.optional(Schema.NullOr(VcsBranchDiffStat)),
 };
 
 const VcsStatusRemoteShape = {
