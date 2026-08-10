@@ -11,3 +11,16 @@ export const vcsCommandConcurrency: AtomCommandConcurrency<{
   mode: "serial",
   key: ({ environmentId, input }) => JSON.stringify([environmentId, input.cwd]),
 };
+
+/**
+ * Working-tree status refreshes are polled while agents edit, so they coalesce
+ * instead of queueing: a repo whose `git status` outlives the poll interval
+ * would otherwise accumulate an unbounded FIFO backlog.
+ */
+export const vcsLocalStatusConcurrency: AtomCommandConcurrency<{
+  readonly environmentId: EnvironmentId;
+  readonly input: { readonly cwd: string };
+}> = {
+  mode: "singleFlight",
+  key: ({ environmentId, input }) => JSON.stringify([environmentId, input.cwd]),
+};

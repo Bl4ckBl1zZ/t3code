@@ -2795,14 +2795,30 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [activePlan, gitStatusQuery.data],
   );
-  // The background broadcaster refreshes on a slow cadence; while an agent is
-  // actively editing, poll faster so the badge counts track the working tree live.
-  const refreshGitStatus = gitStatusQuery.refresh;
+  // The broadcaster only recomputes the working tree when something asks it to
+  // — nothing does while a run is in flight — so poll it directly here. This
+  // has to be the refresh command rather than `gitStatusQuery.refresh()`:
+  // re-subscribing is served from the broadcaster's cache, so it would replay
+  // the same stale counts forever. The refreshed status arrives back through
+  // the existing subscription, so there is nothing to apply here.
+  const refreshLocalGitStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
   useEffect(() => {
     if (!isWorking || gitStatusCwd === null) return;
-    const interval = window.setInterval(() => refreshGitStatus(), 3000);
-    return () => window.clearInterval(interval);
-  }, [isWorking, gitStatusCwd, refreshGitStatus]);
+    const refresh = () => {
+      void refreshLocalGitStatus({ environmentId, input: { cwd: gitStatusCwd } });
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 3000);
+    return () => {
+      window.clearInterval(interval);
+      // Only a *completed* run emits the checkpoint capture that refreshes
+      // status server-side, so a run the user interrupts would otherwise be
+      // left on whichever poll happened to land last.
+      refresh();
+    };
+  }, [isWorking, gitStatusCwd, environmentId, refreshLocalGitStatus]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   const showOpenInPicker = shouldShowOpenInPicker({
