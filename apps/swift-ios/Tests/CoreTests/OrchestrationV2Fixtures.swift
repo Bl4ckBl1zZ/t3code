@@ -246,6 +246,7 @@ enum V2Fixture {
             workspaceRoot: workspaceRoot,
             repositoryIdentity: nil,
             defaultModelSelection: nil,
+            faviconPath: nil,
             scripts: [],
             createdAt: timestamp,
             updatedAt: timestamp,

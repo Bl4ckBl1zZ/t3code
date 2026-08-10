@@ -74,6 +74,9 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     /// listening, so the Ports section lists it from the moment a thread opens
     /// and keeps listing it after the server stops.
     public var previewUrl: String?
+    /// The project's manually chosen icon (workspace-relative), from
+    /// `OrchestrationProject.faviconPath`. Nil keeps favicon auto-discovery.
+    public var faviconPath: String?
 
     public init(
         id: String,
@@ -84,7 +87,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         threadCount: Int = 0,
         defaultSelection: FeatureSelection? = nil,
         scripts: [ProjectScript] = [],
-        previewUrl: String? = nil
+        previewUrl: String? = nil,
+        faviconPath: String? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -95,6 +99,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.defaultSelection = defaultSelection
         self.scripts = scripts
         self.previewUrl = previewUrl
+        self.faviconPath = faviconPath
     }
 
     /// `ProjectScript` is a Core wire type and is deliberately not `Hashable`,
@@ -109,6 +114,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         hasher.combine(threadCount)
         hasher.combine(defaultSelection)
         hasher.combine(previewUrl)
+        hasher.combine(faviconPath)
         for script in scripts { hasher.combine(script.id) }
     }
 }
