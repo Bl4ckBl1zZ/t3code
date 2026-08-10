@@ -134,7 +134,12 @@ function fileScriptFromProjectScript(script: ProjectScript): T3ProjectFileScript
   };
 }
 
-function renderProjectFile(
+/**
+ * Render the `t3.json` document for a project's actions, preserving every
+ * field the app does not own. Shared with the one-time backfill that seeds
+ * the file for projects whose actions predate it.
+ */
+export function renderProjectFile(
   existing: T3ProjectFile | null,
   scripts: ReadonlyArray<ProjectScript>,
   schemaUrl: string | null,
@@ -221,15 +226,14 @@ const syncLoop = Effect.gen(function* () {
     const baseline = lastSynced.get(project.id);
 
     if (baseline === undefined) {
-      // First sight of this project: an existing file is the checked-in
-      // truth; otherwise seed the file from the current actions.
+      // First sight of this project: an existing file is the checked-in truth.
+      // A missing file stays missing — seeding it is the one-time backfill's
+      // job (see T3ProjectFileBackfill), so a `t3.json` the user deleted is
+      // not silently restored on the next round or the next boot.
       if (fileNorm !== null && fileNorm !== dbNorm) {
         yield* applyFileScripts(project, scriptsFromFile(file?.scripts ?? [], project.scripts));
         lastSynced.set(project.id, fileNorm);
       } else {
-        if (fileNorm === null && project.scripts.length > 0) {
-          yield* writeProjectFile(project, filePath, file);
-        }
         lastSynced.set(project.id, dbNorm);
       }
       return;
@@ -246,7 +250,9 @@ const syncLoop = Effect.gen(function* () {
       lastSynced.set(project.id, fileNorm);
       return;
     }
-    if (dbChanged || (fileNorm === null && project.scripts.length > 0)) {
+    // An in-app edit still creates a missing file; an untouched project with no
+    // file is left alone.
+    if (dbChanged) {
       yield* writeProjectFile(project, filePath, file);
       lastSynced.set(project.id, dbNorm);
     }

@@ -36,6 +36,10 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { hermesProactiveDefaultMigration } from "./hermes/HermesProactiveDefaultMigration.ts";
+import {
+  projectFileBackfillPatch,
+  writeMissingProjectFiles,
+} from "./project/T3ProjectFileBackfill.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -473,6 +477,30 @@ export const make = (options?: StartupOptions) =>
               operation: error.operation,
               cause: error.cause,
             }),
+          ),
+        ),
+      );
+
+      // Seeds `t3.json` for projects whose actions predate the file. Ordered
+      // after settings so the marker is readable, and safe relative to
+      // T3ProjectFileSync either way: a file written here matches the
+      // projection, so the reconciler sees no divergence.
+      yield* runStartupPhase(
+        "projects.t3-json-backfill",
+        Effect.gen(function* () {
+          const settings = yield* serverSettings.getSettings;
+          const patch = projectFileBackfillPatch(settings);
+          if (patch === null) return;
+          const written = yield* writeMissingProjectFiles();
+          yield* serverSettings.updateSettings(patch);
+          if (written.length > 0) {
+            yield* Effect.logInfo("Seeded t3.json for existing projects.", {
+              projectIds: written,
+            });
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to back fill project t3.json files", { cause }),
           ),
         ),
       );

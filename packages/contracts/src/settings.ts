@@ -911,6 +911,14 @@ export const ServerSettings = Schema.Struct({
   hermesProactiveDefaultApplied: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // `t3.json` is the source of truth for a project's actions, so a project
+  // whose actions only ever existed in the database needs the file written
+  // once. Recorded here rather than inferred from a missing file: without a
+  // marker, every boot would recreate a `t3.json` the user deliberately
+  // deleted.
+  projectFileBackfillApplied: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1067,6 +1075,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
+  projectFileBackfillApplied: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
