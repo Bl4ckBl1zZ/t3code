@@ -979,10 +979,21 @@ export class GhosttyTerminalSurface {
       this.suppressedKeyCodes.add(event.code);
       return;
     }
-    if (isTerminalCopyShortcut(event) && this.hasSelection()) {
+    if (isTerminalCopyShortcut(event)) {
       event.preventDefault();
       this.suppressedKeyCodes.add(event.code);
-      this.options.onCopy(this.getSelection());
+      if (this.hasSelection()) {
+        this.options.onCopy(this.getSelection());
+        return;
+      }
+      // No selection: copy the whole scrollback, matching the iOS client.
+      // The transient select-all never renders — it is cleared synchronously,
+      // before the next animation frame.
+      if (this.core.selectAll() !== null) {
+        const text = this.core.selectionText();
+        this.core.clearSelection();
+        if (text.length > 0) this.options.onCopy(text);
+      }
       return;
     }
     if (isTerminalSelectAllShortcut(event)) {
