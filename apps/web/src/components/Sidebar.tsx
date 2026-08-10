@@ -795,6 +795,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the user visits the thread.
   wokeAt: string | null;
   isActive: boolean;
+  openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
   environmentLabel: string | null;
@@ -833,6 +834,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onTogglePin,
     onUnsettle,
     onUnsnooze,
+    openPullRequestsInRightPanel,
     renamingTitle,
     thread,
     variant,
@@ -1110,9 +1112,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   }, [showSnoozeButton]);
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
-      if (pr?.url) openPrLink(event, pr.url);
+      if (!pr?.url) return;
+      const openedInRightPanel = openPrLink(
+        event,
+        pr.url,
+        openPullRequestsInRightPanel ? threadRef : undefined,
+      );
+      if (openedInRightPanel && openPullRequestsInRightPanel && !props.isActive) {
+        onThreadActivate(threadRef);
+      }
     },
-    [openPrLink, pr],
+    [onThreadActivate, openPrLink, openPullRequestsInRightPanel, pr, props.isActive, threadRef],
   );
 
   // All sidebar rows share one surface model. Live threads used to look
@@ -4028,6 +4038,7 @@ export default function Sidebar() {
                           // rows resolve to null on their own.
                           wokeAt: threadWokeAt(thread, { now: snoozeNow }),
                           isActive: routeThreadKey === threadKey,
+                          openPullRequestsInRightPanel: routeThreadRef !== null,
                           jumpLabel: showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null,
                           currentEnvironmentId: primaryEnvironmentId,
                           environmentLabel: environmentLabelById.get(thread.environmentId) ?? null,

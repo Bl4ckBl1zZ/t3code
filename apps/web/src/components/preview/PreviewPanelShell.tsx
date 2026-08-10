@@ -23,6 +23,15 @@ interface PreviewPanelShellProps {
   mode: PreviewPanelMode;
   maximized?: boolean;
   inlineSize?: PreviewPanelInlineSize;
+  /**
+   * Overrides the localStorage key used to persist the panel width. Callers
+   * embedding this shell for a different surface (e.g. the pull requests
+   * page) should pass their own key so resizing one panel doesn't clobber
+   * the other's remembered width. Ignored when `inlineSize` is provided.
+   */
+  widthStorageKey?: string;
+  /** Overrides the initial width (px) before the user has resized the panel. */
+  defaultWidth?: number;
   children: ReactNode;
 }
 
@@ -35,7 +44,10 @@ export function PreviewPanelShell(props: PreviewPanelShellProps) {
 }
 
 function ResizablePreviewPanelShell(props: PreviewPanelShellProps) {
-  const inlineSize = usePreviewPanelInlineSize();
+  const inlineSize = usePreviewPanelInlineSize({
+    ...(props.widthStorageKey ? { storageKey: props.widthStorageKey } : {}),
+    ...(props.defaultWidth ? { defaultWidth: props.defaultWidth } : {}),
+  });
   return <PreviewPanelShellFrame {...props} inlineSize={inlineSize} />;
 }
 
