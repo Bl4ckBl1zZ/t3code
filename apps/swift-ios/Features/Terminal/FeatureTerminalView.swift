@@ -58,6 +58,14 @@ enum TerminalSessionList {
 public struct FeatureTerminalView: View {
     let client: any FeatureClient
     let threadID: String
+    /// A command to run once, as soon as the terminal is open — how a project
+    /// action from the details sheet gets somewhere its output is visible.
+    ///
+    /// Sent from here rather than by the caller because this view owns which
+    /// terminal is active: `TerminalSessionList.initialID` may resolve to a
+    /// running session other than `default`, and a caller writing to a guessed
+    /// id would run the command in a terminal the reader never sees.
+    let initialCommand: String?
 
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @AppStorage("terminalFontSize") private var storedFontSize = TerminalFontSize.defaultValue
@@ -72,10 +80,15 @@ public struct FeatureTerminalView: View {
     @State private var isLoading = true
     @State private var isOpening = false
     @State private var errorMessage: String?
+    /// `initialCommand` is run once per presentation. Switching terminals
+    /// re-runs `loadAndOpen`, and re-sending the command there would replay it
+    /// into a terminal the reader deliberately switched to.
+    @State private var didSendInitialCommand = false
 
-    public init(client: any FeatureClient, threadID: String) {
+    public init(client: any FeatureClient, threadID: String, initialCommand: String? = nil) {
         self.client = client
         self.threadID = threadID
+        self.initialCommand = initialCommand
     }
 
     public var body: some View {
@@ -148,6 +161,7 @@ public struct FeatureTerminalView: View {
         .task(id: terminalTaskID) {
             guard sessionsResolved else { return }
             await loadAndOpen()
+            await sendInitialCommandIfNeeded()
         }
         .task(id: terminalTaskID) {
             guard sessionsResolved else { return }
@@ -404,6 +418,20 @@ public struct FeatureTerminalView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Types the caller's command into the resolved terminal, once.
+    ///
+    /// Skipped when the terminal never came up: writing into a failed session
+    /// would report a write error over the open error that actually explains
+    /// what went wrong.
+    private func sendInitialCommandIfNeeded() async {
+        guard !didSendInitialCommand,
+              let initialCommand,
+              !initialCommand.isEmpty,
+              terminal != nil else { return }
+        didSendInitialCommand = true
+        await write("\(initialCommand)\r")
     }
 
     private func open() async {

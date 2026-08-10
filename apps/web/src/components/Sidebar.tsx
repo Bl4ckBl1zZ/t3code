@@ -1201,17 +1201,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // A t3-generated branch ("t3code/ffeef775") tells you nothing the row does
   // not already say. Once the work has a change request, that is the thing
   // worth naming, so it takes the branch's slot and absorbs the badge.
+  // Only the number opens the change request. The title is a label, not a
+  // second link to the same place: it stays part of the row, so clicking it
+  // opens the thread like clicking any other text on the row does.
   const prLine =
     !isHermes && prStatus && pr ? (
-      <button
-        type="button"
-        onClick={handlePrClick}
-        className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left hover:underline"
-        aria-label={prStatus.tooltip}
-      >
-        <span className={cn("shrink-0 tabular-nums", prStatus.colorClass)}>#{pr.number}</span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
+        <button
+          type="button"
+          onClick={handlePrClick}
+          className={cn("shrink-0 tabular-nums hover:underline", prStatus.colorClass)}
+          aria-label={prStatus.tooltip}
+        >
+          #{pr.number}
+        </button>
         <span className="min-w-0 truncate whitespace-nowrap">{pr.title}</span>
-      </button>
+      </span>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span

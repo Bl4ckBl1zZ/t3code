@@ -140,6 +140,10 @@ public struct ThreadDetailView: View {
                             guard let environmentID = threadEnvironment?.id else { return }
                             Task { _ = await model.activateEnvironment(environmentID) }
                         },
+                        // The project's actions, listed as run rows under
+                        // Workspace beside Files and Terminal.
+                        scripts: threadProject?.scripts ?? [],
+                        onRunScript: runProjectScript,
                         // The same projection the transcript renders, so the
                         // sheet's Background Tasks and Lineage sections cannot
                         // disagree with the rows above them.
@@ -187,8 +191,12 @@ public struct ThreadDetailView: View {
                     )
                 case .sourceControl:
                     FeatureSourceControlView(client: model.client, threadID: thread.id)
-                case .terminal:
-                    FeatureTerminalView(client: model.client, threadID: thread.id)
+                case let .terminal(command):
+                    FeatureTerminalView(
+                        client: model.client,
+                        threadID: thread.id,
+                        initialCommand: command
+                    )
                 }
             }
             .toolbar {
@@ -719,6 +727,20 @@ public struct ThreadDetailView: View {
         }
     }
 
+    /// Runs a project action by swapping the details sheet for the terminal and
+    /// letting it type the command in. The terminal is the only surface that can
+    /// show what the action does, so it is the destination rather than a side
+    /// effect the reader has to go looking for.
+    ///
+    /// Narrower than the desktop control on purpose: the action runs in whichever
+    /// terminal this thread resolves to instead of spawning one, and a `singleRun`
+    /// action does not toggle off — attributing a running subprocess back to a
+    /// script needs a script id on `FeatureTerminalSnapshot`, which the wire
+    /// model does not carry yet.
+    private func runProjectScript(_ script: ProjectScript) {
+        toolSurface = .terminal(command: script.command)
+    }
+
     /// Sheets stack over the thread, so a row that opens another surface swaps
     /// the presented sheet rather than pushing a second one on top of it.
     private func navigateFromDetails(_ destination: ThreadDetailsDestination) {
@@ -733,7 +755,7 @@ public struct ThreadDetailView: View {
         case .sourceControl:
             toolSurface = .sourceControl
         case .terminal:
-            toolSurface = .terminal
+            toolSurface = .terminal(command: nil)
         case let .thread(id, isArchived):
             toolSurface = nil
             onOpenRelatedThread(id, isArchived)
@@ -1032,7 +1054,10 @@ private enum FeatureThreadToolSurface: Identifiable {
     case files(path: String?, line: Int?)
     case review(filePath: String?)
     case sourceControl
-    case terminal
+    /// `command` is the project action that opened this terminal, if any. Part
+    /// of the identity below, so running a second action re-presents the
+    /// surface instead of reusing a terminal already running the first.
+    case terminal(command: String?)
 
     var id: String {
         switch self {
@@ -1040,7 +1065,7 @@ private enum FeatureThreadToolSurface: Identifiable {
         case let .files(path, line): "files:\(path ?? "")#\(line.map(String.init) ?? "")"
         case let .review(filePath): "review:\(filePath ?? "")"
         case .sourceControl: "sourceControl"
-        case .terminal: "terminal"
+        case let .terminal(command): "terminal:\(command ?? "")"
         }
     }
 }
