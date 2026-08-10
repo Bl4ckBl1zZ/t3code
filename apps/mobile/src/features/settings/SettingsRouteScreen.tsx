@@ -544,6 +544,7 @@ function GeneralSettingsSection() {
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsRow icon="mic" label="Voice Input" target="SettingsVoiceInput" />
+      <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
     </SettingsSection>
   );
 }

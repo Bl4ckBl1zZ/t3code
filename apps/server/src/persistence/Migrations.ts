@@ -66,6 +66,7 @@ import Migration0049 from "./Migrations/049_HermesImportProjectScope.ts";
 import Migration0050 from "./Migrations/050_HermesImportInheritedBoundary.ts";
 import Migration0051 from "./Migrations/051_HermesCronRunWatermarks.ts";
 import Migration0052 from "./Migrations/052_ProjectionProjectsDefaultThreadEnvMode.ts";
+import Migration0053 from "./Migrations/053_ProjectionProjectFaviconPath.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -130,6 +131,7 @@ export const migrationEntries = [
   [50, "HermesImportInheritedBoundary", Migration0050],
   [51, "HermesCronRunWatermarks", Migration0051],
   [52, "ProjectionProjectsDefaultThreadEnvMode", Migration0052],
+  [53, "ProjectionProjectFaviconPath", Migration0053],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -211,6 +213,7 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [50, { kind: "column", table: "hermes_session_imports", column: "inherited_message_count" }],
   [51, { kind: "table", table: "hermes_cron_run_watermarks" }],
   [52, { kind: "column", table: "projection_projects", column: "default_thread_env_mode" }],
+  [53, { kind: "column", table: "projection_projects", column: "favicon_path" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {

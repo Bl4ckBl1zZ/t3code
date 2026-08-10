@@ -42,7 +42,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   (and its ordering key) in orchestration V2, whose thread state is a JSON projection rather than
   those columns. Upstream's `039_ProjectionProjectsDefaultThreadEnvMode` targets the project
   aggregate the fork keeps, so it is carried but renumbered to
-  `052_ProjectionProjectsDefaultThreadEnvMode`.
+  `052_ProjectionProjectsDefaultThreadEnvMode`. Upstream's
+  `040_ProjectionProjectFaviconPath` likewise targets the project aggregate and is carried as
+  `053_ProjectionProjectFaviconPath`.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.
@@ -74,7 +76,12 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   archive -> export -> upload, with no EAS service). It ships on every push to `main`, on `v*` and
   `fork-v*` tags, and on manual dispatch. An archive takes ~40 minutes, so the `ios-testflight`
   concurrency group cancels a run in flight when a newer merge lands: TestFlight only ever receives
-  head of `main`. `mobile-eas-production.yml` stays as an `eas build --local` fallback. An internal group automatically receives every processed build, and the external group
+  head of `main`. `mobile-eas-production.yml` stays as a manual-only `eas build --local` fallback:
+  upstream's push-to-main EAS auto-release and OTA reconciliation (and its companion
+  `mobile-fingerprint-check.yml`) are not carried, because the direct TestFlight pipeline already
+  ships every merge and the fork does not consume the upstream Expo project's OTA channel.
+  Upstream's label-gated `web-preview.yml` (Vercel hosted-web previews) is likewise not carried —
+  the fork has no access to that Vercel project or its secrets. An internal group automatically receives every processed build, and the external group
   exposes a public TestFlight invitation after Apple's initial Beta App Review. The fork does not
   consume the upstream Expo project's OTA updates; TestFlight distributes signed updates to
   opted-in testers.
