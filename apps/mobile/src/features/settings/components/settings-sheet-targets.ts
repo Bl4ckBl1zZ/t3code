@@ -8,6 +8,7 @@ export type SettingsSheetTarget =
   | "SettingsIntegrations"
   | "SettingsOpenRouter"
   | "SettingsVoiceInput"
-  | "SettingsVoiceModel";
+  | "SettingsVoiceModel"
+  | "SettingsUsage";
 
 export type SettingsLegalDocumentTarget = "SettingsLegal";

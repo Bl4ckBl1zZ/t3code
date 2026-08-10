@@ -27,6 +27,19 @@ public protocol FeatureThreadRoleAssigning: AnyObject {
     func setWorkInboxRole(threadID: String, role: String?) async throws
 }
 
+/// Optional usage-dashboard capability: the same `server.getUsageSummary`
+/// scan the desktop and Expo dashboards read, asked of one environment at a
+/// time so the caller can merge and report partial coverage per environment.
+@MainActor
+public protocol FeatureUsageReading: AnyObject {
+    func usageSummary(
+        environmentID: String,
+        sinceDay: String,
+        untilDay: String,
+        timeZone: String
+    ) async throws -> UsageSummary
+}
+
 /// Optional project-favicon capability: the same signed asset route the desktop
 /// sidebar uses for its repo icons (`t3.json` `iconPath`, else well-known
 /// favicon files in the workspace).
@@ -34,7 +47,13 @@ public protocol FeatureThreadRoleAssigning: AnyObject {
 public protocol FeatureProjectFaviconResolving: AnyObject {
     /// `nil` when the project has no icon — the server answers with a fallback
     /// marker rather than an error, and callers keep their letter badge.
-    func projectFaviconURL(environmentID: String, cwd: String) async throws -> URL?
+    /// `faviconPath` is the project's manually chosen icon when one is set —
+    /// forwarded as a cache-key hint so a changed icon busts the signed URL.
+    func projectFaviconURL(
+        environmentID: String,
+        cwd: String,
+        faviconPath: String?
+    ) async throws -> URL?
 }
 
 public enum FeatureFileKind: String, Sendable, Codable {

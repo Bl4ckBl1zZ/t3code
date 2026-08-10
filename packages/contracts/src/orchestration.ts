@@ -33,7 +33,17 @@ export {
   ApplicationProjectMetaUpdatedPayload as ProjectMetaUpdatedPayload,
 } from "./applicationEvent.ts";
 
-export const OrchestrationProject = Project.mapFields(Struct.omit(["faviconPath"]));
+export const ProjectFaviconPath = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(1024),
+  Schema.isPattern(/\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/i),
+);
+export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
+
+export const OrchestrationProject = Project.mapFields(
+  Struct.assign({
+    faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  }),
+);
 export type OrchestrationProject = typeof OrchestrationProject.Type;
 
 /**
@@ -68,6 +78,7 @@ export const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 

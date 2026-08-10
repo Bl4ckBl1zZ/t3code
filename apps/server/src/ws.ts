@@ -1041,6 +1041,10 @@ const makeWsRpcLayer = (
               ...(mutation.defaultModelSelection === undefined
                 ? {}
                 : { defaultModelSelection: mutation.defaultModelSelection }),
+              ...(mutation.defaultThreadEnvMode === undefined
+                ? {}
+                : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
+              ...(mutation.faviconPath === undefined ? {} : { faviconPath: mutation.faviconPath }),
               ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
             });
           case "project.delete": {
@@ -1759,6 +1763,28 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,
             Effect.gen(function* () {
+              if (input.resource._tag === "project-favicon") {
+                const project = yield* projectService.getByWorkspaceRoot(input.resource.cwd).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AssetWorkspaceContextResolutionError({
+                        resource: input.resource,
+                        cause,
+                      }),
+                  ),
+                );
+                if (Option.isNone(project)) {
+                  return yield* new AssetWorkspaceContextNotFoundError({
+                    resource: input.resource,
+                  });
+                }
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  ...(project.value.faviconPath
+                    ? { projectFaviconPath: project.value.faviconPath }
+                    : {}),
+                });
+              }
               if (input.resource._tag !== "workspace-file") {
                 return yield* issueAssetUrl({ resource: input.resource });
               }

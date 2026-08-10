@@ -240,6 +240,7 @@ public struct NewWorkConversationView: View {
                     workspaceRoot: project.path,
                     repositoryIdentity: nil,
                     defaultModelSelection: nil,
+                    faviconPath: nil,
                     scripts: project.scripts,
                     createdAt: "",
                     updatedAt: "",

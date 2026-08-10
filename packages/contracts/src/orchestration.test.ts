@@ -10,6 +10,7 @@ import {
 import {
   ProjectCreateCommand,
   ProjectCreatedPayload,
+  ProjectMetaUpdateCommand,
   ProjectMetaUpdatedPayload,
 } from "./orchestration.ts";
 import { ModelSelection } from "./modelSelection.ts";
@@ -19,6 +20,7 @@ const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffI
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
 const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
+const decodeProjectMetaUpdateCommand = Schema.decodeUnknownEffect(ProjectMetaUpdateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 
@@ -286,5 +288,27 @@ it.effect("ModelSelection rejects malformed instance ids", () =>
       }),
     );
     assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("project favicon overrides accept only supported image files", () =>
+  Effect.gen(function* () {
+    const valid = yield* decodeProjectMetaUpdateCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-favicon",
+      projectId: "project-1",
+      faviconPath: "brand/icon.svg",
+    });
+    assert.strictEqual(valid.type, "project.meta.update");
+
+    const invalid = yield* Effect.exit(
+      decodeProjectMetaUpdateCommand({
+        type: "project.meta.update",
+        commandId: "cmd-project-secret",
+        projectId: "project-1",
+        faviconPath: ".env",
+      }),
+    );
+    assert.strictEqual(invalid._tag, "Failure");
   }),
 );

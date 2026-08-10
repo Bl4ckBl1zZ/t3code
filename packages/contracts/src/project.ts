@@ -100,6 +100,8 @@ export const ProjectMutation = Schema.Union([
     defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
     // Absent = leave unchanged; null = clear the override.
     defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+    // Absent = leave unchanged; null = clear the manual icon.
+    faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     scripts: Schema.optional(Schema.Array(ProjectScript)),
   }),
   Schema.Struct({
@@ -130,6 +132,7 @@ export const ProjectSearchEntriesInput = Schema.Struct({
   query: TrimmedString.check(Schema.isMaxLength(256)),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_ENTRIES_MAX_LIMIT)),
   kind: Schema.optional(ProjectEntryKind),
+  imageOnly: Schema.optional(Schema.Boolean),
 });
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
 

@@ -75,7 +75,10 @@ public enum AssetResource: Equatable, Sendable {
     /// and recordings. Without this, an assistant message referencing one has
     /// no way to resolve it to a URL.
     case browserArtifact(fileName: String)
-    case projectFavicon(cwd: String)
+    /// `path` is the project's manually chosen icon when one is set — a
+    /// cache-key hint only; the server reads the authoritative path from the
+    /// project projection before issuing the signed URL.
+    case projectFavicon(cwd: String, path: String?)
 
     var jsonValue: JSONValue {
         switch self {
@@ -95,11 +98,15 @@ public enum AssetResource: Equatable, Sendable {
                 "_tag": .string("browser-artifact"),
                 "fileName": .string(fileName),
             ])
-        case let .projectFavicon(cwd):
-            .object([
-                "_tag": .string("project-favicon"),
-                "cwd": .string(cwd),
-            ])
+        case let .projectFavicon(cwd, path):
+            .object(
+                [
+                    "_tag": .string("project-favicon"),
+                    "cwd": .string(cwd),
+                ].merging(path.map { ["path": JSONValue.string($0)] } ?? [:]) { current, _ in
+                    current
+                }
+            )
         }
     }
 }
