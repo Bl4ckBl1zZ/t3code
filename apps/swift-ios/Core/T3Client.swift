@@ -766,6 +766,26 @@ public actor T3Client {
         )
     }
 
+    /// Scans provider transcript directories on this server and returns the
+    /// usage summary for an inclusive `[sinceDay, untilDay]` window of
+    /// `YYYY-MM-DD` days bucketed in `timeZone` (IANA — an offset would be
+    /// wrong across a DST boundary).
+    public func getUsageSummary(
+        sinceDay: String,
+        untilDay: String,
+        timeZone: String
+    ) async throws -> UsageSummary {
+        try await rpc.request(
+            RPCMethod.serverGetUsageSummary.rawValue,
+            payload: .object([
+                "sinceDay": .string(sinceDay),
+                "untilDay": .string(untilDay),
+                "timeZone": .string(timeZone),
+            ]),
+            as: UsageSummary.self
+        )
+    }
+
     /// Issues a short-lived authenticated URL for a persisted attachment,
     /// workspace preview, or project favicon.
     public func createAssetURL(resource: AssetResource) async throws -> AssetCreateURLResult {
@@ -1582,6 +1602,7 @@ public enum RPCMethod: String, Sendable {
     case projectsWriteFile = "projects.writeFile"
     case filesystemBrowse = "filesystem.browse"
     case assetsCreateURL = "assets.createUrl"
+    case serverGetUsageSummary = "server.getUsageSummary"
     case assetsPersistChatAttachments = "assets.persistChatAttachments"
     case subscribeServerConfig
     case serverDiscoverSourceControl = "server.discoverSourceControl"

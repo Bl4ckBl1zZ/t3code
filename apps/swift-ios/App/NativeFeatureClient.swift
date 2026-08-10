@@ -16,7 +16,8 @@ extension FeatureInputAnswer {
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureProjectCreationClient, FeatureWorkspaceAssetResolving,
-    FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, T3ConnectCapable
+    FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading,
+    T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
     /// withheld, and "load earlier" refetches without a window.
@@ -458,9 +459,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
-    func projectFaviconURL(environmentID: String, cwd: String) async throws -> URL? {
+    func usageSummary(
+        environmentID: String,
+        sinceDay: String,
+        untilDay: String,
+        timeZone: String
+    ) async throws -> UsageSummary {
         let client = try await environmentClient(id: environmentID)
-        let url = try await client.resolvedAssetURL(resource: .projectFavicon(cwd: cwd))
+        return try await client.getUsageSummary(
+            sinceDay: sinceDay,
+            untilDay: untilDay,
+            timeZone: timeZone
+        )
+    }
+
+    func projectFaviconURL(
+        environmentID: String,
+        cwd: String,
+        faviconPath: String?
+    ) async throws -> URL? {
+        let client = try await environmentClient(id: environmentID)
+        let url = try await client.resolvedAssetURL(
+            resource: .projectFavicon(cwd: cwd, path: faviconPath)
+        )
         // The server signals "no icon" with a marker filename instead of an
         // error, so the letter badge is a decision rather than a failure path.
         return url.lastPathComponent.contains("project-favicon-missing") ? nil : url
@@ -3765,7 +3786,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     threadCount: threadCountByProjectID[uiID, default: 0],
                     defaultSelection: project.defaultModelSelection.map(mapSelection),
                     scripts: project.scripts,
-                    previewUrl: pinnedPreviewURLs[uiID]
+                    previewUrl: pinnedPreviewURLs[uiID],
+                    faviconPath: project.faviconPath
                 )
             }
         }

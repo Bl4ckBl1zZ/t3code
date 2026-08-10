@@ -26,17 +26,27 @@ final class ProjectFaviconStore {
         resolver = client as? any FeatureProjectFaviconResolving
     }
 
-    func url(environmentID: String?, workspaceRoot: String?) -> URL? {
-        guard let key = key(environmentID: environmentID, workspaceRoot: workspaceRoot) else {
+    func url(environmentID: String?, workspaceRoot: String?, faviconPath: String? = nil) -> URL? {
+        guard
+            let key = key(
+                environmentID: environmentID,
+                workspaceRoot: workspaceRoot,
+                faviconPath: faviconPath
+            )
+        else {
             return nil
         }
         return urls[key] ?? nil
     }
 
-    func resolve(environmentID: String?, workspaceRoot: String?) {
+    func resolve(environmentID: String?, workspaceRoot: String?, faviconPath: String? = nil) {
         guard let environmentID,
               let workspaceRoot,
-              let key = key(environmentID: environmentID, workspaceRoot: workspaceRoot),
+              let key = key(
+                  environmentID: environmentID,
+                  workspaceRoot: workspaceRoot,
+                  faviconPath: faviconPath
+              ),
               urls[key] == nil,
               !inFlight.contains(key),
               let resolver else {
@@ -50,7 +60,8 @@ final class ProjectFaviconStore {
                 // the row settles on the letter badge instead of re-asking.
                 let url = try await resolver.projectFaviconURL(
                     environmentID: environmentID,
-                    cwd: workspaceRoot
+                    cwd: workspaceRoot,
+                    faviconPath: faviconPath
                 )
                 self?.urls[key] = url
             } catch {
@@ -60,9 +71,15 @@ final class ProjectFaviconStore {
         }
     }
 
-    private func key(environmentID: String?, workspaceRoot: String?) -> String? {
+    /// The manual icon path participates in the key so choosing a different
+    /// icon on desktop invalidates rows that cached the previous answer.
+    private func key(
+        environmentID: String?,
+        workspaceRoot: String?,
+        faviconPath: String?
+    ) -> String? {
         guard let environmentID, let workspaceRoot, !workspaceRoot.isEmpty else { return nil }
-        return "\(environmentID)|\(workspaceRoot)"
+        return "\(environmentID)|\(workspaceRoot)|\(faviconPath ?? "")"
     }
 }
 
@@ -71,6 +88,7 @@ final class ProjectFaviconStore {
 struct ProjectFaviconBadge<Fallback: View>: View {
     let environmentID: String?
     let workspaceRoot: String?
+    var faviconPath: String?
     var size: CGFloat = 16
     @ViewBuilder let fallback: Fallback
 
@@ -78,7 +96,11 @@ struct ProjectFaviconBadge<Fallback: View>: View {
 
     var body: some View {
         Group {
-            if let url = store.url(environmentID: environmentID, workspaceRoot: workspaceRoot) {
+            if let url = store.url(
+                environmentID: environmentID,
+                workspaceRoot: workspaceRoot,
+                faviconPath: faviconPath
+            ) {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case let .success(image):
@@ -95,8 +117,14 @@ struct ProjectFaviconBadge<Fallback: View>: View {
                 fallback
             }
         }
-        .task(id: (environmentID ?? "") + "|" + (workspaceRoot ?? "")) {
-            store.resolve(environmentID: environmentID, workspaceRoot: workspaceRoot)
+        .task(
+            id: (environmentID ?? "") + "|" + (workspaceRoot ?? "") + "|" + (faviconPath ?? "")
+        ) {
+            store.resolve(
+                environmentID: environmentID,
+                workspaceRoot: workspaceRoot,
+                faviconPath: faviconPath
+            )
         }
         .accessibilityHidden(true)
     }

@@ -13,6 +13,7 @@ public struct SettingsView: View {
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
+    @State private var showingUsage = false
     /// Lives here rather than in the runs screen so the badge on the row stays
     /// live without opening it, and so both read one subscription.
     @State private var hermesInboxStore = HermesInboxStore()
@@ -144,6 +145,17 @@ public struct SettingsView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { showingAutomations = false }
+                            }
+                        }
+                }
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showingUsage) {
+                NavigationStack {
+                    SettingsUsageView(model: model)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingUsage = false }
                             }
                         }
                 }
@@ -442,6 +454,18 @@ public struct SettingsView: View {
                         title: "Hermes Runs",
                         systemImage: "clock.arrow.circlepath",
                         badge: HermesRunLabels.badgeText(unreadCount: hermesInboxStore.totalUnreadCount)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                settingsDivider
+
+                Button {
+                    showingUsage = true
+                } label: {
+                    SettingsNavigationRow(
+                        title: "Usage",
+                        systemImage: "chart.bar.xaxis"
                     )
                 }
                 .buttonStyle(.plain)

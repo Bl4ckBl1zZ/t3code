@@ -671,6 +671,7 @@ public struct WorkspaceView: View {
                     workspaceRoot: project.path,
                     repositoryIdentity: nil,
                     defaultModelSelection: nil,
+                    faviconPath: project.faviconPath,
                     scripts: project.scripts,
                     createdAt: "",
                     updatedAt: "",
@@ -1070,6 +1071,9 @@ struct HomeThreadRowContext: Equatable {
     /// Where the project's favicon resolves from; nil keeps the letter badge.
     let projectEnvironmentID: String?
     let projectWorkspaceRoot: String?
+    /// The project's manually chosen icon, forwarded to favicon resolution as
+    /// a cache-key hint so icon changes reach existing rows.
+    let projectFaviconPath: String?
     let environmentLabel: String?
     let providerID: String
     let providerDriver: String
@@ -1084,6 +1088,7 @@ struct HomeThreadRowContext: Equatable {
         projectName: "Project",
         projectEnvironmentID: nil,
         projectWorkspaceRoot: nil,
+        projectFaviconPath: nil,
         environmentLabel: nil,
         providerID: "agent",
         providerDriver: "",
@@ -1142,6 +1147,7 @@ struct HomeThreadRowContext: Equatable {
                 projectName: project?.name ?? "Project",
                 projectEnvironmentID: project?.environmentID,
                 projectWorkspaceRoot: project?.path,
+                projectFaviconPath: project?.faviconPath,
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
                 providerID: providerID,
                 providerDriver: providerDriver,
@@ -1216,7 +1222,8 @@ struct FeatureThreadRow: View, Equatable {
             HStack(spacing: 6) {
                 ProjectFaviconBadge(
                     environmentID: context.projectEnvironmentID,
-                    workspaceRoot: context.projectWorkspaceRoot
+                    workspaceRoot: context.projectWorkspaceRoot,
+                    faviconPath: context.projectFaviconPath
                 ) {
                     ProjectBadge(name: context.projectName)
                 }
@@ -1250,7 +1257,12 @@ struct FeatureThreadRow: View, Equatable {
                     Text(pullRequest.title)
                         .lineLimit(1)
                 } else {
-                    Image(systemName: "arrow.triangle.branch")
+                    // Worktree checkouts get their own glyph (the desktop
+                    // sidebar's worktree indicator): the branch alone doesn't
+                    // say the thread runs on an isolated copy of the repo.
+                    Image(systemName: isWorktreeCheckout
+                        ? "square.on.square"
+                        : "arrow.triangle.branch")
                         .font(.system(size: 10, weight: .medium))
                     Text(branchLabel)
                         .lineLimit(1)
@@ -1296,7 +1308,8 @@ struct FeatureThreadRow: View, Equatable {
         HStack(spacing: 9) {
             ProjectFaviconBadge(
                 environmentID: context.projectEnvironmentID,
-                workspaceRoot: context.projectWorkspaceRoot
+                workspaceRoot: context.projectWorkspaceRoot,
+                faviconPath: context.projectFaviconPath
             ) {
                 ProjectBadge(name: context.projectName)
             }
@@ -1515,6 +1528,11 @@ struct FeatureThreadRow: View, Equatable {
             || context.connectionState == .disconnected
     }
 
+    private var isWorktreeCheckout: Bool {
+        guard let worktreePath = thread.worktreePath else { return false }
+        return !worktreePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var branchLabel: String {
         if let branch = thread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
            !branch.isEmpty {
@@ -1589,7 +1607,10 @@ struct FeatureThreadRow: View, Equatable {
                     "Pull request #\(pullRequest.number) \(pullRequest.state). \(pullRequest.title)"
                 )
             } else {
-                values.append("Branch \(branchLabel)")
+                values.append(
+                    isWorktreeCheckout
+                        ? "Worktree branch \(branchLabel)" : "Branch \(branchLabel)"
+                )
             }
             if let environmentLabel {
                 values.append("on \(environmentLabel)")

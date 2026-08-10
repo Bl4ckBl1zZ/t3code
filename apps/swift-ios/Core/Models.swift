@@ -281,6 +281,9 @@ public struct OrchestrationProject: Codable, Identifiable, Equatable, Sendable {
     public let workspaceRoot: String
     public let repositoryIdentity: RepositoryIdentity?
     public let defaultModelSelection: ModelSelection?
+    /// A manually chosen project icon, workspace-relative. Absent on servers
+    /// predating manual icons and on projects that rely on auto-discovery.
+    public let faviconPath: String?
     public let scripts: [ProjectScript]
     public let createdAt: String
     public let updatedAt: String
