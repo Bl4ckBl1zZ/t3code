@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   migratePersistedRightPanelState,
+  pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
+  selectSelectedRightPanelSurface,
   selectThreadPanelOpen,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
@@ -103,6 +105,82 @@ describe("rightPanelStore", () => {
           ],
         },
       },
+      threadPanelVisibilityByThreadKey: {},
+    });
+  });
+
+  it("upgrades the legacy singleton pull request surface to a reference-keyed tab", () => {
+    const id = pullRequestSurfaceId({
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    });
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "pull-request",
+            surfaces: [
+              {
+                id: "pull-request",
+                kind: "pull-request",
+                projectId: "project-a",
+                repository: "pingdotgg/t3code",
+                number: 4909,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: id,
+          surfaces: [
+            {
+              id,
+              kind: "pull-request",
+              projectId: "project-a",
+              repository: "pingdotgg/t3code",
+              number: 4909,
+            },
+          ],
+        },
+      },
+      threadPanelVisibilityByThreadKey: {},
+    });
+  });
+
+  it("drops the pull-request list's shared panel so a restart opens the page fresh", () => {
+    const id = pullRequestSurfaceId({
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    });
+    const panelState = {
+      isOpen: true,
+      activeSurfaceId: id,
+      surfaces: [
+        {
+          id,
+          kind: "pull-request" as const,
+          projectId: "project-a",
+          repository: "pingdotgg/t3code",
+          number: 4909,
+        },
+      ],
+    };
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:pull-requests-panel": panelState,
+          "env-1:thread-A": panelState,
+        },
+      }),
+    ).toEqual({
+      byThreadKey: { "env-1:thread-A": panelState },
       threadPanelVisibilityByThreadKey: {},
     });
   });
@@ -306,6 +384,9 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().open(refA, "plan");
     useRightPanelStore.getState().close(refA);
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
+    expect(
+      selectSelectedRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
+    ).toEqual({ id: "plan", kind: "plan" });
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: false,
       activeSurfaceId: "plan",
@@ -365,6 +446,21 @@ describe("rightPanelStore", () => {
       kind: "preview",
       resourceId: "tab-b",
     });
+  });
+
+  it("tracks one surface per pull request", () => {
+    const first = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
+    const second = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4910 };
+    useRightPanelStore.getState().openPullRequest(refA, first);
+    useRightPanelStore.getState().openPullRequest(refA, second);
+    useRightPanelStore.getState().openPullRequest(refA, first);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      pullRequestSurfaceId(first),
+      pullRequestSurfaceId(second),
+    ]);
+    expect(state.activeSurfaceId).toBe(pullRequestSurfaceId(first));
   });
 
   it("tracks one surface per terminal session", () => {

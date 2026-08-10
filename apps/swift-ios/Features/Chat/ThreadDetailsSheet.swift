@@ -60,6 +60,7 @@ struct ThreadDetailsSheet: View {
     @State private var actionError: String?
     @State private var pendingDefaultBranchAction: GitStackedAction?
     @State private var portAlert: ThreadDetailsPortsSection.OpenRefusal?
+    @State private var presentedPullRequest: ThreadDetailsPullRequest?
     @SwiftUI.Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -130,6 +131,15 @@ struct ThreadDetailsSheet: View {
                 "This publishes straight to \(gitStatus?.refName ?? "the default branch"), "
                     + "which has no undo on the other side."
             )
+        }
+        .sheet(item: $presentedPullRequest) { pullRequest in
+            NavigationStack {
+                PullRequestDetailSheet(
+                    client: client,
+                    threadID: thread.id,
+                    number: pullRequest.number
+                )
+            }
         }
         .accessibilityIdentifier("thread-details-sheet")
     }
@@ -410,6 +420,16 @@ struct ThreadDetailsSheet: View {
                     }
                 )
 
+                if let pullRequest = gitStatus?.pullRequest {
+                    ThreadDetailsDivider()
+                    ThreadDetailsRow(
+                        systemImage: "arrow.triangle.pull",
+                        title: "Pull Request #\(pullRequest.number)",
+                        subtitle: pullRequest.state.capitalized,
+                        action: { open(pullRequest) }
+                    )
+                }
+
                 ThreadDetailsDivider()
                 ThreadDetailsRow(
                     systemImage: ThreadDetailsGit.quickActionIcon(quickAction),
@@ -498,6 +518,21 @@ struct ThreadDetailsSheet: View {
 
     // MARK: - Actions
 
+    /// The native sheet where the server can answer for it; the host's own
+    /// page everywhere else, exactly as this row behaved before the sheet
+    /// existed.
+    private func open(_ pullRequest: ThreadDetailsPullRequest) {
+        if environment?.supportsPullRequests == true {
+            presentedPullRequest = pullRequest
+            return
+        }
+        guard let address = pullRequest.url, let url = URL(string: address) else {
+            actionError = "This pull request has no link to open."
+            return
+        }
+        openURL(url)
+    }
+
     private func loadSourceControl() async {
         isLoadingStatus = true
         defer { isLoadingStatus = false }
@@ -560,6 +595,12 @@ struct ThreadDetailsSheet: View {
             actionError = error.localizedDescription
         }
     }
+}
+
+/// Item-presented so the sheet always opens on the request the row named; a
+/// branch has one change request at a time, so the number identifies it.
+extension ThreadDetailsPullRequest: Identifiable {
+    public var id: Int { number }
 }
 
 // MARK: - Background task row

@@ -44,6 +44,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let threadSnooze: Bool?
         public let threadPinning: Bool?
         public let threadTitleRegeneration: Bool?
+        public let pullRequests: Bool?
         public let serverSelfUpdate: String?
         public let serverSelfUpdateProgress: Bool?
 
@@ -54,6 +55,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadSnooze
             case threadPinning
             case threadTitleRegeneration
+            case pullRequests
             case serverSelfUpdate
             case serverSelfUpdateProgress
         }
@@ -70,6 +72,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 Bool.self,
                 forKey: .threadTitleRegeneration
             )
+            pullRequests = try container.decodeIfPresent(Bool.self, forKey: .pullRequests)
             serverSelfUpdate = try container.decodeIfPresent(String.self, forKey: .serverSelfUpdate)
             serverSelfUpdateProgress = try container.decodeIfPresent(
                 Bool.self,

@@ -126,6 +126,9 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     case unorderedList([MarkdownRenderedListItem])
     case orderedList(start: Int, items: [MarkdownRenderedListItem])
     case blockquote([MarkdownRenderedBlock])
+    /// Colours resolve on the main actor from the current colour scheme, so
+    /// only the kind and rendered children are carried here.
+    case githubAlert(kind: MarkdownAlertKind, blocks: [MarkdownRenderedBlock])
     case table(MarkdownRenderedTable)
     case codeBlock(language: String?, code: String)
     /// Carried through unrendered: the embed's document is assembled on the
@@ -359,6 +362,10 @@ final class MarkdownRenderCache: @unchecked Sendable {
             case let .blockquote(document):
                 guard let blocks = renderBlocks(document.blocks) else { return nil }
                 rendered = .blockquote(blocks)
+
+            case let .githubAlert(kind, document):
+                guard let blocks = renderBlocks(document.blocks) else { return nil }
+                rendered = .githubAlert(kind: kind, blocks: blocks)
 
             case let .table(table):
                 guard let table = renderTable(table) else { return nil }

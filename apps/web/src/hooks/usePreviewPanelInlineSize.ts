@@ -13,11 +13,14 @@ const PREVIEW_PANEL_MIN_WIDTH = 360;
 const PREVIEW_PANEL_MAX_WIDTH_FRACTION = 0.7;
 const PREVIEW_PANEL_DEFAULT_WIDTH = 540;
 
-export function usePreviewPanelInlineSize(): PreviewPanelInlineSize {
+export function usePreviewPanelInlineSize(options?: {
+  readonly storageKey?: string;
+  readonly defaultWidth?: number;
+}): PreviewPanelInlineSize {
   const maxWidth = useViewportClampedMaxWidth();
   return useResizableWidth({
-    storageKey: PREVIEW_PANEL_WIDTH_STORAGE_KEY,
-    defaultWidth: PREVIEW_PANEL_DEFAULT_WIDTH,
+    storageKey: options?.storageKey ?? PREVIEW_PANEL_WIDTH_STORAGE_KEY,
+    defaultWidth: options?.defaultWidth ?? PREVIEW_PANEL_DEFAULT_WIDTH,
     minWidth: PREVIEW_PANEL_MIN_WIDTH,
     maxWidth,
     edge: "left",

@@ -73,6 +73,11 @@ export interface ThreadDetailsPanelProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest: () => void;
   onOpenChanges?: () => void;
+  /**
+   * Opens the thread's own change request beside it. Absent when the thread has no project to
+   * place it against, in which case it still opens in the browser.
+   */
+  onOpenPullRequest?: ((number: number) => void) | undefined;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
   versionMismatch: VersionMismatchIssue | null;
@@ -318,6 +323,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   activeThreadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
                   {...(props.draftId ? { draftId: props.draftId } : {})}
                   {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
+                  onOpenPullRequest={props.onOpenPullRequest}
                 />
               ) : null}
             </div>

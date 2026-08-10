@@ -35,6 +35,10 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?
     public var connectionDetail: String?
+    /// Whether the server answers the `pullRequests.*` RPCs. `nil` means an
+    /// older cached descriptor that never reported the capability, which reads
+    /// as unsupported: the sheet has nothing to ask such a server for.
+    public var supportsPullRequests: Bool?
 
     public init(
         id: String,
@@ -42,7 +46,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         endpoint: String,
         isActive: Bool = false,
         connectionState: FeatureConnection.State? = nil,
-        connectionDetail: String? = nil
+        connectionDetail: String? = nil,
+        supportsPullRequests: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -50,6 +55,20 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.isActive = isActive
         self.connectionState = connectionState
         self.connectionDetail = connectionDetail
+        self.supportsPullRequests = supportsPullRequests
+    }
+}
+
+/// Everything the pull-request sheet shows in one load: the core detail, and
+/// the conversation half where it could be read. `activity` is nil when that
+/// second read failed — the sheet degrades to detail-only rather than sinking.
+public struct FeaturePullRequestOverview: Sendable, Equatable {
+    public let detail: PullRequestDetail
+    public let activity: PullRequestActivity?
+
+    public init(detail: PullRequestDetail, activity: PullRequestActivity?) {
+        self.detail = detail
+        self.activity = activity
     }
 }
 
