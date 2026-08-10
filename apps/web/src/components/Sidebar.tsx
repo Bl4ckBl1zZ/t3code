@@ -150,7 +150,7 @@ import {
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
   workInboxActiveSection,
-  workspaceComposerKind,
+  workspaceLandingKind,
   type SidebarWorkspace,
   type WorkInboxBadge,
 } from "./Sidebar.logic";
@@ -2702,10 +2702,12 @@ export default function Sidebar() {
         return;
       }
       if (navigation.kind === "new-chat") {
-        if (workspaceComposerKind(nextWorkspace) === "hermes") {
-          // Straight to the Hermes composer rather than bouncing through the
-          // index route, and when it cannot open, staying on the current
-          // thread beats a dead landing.
+        if (workspaceLandingKind(nextWorkspace) === "chat-composer") {
+          // Chat lands on a composer, so open it here rather than bouncing
+          // through the index route: this path honors the work environment
+          // scope, and when Hermes cannot open, staying on the current thread
+          // beats a dead landing. Code and Work land on a page, which the
+          // index route renders per workspace.
           openWorkComposer();
           return;
         }

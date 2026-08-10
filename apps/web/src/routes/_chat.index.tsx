@@ -1,31 +1,20 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LinkIcon, PlusIcon } from "lucide-react";
 
-import { openCommandPalette } from "../commandPaletteBus";
-import {
-  sortScopedProjectsForSidebar,
-  workspaceComposerKind,
-  type SidebarWorkspace,
-} from "../components/Sidebar.logic";
+import { workspaceLandingKind } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
-import { useNewThreadHandler, useRememberedNewThreadProjectRef } from "../hooks/useHandleNewThread";
-import { useHermesChat } from "../hooks/useHermesChat";
 import {
-  useAllEnvironmentShellsBootstrapped,
-  useProjects,
-  useServerConfigs,
-  useThreadShells,
-} from "../state/entities";
+  ChatComposerLanding,
+  CodeDraftLanding,
+  WorkInboxLanding,
+} from "../components/WorkspaceLanding";
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
 import { useSidebarWorkspace } from "~/sidebarWorkspace";
-import { isT3WorkBackingProject } from "~/t3WorkProject";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 function ChatIndexRouteView() {
@@ -37,210 +26,17 @@ function ChatIndexRouteView() {
     return <HostedStaticOnboardingState />;
   }
 
-  // The index route is the landing for every workspace, so it has to compose
-  // on the side the user is actually in: dropping T3 Work or T3 Chat into the
+  // The index route is the landing for every workspace, so it has to open on
+  // the side the user is actually in: dropping T3 Work or T3 Chat into the
   // Code composer offers a coding thread their own sidebar cannot list.
-  return workspaceComposerKind(workspace) === "hermes" ? (
-    <HermesDraftLanding workspace={workspace} />
-  ) : (
-    <IndexDraftLanding />
-  );
-}
-
-/**
- * Work and Chat compose on Hermes against the T3 Work backing project, which
- * is created on demand the first time either workspace is used.
- */
-function HermesDraftLanding({ workspace }: { readonly workspace: SidebarWorkspace }) {
-  const hermesChat = useHermesChat();
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
-  const startingRef = useRef(false);
-  const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
-
-  useEffect(() => {
-    // Readiness before the primary environment's config lands is "unknown",
-    // not "unavailable" — starting then would fail a boot that only needed
-    // another tick. The effect re-runs once the config resolves.
-    if (!bootstrapped || !hermesChat.isResolved || !hermesChat.isReady || startingRef.current) {
-      return;
-    }
-    startingRef.current = true;
-    void hermesChat
-      .start({ replace: true })
-      .then((outcome) => {
-        if (outcome === "started") return;
-        startingRef.current = false;
-        setStartState((state) => ({ ...state, failed: true }));
-      })
-      .catch(() => {
-        startingRef.current = false;
-        setStartState((state) => ({ ...state, failed: true }));
-      });
-  }, [bootstrapped, hermesChat, startState.retryRequest]);
-
-  if (!bootstrapped || !hermesChat.isResolved) {
-    return null;
+  switch (workspaceLandingKind(workspace)) {
+    case "work-inbox":
+      return <WorkInboxLanding />;
+    case "chat-composer":
+      return <ChatComposerLanding />;
+    case "code-composer":
+      return <CodeDraftLanding />;
   }
-  if (!hermesChat.isReady) {
-    return <HermesUnavailableHero workspace={workspace} />;
-  }
-  return startState.failed ? (
-    <DraftStartError
-      onRetry={() => {
-        setStartState((state) => ({ failed: false, retryRequest: state.retryRequest + 1 }));
-      }}
-    />
-  ) : null;
-}
-
-function HermesUnavailableHero({ workspace }: { readonly workspace: SidebarWorkspace }) {
-  const workspaceName = workspace === "chat" ? "T3 Chat" : "T3 Work";
-
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <Empty className="flex-1">
-        <EmptyHeader className="max-w-md">
-          <EmptyTitle className="text-foreground text-xl">Hermes isn’t ready</EmptyTitle>
-          <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-            {workspaceName} conversations run on Hermes. Enable and configure it to start one.
-          </EmptyDescription>
-          <div className="mt-5 flex justify-center">
-            <Button render={<Link to="/settings/providers" />} size="sm">
-              Open provider settings
-            </Button>
-          </div>
-        </EmptyHeader>
-      </Empty>
-    </SidebarInset>
-  );
-}
-
-/**
- * Landing on the index route drops straight into a draft thread for the
- * project the user last started a thread in (most recently active project when
- * nothing is remembered yet), so the first screen is a prompt instead of a dead
- * end. Falls back to an add-project hero when no project exists yet.
- */
-function IndexDraftLanding() {
-  const projects = useProjects();
-  const threads = useThreadShells();
-  const serverConfigs = useServerConfigs();
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
-  const handleNewThread = useNewThreadHandler();
-  const rememberedProjectRef = useRememberedNewThreadProjectRef();
-  const startingRef = useRef(false);
-  const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
-
-  // The index draft is the Code composer; the T3 Work backing project is
-  // Hermes-only, so it must never be the auto-selected draft target.
-  const codeProjects = useMemo(
-    () => projects.filter((project) => !isT3WorkBackingProject(project, serverConfigs)),
-    [projects, serverConfigs],
-  );
-  // Picking up where the user left off beats recency: they may have opened a
-  // handful of older threads since, which would otherwise reshuffle the
-  // landing target under them.
-  const landingProject = useMemo(() => {
-    if (!bootstrapped) {
-      return null;
-    }
-    const remembered = rememberedProjectRef
-      ? codeProjects.find(
-          (project) =>
-            project.id === rememberedProjectRef.projectId &&
-            project.environmentId === rememberedProjectRef.environmentId,
-        )
-      : undefined;
-    return (
-      remembered ?? sortScopedProjectsForSidebar(codeProjects, threads, "updated_at")[0] ?? null
-    );
-  }, [bootstrapped, codeProjects, rememberedProjectRef, threads]);
-
-  useEffect(() => {
-    if (landingProject === null || startingRef.current) {
-      return;
-    }
-    // Until the environment's server config arrives, the Work-backing check
-    // above cannot classify this project; starting the draft now could latch
-    // onto the T3 Work project. The effect re-runs once configs load.
-    if (!serverConfigs.has(landingProject.environmentId)) {
-      return;
-    }
-    startingRef.current = true;
-    void handleNewThread(scopeProjectRef(landingProject.environmentId, landingProject.id), {
-      replace: true,
-    }).catch(() => {
-      startingRef.current = false;
-      setStartState((state) => ({ ...state, failed: true }));
-    });
-  }, [handleNewThread, landingProject, serverConfigs, startState.retryRequest]);
-
-  if (!bootstrapped) {
-    return null;
-  }
-  if (landingProject !== null) {
-    return startState.failed ? (
-      <DraftStartError
-        onRetry={() => {
-          setStartState((state) => ({
-            failed: false,
-            retryRequest: state.retryRequest + 1,
-          }));
-        }}
-      />
-    ) : null;
-  }
-  return <NoProjectsHero />;
-}
-
-function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <Empty className="flex-1">
-        <EmptyHeader className="max-w-md">
-          <EmptyTitle className="text-foreground text-xl">Couldn’t start a new thread</EmptyTitle>
-          <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-            The project is still available. Try opening the draft again.
-          </EmptyDescription>
-          <div className="mt-5 flex justify-center">
-            <Button size="sm" onClick={onRetry}>
-              <RotateCcwIcon className="size-4" />
-              Try again
-            </Button>
-          </div>
-        </EmptyHeader>
-      </Empty>
-    </SidebarInset>
-  );
-}
-
-function NoProjectsHero() {
-  const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
-
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <Empty className="flex-1">
-          <div className="w-full max-w-lg px-8 py-12">
-            <EmptyHeader className="max-w-none">
-              <EmptyTitle className="text-foreground text-2xl sm:text-3xl">
-                What should we work on?
-              </EmptyTitle>
-              <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-                Add a project to start your first thread.
-              </EmptyDescription>
-              <div className="mt-6 flex justify-center">
-                <Button size="sm" onClick={openAddProject}>
-                  <PlusIcon className="size-4" />
-                  Add project
-                </Button>
-              </div>
-            </EmptyHeader>
-          </div>
-        </Empty>
-      </div>
-    </SidebarInset>
-  );
 }
 
 export const Route = createFileRoute("/_chat/")({
