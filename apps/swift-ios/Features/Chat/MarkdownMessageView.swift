@@ -238,6 +238,9 @@ private struct MarkdownBlockView: View, Equatable {
                         .frame(width: 2)
                 }
 
+        case let .githubAlert(kind, blocks):
+            MarkdownGithubAlertView(kind: kind, blocks: blocks)
+
         case let .table(table):
             MarkdownTableView(table: table)
 
@@ -253,6 +256,63 @@ private struct MarkdownBlockView: View, Equatable {
                 .frame(height: 1)
                 .padding(.vertical, 2)
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+/// GitHub-style alert callout. The structure stays fixed across kinds — only
+/// colours and text vary — so transcript cell gestures never see a branch swap.
+private struct MarkdownGithubAlertView: View {
+    let kind: MarkdownAlertKind
+    let blocks: [MarkdownRenderedBlock]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: symbolName)
+                    .font(.footnote.weight(.semibold))
+                Text(label)
+                    .font(T3Typography.supportingStrong)
+            }
+            .foregroundStyle(tint)
+            MarkdownBlocksView(blocks: blocks, spacing: 9)
+                .foregroundStyle(T3Colors.textPrimary)
+        }
+        .padding(.leading, 14)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(tint)
+                .frame(width: 2)
+        }
+    }
+
+    private var tint: Color {
+        switch kind {
+        case .note: T3Colors.accent
+        case .tip: T3Colors.success
+        case .important: T3Colors.statusInput
+        case .warning: T3Colors.warning
+        case .caution: T3Colors.danger
+        }
+    }
+
+    private var symbolName: String {
+        switch kind {
+        case .note: "info.circle"
+        case .tip: "lightbulb"
+        case .important: "exclamationmark.circle"
+        case .warning: "exclamationmark.triangle"
+        case .caution: "octagon.fill"
+        }
+    }
+
+    private var label: String {
+        switch kind {
+        case .note: "Note"
+        case .tip: "Tip"
+        case .important: "Important"
+        case .warning: "Warning"
+        case .caution: "Caution"
         }
     }
 }

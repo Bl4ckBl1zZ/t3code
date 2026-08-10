@@ -24,6 +24,9 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     case unorderedList([MarkdownListItem])
     case orderedList(start: Int, items: [MarkdownListItem])
     case blockquote(MarkdownDocument)
+    /// A GitHub-style alert: a blockquote whose first line is exactly a
+    /// `[!NOTE]`-style marker. Mirrors the web app's callout rendering.
+    case githubAlert(kind: MarkdownAlertKind, content: MarkdownDocument)
     case table(MarkdownTable)
     case codeBlock(language: String?, code: String)
     /// A `t3-html` fence, which renders as a live sandboxed embed rather than
@@ -31,6 +34,14 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     /// document around it belongs to `HtmlEmbed`.
     case htmlEmbed(String)
     case thematicBreak
+}
+
+enum MarkdownAlertKind: String, Equatable, Sendable {
+    case note
+    case tip
+    case important
+    case warning
+    case caution
 }
 
 struct MarkdownTable: Equatable, Sendable {
@@ -152,8 +163,23 @@ private struct MarkdownBlockParser {
             index += 1
         }
 
+        if let kind = alertKind(in: quotedLines.first ?? "") {
+            var parser = MarkdownBlockParser(
+                source: quotedLines.dropFirst().joined(separator: "\n")
+            )
+            return .githubAlert(kind: kind, content: MarkdownDocument(blocks: parser.parse()))
+        }
+
         var parser = MarkdownBlockParser(source: quotedLines.joined(separator: "\n"))
         return .blockquote(MarkdownDocument(blocks: parser.parse()))
+    }
+
+    /// The marker must be the entire first quoted line; `[!NOTE] trailing text`
+    /// stays a plain blockquote, matching GitHub.
+    private func alertKind(in line: String) -> MarkdownAlertKind? {
+        let trimmed = line.markdownTrimmed
+        guard trimmed.hasPrefix("[!"), trimmed.hasSuffix("]") else { return nil }
+        return MarkdownAlertKind(rawValue: trimmed.dropFirst(2).dropLast().lowercased())
     }
 
     private mutating func parseTable(opening: TableOpening) -> MarkdownBlock {
