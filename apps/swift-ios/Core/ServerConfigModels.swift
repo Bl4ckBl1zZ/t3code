@@ -135,15 +135,56 @@ public enum ServerThreadEnvironmentMode: String, Codable, Equatable, Sendable {
 /// New-thread preferences are server-authoritative, so every saved environment
 /// can resolve these differently even though they share one mobile client.
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
+    /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
+    /// `packages/contracts`, applied when a server predates the setting.
+    public static let defaultSidebarAutoSettleAfterDays: Double = 3
+
     public let defaultThreadEnvMode: ServerThreadEnvironmentMode
     public let newWorktreesStartFromOrigin: Bool
+    /// Days of inactivity before a thread auto-settles; `nil` is the user's
+    /// explicit "never". A server that never sends the key gets the default
+    /// instead, so absence and "never" stay distinguishable.
+    public let sidebarAutoSettleAfterDays: Double?
 
     public init(
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
-        newWorktreesStartFromOrigin: Bool = true
+        newWorktreesStartFromOrigin: Bool = true,
+        sidebarAutoSettleAfterDays: Double? = ServerSettingsSnapshot
+            .defaultSidebarAutoSettleAfterDays
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+        self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case defaultThreadEnvMode
+        case newWorktreesStartFromOrigin
+        case sidebarAutoSettleAfterDays
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultThreadEnvMode = try container.decode(
+            ServerThreadEnvironmentMode.self,
+            forKey: .defaultThreadEnvMode
+        )
+        newWorktreesStartFromOrigin = try container.decode(
+            Bool.self,
+            forKey: .newWorktreesStartFromOrigin
+        )
+        sidebarAutoSettleAfterDays = container.contains(.sidebarAutoSettleAfterDays)
+            ? try container.decodeIfPresent(Double.self, forKey: .sidebarAutoSettleAfterDays)
+            : Self.defaultSidebarAutoSettleAfterDays
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
+        try container.encode(newWorktreesStartFromOrigin, forKey: .newWorktreesStartFromOrigin)
+        // Encoded as explicit null so "never" survives a round trip instead of
+        // decoding back as the absent-key default.
+        try container.encode(sidebarAutoSettleAfterDays, forKey: .sidebarAutoSettleAfterDays)
     }
 }
 
