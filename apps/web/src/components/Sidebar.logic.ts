@@ -199,6 +199,18 @@ export function isThreadVisibleInSidebarWorkspace(
 }
 
 /**
+ * Which composer a workspace opens when there is no thread to restore.
+ *
+ * Work and Chat are both Hermes surfaces — neither can even list a coding
+ * thread — so only Code lands on the repository composer. Landing a Hermes
+ * workspace on the Code composer offers a thread that would immediately
+ * disappear from its own sidebar.
+ */
+export function workspaceComposerKind(workspace: SidebarWorkspace): "code" | "hermes" {
+  return workspace === "code" ? "code" : "hermes";
+}
+
+/**
  * Where the sidebar should route after a workspace switch.
  *
  * The remembered thread for the target workspace wins when it is still

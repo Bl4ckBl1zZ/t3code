@@ -41,6 +41,7 @@ import {
   applyManualThreadOrderForSidebarV2,
   sortThreadsForSidebar,
   workInboxActiveSection,
+  workspaceComposerKind,
   pinOrderKeyBetween,
   planPinnedReorder,
   sortPinnedThreadsForSidebar,
@@ -582,6 +583,14 @@ describe("sidebar thread lineage helpers", () => {
     expect(getSidebarForkParentThreadId(runFork)).toBe(parentId);
     expect(getSidebarForkParentThreadId(lineageFork)).toBe(fallbackParentId);
     expect(getSidebarForkParentThreadId(makeThreadFixture())).toBeNull();
+  });
+});
+
+describe("workspaceComposerKind", () => {
+  it("composes Work and Chat on Hermes, and only Code on a repository", () => {
+    expect(workspaceComposerKind("code")).toBe("code");
+    expect(workspaceComposerKind("work")).toBe("hermes");
+    expect(workspaceComposerKind("chat")).toBe("hermes");
   });
 });
 

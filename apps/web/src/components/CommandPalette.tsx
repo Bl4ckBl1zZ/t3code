@@ -58,6 +58,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useHermesChat } from "../hooks/useHermesChat";
 import { useClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -132,18 +133,9 @@ import {
   primaryServerKeybindingsAtom,
   primaryServerProvidersAtom,
 } from "../state/server";
-import {
-  deriveProviderInstanceEntries,
-  resolveDefaultProviderModelSelection,
-} from "../providerInstances";
+import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import {
-  HERMES_DRIVER_KIND,
-  isT3WorkBackingProject,
-  T3_WORK_BACKING_PROJECT_ID,
-  t3WorkDirectoryForEnvironment,
-} from "../t3WorkProject";
-import { createT3WorkBackingProject, resolveHermesDefaultModel } from "../t3WorkProjectCreate";
+import { HERMES_DRIVER_KIND, isT3WorkBackingProject } from "../t3WorkProject";
 import {
   Command,
   CommandDialog,
@@ -606,17 +598,7 @@ function OpenCommandPaletteDialog(props: {
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const hermesProviderEntry = useMemo(
-    () =>
-      deriveProviderInstanceEntries(providers).find(
-        (entry) =>
-          entry.driverKind === "hermes" &&
-          entry.enabled &&
-          entry.isAvailable &&
-          entry.status === "ready",
-      ) ?? null,
-    [providers],
-  );
+  const hermesChat = useHermesChat();
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const environmentIds = useMemo(
@@ -996,59 +978,15 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const startFreshHermesChat = useCallback(async () => {
-    const t3WorkDirectory = t3WorkDirectoryForEnvironment(serverConfigs, primaryEnvironmentId);
-    const existingBackingProject =
-      projects.find(
-        (project) =>
-          project.environmentId === primaryEnvironmentId &&
-          t3WorkDirectory !== null &&
-          project.workspaceRoot === t3WorkDirectory,
-      ) ?? null;
-    const hermesModel =
-      hermesProviderEntry === null ? null : resolveHermesDefaultModel(hermesProviderEntry);
-    if (
-      primaryEnvironmentId === null ||
-      t3WorkDirectory === null ||
-      !hermesProviderEntry ||
-      !hermesModel
-    ) {
+    const outcome = await hermesChat.start();
+    if (outcome === "unavailable") {
       toastManager.add({
         type: "warning",
         title: "Hermes is not ready",
         description: "Enable and configure Hermes before starting a new chat.",
       });
-      return;
     }
-    if (existingBackingProject === null) {
-      const outcome = await createT3WorkBackingProject({
-        createProject,
-        environmentId: primaryEnvironmentId,
-        workspaceRoot: t3WorkDirectory,
-        hermesProviderEntry,
-      });
-      if (outcome !== "created") return;
-    }
-    await handleNewThread(
-      scopeProjectRef(
-        primaryEnvironmentId,
-        existingBackingProject?.id ?? T3_WORK_BACKING_PROJECT_ID,
-      ),
-      {
-        fresh: true,
-        modelSelection: {
-          instanceId: hermesProviderEntry.instanceId,
-          model: hermesModel.slug,
-        },
-      },
-    );
-  }, [
-    createProject,
-    handleNewThread,
-    hermesProviderEntry,
-    primaryEnvironmentId,
-    projects,
-    serverConfigs,
-  ]);
+  }, [hermesChat]);
 
   const newChatItem = useMemo<CommandPaletteActionItem>(
     () => ({

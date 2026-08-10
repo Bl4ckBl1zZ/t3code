@@ -4,11 +4,16 @@ import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
-import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
+import {
+  sortScopedProjectsForSidebar,
+  workspaceComposerKind,
+  type SidebarWorkspace,
+} from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useNewThreadHandler, useRememberedNewThreadProjectRef } from "../hooks/useHandleNewThread";
+import { useHermesChat } from "../hooks/useHermesChat";
 import {
   useAllEnvironmentShellsBootstrapped,
   useProjects,
@@ -19,18 +24,95 @@ import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
+import { useSidebarWorkspace } from "~/sidebarWorkspace";
 import { isT3WorkBackingProject } from "~/t3WorkProject";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments } = useEnvironments();
+  const [workspace] = useSidebarWorkspace();
 
   if (authGateState.status === "hosted-static" && environments.length === 0) {
     return <HostedStaticOnboardingState />;
   }
 
-  return <IndexDraftLanding />;
+  // The index route is the landing for every workspace, so it has to compose
+  // on the side the user is actually in: dropping T3 Work or T3 Chat into the
+  // Code composer offers a coding thread their own sidebar cannot list.
+  return workspaceComposerKind(workspace) === "hermes" ? (
+    <HermesDraftLanding workspace={workspace} />
+  ) : (
+    <IndexDraftLanding />
+  );
+}
+
+/**
+ * Work and Chat compose on Hermes against the T3 Work backing project, which
+ * is created on demand the first time either workspace is used.
+ */
+function HermesDraftLanding({ workspace }: { readonly workspace: SidebarWorkspace }) {
+  const hermesChat = useHermesChat();
+  const bootstrapped = useAllEnvironmentShellsBootstrapped();
+  const startingRef = useRef(false);
+  const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+
+  useEffect(() => {
+    // Readiness before the primary environment's config lands is "unknown",
+    // not "unavailable" — starting then would fail a boot that only needed
+    // another tick. The effect re-runs once the config resolves.
+    if (!bootstrapped || !hermesChat.isResolved || !hermesChat.isReady || startingRef.current) {
+      return;
+    }
+    startingRef.current = true;
+    void hermesChat
+      .start({ replace: true })
+      .then((outcome) => {
+        if (outcome === "started") return;
+        startingRef.current = false;
+        setStartState((state) => ({ ...state, failed: true }));
+      })
+      .catch(() => {
+        startingRef.current = false;
+        setStartState((state) => ({ ...state, failed: true }));
+      });
+  }, [bootstrapped, hermesChat, startState.retryRequest]);
+
+  if (!bootstrapped || !hermesChat.isResolved) {
+    return null;
+  }
+  if (!hermesChat.isReady) {
+    return <HermesUnavailableHero workspace={workspace} />;
+  }
+  return startState.failed ? (
+    <DraftStartError
+      onRetry={() => {
+        setStartState((state) => ({ failed: false, retryRequest: state.retryRequest + 1 }));
+      }}
+    />
+  ) : null;
+}
+
+function HermesUnavailableHero({ workspace }: { readonly workspace: SidebarWorkspace }) {
+  const workspaceName = workspace === "chat" ? "T3 Chat" : "T3 Work";
+
+  return (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <Empty className="flex-1">
+        <EmptyHeader className="max-w-md">
+          <EmptyTitle className="text-foreground text-xl">Hermes isn’t ready</EmptyTitle>
+          <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
+            {workspaceName} conversations run on Hermes. Enable and configure it to start one.
+          </EmptyDescription>
+          <div className="mt-5 flex justify-center">
+            <Button render={<Link to="/settings/providers" />} size="sm">
+              Open provider settings
+            </Button>
+          </div>
+        </EmptyHeader>
+      </Empty>
+    </SidebarInset>
+  );
 }
 
 /**
