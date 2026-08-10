@@ -772,7 +772,7 @@ jobs:
     needs: [preflight, build, publish_cli]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
