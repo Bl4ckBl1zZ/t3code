@@ -13,7 +13,6 @@ import type {
   EnvironmentId,
   ProjectContentMatch,
   ProjectEntryKind,
-  ThreadId,
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";

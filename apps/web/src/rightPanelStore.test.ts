@@ -149,6 +149,7 @@ describe("rightPanelStore", () => {
           ],
         },
       },
+      threadPanelVisibilityByThreadKey: {},
     });
   });
 
@@ -178,7 +179,10 @@ describe("rightPanelStore", () => {
           "env-1:thread-A": panelState,
         },
       }),
-    ).toEqual({ byThreadKey: { "env-1:thread-A": panelState } });
+    ).toEqual({
+      byThreadKey: { "env-1:thread-A": panelState },
+      threadPanelVisibilityByThreadKey: {},
+    });
   });
 
   it("persists inline preference without restoring an open popover", () => {
@@ -382,7 +386,7 @@ describe("rightPanelStore", () => {
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
     expect(
       selectSelectedRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
-    ).toEqual({ id: "agents", kind: "agents" });
+    ).toEqual({ id: "plan", kind: "plan" });
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: false,
       activeSurfaceId: "plan",
