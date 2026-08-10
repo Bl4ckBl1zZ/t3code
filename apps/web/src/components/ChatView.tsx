@@ -6919,15 +6919,12 @@ function ChatViewContent(props: ChatViewProps) {
                 topFadeEnabled={!hasTimelineTopBanner}
               />
 
-              {/* floating pills above the composer: working-tree status + scroll-to-end */}
+              {/* floating pills above the composer: scroll-to-end + working-tree status */}
               {((workingTreeBadgeState !== null && !isDraftHeroState) || showScrollToBottom) && (
                 <div
                   className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex flex-col items-center gap-1.5 py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}
                 >
-                  {workingTreeBadgeState !== null && !isDraftHeroState && (
-                    <WorkingTreeStatusBadge state={workingTreeBadgeState} isWorking={isWorking} />
-                  )}
                   {showScrollToBottom && (
                     <button
                       type="button"
@@ -6939,6 +6936,9 @@ function ChatViewContent(props: ChatViewProps) {
                       <ChevronDownIcon className="size-3.5" />
                       Scroll to end
                     </button>
+                  )}
+                  {workingTreeBadgeState !== null && !isDraftHeroState && (
+                    <WorkingTreeStatusBadge state={workingTreeBadgeState} isWorking={isWorking} />
                   )}
                 </div>
               )}
