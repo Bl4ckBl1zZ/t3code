@@ -22,7 +22,11 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { request, subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
+import {
+  vcsCommandConcurrency,
+  vcsCommandScheduler,
+  vcsLocalStatusConcurrency,
+} from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
   vcsRefsCacheStateAtom,
@@ -296,6 +300,15 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
+    }),
+    // Poll-friendly counterpart to `refreshStatus`: working tree only, so it
+    // costs a local `git` call instead of a remote/PR lookup, and overlapping
+    // polls join the in-flight request rather than queueing behind it.
+    refreshLocalStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:refresh-local-status",
+      tag: WS_METHODS.vcsRefreshLocalStatus,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsLocalStatusConcurrency,
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",

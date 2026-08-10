@@ -418,6 +418,70 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(makeTestLayer(state)));
   });
 
+  it.effect("only reports working tree edits to subscribers after a local refresh", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+    const editedLocalStatus: VcsStatusLocalResult = {
+      ...baseLocalStatus,
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "apps/web/src/components/Sidebar.tsx", insertions: 41, deletions: 0 }],
+        insertions: 41,
+        deletions: 0,
+      },
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      const localUpdatedDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) => {
+        if (event._tag === "snapshot") {
+          return Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore);
+        }
+        if (event._tag === "localUpdated") {
+          return Deferred.succeed(localUpdatedDeferred, event).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkScoped);
+
+      yield* Deferred.await(snapshotDeferred);
+      state.currentLocalStatus = editedLocalStatus;
+
+      // Re-subscribing is how a client "refresh" reaches the server, and it is
+      // served from the cache — the edits stay invisible until an explicit
+      // local refresh recomputes and republishes them.
+      const resubscribed = Option.getOrNull(
+        yield* Stream.runHead(broadcaster.streamStatus({ cwd: "/repo" })),
+      );
+      assert.equal(resubscribed?._tag, "snapshot");
+      assert.deepStrictEqual(
+        resubscribed?._tag === "snapshot" ? resubscribed.local : null,
+        baseLocalStatus,
+      );
+
+      const remoteInvalidationsBeforeRefresh = state.remoteInvalidationCalls;
+      const refreshed = yield* broadcaster.refreshLocalStatus("/repo");
+      const localUpdated = yield* Deferred.await(localUpdatedDeferred);
+
+      assert.deepStrictEqual(refreshed, editedLocalStatus);
+      assert.deepStrictEqual(localUpdated, {
+        _tag: "localUpdated",
+        local: editedLocalStatus,
+      } satisfies VcsStatusStreamEvent);
+      assert.equal(state.localInvalidationCalls, 1);
+      // A working-tree refresh must not pay for the remote/PR lookup, which is
+      // what makes it cheap enough to poll while an agent edits.
+      assert.equal(state.remoteInvalidationCalls, remoteInvalidationsBeforeRefresh);
+    }).pipe(Effect.provide(makeTestLayer(state)));
+  });
+
   it.effect("loads remote status once when periodic refreshes are disabled", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
