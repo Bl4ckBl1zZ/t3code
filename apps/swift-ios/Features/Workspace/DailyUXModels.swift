@@ -210,20 +210,27 @@ struct DailyUXSidebarIndex {
         snapshot: FeatureSnapshot,
         query: String,
         projectID: String? = nil,
-        now: Date = .now
+        now: Date = .now,
+        changeRequests: [String: FeaturePullRequest] = [:]
     ) {
         let visible = snapshot.threads.filter { thread in
             guard !thread.isArchived else { return false }
             return projectID == nil || thread.projectID == projectID
         }
         let available = visible.filter { !$0.isEffectivelySnoozed(at: now) }
+        let isSettled = { (thread: FeatureThread) in
+            thread.isEffectivelySettled(
+                at: now,
+                changeRequestState: changeRequests[thread.id]?.state
+            )
+        }
 
         pinned = available
             .filter { $0.pinnedAt != nil }
             .sorted(by: Self.creationOrder)
 
         active = available
-            .filter { $0.pinnedAt == nil && !$0.isEffectivelySettled(at: now) }
+            .filter { $0.pinnedAt == nil && !isSettled($0) }
             .sorted(by: Self.creationOrder)
 
         snoozed = visible
@@ -238,7 +245,7 @@ struct DailyUXSidebarIndex {
             }
 
         settled = available
-            .filter { $0.pinnedAt == nil && $0.isEffectivelySettled(at: now) }
+            .filter { $0.pinnedAt == nil && isSettled($0) }
             .sorted { lhs, rhs in
                 if lhs.settledSortDate != rhs.settledSortDate {
                     return lhs.settledSortDate > rhs.settledSortDate
@@ -290,13 +297,18 @@ struct DailyUXSidebarIndex {
 enum DailyUXSidebarRefresh {
     static func nextBoundary(
         for threads: [FeatureThread],
-        after now: Date
+        after now: Date,
+        changeRequests: [String: FeaturePullRequest] = [:]
     ) -> Date? {
         threads.reduce(nil as Date?) { earliest, thread in
             let snoozeBoundary = thread.isEffectivelySnoozed(at: now)
                 ? thread.snoozedUntil
                 : nil
-            let settlementBoundary = automaticSettlementBoundary(for: thread, after: now)
+            let settlementBoundary = automaticSettlementBoundary(
+                for: thread,
+                after: now,
+                changeRequestState: changeRequests[thread.id]?.state
+            )
             let threadBoundary = [snoozeBoundary, settlementBoundary]
                 .compactMap { $0 }
                 .min()
@@ -308,12 +320,18 @@ enum DailyUXSidebarRefresh {
 
     private static func automaticSettlementBoundary(
         for thread: FeatureThread,
-        after now: Date
+        after now: Date,
+        changeRequestState: String?
     ) -> Date? {
         guard !thread.isArchived,
               !thread.isSettled,
               thread.pinnedAt == nil,
               !thread.keepsActive,
+              // A change request pins the shelf either way — merged/closed rows
+              // are settled now and open ones never inactivity-settle — so no
+              // clock tick moves them.
+              changeRequestState == nil,
+              let autoSettleAfterDays = thread.autoSettleAfterDays,
               let lastActivityAt = thread.lastActivityAt else {
             return nil
         }
@@ -323,7 +341,7 @@ enum DailyUXSidebarRefresh {
         case .queued, .working, .waitingForApproval, .waitingForInput:
             return nil
         }
-        let boundary = lastActivityAt.addingTimeInterval(3 * 24 * 60 * 60)
+        let boundary = lastActivityAt.addingTimeInterval(autoSettleAfterDays * 24 * 60 * 60)
         return boundary > now ? boundary : nil
     }
 }
@@ -498,7 +516,12 @@ extension FeatureThread {
         state == .waitingForApproval || state == .waitingForInput || state == .failed
     }
 
-    func isEffectivelySettled(at now: Date) -> Bool {
+    /// Swift port of `effectiveSettled` in
+    /// `packages/client-runtime/src/state/threadSettled.ts` — keep the two in
+    /// step or the same thread parks on different shelves on web and mobile.
+    /// `changeRequestState` is the thread's pull-request state ("open" /
+    /// "merged" / "closed") when one is being observed.
+    func isEffectivelySettled(at now: Date, changeRequestState: String? = nil) -> Bool {
         switch state {
         case .queued, .working, .waitingForApproval, .waitingForInput:
             return false
@@ -511,10 +534,22 @@ extension FeatureThread {
         if keepsActive {
             return false
         }
+        // A merged or closed PR is finished work; an open one is unfinished
+        // business that blocks the inactivity path no matter how quiet the
+        // thread has been.
+        if changeRequestState == "merged" || changeRequestState == "closed" {
+            return true
+        }
+        if changeRequestState == "open" {
+            return false
+        }
+        guard let autoSettleAfterDays else {
+            return false
+        }
         guard let lastActivityAt else {
             return false
         }
-        return now.timeIntervalSince(lastActivityAt) >= 3 * 24 * 60 * 60
+        return now.timeIntervalSince(lastActivityAt) >= autoSettleAfterDays * 24 * 60 * 60
     }
 
     func isEffectivelySnoozed(at now: Date) -> Bool {

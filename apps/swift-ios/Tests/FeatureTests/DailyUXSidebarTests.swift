@@ -425,12 +425,99 @@ struct DailyUXSidebarTests {
         )
     }
 
-    private func makeIndex(_ threads: [FeatureThread]) -> DailyUXSidebarIndex {
+    @Test
+    func mergedOrClosedChangeRequestSettlesImmediately() {
+        let merged = thread(id: "merged", created: -10, updated: -10, state: .idle)
+        let closed = thread(id: "closed", created: -10, updated: -10, state: .idle)
+        let open = thread(id: "open", created: -400_000, updated: -300_000, state: .idle)
+
+        let index = makeIndex(
+            [merged, closed, open],
+            changeRequests: [
+                "merged": pullRequest(state: "merged"),
+                "closed": pullRequest(state: "closed"),
+                "open": pullRequest(state: "open"),
+            ]
+        )
+
+        #expect(Set(index.settled.map(\.id)) == ["merged", "closed"])
+        // An open PR is unfinished business: it blocks the inactivity path no
+        // matter how long the thread has been quiet.
+        #expect(index.active.map(\.id) == ["open"])
+    }
+
+    @Test
+    func explicitOverridesOutrankChangeRequestState() {
+        var reopened = thread(id: "reopened", created: -10, updated: -10, state: .idle)
+        reopened.keepsActive = true
+        let settledOpen = thread(
+            id: "settled-open",
+            created: -10,
+            updated: -10,
+            state: .idle,
+            isSettled: true
+        )
+
+        let index = makeIndex(
+            [reopened, settledOpen],
+            changeRequests: [
+                "reopened": pullRequest(state: "merged"),
+                "settled-open": pullRequest(state: "open"),
+            ]
+        )
+
+        #expect(index.active.map(\.id) == ["reopened"])
+        #expect(index.settled.map(\.id) == ["settled-open"])
+    }
+
+    @Test
+    func autoSettleWindowFollowsEnvironmentSetting() {
+        var quickToSettle = thread(id: "one-day", created: -400_000, updated: -100_000)
+        quickToSettle.autoSettleAfterDays = 1
+        var neverSettles = thread(id: "never", created: -4_000_000, updated: -3_000_000)
+        neverSettles.autoSettleAfterDays = nil
+
+        let index = makeIndex([quickToSettle, neverSettles])
+
+        #expect(index.settled.map(\.id) == ["one-day"])
+        #expect(index.active.map(\.id) == ["never"])
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: [neverSettles], after: now) == nil)
+    }
+
+    @Test
+    func settlementBoundaryTracksWindowAndChangeRequests() {
+        var resting = thread(id: "resting", created: -400_000, updated: -100_000)
+        resting.autoSettleAfterDays = 2
+
+        #expect(
+            DailyUXSidebarRefresh.nextBoundary(for: [resting], after: now)
+                == resting.lastActivityAt?.addingTimeInterval(2 * 24 * 60 * 60)
+        )
+        // Any change request pins the shelf: merged/closed rows are settled
+        // already and open ones never inactivity-settle.
+        #expect(
+            DailyUXSidebarRefresh.nextBoundary(
+                for: [resting],
+                after: now,
+                changeRequests: ["resting": pullRequest(state: "open")]
+            ) == nil
+        )
+    }
+
+    private func makeIndex(
+        _ threads: [FeatureThread],
+        changeRequests: [String: FeaturePullRequest] = [:]
+    ) -> DailyUXSidebarIndex {
         DailyUXSidebarIndex(
             snapshot: FeatureSnapshot(threads: threads),
             query: "",
-            now: now
+            now: now,
+            changeRequests: changeRequests
         )
+    }
+
+    private func pullRequest(state: String) -> FeaturePullRequest {
+        FeaturePullRequest(number: 1, title: "PR", state: state)
     }
 
     private func thread(

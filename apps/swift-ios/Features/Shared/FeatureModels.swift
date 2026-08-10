@@ -183,6 +183,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var isSettled: Bool
     public var keepsActive: Bool
     public var settledAt: Date?
+    /// Days of inactivity before the row auto-settles, resolved from the
+    /// thread's environment settings at map time (web's
+    /// `sidebarAutoSettleAfterDays`). `nil` means the user chose "never".
+    public var autoSettleAfterDays: Double?
     public var lastActivityAt: Date?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
@@ -230,6 +234,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         isSettled: Bool = false,
         keepsActive: Bool = false,
         settledAt: Date? = nil,
+        autoSettleAfterDays: Double? = 3,
         lastActivityAt: Date? = nil,
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
@@ -266,6 +271,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.isSettled = isSettled
         self.keepsActive = keepsActive
         self.settledAt = settledAt
+        self.autoSettleAfterDays = autoSettleAfterDays
         self.lastActivityAt = lastActivityAt
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt

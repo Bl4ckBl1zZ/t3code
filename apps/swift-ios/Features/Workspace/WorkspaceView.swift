@@ -263,7 +263,8 @@ public struct WorkspaceView: View {
             workspace: workspace,
             query: searchText,
             projectID: activeProjectFilterID,
-            now: sidebarBoundaryNow
+            now: sidebarBoundaryNow,
+            changeRequests: model.changeRequestsByThreadID
         )
 
         let changeRequestThreadIDs = changeRequestThreadIDs(in: presentation)
@@ -325,9 +326,18 @@ public struct WorkspaceView: View {
 
     private func changeRequestThreadIDs(in presentation: HomePresentation) -> [String] {
         guard workspace == .code else { return [] }
-        return (presentation.pinned + presentation.active)
+        let live = (presentation.pinned + presentation.active)
             .prefix(Self.changeRequestRowLimit)
             .map(\.id)
+        // A merged or closed change request is itself what parks a row on the
+        // Settled shelf. Dropping its subscription the moment the row settles
+        // would forget that state and bounce the row straight back to Active,
+        // so rows that settled while observed stay observed.
+        let settledWithKnownRequest = presentation.settled
+            .map(\.id)
+            .filter { model.changeRequestsByThreadID[$0] != nil }
+        var seen = Set<String>()
+        return (live + settledWithKnownRequest).filter { seen.insert($0).inserted }
     }
 
     @ViewBuilder
@@ -746,7 +756,8 @@ public struct WorkspaceView: View {
     private var nextSidebarBoundary: Date? {
         DailyUXSidebarRefresh.nextBoundary(
             for: model.snapshot.threads,
-            after: sidebarBoundaryNow
+            after: sidebarBoundaryNow,
+            changeRequests: model.changeRequestsByThreadID
         )
     }
 
@@ -922,7 +933,8 @@ struct HomePresentation {
         workspace: MobileWorkspace,
         query: String,
         projectID: String?,
-        now: Date
+        now: Date,
+        changeRequests: [String: FeaturePullRequest] = [:]
     ) {
         // The two workspaces share one thread list; which rows belong to which
         // is decided here, before the shelves are built, so every shelf below
@@ -941,7 +953,8 @@ struct HomePresentation {
             snapshot: scoped,
             query: "",
             projectID: projectID,
-            now: now
+            now: now,
+            changeRequests: changeRequests
         )
         // Archived rows never reach `WorkspaceSwitcher.threads` — it drops them
         // along with subagents — so the shelf splits them by workspace itself.
@@ -1004,6 +1017,11 @@ final class HomePresentationCache {
         let query: String
         let projectID: String?
         let now: Date
+        /// Change-request state moves rows between Active and Settled, and it
+        /// streams in outside `homePresentationRevision` — without it in the
+        /// key, a PR merging would not re-sort the list until something else
+        /// changed.
+        let changeRequests: [String: FeaturePullRequest]
     }
 
     private var cachedKey: Key?
@@ -1015,14 +1033,16 @@ final class HomePresentationCache {
         workspace: MobileWorkspace,
         query: String,
         projectID: String?,
-        now: Date
+        now: Date,
+        changeRequests: [String: FeaturePullRequest] = [:]
     ) -> HomePresentation {
         let key = Key(
             revision: revision,
             workspace: workspace,
             query: query,
             projectID: projectID,
-            now: now
+            now: now,
+            changeRequests: changeRequests
         )
         if cachedKey == key, let cachedPresentation {
             return cachedPresentation
@@ -1033,7 +1053,8 @@ final class HomePresentationCache {
             workspace: workspace,
             query: query,
             projectID: projectID,
-            now: now
+            now: now,
+            changeRequests: changeRequests
         )
         cachedKey = key
         cachedPresentation = presentation

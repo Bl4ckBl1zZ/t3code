@@ -233,7 +233,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 configuration.performsFirstActionWithFullSwipe = false
                 return configuration
             } else {
-                let isSettled = thread.isEffectivelySettled(at: .now)
+                let isSettled = thread.isEffectivelySettled(
+                    at: .now,
+                    changeRequestState: parent.changeRequests[thread.id]?.state
+                )
                 primaryAction = UIContextualAction(
                     style: .normal,
                     title: isSettled ? "Reopen" : "Settle"
@@ -404,7 +407,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 isArchived: isArchived,
                 canTogglePin: thread.canTogglePin,
                 isPinned: thread.pinnedAt != nil,
-                isSettled: thread.isEffectivelySettled(at: now),
+                isSettled: thread.isEffectivelySettled(
+                    at: now,
+                    changeRequestState: parent.changeRequests[thread.id]?.state
+                ),
                 isSnoozed: thread.isEffectivelySnoozed(at: now),
                 canSnooze: thread.state != .queued
                     && thread.state != .waitingForApproval

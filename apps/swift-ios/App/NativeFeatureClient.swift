@@ -4270,6 +4270,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
             keepsActive: thread.settledOverride == "active",
             settledAt: thread.settledAt.map(parseDate),
+            autoSettleAfterDays: autoSettleAfterDays(environmentID: environment.id),
             lastActivityAt: lastActivityDate(
                 latestUserMessageAt: nil,
                 latestRunCompletedAt: latestRun?.completedAt,
@@ -4359,6 +4360,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
             keepsActive: thread.settledOverride == "active",
             settledAt: thread.settledAt.map(parseDate),
+            autoSettleAfterDays: autoSettleAfterDays(environmentID: environment.id),
             lastActivityAt: lastActivityDate(
                 latestUserMessageAt: thread.latestUserMessageAt,
                 latestRunCompletedAt: thread.latestRunCompletedAt,
@@ -4456,9 +4458,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
 
-    private func isSettled(_ override: String?, settledAt: String?) -> Bool {
-        if override == "active" { return false }
-        return override == "settled" || settledAt != nil
+    /// Mirrors web's `effectiveSettled`: only the explicit override marks a
+    /// thread settled. Web never reads `settledAt` as a settled signal, so a
+    /// stray timestamp without the override must not park the row here either.
+    private func isSettled(_ override: String?, settledAt _: String?) -> Bool {
+        override == "settled"
+    }
+
+    /// The environment's inactivity window before a quiet thread auto-settles,
+    /// in days; `nil` is the user's "never". Servers that predate the setting
+    /// resolve to web's default via `ServerSettingsSnapshot` decoding.
+    private func autoSettleAfterDays(environmentID: String) -> Double? {
+        guard let settings = serverConfigsByEnvironmentID[environmentID]?.settings else {
+            return ServerSettingsSnapshot.defaultSidebarAutoSettleAfterDays
+        }
+        return settings.sidebarAutoSettleAfterDays
     }
 
     private func mapRuntimeMode(_ mode: RuntimeMode) -> FeatureRuntimeMode {
