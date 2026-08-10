@@ -89,6 +89,62 @@ struct MarkdownDocumentTests {
     }
 
     @Test
+    func parsesGithubAlertBlockquotes() {
+        let document = MarkdownDocument(
+            parsing: """
+            > [!WARNING]
+            > Body text
+            """
+        )
+
+        guard case let .githubAlert(kind, content) = document.blocks.first else {
+            Issue.record("Expected a GitHub alert")
+            return
+        }
+        #expect(kind == .warning)
+        #expect(content.blocks == [.paragraph("Body text")])
+    }
+
+    @Test
+    func matchesAlertMarkersCaseInsensitively() {
+        let document = MarkdownDocument(
+            parsing: """
+            > [!note]
+            > Lowercase marker
+            """
+        )
+
+        guard case let .githubAlert(kind, content) = document.blocks.first else {
+            Issue.record("Expected a GitHub alert")
+            return
+        }
+        #expect(kind == .note)
+        #expect(content.blocks == [.paragraph("Lowercase marker")])
+    }
+
+    @Test
+    func keepsQuotesWithInlineMarkerTextAsPlainBlockquotes() {
+        let document = MarkdownDocument(parsing: "> [!NOTE] inline text")
+
+        guard case let .blockquote(quote) = document.blocks.first else {
+            Issue.record("Expected a block quote")
+            return
+        }
+        #expect(quote.blocks == [.paragraph("[!NOTE] inline text")])
+    }
+
+    @Test
+    func leavesPlainBlockquotesUnaffectedByAlertParsing() {
+        let document = MarkdownDocument(parsing: "> Just a quote")
+
+        guard case let .blockquote(quote) = document.blocks.first else {
+            Issue.record("Expected a block quote")
+            return
+        }
+        #expect(quote.blocks == [.paragraph("Just a quote")])
+    }
+
+    @Test
     func parsesTablesWithAlignmentEscapesAndNormalizedRows() {
         let document = MarkdownDocument(
             parsing: """

@@ -617,6 +617,44 @@ public actor T3Client {
 
     // MARK: Workspace files
 
+    // MARK: - Pull requests
+    //
+    // Host-backed change-request reads, addressed by `PullRequestRef`
+    // (`packages/contracts/src/pullRequest.ts`): the server project id, the
+    // repository's display name, and the change request's number on the host.
+
+    public func pullRequestDetail(
+        projectID: String,
+        repository: String,
+        number: Int
+    ) async throws -> PullRequestDetail {
+        try await rpc.request(
+            RPCMethod.pullRequestsDetail.rawValue,
+            payload: .object([
+                "projectId": .string(projectID),
+                "repository": .string(repository),
+                "number": .number(Double(number)),
+            ]),
+            as: PullRequestDetail.self
+        )
+    }
+
+    public func pullRequestActivity(
+        projectID: String,
+        repository: String,
+        number: Int
+    ) async throws -> PullRequestActivity {
+        try await rpc.request(
+            RPCMethod.pullRequestsActivity.rawValue,
+            payload: .object([
+                "projectId": .string(projectID),
+                "repository": .string(repository),
+                "number": .number(Double(number)),
+            ]),
+            as: PullRequestActivity.self
+        )
+    }
+
     // MARK: - Scheduled tasks
     //
     // Environment-scoped, and RPCs rather than orchestration commands: an
@@ -1619,6 +1657,8 @@ public enum RPCMethod: String, Sendable {
     case sourceControlLookup = "sourceControl.lookupRepository"
     case sourceControlClone = "sourceControl.cloneRepository"
     case sourceControlPublish = "sourceControl.publishRepository"
+    case pullRequestsDetail = "pullRequests.detail"
+    case pullRequestsActivity = "pullRequests.activity"
     case reviewDiffPreview = "review.getDiffPreview"
     case reviewDiffFileContents = "review.getDiffFileContents"
     case terminalOpen = "terminal.open"

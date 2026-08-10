@@ -1845,6 +1845,38 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    func pullRequestOverview(threadID: String, number: Int) async throws
+        -> FeaturePullRequestOverview
+    {
+        let route = try threadRoute(for: threadID)
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }) else {
+            throw NativeFeatureClientError.workspaceNotFound
+        }
+        // The server addresses a change request by the repository's display
+        // name, exactly as the web client does (apps/web/src/lib/
+        // openPullRequestLink.ts). A project whose identity never resolved has
+        // no repository to ask the host about.
+        guard let repository = project.repositoryIdentity?.displayName,
+              !repository.isEmpty else {
+            throw NativeFeatureClientError.repositoryIdentityUnavailable
+        }
+        let detail = try await route.client.pullRequestDetail(
+            projectID: project.id,
+            repository: repository,
+            number: number
+        )
+        // The conversation is an enrichment: a host that cannot answer it
+        // still has a summary worth showing.
+        let activity = try? await route.client.pullRequestActivity(
+            projectID: project.id,
+            repository: repository,
+            number: number
+        )
+        return FeaturePullRequestOverview(detail: detail, activity: activity)
+    }
+
     /// One subscription per checkout, not per thread: threads that share a
     /// worktree share a status, and the server keeps one cached status per cwd.
     private struct ChangeRequestSubscription: Hashable {
@@ -3843,7 +3875,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             endpoint: environment.httpBaseURL.absoluteString,
             isActive: environment.id == activeID,
             connectionState: environmentConnectionStates[environment.id],
-            connectionDetail: environmentConnectionDetails[environment.id]
+            connectionDetail: environmentConnectionDetails[environment.id],
+            supportsPullRequests: environment.descriptor?.capabilities.pullRequests
         )
     }
 
@@ -5538,6 +5571,7 @@ private enum NativeFeatureClientError: LocalizedError {
     case missingScope(String)
     case tooManyAttachments
     case crossEnvironmentMerge
+    case repositoryIdentityUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -5555,6 +5589,8 @@ private enum NativeFeatureClientError: LocalizedError {
         case .tooManyAttachments: "You can attach up to 8 images per message."
         case .crossEnvironmentMerge:
             "These threads are on different environments and cannot be merged."
+        case .repositoryIdentityUnavailable:
+            "This project's repository has not been identified, so its pull requests cannot be read."
         }
     }
 }

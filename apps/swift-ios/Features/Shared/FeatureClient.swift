@@ -158,6 +158,11 @@ public protocol FeatureClient: AnyObject {
     /// server holds one cached status per workspace, so the caller scopes this
     /// to what is on screen instead of every thread it knows about.
     func threadChangeRequests(threadIDs: [String]) -> AsyncStream<[String: FeaturePullRequest]>
+    /// The host-backed detail (and, where readable, the conversation) for the
+    /// change request `number` on the repository this thread's project tracks.
+    /// Only offered where the environment reports the `pullRequests` capability.
+    func pullRequestOverview(threadID: String, number: Int) async throws
+        -> FeaturePullRequestOverview
     func performSourceControlAction(
         threadID: String,
         action: FeatureSourceControlAction,
@@ -424,6 +429,12 @@ public extension FeatureClient {
 
     func threadChangeRequests(threadIDs _: [String]) -> AsyncStream<[String: FeaturePullRequest]> {
         AsyncStream { $0.finish() }
+    }
+
+    func pullRequestOverview(threadID _: String, number _: Int) async throws
+        -> FeaturePullRequestOverview
+    {
+        throw FeatureCapabilityUnavailable("Pull requests")
     }
 
     func performSourceControlAction(
