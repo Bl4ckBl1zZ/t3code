@@ -343,6 +343,7 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { readSidebarWorkspace } from "~/sidebarWorkspace";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
@@ -5848,29 +5849,14 @@ function ChatViewContent(props: ChatViewProps) {
         // conversation: stamp the role so the sidebar's workspace split can
         // tell it apart from Work. Best-effort — an older server rejects the
         // value and the thread simply lives in Work.
-        if (isLocalDraftThread && isHermesConversation) {
-          try {
-            const raw = window.localStorage.getItem("t3code:sidebar-workspace");
-            const storedWorkspace = (() => {
-              if (raw === null) return null;
-              try {
-                return JSON.parse(raw) as unknown;
-              } catch {
-                return raw;
-              }
-            })();
-            if (storedWorkspace === "chat") {
-              void updateThreadMetadata({
-                environmentId,
-                input: {
-                  threadId: threadIdForSend,
-                  workInboxRole: "chat",
-                },
-              });
-            }
-          } catch {
-            // Unreadable storage never blocks the send.
-          }
+        if (isLocalDraftThread && isHermesConversation && readSidebarWorkspace() === "chat") {
+          void updateThreadMetadata({
+            environmentId,
+            input: {
+              threadId: threadIdForSend,
+              workInboxRole: "chat",
+            },
+          });
         }
       }
     }

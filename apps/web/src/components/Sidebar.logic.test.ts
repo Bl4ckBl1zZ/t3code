@@ -40,7 +40,9 @@ import {
   sortSettledThreadsForSidebar,
   applyManualThreadOrderForSidebarV2,
   sortThreadsForSidebar,
+  selectWorkInboxLandingSections,
   workInboxActiveSection,
+  workspaceLandingKind,
   pinOrderKeyBetween,
   planPinnedReorder,
   sortPinnedThreadsForSidebar,
@@ -582,6 +584,99 @@ describe("sidebar thread lineage helpers", () => {
     expect(getSidebarForkParentThreadId(runFork)).toBe(parentId);
     expect(getSidebarForkParentThreadId(lineageFork)).toBe(fallbackParentId);
     expect(getSidebarForkParentThreadId(makeThreadFixture())).toBeNull();
+  });
+});
+
+describe("workspaceLandingKind", () => {
+  it("gives every workspace the landing it is for", () => {
+    expect(workspaceLandingKind("code")).toBe("code-composer");
+    expect(workspaceLandingKind("work")).toBe("work-inbox");
+    expect(workspaceLandingKind("chat")).toBe("chat-composer");
+  });
+});
+
+describe("selectWorkInboxLandingSections", () => {
+  const environmentId = EnvironmentId.make("environment-landing");
+  const hermesInstanceId = ProviderInstanceId.make("hermes-main");
+  const codexInstanceId = ProviderInstanceId.make("codex-main");
+  const providerDriverKindByInstance = new Map([
+    [
+      sidebarProviderInstanceKey(environmentId, hermesInstanceId),
+      ProviderDriverKind.make("hermes"),
+    ],
+    [sidebarProviderInstanceKey(environmentId, codexInstanceId), ProviderDriverKind.make("codex")],
+  ]);
+  const now = "2024-05-01T12:00:00.000Z";
+  const workThread = (id: string, overrides: ThreadFixtureOverrides = {}) =>
+    makeThreadFixture({
+      environmentId,
+      providerInstanceId: hermesInstanceId,
+      id: ThreadId.make(id),
+      updatedAt: "2024-05-01T11:00:00.000Z",
+      ...overrides,
+    });
+  const select = (threads: ReadonlyArray<ReturnType<typeof workThread>>, recentLimit = 6) =>
+    selectWorkInboxLandingSections({
+      threads,
+      providerDriverKindByInstance,
+      now,
+      autoSettleAfterDays: null,
+      recentLimit,
+    });
+
+  it("splits the Hermes work inbox into Main, Needs you and Recent", () => {
+    const main = workThread("main", { workInboxRole: "main" });
+    const blocked = workThread("blocked", { hasPendingUserInput: true });
+    const ordinary = workThread("ordinary");
+    const codeThread = makeThreadFixture({
+      environmentId,
+      providerInstanceId: codexInstanceId,
+      id: ThreadId.make("code"),
+    });
+
+    const sections = select([codeThread, ordinary, blocked, main]);
+
+    expect(sections.main.map((thread) => thread.id)).toEqual(["main"]);
+    expect(sections.needsYou.map((thread) => thread.id)).toEqual(["blocked"]);
+    expect(sections.recent.map((thread) => thread.id)).toEqual(["ordinary"]);
+    expect(sections.visibleCount).toBe(3);
+  });
+
+  it("drops snoozed and settled threads but never Main", () => {
+    const main = workThread("main", {
+      workInboxRole: "main",
+      settledOverride: "settled",
+      settledAt: "2024-04-30T12:00:00.000Z",
+      snoozedUntil: "2024-05-02T12:00:00.000Z",
+      snoozedAt: "2024-05-01T10:00:00.000Z",
+    });
+    const snoozed = workThread("snoozed", {
+      snoozedUntil: "2024-05-02T12:00:00.000Z",
+      snoozedAt: "2024-05-01T10:00:00.000Z",
+    });
+    const settled = workThread("settled", {
+      settledOverride: "settled",
+      settledAt: "2024-04-30T12:00:00.000Z",
+    });
+
+    const sections = select([main, snoozed, settled]);
+
+    expect(sections.main.map((thread) => thread.id)).toEqual(["main"]);
+    expect(sections.needsYou).toEqual([]);
+    expect(sections.recent).toEqual([]);
+    expect(sections.visibleCount).toBe(1);
+  });
+
+  it("orders Recent by last activity and caps it", () => {
+    const threads = [
+      workThread("oldest", { latestUserMessageAt: "2024-05-01T08:00:00.000Z" }),
+      workThread("newest", { latestUserMessageAt: "2024-05-01T11:30:00.000Z" }),
+      workThread("middle", { latestUserMessageAt: "2024-05-01T10:00:00.000Z" }),
+    ];
+
+    expect(select(threads, 2).recent.map((thread) => thread.id)).toEqual(["newest", "middle"]);
+    // The cap truncates the tail; the count still reports the whole inbox.
+    expect(select(threads, 2).visibleCount).toBe(3);
   });
 });
 

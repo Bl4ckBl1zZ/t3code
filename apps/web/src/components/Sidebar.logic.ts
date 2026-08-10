@@ -6,6 +6,7 @@ import type {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   getThreadSortTimestamp,
   sortThreads,
@@ -196,6 +197,95 @@ export function isThreadVisibleInSidebarWorkspace(
     case "chat":
       return isHermes && thread.workInboxRole === "chat";
   }
+}
+
+export type WorkspaceLandingKind = "code-composer" | "work-inbox" | "chat-composer";
+
+/**
+ * The screen a workspace lands on when there is no thread to restore.
+ *
+ * Each workspace lands on the thing it is for: Code and Chat both open
+ * straight into a composer (one on a repository, one on Hermes), while Work
+ * is an inbox — dropping it into a composer buries the threads already
+ * waiting on the user. Landing any workspace on another's composer offers a
+ * thread that would immediately vanish from its own sidebar.
+ */
+export function workspaceLandingKind(workspace: SidebarWorkspace): WorkspaceLandingKind {
+  switch (workspace) {
+    case "code":
+      return "code-composer";
+    case "work":
+      return "work-inbox";
+    case "chat":
+      return "chat-composer";
+  }
+}
+
+export interface WorkInboxLandingSections {
+  /** The fixed Main conversation, which is never snoozed or settled away. */
+  readonly main: readonly SidebarThreadSummary[];
+  readonly needsYou: readonly SidebarThreadSummary[];
+  readonly recent: readonly SidebarThreadSummary[];
+  /** Inbox threads before `recentLimit` truncates the tail. */
+  readonly visibleCount: number;
+}
+
+function byWorkInboxRecency(left: SidebarThreadSummary, right: SidebarThreadSummary): number {
+  return (
+    parseTimestampMs(right.latestUserMessageAt ?? right.updatedAt) -
+      parseTimestampMs(left.latestUserMessageAt ?? left.updatedAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+/**
+ * The Work landing's view of the inbox: the same Main / Needs you / Active
+ * split the Work sidebar renders, ordered by last activity and capped.
+ *
+ * Unlike the sidebar this drops snoozed and settled threads outright instead
+ * of shelving them, and skips the sidebar's per-server capability gate: the
+ * landing is a capped overview, so hiding a wrapped-up thread costs nothing
+ * — the sidebar remains the complete, unabridged list.
+ */
+export function selectWorkInboxLandingSections(input: {
+  readonly threads: readonly SidebarThreadSummary[];
+  readonly providerDriverKindByInstance: ReadonlyMap<string, ProviderDriverKind>;
+  readonly now: string;
+  readonly autoSettleAfterDays: number | null;
+  readonly recentLimit: number;
+}): WorkInboxLandingSections {
+  const main: SidebarThreadSummary[] = [];
+  const needsYou: SidebarThreadSummary[] = [];
+  const recent: SidebarThreadSummary[] = [];
+  for (const thread of input.threads) {
+    if (!isThreadVisibleInSidebarWorkspace(thread, "work", input.providerDriverKindByInstance)) {
+      continue;
+    }
+    if (thread.workInboxRole === "main") {
+      main.push(thread);
+      continue;
+    }
+    if (effectiveSnoozed(thread, { now: input.now })) continue;
+    // A thread that needs the user is never settled (settlement checks the
+    // same blockers first), so this ordering only decides which list it
+    // lands in, never whether it shows at all.
+    if (workInboxActiveSection(thread) === "needs-you") {
+      needsYou.push(thread);
+      continue;
+    }
+    if (
+      effectiveSettled(thread, { now: input.now, autoSettleAfterDays: input.autoSettleAfterDays })
+    ) {
+      continue;
+    }
+    recent.push(thread);
+  }
+  return {
+    main: main.toSorted(byWorkInboxRecency),
+    needsYou: needsYou.toSorted(byWorkInboxRecency),
+    recent: recent.toSorted(byWorkInboxRecency).slice(0, input.recentLimit),
+    visibleCount: main.length + needsYou.length + recent.length,
+  };
 }
 
 /**

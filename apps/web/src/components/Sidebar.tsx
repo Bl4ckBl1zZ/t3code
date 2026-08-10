@@ -120,6 +120,7 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { useSidebarWorkspace } from "../sidebarWorkspace";
 import { isT3WorkBackingProject, t3WorkDirectoryForEnvironment } from "../t3WorkProject";
 import { createT3WorkBackingProject } from "../t3WorkProjectCreate";
 import type { SidebarThreadSummary } from "../types";
@@ -149,6 +150,7 @@ import {
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
   workInboxActiveSection,
+  workspaceLandingKind,
   type SidebarWorkspace,
   type WorkInboxBadge,
 } from "./Sidebar.logic";
@@ -195,8 +197,6 @@ import { HermesImportOnboarding } from "./HermesImportOnboarding";
 // stays behind an explicit Show more.
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
-const SIDEBAR_WORKSPACE_STORAGE_KEY = "t3code:sidebar-workspace";
-const SIDEBAR_WORKSPACE_SCHEMA = Schema.Literals(["work", "code", "chat"]);
 const SIDEBAR_WORKSPACE_ROUTES_STORAGE_KEY = "t3code:sidebar-workspace-routes:v1";
 const SIDEBAR_WORKSPACE_ROUTES_SCHEMA = Schema.Struct({
   work: Schema.optional(Schema.String),
@@ -1815,11 +1815,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 });
 
 export default function Sidebar() {
-  const [workspace, setWorkspace] = useLocalStorage<SidebarWorkspace, SidebarWorkspace>(
-    SIDEBAR_WORKSPACE_STORAGE_KEY,
-    "code",
-    SIDEBAR_WORKSPACE_SCHEMA,
-  );
+  const [workspace, setWorkspace] = useSidebarWorkspace();
   const [workspaceRoutes, setWorkspaceRoutes] = useLocalStorage(
     SIDEBAR_WORKSPACE_ROUTES_STORAGE_KEY,
     {},
@@ -2706,9 +2702,12 @@ export default function Sidebar() {
         return;
       }
       if (navigation.kind === "new-chat") {
-        if (nextWorkspace === "work") {
-          // The index route starts a Code draft; when the Work composer
-          // cannot open, staying put beats landing on a Code composer.
+        if (workspaceLandingKind(nextWorkspace) === "chat-composer") {
+          // Chat lands on a composer, so open it here rather than bouncing
+          // through the index route: this path honors the work environment
+          // scope, and when Hermes cannot open, staying on the current thread
+          // beats a dead landing. Code and Work land on a page, which the
+          // index route renders per workspace.
           openWorkComposer();
           return;
         }
