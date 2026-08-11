@@ -86,6 +86,31 @@ final class ThreadListActionsTests: XCTestCase {
         XCTAssertTrue(actions.first { $0.id == "snooze" }?.disabled == true)
     }
 
+    func testSnoozeOpensTheSharedPresetSubmenu() {
+        let now = Date(timeIntervalSince1970: 1_777_777_777)
+        let actions = ThreadRowMenuActions.homeRowActions(ThreadRowMenuContext(), now: now)
+        let snooze = actions.first { $0.id == ThreadRowMenuActions.snoozeActionID }
+
+        XCTAssertEqual(
+            snooze?.children.map(\.id),
+            SnoozePresets.resolve(now: now).map(SnoozePresets.actionID(for:))
+        )
+        // The wake-time column rides subtitle, not the label.
+        XCTAssertEqual(
+            snooze?.children.map(\.subtitle),
+            SnoozePresets.resolve(now: now).map(\.whenLabel)
+        )
+        // Unsnooze stays a plain action: there is only one way back.
+        let unsnoozed = ThreadRowMenuActions.homeRowActions(
+            ThreadRowMenuContext(isSnoozed: true),
+            now: now
+        )
+        XCTAssertEqual(
+            unsnoozed.first { $0.id == ThreadRowMenuActions.unsnoozeActionID }?.children,
+            []
+        )
+    }
+
     func testHandoffActionAppendsWhenThereIsNoDeleteToAnchorOn() {
         let actions = ThreadRowMenuActions.withHandoffScriptAction(
             [ThreadRowMenuAction(id: "archive", title: "Archive")]

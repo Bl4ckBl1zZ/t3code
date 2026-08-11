@@ -93,11 +93,14 @@ public enum ThreadRowMenuActions {
 
     /// The Home row's long-press menu.
     ///
-    /// Lifecycle first, then the two server-side actions, then Delete. The
-    /// snooze preset submenu the React Native rows offer is not ported: this
-    /// client has a single fixed snooze, so a submenu of one would be a
-    /// disclosure that discloses nothing.
-    public static func homeRowActions(_ context: ThreadRowMenuContext) -> [ThreadRowMenuAction] {
+    /// Lifecycle first, then the two server-side actions, then Delete. Snooze
+    /// opens the shared preset submenu (``SnoozePresets``), mirroring the web
+    /// sidebar and the React Native rows; `now` anchors the preset wake times
+    /// and their labels.
+    public static func homeRowActions(
+        _ context: ThreadRowMenuContext,
+        now: Date = .now
+    ) -> [ThreadRowMenuAction] {
         var actions: [ThreadRowMenuAction] = [
             ThreadRowMenuAction(id: renameActionID, title: "Rename", symbol: "pencil"),
         ]
@@ -136,9 +139,16 @@ public enum ThreadRowMenuActions {
                         ? ThreadRowMenuAction(id: unsnoozeActionID, title: "Unsnooze", symbol: "bell")
                         : ThreadRowMenuAction(
                             id: snoozeActionID,
-                            title: "Snooze 1 hour",
+                            title: "Snooze",
                             symbol: "clock",
-                            disabled: !context.canSnooze
+                            disabled: !context.canSnooze,
+                            children: SnoozePresets.resolve(now: now).map { preset in
+                                ThreadRowMenuAction(
+                                    id: SnoozePresets.actionID(for: preset),
+                                    title: preset.label,
+                                    subtitle: preset.whenLabel
+                                )
+                            }
                         )
                 )
             }
