@@ -9,23 +9,32 @@ import Foundation
 public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
     public let id: String
     public let title: String
+    /// Secondary line under the title (UIKit's `UIAction.subtitle`); the
+    /// snooze presets use it for the wake time.
+    public let subtitle: String?
     /// SF Symbol name.
     public let symbol: String?
     public let disabled: Bool
     public let destructive: Bool
+    /// Non-empty makes this row a submenu; the row itself then never fires.
+    public let children: [ThreadRowMenuAction]
 
     public init(
         id: String,
         title: String,
+        subtitle: String? = nil,
         symbol: String? = nil,
         disabled: Bool = false,
-        destructive: Bool = false
+        destructive: Bool = false,
+        children: [ThreadRowMenuAction] = []
     ) {
         self.id = id
         self.title = title
+        self.subtitle = subtitle
         self.symbol = symbol
         self.disabled = disabled
         self.destructive = destructive
+        self.children = children
     }
 }
 

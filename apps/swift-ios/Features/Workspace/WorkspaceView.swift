@@ -33,9 +33,12 @@ public struct WorkspaceView: View {
     @State private var selectedProjectID: String?
     @State private var searchText = ""
     @State private var isSearching = false
-    @State private var isSnoozedExpanded = false
-    @State private var isSettledExpanded = true
-    @State private var isArchiveExpanded = false
+    // Persisted like the web sidebar's shelves: whether a shelf is open is a
+    // lasting preference, not per-launch state. Defaults match web (settled
+    // open; snoozed and archived out of the way).
+    @AppStorage("workspace.snoozed-expanded") private var isSnoozedExpanded = false
+    @AppStorage("workspace.settled-expanded") private var isSettledExpanded = true
+    @AppStorage("workspace.archive-expanded") private var isArchiveExpanded = false
     @State private var settledLimit = 12
     @State private var showingNewTask = false
     @State private var showingNewWorkConversation = false

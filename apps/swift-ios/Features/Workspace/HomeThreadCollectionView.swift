@@ -420,17 +420,35 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 isRegeneratingTitle: thread.isRegeneratingTitle
             )
 
-            return ThreadRowMenuActions.homeRowActions(context).map { action in
-                let element = UIAction(
+            return ThreadRowMenuActions.homeRowActions(context, now: now).map {
+                menuElement(for: $0, on: thread)
+            }
+        }
+
+        private func menuElement(
+            for action: ThreadRowMenuAction,
+            on thread: FeatureThread
+        ) -> UIMenuElement {
+            // A disabled submenu renders as a plain disabled row: it keeps its
+            // slot (hiding it would make the menu jump between renders of the
+            // same row) without disclosing choices that cannot fire.
+            if !action.children.isEmpty, !action.disabled {
+                return UIMenu(
                     title: action.title,
                     image: action.symbol.flatMap { UIImage(systemName: $0) },
-                    attributes: action.destructive ? .destructive : []
-                ) { [weak self] _ in
-                    self?.perform(action.id, on: thread)
-                }
-                if action.disabled { element.attributes.insert(.disabled) }
-                return element
+                    children: action.children.map { menuElement(for: $0, on: thread) }
+                )
             }
+            let element = UIAction(
+                title: action.title,
+                subtitle: action.subtitle,
+                image: action.symbol.flatMap { UIImage(systemName: $0) },
+                attributes: action.destructive ? .destructive : []
+            ) { [weak self] _ in
+                self?.perform(action.id, on: thread)
+            }
+            if action.disabled { element.attributes.insert(.disabled) }
+            return element
         }
 
         private func perform(_ actionID: String, on thread: FeatureThread) {
@@ -451,8 +469,11 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 parent.onSettle(thread, true)
             case ThreadRowMenuActions.unsettleActionID:
                 parent.onSettle(thread, false)
-            case ThreadRowMenuActions.snoozeActionID:
-                parent.onSnooze(thread, Date.now.addingTimeInterval(60 * 60))
+            case let presetID where presetID.hasPrefix(SnoozePresets.actionIDPrefix):
+                // Recomputed at tap time, so a menu that sat open never
+                // snoozes to the stale clock its labels were built from.
+                guard let until = SnoozePresets.snoozedUntil(actionID: presetID) else { break }
+                parent.onSnooze(thread, until)
             case ThreadRowMenuActions.unsnoozeActionID:
                 parent.onSnooze(thread, nil)
             case ThreadRowMenuActions.copyHandoffScriptActionID:
