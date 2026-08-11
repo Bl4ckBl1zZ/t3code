@@ -435,21 +435,27 @@ public struct ThreadDetailView: View {
         }
     }
 
-    /// The working-agents line above the transcript. A `safeAreaInset` rather
-    /// than a row in the feed: it summarises the whole thread, so it has to stay
-    /// put while the transcript scrolls under it.
-    @ViewBuilder
+    /// The working-agents and background-work line above the transcript. An
+    /// overlay rather than a row in the feed: it summarises the whole thread, so
+    /// it has to stay put while the transcript scrolls under it.
+    ///
+    /// Visibility and padding belong to the bar itself, because the background
+    /// half comes and goes on a clock this view does not run.
     private var relationshipsBanner: some View {
-        if let relationships, relationships.showsCollapsedBanner {
-            ThreadRelationshipsBanner(
-                model: relationships,
-                onOpenThread: onOpenRelatedThread,
-                onMerge: mergeBack,
-                onDetach: detachSession
-            )
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-        }
+        TranscriptStatusBar(
+            relationships: relationships,
+            backgroundCommands: backgroundCommands,
+            onOpenThread: onOpenRelatedThread,
+            onMerge: mergeBack,
+            onDetach: detachSession
+        )
+    }
+
+    /// Background commands for the open thread, finished ones included so the bar
+    /// can report an ending that has just landed.
+    private var backgroundCommands: [ThreadDetailsBackgroundCommand] {
+        guard let detail else { return [] }
+        return ThreadDetailsBackgroundTasks.backgroundCommands(detail.timelineItems.map(\.item))
     }
 
     /// Queued runs, above the composer that will add to them.
