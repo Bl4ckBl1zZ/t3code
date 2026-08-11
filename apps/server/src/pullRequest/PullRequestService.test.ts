@@ -2,14 +2,14 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type {
-  OrchestrationProjectShell,
+  Project,
   ProjectId,
   PullRequestReviewCapabilities,
   PullRequestReviewerCapabilities,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
@@ -25,7 +25,7 @@ function project(input: {
   readonly repository?: string;
   readonly provider?: string;
   readonly host?: string;
-}): OrchestrationProjectShell {
+}): Project {
   // The host defaults from the provider, so a fixture only names one when the point of the
   // test is two hosts of the same kind.
   const host = input.host ?? (input.provider === "gitlab" ? "gitlab.com" : "github.com");
@@ -51,6 +51,7 @@ function project(input: {
     scripts: [],
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt: "2026-07-01T00:00:00Z",
+    deletedAt: null,
   };
 }
 
@@ -142,21 +143,18 @@ function fakeProvider(
 }
 
 function makeService(input: {
-  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  readonly projects: ReadonlyArray<Project>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
 }) {
   return PullRequestService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 1,
-              projects: input.projects,
-              threads: [],
-              updatedAt: "2026-07-01T00:00:00Z",
-            }),
+        Layer.mock(ProjectService.ProjectService)({
+          snapshot: Effect.succeed({
+            projects: input.projects,
+            updatedAt: "2026-07-01T00:00:00Z",
+          }),
         }),
       ),
     ),

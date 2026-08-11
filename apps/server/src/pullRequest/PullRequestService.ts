@@ -39,7 +39,7 @@ import {
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import {
   type ProviderChangeRequest,
   type ProviderListCursor,
@@ -359,12 +359,17 @@ function repositoryIdentityOf(project: OrchestrationProjectShell): string | null
 
 export const make = Effect.gen(function* () {
   const registry = yield* PullRequestProviderRegistry;
-  const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projectService = yield* ProjectService.ProjectService;
 
   const listWorkspaceProjects = (
     filter: Pick<PullRequestListInput, "projectId" | "host">,
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
-    projections.getShellSnapshot().pipe(
+    // ProjectService rather than the projection query: this fork's
+    // ProjectionSnapshotQuery serves only the project half of the read model, and its
+    // shells come back with repository metadata stripped. Repository identity is the
+    // whole basis for deciding which projects have a change-request host, so the
+    // enriched snapshot is the only source that can answer this.
+    projectService.snapshot.pipe(
       Effect.mapError(
         (error) =>
           new PullRequestOperationError({
