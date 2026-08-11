@@ -5,6 +5,7 @@ import {
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -321,11 +322,10 @@ describe("HermesProactiveService missed runs", () => {
    * One database across every sweep in a scenario, which is what makes the
    * watermark from an earlier process visible to a later one.
    */
-  const scenario = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provide(Layer.mergeAll(repositories, settingsLayer(true))),
-      Effect.orDie,
-    ) as Effect.Effect<A>;
+  const scenarioLayer = Layer.mergeAll(repositories, settingsLayer(true));
+  const scenario = <A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<typeof scenarioLayer> | Scope.Scope>,
+  ): Effect.Effect<A> => effect.pipe(Effect.scoped, Effect.provide(scenarioLayer), Effect.orDie);
 
   /**
    * A service instance with its own first-sweep memory, which is what
