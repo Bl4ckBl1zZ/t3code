@@ -216,3 +216,58 @@ describe("model option provider scope", () => {
     ]);
   });
 });
+
+describe("model visibility preferences", () => {
+  const configWith = (
+    providerModelPreferences: Record<string, { hiddenModels: string[]; modelOrder: string[] }>,
+  ) =>
+    ({
+      settings: { providerModelPreferences },
+      providers: [
+        {
+          instanceId: "hermes",
+          driver: "hermes",
+          displayName: "Hermes",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            { slug: "alpha", name: "Alpha", isCustom: false, capabilities: null },
+            { slug: "beta", name: "Beta", isCustom: false, capabilities: null },
+            { slug: "mine", name: "Mine", isCustom: true, capabilities: null },
+          ],
+        },
+      ],
+    }) as unknown as ServerConfig;
+
+  it("hides models the user hid on another client", () => {
+    const config = configWith({ hermes: { hiddenModels: ["beta"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "hermes:alpha",
+      "hermes:mine",
+    ]);
+  });
+
+  it("never hides a custom model", () => {
+    const config = configWith({ hermes: { hiddenModels: ["mine"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toContain("hermes:mine");
+  });
+
+  it("applies the user's ordering and leaves unordered models behind it", () => {
+    const config = configWith({ hermes: { hiddenModels: [], modelOrder: ["mine", "beta"] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "hermes:mine",
+      "hermes:beta",
+      "hermes:alpha",
+    ]);
+  });
+
+  it("leaves preferences for a different instance alone", () => {
+    const config = configWith({ codex: { hiddenModels: ["alpha"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "hermes:alpha",
+      "hermes:beta",
+      "hermes:mine",
+    ]);
+  });
+});

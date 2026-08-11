@@ -32,7 +32,7 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "locked-down sandbox with no access to the app");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "popups and link navigation are blocked");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "blocks all network requests");
-    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "auto-sizes to your content's height");
+    assert.include(T3_HTML_EMBED_INSTRUCTIONS, "grows to your content's full height");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "Design responsively");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "expand button to open the embed in a large popup");
     assert.include(T3_HTML_EMBED_INSTRUCTIONS, "stack multiple independent embeds");

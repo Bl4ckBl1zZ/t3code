@@ -111,6 +111,31 @@ export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationM
 export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
+/**
+ * Per-provider-instance model visibility and ordering, keyed by
+ * `ProviderInstanceId` (the default instance for a driver uses the driver kind
+ * as its id, so `"hermes"`, `"codex"`, `"claudeAgent"`, …).
+ *
+ * Server-authoritative, because every client renders the same picker: hiding a
+ * model in the desktop app has to hide it in the browser and on mobile too.
+ * This lived in `ClientSettings` originally, which meant one copy per
+ * localStorage origin, one per desktop state dir, and none at all on mobile —
+ * so the native pickers rendered the full unfiltered catalog.
+ *
+ * The server keeps serving the *unfiltered* catalog in `server.getConfig`;
+ * only the preference travels. Clients filter at the picker, and the settings
+ * editor needs the hidden entries present so it can render their un-hide
+ * toggles.
+ */
+export const ProviderModelPreferences = Schema.Record(
+  ProviderInstanceId,
+  Schema.Struct({
+    hiddenModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+    modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  }),
+);
+export type ProviderModelPreferences = typeof ProviderModelPreferences.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   // Timelines fold a settled turn behind "Worked for …" and keep only the last
   // entry of a work group, which reads well for a finished turn but hides the
@@ -164,15 +189,21 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  providerModelPreferences: Schema.Record(
-    ProviderInstanceId,
-    Schema.Struct({
-      hiddenModels: Schema.Array(Schema.String).pipe(
-        Schema.withDecodingDefault(Effect.succeed([])),
-      ),
-      modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * @deprecated Migration shim only — the live value is
+   * `ServerSettings.providerModelPreferences`.
+   *
+   * Retained under the original key so the one-time upload in
+   * `migrateLegacyProviderModelPreferences` can still find what this device
+   * wrote before the setting became server-authoritative; decoding it away
+   * would silently discard every hide the user had already configured. The
+   * migration clears it once the server has the value, and
+   * `mergeEnvironmentSettings` always resolves this key from the server so a
+   * stale copy can never shadow the synced one.
+   */
+  providerModelPreferences: ProviderModelPreferences.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
@@ -902,6 +933,16 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  providerModelPreferences: ProviderModelPreferences.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // Set once the client has copied a pre-sync, device-local
+  // `providerModelPreferences` up to the server. Without the marker every
+  // client would re-upload its own stale copy on every boot and clobber the
+  // others; see `migrateLegacyProviderModelPreferences`.
+  providerModelPreferencesMigrated: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Proactive mode shipped as opt-out, but every Hermes instance created
   // before that has `proactiveEnabled: false` written into its config blob by
@@ -1074,6 +1115,10 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-map replacement, for the same reason as `providerInstances`: the web
+  // settings editor always sends a fully-formed map.
+  providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
+  providerModelPreferencesMigrated: Schema.optionalKey(Schema.Boolean),
   hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
   projectFileBackfillApplied: Schema.optionalKey(Schema.Boolean),
 });
@@ -1104,19 +1149,8 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
-  providerModelPreferences: Schema.optionalKey(
-    Schema.Record(
-      ProviderInstanceId,
-      Schema.Struct({
-        hiddenModels: Schema.Array(Schema.String).pipe(
-          Schema.withDecodingDefault(Effect.succeed([])),
-        ),
-        modelOrder: Schema.Array(Schema.String).pipe(
-          Schema.withDecodingDefault(Effect.succeed([])),
-        ),
-      }),
-    ),
-  ),
+  /** @deprecated Migration shim — patched only to clear the legacy copy. */
+  providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),

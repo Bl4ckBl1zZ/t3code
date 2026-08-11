@@ -1019,6 +1019,8 @@ struct FeatureRootModelTests {
                 "threadId": .string("thread-v2"),
                 "ordinal": .number(1),
                 "status": .string("running"),
+                // Non-null in the contract, so the reducer's decode requires it.
+                "userMessageId": .string("message-1"),
                 "requestedAt": .string("2026-07-31T20:00:00.000Z"),
                 "startedAt": .string("2026-07-31T20:00:01.000Z"),
                 "completedAt": .null,

@@ -312,6 +312,152 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         )
     }
 
+    // MARK: - Background capsule
+
+    func testOneTaskReportsTimeAndSeveralReportACount() {
+        let solo = summary([backgroundCommand(id: "a", taskID: "t1")], after: 30_000)
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleLabel(
+                solo, nowMilliseconds: Self.startedAtMilliseconds + 30_000
+            ),
+            "30s"
+        )
+
+        let several = summary(
+            (1...3).map { backgroundCommand(id: "c-\($0)", taskID: "t-\($0)") }, after: 30_000
+        )
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleLabel(
+                several, nowMilliseconds: Self.startedAtMilliseconds + 30_000
+            ),
+            "3"
+        )
+    }
+
+    func testASingleDeadlineCountsDownAndFillsItsRing() {
+        let capsule = summary([backgroundCommand(id: "a", timeoutMs: 120_000)], after: 30_000)
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleLabel(
+                capsule, nowMilliseconds: Self.startedAtMilliseconds + 30_000
+            ),
+            "1m 30s"
+        )
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleGlyph(
+                capsule, nowMilliseconds: Self.startedAtMilliseconds + 30_000
+            ),
+            .deadline(0.25)
+        )
+    }
+
+    func testAPrintingCommandOutranksAParkedMonitorForTheGlyph() {
+        let capsule = summary(
+            [
+                backgroundCommand(id: "sleeping", taskID: "t1", waitKind: "monitor"),
+                backgroundCommand(id: "printing", taskID: "t2", output: "step 1\n"),
+            ],
+            after: 5_000
+        )
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleGlyph(
+                capsule, nowMilliseconds: Self.startedAtMilliseconds + 5_000
+            ),
+            .command
+        )
+    }
+
+    func testAFailureLingersThenClears() {
+        let failed = backgroundCommand(
+            id: "a", status: "failed", completedAt: Self.startedTimestamp, exitCode: 1
+        )
+        let commands = ThreadDetailsBackgroundTasks.backgroundCommands([failed])
+
+        let lingering = ThreadDetailsBackgroundTasks.summary(
+            commands: commands, nowMilliseconds: Self.startedAtMilliseconds + 2_000
+        )
+        XCTAssertTrue(lingering.reportsOutcome)
+        XCTAssertEqual(lingering.outcome?.tone, .danger)
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleLabel(
+                lingering, nowMilliseconds: Self.startedAtMilliseconds + 2_000
+            ),
+            "exit 1"
+        )
+        // The row behind the capsule is the command that failed, so the tap has
+        // somewhere to land.
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleProcesses(
+                commands: commands, nowMilliseconds: Self.startedAtMilliseconds + 2_000
+            ).first?.command.id,
+            "a"
+        )
+
+        let expired = ThreadDetailsBackgroundTasks.summary(
+            commands: commands, nowMilliseconds: Self.startedAtMilliseconds + 10_000
+        )
+        XCTAssertTrue(expired.isEmpty)
+    }
+
+    func testACleanExitNeverLingers() {
+        let done = backgroundCommand(
+            id: "a", status: "completed", completedAt: Self.startedTimestamp, exitCode: 0
+        )
+        let capsule = summary([done], after: 1_000)
+        XCTAssertTrue(capsule.isEmpty)
+    }
+
+    /// A command that was killed reads as a failure in a status field and means
+    /// the opposite thing, so it is toned as a warning and named for what
+    /// happened to it.
+    func testWorkThatNeverGotToFinishIsNotReportedAsAFailure() {
+        let killed = backgroundCommand(
+            id: "a",
+            status: "failed",
+            completedAt: Self.startedTimestamp,
+            exitCode: 137,
+            exitReason: "killed"
+        )
+        let capsule = summary([killed], after: 1_000)
+        XCTAssertEqual(capsule.outcome?.tone, .warning)
+        XCTAssertEqual(capsule.outcome?.label, "stopped")
+    }
+
+    func testLiveWorkOutranksAFailureThatHasAlreadyBeenSuperseded() {
+        let failed = backgroundCommand(
+            id: "old", status: "failed", completedAt: Self.startedTimestamp, exitCode: 1
+        )
+        let running = backgroundCommand(id: "new", taskID: "t2")
+        let capsule = summary([failed, running], after: 2_000)
+        XCTAssertFalse(capsule.reportsOutcome)
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleLabel(
+                capsule, nowMilliseconds: Self.startedAtMilliseconds + 2_000
+            ),
+            "2s"
+        )
+    }
+
+    func testTheCapsuleTicksForALingeringFailureAndCoarsensForOldWork() {
+        let failed = backgroundCommand(
+            id: "a", status: "failed", completedAt: Self.startedTimestamp, exitCode: 1
+        )
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleTickSeconds(
+                summary([failed], after: 1_000),
+                nowMilliseconds: Self.startedAtMilliseconds + 1_000
+            ),
+            1
+        )
+
+        let old = summary([backgroundCommand(id: "b", taskID: "t1")], after: 20 * 60_000)
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleTickSeconds(
+                old, nowMilliseconds: Self.startedAtMilliseconds + 20 * 60_000
+            ),
+            30
+        )
+    }
+
     // MARK: - Automations
 
     func testOnlyAutomationsBoundToThisThreadAreListed() {
@@ -457,7 +603,9 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         pausedMs: Int? = nil,
         waitKind: String? = nil,
         waitingOnTaskID: String? = nil,
-        completedAt: String? = nil
+        completedAt: String? = nil,
+        exitCode: Int? = nil,
+        exitReason: String? = nil
     ) -> OrchestrationV2TurnItem {
         var extra: [String: JSONValue] = [
             "input": .string("pnpm vitest run apps/web"),
@@ -474,8 +622,20 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         if let pausedMs { extra["pausedMs"] = .number(Double(pausedMs)) }
         if let waitKind { extra["waitKind"] = .string(waitKind) }
         if let waitingOnTaskID { extra["waitingOnTaskId"] = .string(waitingOnTaskID) }
+        if let exitCode { extra["exitCode"] = .number(Double(exitCode)) }
+        if let exitReason { extra["exitReason"] = .string(exitReason) }
         return V2Fixture.turnItem(
             id: id, type: "command_execution", status: status, extra: extra
+        )
+    }
+
+    private func summary(
+        _ items: [OrchestrationV2TurnItem],
+        after offsetMilliseconds: Int
+    ) -> ThreadBackgroundSummary {
+        ThreadDetailsBackgroundTasks.summary(
+            commands: ThreadDetailsBackgroundTasks.backgroundCommands(items),
+            nowMilliseconds: Self.startedAtMilliseconds + offsetMilliseconds
         )
     }
 

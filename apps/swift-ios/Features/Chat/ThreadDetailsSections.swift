@@ -648,6 +648,94 @@ public struct ThreadDetailsBackgroundView: Equatable, Sendable {
     public let waitingOnTaskID: String?
 }
 
+/// Why a stopped background command is worth holding on screen for a moment.
+///
+/// A clean exit has no tone and never lingers: it already landed in the
+/// transcript, and a bar that narrated every success would be chrome within a
+/// minute. What the bar exists to catch is the opposite case — work that ended
+/// badly while the reader was looking somewhere else.
+public enum ThreadBackgroundOutcomeTone: Equatable, Sendable {
+    case danger
+    case warning
+}
+
+public struct ThreadBackgroundOutcome: Equatable, Sendable {
+    public let tone: ThreadBackgroundOutcomeTone
+    public let label: String
+    /// Epoch milliseconds it settled, which is when the linger window opens.
+    public let endedAtMilliseconds: Int
+
+    public init(tone: ThreadBackgroundOutcomeTone, label: String, endedAtMilliseconds: Int) {
+        self.tone = tone
+        self.label = label
+        self.endedAtMilliseconds = endedAtMilliseconds
+    }
+}
+
+/// What the glyph on the collapsed capsule draws. Resolved once so the glyph and
+/// the label cannot disagree about which state the capsule is reporting.
+public enum ThreadBackgroundCapsuleGlyph: Equatable, Sendable {
+    /// A command whose output is readable while it runs.
+    case command
+    /// A declared deadline, with progress toward it when it is knowable.
+    case deadline(Double?)
+    /// The agent is parked until a condition passes.
+    case asleep
+    /// Nothing is live; this is the ending still inside its linger window.
+    case outcome(ThreadBackgroundOutcomeTone)
+}
+
+/// The whole of what the transcript bar's right-hand capsule knows, derived in
+/// one pass so a glance at the capsule and a read of the sheet behind it agree.
+///
+/// The desktop equivalent is the strip above the composer
+/// (apps/web/src/components/chat/BackgroundProcessesControl.tsx), which leads
+/// with a count and the oldest process's elapsed time. This leads with time when
+/// there is one process and a count when there are several, for the reason given
+/// on ``ThreadDetailsBackgroundTasks/capsuleLabel(_:nowMilliseconds:)``.
+public struct ThreadBackgroundSummary: Equatable, Sendable {
+    /// Live processes, monitors already folded into what they watch — the same
+    /// count `orchestrationV2BackgroundProcessCount` gives the desktop sidebar.
+    public let count: Int
+    /// The most active variant present; see `dominantVariant`.
+    public let variant: ThreadDetailsBackgroundVariant
+    /// Every live process is paused, so the capsule should stop pulsing.
+    public let paused: Bool
+    /// The only live process, when there is exactly one.
+    public let solitary: ThreadDetailsBackgroundView?
+    /// A recent bad ending still inside its linger window. Only consulted when
+    /// nothing is live: running work is the headline, and a failure that has
+    /// already been superseded by more work is history.
+    public let outcome: ThreadBackgroundOutcome?
+
+    public init(
+        count: Int,
+        variant: ThreadDetailsBackgroundVariant,
+        paused: Bool,
+        solitary: ThreadDetailsBackgroundView?,
+        outcome: ThreadBackgroundOutcome?
+    ) {
+        self.count = count
+        self.variant = variant
+        self.paused = paused
+        self.solitary = solitary
+        self.outcome = outcome
+    }
+
+    /// A thread with no background work at all, for the path that skips the
+    /// clock entirely because there is nothing on it that time could change.
+    public static let empty = ThreadBackgroundSummary(
+        count: 0, variant: .tail, paused: false, solitary: nil, outcome: nil
+    )
+
+    /// Nothing is running and nothing ended badly recently, so the capsule has
+    /// nothing to report and leaves rather than sitting there empty.
+    public var isEmpty: Bool { count == 0 && outcome == nil }
+
+    /// An ending only speaks for the thread once the work has actually stopped.
+    public var reportsOutcome: Bool { count == 0 && outcome != nil }
+}
+
 public enum ThreadDetailsBackgroundTasks {
     /// Same ceiling as the ports section, for the same reason.
     public static let visibleLimit = 4
@@ -675,7 +763,24 @@ public enum ThreadDetailsBackgroundTasks {
     public static func liveProcesses(
         _ items: [OrchestrationV2TurnItem]
     ) -> [ThreadDetailsBackgroundProcess] {
-        let live = items.compactMap(ThreadDetailsBackgroundCommand.init).filter(isLiveInBackground)
+        liveProcesses(commands: backgroundCommands(items))
+    }
+
+    /// Every background command in the thread, finished ones included.
+    ///
+    /// The capsule needs the terminal ones to report a recent failure, and
+    /// unpacking the payload once here keeps a per-tick re-render from
+    /// re-matching every turn item in the thread.
+    public static func backgroundCommands(
+        _ items: [OrchestrationV2TurnItem]
+    ) -> [ThreadDetailsBackgroundCommand] {
+        items.compactMap(ThreadDetailsBackgroundCommand.init).filter(isBackgroundProcessItem)
+    }
+
+    public static func liveProcesses(
+        commands: [ThreadDetailsBackgroundCommand]
+    ) -> [ThreadDetailsBackgroundProcess] {
+        let live = commands.filter(isLiveInBackground)
         let monitors = live.filter { $0.liveness.waitKind == monitorWaitKind }
 
         var foldedMonitorIDs: Set<String> = []
@@ -817,6 +922,224 @@ public enum ThreadDetailsBackgroundTasks {
     /// Tick cadence matched to the precision on screen — no wasted renders.
     public static func elapsedTickSeconds(_ milliseconds: Int) -> Int {
         milliseconds < 10 * 60 * 1000 ? 1 : 30
+    }
+
+    // MARK: Collapsed capsule
+
+    /// How long a bad ending stays on the transcript bar after the work stops.
+    ///
+    /// Long enough to catch an eye already on the screen, short enough that the
+    /// bar never becomes a place where old news accumulates. The failure keeps
+    /// its permanent home in the transcript either way.
+    public static let outcomeLingerMilliseconds = 6000
+
+    /// A command's ending in the terms a reader would act on, mirroring
+    /// `backgroundProcessOutcome` in packages/shared/src/backgroundProcess.ts.
+    ///
+    /// Returns nil for a clean exit. The distinction that matters most is
+    /// between a command that failed and one that never got to finish — those
+    /// look identical in a status field and mean opposite things.
+    public static func outcome(_ command: ThreadDetailsBackgroundCommand) -> ThreadBackgroundOutcome? {
+        guard command.item.status.isTerminal,
+              let endedAt = ThreadDetailsTimestamp.epochMilliseconds(command.item.base.completedAt)
+        else { return nil }
+
+        switch command.liveness.exitReason {
+        case "unknown":
+            return ThreadBackgroundOutcome(
+                tone: .warning, label: "outcome unknown", endedAtMilliseconds: endedAt
+            )
+        case "killed":
+            return ThreadBackgroundOutcome(
+                tone: .warning, label: "stopped", endedAtMilliseconds: endedAt
+            )
+        case "timeout":
+            return ThreadBackgroundOutcome(
+                tone: .warning, label: "timed out", endedAtMilliseconds: endedAt
+            )
+        default:
+            break
+        }
+
+        if command.item.status == .cancelled || command.item.status == .interrupted {
+            return ThreadBackgroundOutcome(
+                tone: .warning, label: "stopped", endedAtMilliseconds: endedAt
+            )
+        }
+        if command.item.status == .failed || (command.exitCode ?? 0) != 0 {
+            return ThreadBackgroundOutcome(
+                tone: .danger,
+                label: command.exitCode.map { "exit \($0)" } ?? "failed",
+                endedAtMilliseconds: endedAt
+            )
+        }
+        return nil
+    }
+
+    /// The most recent bad ending still inside its window, carrying the command
+    /// it came from so a tap on the capsule can land on that command rather than
+    /// on an empty sheet.
+    ///
+    /// The window is a half-open range rather than a `<` on the elapsed gap so
+    /// that a clock running behind the server cannot resurrect an ending from an
+    /// hour ago as though it had just happened.
+    public static func recentOutcomeCommand(
+        commands: [ThreadDetailsBackgroundCommand],
+        nowMilliseconds: Int
+    ) -> (command: ThreadDetailsBackgroundCommand, outcome: ThreadBackgroundOutcome)? {
+        commands
+            .compactMap { command in outcome(command).map { (command: command, outcome: $0) } }
+            .filter {
+                (0..<outcomeLingerMilliseconds).contains(
+                    nowMilliseconds - $0.outcome.endedAtMilliseconds
+                )
+            }
+            .max { $0.outcome.endedAtMilliseconds < $1.outcome.endedAtMilliseconds }
+    }
+
+    public static func recentOutcome(
+        commands: [ThreadDetailsBackgroundCommand],
+        nowMilliseconds: Int
+    ) -> ThreadBackgroundOutcome? {
+        recentOutcomeCommand(commands: commands, nowMilliseconds: nowMilliseconds)?.outcome
+    }
+
+    /// What the capsule's sheet lists. Everything live; or, when nothing is
+    /// live, the one command whose ending the capsule is currently reporting.
+    public static func capsuleProcesses(
+        commands: [ThreadDetailsBackgroundCommand],
+        nowMilliseconds: Int
+    ) -> [ThreadDetailsBackgroundProcess] {
+        let live = liveProcesses(commands: commands)
+        guard live.isEmpty,
+              let recent = recentOutcomeCommand(commands: commands, nowMilliseconds: nowMilliseconds)
+        else { return live }
+        return [ThreadDetailsBackgroundProcess(command: recent.command, monitor: nil)]
+    }
+
+    /// Tail beats deadline beats monitor.
+    ///
+    /// The capsule has room for one glyph and should spend it on the most active
+    /// thing happening: a command that is printing is the strongest signal the
+    /// thread is alive, and a monitor only speaks for the thread once everything
+    /// else has gone quiet.
+    private static func dominantVariant(
+        _ views: [ThreadDetailsBackgroundView]
+    ) -> ThreadDetailsBackgroundVariant {
+        if views.contains(where: { $0.variant == .tail }) { return .tail }
+        if views.contains(where: { $0.variant == .deadline }) { return .deadline }
+        return views.isEmpty ? .tail : .monitor
+    }
+
+    public static func summary(
+        commands: [ThreadDetailsBackgroundCommand],
+        nowMilliseconds: Int
+    ) -> ThreadBackgroundSummary {
+        let views = liveProcesses(commands: commands)
+            .map { resolveView($0.command, nowMilliseconds: nowMilliseconds) }
+        return ThreadBackgroundSummary(
+            count: views.count,
+            variant: dominantVariant(views),
+            paused: !views.isEmpty && views.allSatisfy(\.paused),
+            solitary: views.count == 1 ? views[0] : nil,
+            outcome: recentOutcome(commands: commands, nowMilliseconds: nowMilliseconds)
+        )
+    }
+
+    /// Milliseconds left on a declared deadline, or nil when none was declared.
+    public static func remainingMilliseconds(
+        _ view: ThreadDetailsBackgroundView,
+        nowMilliseconds: Int
+    ) -> Int? {
+        guard let timeout = view.timeoutMilliseconds else { return nil }
+        return max(0, timeout - elapsedMilliseconds(view, nowMilliseconds: nowMilliseconds))
+    }
+
+    /// 0–1 progress toward a declared deadline. Nil without one, because a bar
+    /// that invents its own scale is a lie the reader cannot check.
+    public static func deadlineFraction(
+        _ view: ThreadDetailsBackgroundView,
+        nowMilliseconds: Int
+    ) -> Double? {
+        guard let timeout = view.timeoutMilliseconds, timeout > 0 else { return nil }
+        let elapsed = elapsedMilliseconds(view, nowMilliseconds: nowMilliseconds)
+        return min(1, max(0, Double(elapsed) / Double(timeout)))
+    }
+
+    public static func capsuleGlyph(
+        _ summary: ThreadBackgroundSummary,
+        nowMilliseconds: Int
+    ) -> ThreadBackgroundCapsuleGlyph {
+        if summary.reportsOutcome, let outcome = summary.outcome {
+            return .outcome(outcome.tone)
+        }
+        switch summary.variant {
+        case .tail:
+            return .command
+        case .deadline:
+            return .deadline(
+                summary.solitary.flatMap { deadlineFraction($0, nowMilliseconds: nowMilliseconds) }
+            )
+        case .monitor:
+            return .asleep
+        }
+    }
+
+    /// One process reports time; several report a count.
+    ///
+    /// A bare "1" is the least useful thing a capsule this size could say — the
+    /// glyph already told you a command is running. With several, their clocks
+    /// disagree and no one of them speaks for the set, so the count is the only
+    /// honest summary. A deadline counts down, everything else counts up.
+    public static func capsuleLabel(
+        _ summary: ThreadBackgroundSummary,
+        nowMilliseconds: Int
+    ) -> String {
+        if summary.reportsOutcome, let outcome = summary.outcome { return outcome.label }
+        guard let solitary = summary.solitary else { return "\(summary.count)" }
+        if let remaining = remainingMilliseconds(solitary, nowMilliseconds: nowMilliseconds) {
+            return formatElapsed(remaining)
+        }
+        return formatElapsed(elapsedMilliseconds(solitary, nowMilliseconds: nowMilliseconds))
+    }
+
+    /// Spoken form. The visible label is a bare duration or digit, which reads as
+    /// nonsense without the noun the glyph is carrying.
+    public static func capsuleAccessibilityLabel(
+        _ summary: ThreadBackgroundSummary,
+        nowMilliseconds: Int
+    ) -> String {
+        if summary.reportsOutcome, let outcome = summary.outcome {
+            return "Background task \(outcome.label). Show background tasks"
+        }
+        let label = capsuleLabel(summary, nowMilliseconds: nowMilliseconds)
+        var lead: String
+        if let solitary = summary.solitary {
+            // A monitor is named by what it is doing, the same way its row is.
+            lead = solitary.variant == .monitor ? "Waiting on a condition" : "1 background task"
+            lead += remainingMilliseconds(solitary, nowMilliseconds: nowMilliseconds) == nil
+                ? ", running \(label)"
+                : ", \(label) left"
+        } else {
+            lead = "\(summary.count) background tasks"
+        }
+        if summary.paused { lead += ", paused" }
+        return "\(lead). Show background tasks"
+    }
+
+    /// Tick cadence for the capsule, matched to what is actually moving on it.
+    public static func capsuleTickSeconds(
+        _ summary: ThreadBackgroundSummary,
+        nowMilliseconds: Int
+    ) -> Int {
+        // A linger window has to close on time, or a failure would sit on the
+        // bar until some unrelated change forced a re-render.
+        if summary.outcome != nil { return 1 }
+        guard let solitary = summary.solitary else { return 30 }
+        if solitary.paused { return 30 }
+        // A ring that only advanced twice a minute would read as stuck.
+        if solitary.variant == .deadline { return 1 }
+        return elapsedTickSeconds(elapsedMilliseconds(solitary, nowMilliseconds: nowMilliseconds))
     }
 }
 

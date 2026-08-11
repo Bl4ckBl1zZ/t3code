@@ -416,8 +416,9 @@ it.effect("leaves a runless rollback marker so the discarded work stays visible"
       scopeId,
       restoredFileCount: 3,
       rolledBackRunCount: 2,
-      // Past every surviving item, ahead of the next run's first item.
-      ordinal: 100,
+      // Past every surviving item, ahead of the next run's first item: the
+      // head of the discarded run's runOrdinal * 1_000_000 position band.
+      ordinal: 1_000_000,
     });
   }).pipe(Effect.provide(testLayer));
 });

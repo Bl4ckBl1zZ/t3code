@@ -204,7 +204,15 @@ export function mergeEnvironmentSettings(
   serverSettings: ServerSettings,
   clientSettings: ClientSettings,
 ): UnifiedSettings {
-  return { ...serverSettings, ...clientSettings };
+  return {
+    ...serverSettings,
+    ...clientSettings,
+    // `providerModelPreferences` exists on both structs: it is server-owned
+    // now, but `ClientSettings` still carries the pre-sync copy so the
+    // migration can find it. Client keys win in the spread above, so without
+    // this the stale device-local map would shadow the synced one forever.
+    providerModelPreferences: serverSettings.providerModelPreferences,
+  };
 }
 
 function useMergedSettings<T>(

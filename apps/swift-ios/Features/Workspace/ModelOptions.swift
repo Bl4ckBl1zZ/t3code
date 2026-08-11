@@ -105,7 +105,13 @@ public enum ModelOptions {
         for provider in config?.providers ?? [] {
             guard isUsable(provider), matches(provider.driver, scope) else { continue }
             let providerLabel = displayLabel(provider)
-            for model in provider.models {
+            // This builder reads the raw config rather than the mapped
+            // `FeatureProvider` catalog, so it has to apply model visibility
+            // itself — automations would otherwise still offer hidden models.
+            let visibleModels = config?.settings?
+                .providerModelPreferences[provider.instanceId]?
+                .apply(to: provider.models) ?? provider.models
+            for model in visibleModels {
                 put(
                     ModelOption(
                         key: "\(provider.instanceId):\(model.slug)",

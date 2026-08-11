@@ -94,12 +94,36 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
     return TurnItemPositionStoreV2.of({
       allocate,
       normalize: (item, runOrdinal) =>
-        allocate({
-          threadId: item.threadId,
-          turnItemId: item.id,
-          runId: item.runId,
-          ...(runOrdinal === undefined ? {} : { runOrdinal }),
-        }).pipe(Effect.map((ordinal) => (item.ordinal === ordinal ? item : { ...item, ordinal }))),
+        Effect.gen(function* () {
+          // A runless item arriving with a positive ordinal was positioned by
+          // its producer — a legacy import carrying its original order, or a
+          // rollback marker aimed past the run it discarded. Allocating a
+          // fresh slot from the runless band would drag it to the top of the
+          // thread, so record the producer's ordinal instead.
+          if (item.runId === null && item.ordinal > 0) {
+            yield* sql`
+              INSERT INTO orchestration_v2_turn_item_positions (thread_id, turn_item_id, ordinal)
+              VALUES (${item.threadId}, ${item.id}, ${item.ordinal})
+              ON CONFLICT(thread_id, turn_item_id) DO NOTHING
+            `.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TurnItemPositionStoreError({
+                    threadId: item.threadId,
+                    turnItemId: item.id,
+                    cause,
+                  }),
+              ),
+            );
+          }
+          const ordinal = yield* allocate({
+            threadId: item.threadId,
+            turnItemId: item.id,
+            runId: item.runId,
+            ...(runOrdinal === undefined ? {} : { runOrdinal }),
+          });
+          return item.ordinal === ordinal ? item : { ...item, ordinal };
+        }),
     });
   }),
 );
