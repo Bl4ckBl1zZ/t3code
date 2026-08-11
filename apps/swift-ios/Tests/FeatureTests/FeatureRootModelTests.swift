@@ -1061,6 +1061,58 @@ struct FeatureRootModelTests {
 
         #expect(NativeThreadDetailReducer.apply(event, to: projection).result == .refresh)
     }
+
+    @Test
+    func observingAnUnchangedThreadListKeepsTheExistingChangeRequestStream() async throws {
+        let client = FeatureClientStub()
+        let model = testRootModel(client: client)
+
+        model.observeChangeRequests(threadIDs: ["thread-a", "thread-b"])
+        try await waitUntil { client.changeRequestCalls.count == 1 }
+
+        model.observeChangeRequests(threadIDs: ["thread-a", "thread-b"])
+        for _ in 0..<10 { await Task.yield() }
+
+        #expect(client.changeRequestCalls.count == 1)
+    }
+
+    @Test
+    func changeRequestRestartsAreSeededWithRetainedState() async throws {
+        let client = FeatureClientStub()
+        let model = testRootModel(client: client)
+        let merged = FeaturePullRequest(number: 7, title: "Ship it", state: "merged")
+
+        model.observeChangeRequests(threadIDs: ["thread-a", "thread-b"])
+        try await waitUntil { client.changeRequestCalls.count == 1 }
+        #expect(client.changeRequestCalls[0].seed.isEmpty)
+
+        client.emitChangeRequests(["thread-a": merged])
+        try await waitUntil { model.changeRequestsByThreadID["thread-a"] == merged }
+
+        // A membership change restarts the stream. The state the model already
+        // holds must ride along as the seed, or the row settled by this merged
+        // PR bounces back to Active until the new stream's snapshot arrives —
+        // which reorders the list, restarts the stream again, and loops.
+        model.observeChangeRequests(threadIDs: ["thread-a", "thread-b", "thread-c"])
+        try await waitUntil { client.changeRequestCalls.count == 2 }
+        #expect(client.changeRequestCalls[1].seed == ["thread-a": merged])
+        #expect(model.changeRequestsByThreadID == ["thread-a": merged])
+
+        // Dropping a thread from observation drops it from the seed too.
+        model.observeChangeRequests(threadIDs: ["thread-b", "thread-c"])
+        try await waitUntil { client.changeRequestCalls.count == 3 }
+        #expect(client.changeRequestCalls[2].seed.isEmpty)
+    }
+
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool
+    ) async throws {
+        for _ in 0..<200 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for the model to apply the emission")
+    }
 }
 
 @MainActor
@@ -1202,6 +1254,23 @@ private final class FeatureClientStub: FeatureClient {
     var loadEarlierCallCount = 0
     var resolvedInputID: String?
     var resolvedInputAnswers: [String: FeatureInputAnswer]?
+    var changeRequestCalls: [(threadIDs: [String], seed: [String: FeaturePullRequest])] = []
+    private var changeRequestContinuations: [AsyncStream<[String: FeaturePullRequest]>.Continuation] = []
+
+    func threadChangeRequests(
+        threadIDs: [String],
+        seed: [String: FeaturePullRequest]
+    ) -> AsyncStream<[String: FeaturePullRequest]> {
+        changeRequestCalls.append((threadIDs: threadIDs, seed: seed))
+        let pair = AsyncStream<[String: FeaturePullRequest]>.makeStream()
+        changeRequestContinuations.append(pair.continuation)
+        return pair.stream
+    }
+
+    /// Emits on the most recently opened change-request stream.
+    func emitChangeRequests(_ value: [String: FeaturePullRequest]) {
+        changeRequestContinuations.last?.yield(value)
+    }
 
     init() {
         let pair = AsyncStream<FeatureEvent>.makeStream()

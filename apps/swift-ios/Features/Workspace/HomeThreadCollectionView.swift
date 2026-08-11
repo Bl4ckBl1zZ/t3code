@@ -226,9 +226,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 }
                 primaryAction.image = UIImage(systemName: "pin.slash")
                 primaryAction.backgroundColor = .systemBlue
-            } else if parent.workspace == .chat {
+            } else if parent.workspace == .chat || !thread.canShelveSettled {
                 // Chat has no parking: a conversation is either there or
-                // deleted, so the swipe offers nothing beside Delete.
+                // deleted, so the swipe offers nothing beside Delete. The same
+                // goes for a thread the Settled shelf may not claim — an
+                // environment without the capability, or the Work Main thread,
+                // whose settle command the server refuses.
                 let configuration = UISwipeActionsConfiguration(actions: [delete])
                 configuration.performsFirstActionWithFullSwipe = false
                 return configuration
@@ -407,15 +410,17 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 isArchived: isArchived,
                 canTogglePin: thread.canTogglePin,
                 isPinned: thread.pinnedAt != nil,
-                isSettled: thread.isEffectivelySettled(
+                isSettled: thread.canShelveSettled && thread.isEffectivelySettled(
                     at: now,
                     changeRequestState: parent.changeRequests[thread.id]?.state
                 ),
-                isSnoozed: thread.isEffectivelySnoozed(at: now),
+                isSnoozed: thread.canShelveSnoozed && thread.isEffectivelySnoozed(at: now),
                 canSnooze: thread.state != .queued
                     && thread.state != .waitingForApproval
                     && thread.state != .waitingForInput,
                 offersParking: parent.workspace != .chat,
+                settlementSupported: thread.canShelveSettled,
+                snoozeSupported: thread.canShelveSnoozed,
                 titleRegenerationSupported: thread.canRegenerateTitle,
                 isRegeneratingTitle: thread.isRegeneratingTitle
             )

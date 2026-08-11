@@ -74,6 +74,85 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func settlementRequiresTheEnvironmentCapability() {
+        // Same resting age, but the environment never reported the settlement
+        // capability (old server, or a descriptor still loading): the shelf may
+        // not claim the row, because the user could not reopen it there.
+        let capable = thread(id: "capable", created: -400_000, updated: -300_000)
+        let oldServer = thread(
+            id: "old-server",
+            created: -400_000,
+            updated: -300_000,
+            supportsSettlement: nil
+        )
+        let explicitOldServer = thread(
+            id: "explicit-old-server",
+            created: -10,
+            updated: -10,
+            isSettled: true,
+            supportsSettlement: false
+        )
+
+        let index = makeIndex([capable, oldServer, explicitOldServer])
+
+        #expect(index.settled.map(\.id) == ["capable"])
+        #expect(Set(index.active.map(\.id)) == ["old-server", "explicit-old-server"])
+    }
+
+    @Test
+    func settlementBoundaryTicksOnlyForCapableEnvironments() {
+        let capable = thread(id: "capable", created: -200, updated: -100)
+        let oldServer = thread(
+            id: "old-server",
+            created: -200,
+            updated: -100,
+            supportsSettlement: nil
+        )
+
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: [capable], after: now) != nil)
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: [oldServer], after: now) == nil)
+    }
+
+    @Test
+    func snoozeRequiresTheEnvironmentCapability() {
+        var snoozed = thread(id: "snoozed", created: -100, updated: -50)
+        snoozed.snoozedUntil = now.addingTimeInterval(3_600)
+        var oldServer = thread(
+            id: "old-server",
+            created: -100,
+            updated: -50,
+            supportsSnooze: nil
+        )
+        oldServer.snoozedUntil = now.addingTimeInterval(3_600)
+
+        let index = makeIndex([snoozed, oldServer])
+
+        #expect(index.snoozed.map(\.id) == ["snoozed"])
+        #expect(index.active.map(\.id) == ["old-server"])
+    }
+
+    @Test
+    func workMainThreadNeverParks() {
+        // The server refuses to settle or snooze the Work inbox's Main thread;
+        // shelving it client-side would hide a row that cannot be brought back
+        // by the same affordances.
+        var main = thread(
+            id: "main",
+            created: -400_000,
+            updated: -300_000,
+            isSettled: true,
+            workInboxRole: "main"
+        )
+        main.snoozedUntil = now.addingTimeInterval(3_600)
+
+        let index = makeIndex([main])
+
+        #expect(index.active.map(\.id) == ["main"])
+        #expect(index.settled.isEmpty)
+        #expect(index.snoozed.isEmpty)
+    }
+
+    @Test
     func explicitActiveOverridePreventsAutoSettlement() {
         var reopened = thread(
             id: "reopened",
@@ -527,7 +606,10 @@ struct DailyUXSidebarTests {
         created: TimeInterval,
         updated: TimeInterval,
         state: FeatureThreadState = .idle,
-        isSettled: Bool = false
+        isSettled: Bool = false,
+        supportsSettlement: Bool? = true,
+        supportsSnooze: Bool? = true,
+        workInboxRole: String? = nil
     ) -> FeatureThread {
         FeatureThread(
             id: id,
@@ -537,7 +619,10 @@ struct DailyUXSidebarTests {
             updatedAt: now.addingTimeInterval(updated),
             state: state,
             isSettled: isSettled,
-            lastActivityAt: now.addingTimeInterval(updated)
+            lastActivityAt: now.addingTimeInterval(updated),
+            supportsSettlement: supportsSettlement,
+            supportsSnooze: supportsSnooze,
+            workInboxRole: workInboxRole
         )
     }
 }

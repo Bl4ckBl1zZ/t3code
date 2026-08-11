@@ -157,7 +157,16 @@ public protocol FeatureClient: AnyObject {
     /// themselves with the PR rather than a generated branch name, and the
     /// server holds one cached status per workspace, so the caller scopes this
     /// to what is on screen instead of every thread it knows about.
-    func threadChangeRequests(threadIDs: [String]) -> AsyncStream<[String: FeaturePullRequest]>
+    ///
+    /// `seed` is what the caller already knows for these threads. A restarted
+    /// stream starts from it rather than from nothing, so its early emissions
+    /// never claim less than the previous stream had established — a merged PR
+    /// parks its row on the Settled shelf, and forgetting it mid-restart
+    /// bounced the row back to Active until the fresh snapshot arrived.
+    func threadChangeRequests(
+        threadIDs: [String],
+        seed: [String: FeaturePullRequest]
+    ) -> AsyncStream<[String: FeaturePullRequest]>
     /// The host-backed detail (and, where readable, the conversation) for the
     /// change request `number` on the repository this thread's project tracks.
     /// Only offered where the environment reports the `pullRequests` capability.
@@ -427,7 +436,10 @@ public extension FeatureClient {
         throw FeatureCapabilityUnavailable("Source control")
     }
 
-    func threadChangeRequests(threadIDs _: [String]) -> AsyncStream<[String: FeaturePullRequest]> {
+    func threadChangeRequests(
+        threadIDs _: [String],
+        seed _: [String: FeaturePullRequest]
+    ) -> AsyncStream<[String: FeaturePullRequest]> {
         AsyncStream { $0.finish() }
     }
 

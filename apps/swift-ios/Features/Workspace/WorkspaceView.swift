@@ -340,7 +340,13 @@ public struct WorkspaceView: View {
             .map(\.id)
             .filter { model.changeRequestsByThreadID[$0] != nil }
         var seen = Set<String>()
-        return (live + settledWithKnownRequest).filter { seen.insert($0).inserted }
+        // Membership is chosen by list order (the prefix above), but the result
+        // is sorted: `.task(id:)` and the model compare this array, and active
+        // rows reorder on every agent turn — a mere reorder must not read as a
+        // different subscription set and restart every vcs status stream.
+        return (live + settledWithKnownRequest)
+            .filter { seen.insert($0).inserted }
+            .sorted()
     }
 
     @ViewBuilder
