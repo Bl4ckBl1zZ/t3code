@@ -29,7 +29,12 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { ProviderDriverKind, type EnvironmentId, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type EnvironmentId,
+  type ScopedThreadRef,
+  type ThreadId,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -1954,6 +1959,25 @@ export default function Sidebar() {
       );
     },
   });
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
+    target: "thread ID",
+    onCopy: ({ threadId }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ID copied",
+        description: threadId,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
   const { copyToClipboard: copyHandoffScriptToClipboard } = useCopyToClipboard({
     target: "handoff script",
     onCopy: () => {
@@ -3353,6 +3377,7 @@ export default function Sidebar() {
               { id: "mark-unread", label: "Mark unread" },
               { id: "copy-path", label: "Copy path", icon: "copy" },
               ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
+              { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
               { id: "copy-handoff-script", label: "Copy handoff script", icon: "copy" },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
@@ -3446,6 +3471,9 @@ export default function Sidebar() {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
             return;
+          case "copy-thread-id":
+            copyThreadIdToClipboard(threadRef.threadId, { threadId: threadRef.threadId });
+            return;
           case "copy-handoff-script": {
             const loadingToastId = toastManager.add({
               type: "loading",
@@ -3515,6 +3543,7 @@ export default function Sidebar() {
       attemptUnsnooze,
       confirmThreadDelete,
       copyBranchToClipboard,
+      copyThreadIdToClipboard,
       copyPathToClipboard,
       deleteThread,
       handleMultiSelectContextMenu,
