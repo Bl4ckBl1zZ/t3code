@@ -24,7 +24,20 @@ public actor T3Client {
             connector: webSocketConnector,
             connectionWaitTimeout: rpcConnectionWaitTimeout
         ) {
-            let ticket = try await api.webSocketTicket(for: environment)
+            let ticket: WebSocketTicket
+            do {
+                ticket = try await api.webSocketTicket(for: environment)
+            } catch {
+                // A failing mint is retried by the connection loop and looks
+                // identical to socket flapping unless distinguished here.
+                ConnectionLog.logger.error(
+                    """
+                    [conn] ticket-mint-failed env=\(environment.id, privacy: .public) \
+                    error=\(ConnectionLog.describe(error), privacy: .public)
+                    """
+                )
+                throw error
+            }
             var components = URLComponents(
                 url: environment.webSocketBaseURL,
                 resolvingAgainstBaseURL: false
@@ -1586,6 +1599,24 @@ public actor EnvironmentRuntime {
             // Publish the replacement before disconnecting the stale client.
             // Actor methods are reentrant across that await; removing first
             // allowed a concurrent caller to construct a second replacement.
+            var changed: [String] = []
+            if existing.environment.label != environment.label { changed.append("label") }
+            if existing.environment.httpBaseURL != environment.httpBaseURL {
+                changed.append("httpBaseURL")
+            }
+            if existing.environment.webSocketBaseURL != environment.webSocketBaseURL {
+                changed.append("webSocketBaseURL")
+            }
+            if existing.environment.kind != environment.kind { changed.append("kind") }
+            if existing.environment.descriptor != environment.descriptor {
+                changed.append("descriptor")
+            }
+            ConnectionLog.logger.warning(
+                """
+                [conn] client-replaced env=\(environment.id, privacy: .public) \
+                changed=\(changed.joined(separator: ","), privacy: .public)
+                """
+            )
             let replacement = T3Client(
                 environment: environment,
                 credentialStore: credentialStore,

@@ -108,7 +108,8 @@ public final class FeatureRootModel {
         }
     }
 
-    public func reload() async {
+    public func reload(reason: String = "unspecified") async {
+        ConnectionLog.logger.info("[conn] reload reason=\(reason, privacy: .public)")
         do {
             install(try await client.initialSnapshot())
         } catch {
@@ -120,7 +121,7 @@ public final class FeatureRootModel {
 
     public func reloadAfterConnection() async {
         clearDetails()
-        await reload()
+        await reload(reason: "after-connection")
     }
 
     public func pair(endpoint: String, token: String?) async -> Bool {
