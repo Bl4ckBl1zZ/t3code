@@ -607,7 +607,10 @@ extension ThreadDetailsPullRequest: Identifiable {
 
 /// Self-ticking elapsed time. The live set does not change while a command runs,
 /// so a value rendered once by the parent would sit frozen.
-private struct ThreadDetailsBackgroundTaskRow: View {
+///
+/// Shared with the transcript bar's background capsule, which presents these
+/// same rows when tapped.
+struct ThreadDetailsBackgroundTaskRow: View {
     let process: ThreadDetailsBackgroundProcess
 
     var body: some View {
@@ -628,7 +631,7 @@ private struct ThreadDetailsBackgroundTaskRow: View {
                 leading: {
                     // `bg-info` on the web; here the same "a command is running"
                     // blue the composer strip paints, dimmed while paused.
-                    ThreadDetailsStatusDot(color: T3Colors.statusRunning, dimmed: view.paused)
+                    ThreadDetailsStatusDot(color: dotColor(view), dimmed: view.paused)
                 },
                 detail: {
                     ThreadDetailsRowBadge(
@@ -637,6 +640,18 @@ private struct ThreadDetailsBackgroundTaskRow: View {
                     )
                 }
             )
+        }
+    }
+
+    /// The details section only ever lists live work, but the capsule's sheet
+    /// also shows the one command whose ending it is reporting — and a red dot
+    /// is the entire reason that row is still on screen.
+    private func dotColor(_ view: ThreadDetailsBackgroundView) -> Color {
+        guard !view.live else { return T3Colors.statusRunning }
+        switch ThreadDetailsBackgroundTasks.outcome(process.command)?.tone {
+        case .danger: return T3Colors.danger
+        case .warning: return T3Colors.warning
+        case nil: return T3Colors.success
         }
     }
 

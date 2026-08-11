@@ -143,6 +143,27 @@ extension View {
     }
 }
 
+/// Groups sibling glass surfaces so the system can blend them as one material
+/// when they sit near each other, instead of rendering two panes that happen to
+/// be adjacent.
+///
+/// Pre-iOS-26 this is deliberately a passthrough rather than a stack or a group:
+/// a blur material has no such interaction to opt into, and wrapping the content
+/// in anything at all would change the layout on exactly the systems that gain
+/// nothing from it.
+struct T3GlassContainer<Content: View>: View {
+    var spacing: CGFloat?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if #available(iOS 26, *) {
+            GlassEffectContainer(spacing: spacing) { content }
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
     func t3NavigationChrome() -> some View {
         toolbarBackground(T3Colors.sheet, for: .navigationBar)
