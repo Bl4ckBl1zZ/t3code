@@ -187,6 +187,13 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
+    // Whole-map replacement, like `providerInstances`. A deep merge would keep
+    // instance keys the settings editor deleted (it drops an entry once both
+    // its lists are empty) and could union the arrays, so un-hiding a model
+    // would never actually un-hide it.
+    ...(patch.providerModelPreferences !== undefined
+      ? { providerModelPreferences: patch.providerModelPreferences }
+      : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),

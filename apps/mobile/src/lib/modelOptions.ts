@@ -117,6 +117,38 @@ function matchesProviderScope(driver: string, scope: ModelOptionProviderScope): 
   return scope === "hermes-only" ? driver === "hermes" : driver !== "hermes";
 }
 
+/**
+ * Applies the user's model visibility and ordering for one provider instance,
+ * mirroring `applyInstanceModelPreferences` in `apps/web/src/modelSelection.ts`.
+ *
+ * Custom models are never hidden — the web settings editor omits the hide
+ * toggle for them, so a hand-typed slug can only be removed by deleting it.
+ */
+function applyModelPreferences<T extends { readonly slug: string; readonly isCustom?: boolean }>(
+  models: ReadonlyArray<T>,
+  preferences:
+    | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
+    | undefined,
+): ReadonlyArray<T> {
+  if (!preferences) return models;
+
+  const hidden = new Set(preferences.hiddenModels);
+  const visible = models.filter((model) => model.isCustom === true || !hidden.has(model.slug));
+  if (preferences.modelOrder.length === 0) return visible;
+
+  // Ordered slugs first, everything else keeping its catalog position behind
+  // them. `Array.prototype.sort` is stable, so equal ranks preserve order.
+  const rankBySlug = new Map(preferences.modelOrder.map((slug, index) => [slug, index] as const));
+  return [...visible].sort((left, right) => {
+    // Subtracting the ranks would yield NaN for two unordered models, which
+    // silently scrambles the comparator.
+    const leftRank = rankBySlug.get(left.slug) ?? Number.POSITIVE_INFINITY;
+    const rightRank = rankBySlug.get(right.slug) ?? Number.POSITIVE_INFINITY;
+    if (leftRank === rightRank) return 0;
+    return leftRank < rightRank ? -1 : 1;
+  });
+}
+
 export function buildModelOptions(
   config: T3ServerConfig | null | undefined,
   fallbackModelSelection: ModelSelection | null,
@@ -133,7 +165,13 @@ export function buildModelOptions(
     }
 
     const providerLabel = providerDisplayLabel(provider);
-    for (const model of provider.models) {
+    const visibleModels = applyModelPreferences(
+      provider.models,
+      // Optional all the way down: a server that predates the setting sends no
+      // `providerModelPreferences`, and callers hand us partial configs.
+      config?.settings?.providerModelPreferences?.[provider.instanceId],
+    );
+    for (const model of visibleModels) {
       const key = `${provider.instanceId}:${model.slug}`;
       options.set(key, {
         key,

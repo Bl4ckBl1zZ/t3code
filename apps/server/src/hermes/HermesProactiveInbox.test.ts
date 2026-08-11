@@ -1,6 +1,7 @@
 import { HermesProactiveEventKinds, type HermesGatewayCompatibility } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
@@ -37,8 +38,9 @@ const repositories = repositoryLayer.pipe(Layer.provideMerge(persistence));
  * Built per test rather than per file. These assertions are about counts, and a
  * database shared across tests would make each one depend on its neighbours.
  */
-const scoped = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A> =>
-  effect.pipe(Effect.provide(repositories), Effect.orDie) as Effect.Effect<A>;
+const scoped = <A, E>(
+  effect: Effect.Effect<A, E, Layer.Success<typeof repositories> | Scope.Scope>,
+): Effect.Effect<A> => effect.pipe(Effect.scoped, Effect.provide(repositories), Effect.orDie);
 
 const witnessedRun = (runIdentity: string) => ({
   providerInstanceId: PROVIDER_INSTANCE_ID,

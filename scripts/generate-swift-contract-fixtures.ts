@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Codegen tooling runs from plain node before an Effect runtime exists.
 /**
  * Emits contract-derived JSON fixtures for the native SwiftUI client's tests.
  *
@@ -22,6 +23,7 @@ import {
   OrchestrationV2ThreadProjection,
   PlanId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
@@ -219,7 +221,7 @@ const turnItems: OrchestrationV2TurnItem[] = [
   {
     ...base("item-compaction"),
     type: "compaction",
-    driver: "codex",
+    driver: ProviderDriverKind.make("codex"),
     summary: "compacted",
     beforeTokenCount: 100,
     afterTokenCount: 10,
@@ -256,7 +258,7 @@ const turnItems: OrchestrationV2TurnItem[] = [
     type: "subagent",
     subagentId: NodeId.make("node-sub"),
     origin: "app_owned",
-    driver: "codex",
+    driver: ProviderDriverKind.make("codex"),
     providerInstanceId,
     childThreadId: ThreadId.make("thread-child"),
     prompt: "Investigate",

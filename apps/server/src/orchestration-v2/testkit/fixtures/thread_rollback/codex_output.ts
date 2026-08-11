@@ -35,6 +35,9 @@ export function assertThreadRollbackOutput(
     "user_message",
     "assistant_message",
     "checkpoint",
+    // The rollback marker sits at the head of the discarded run's ordinal
+    // band: past every surviving item, ahead of the retained rolled-back log.
+    "checkpoint_rollback",
     "user_message",
     "assistant_message",
     "checkpoint",
@@ -46,6 +49,9 @@ export function assertThreadRollbackOutput(
     "user_message",
     "assistant_message",
     "checkpoint",
+    // The clients render this as the "Rolled back" divider between the
+    // surviving history and the continuation.
+    "checkpoint_rollback",
     "user_message",
     "assistant_message",
     "checkpoint",

@@ -81,10 +81,12 @@ final class NativeAdapterProjectionTests: XCTestCase {
             Set(relationships.rows.map(\.edge.kind)),
             [.fork, .subagent, .transfer]
         )
-        // Merge-back targets the fork parent, at the newest finished run.
+        // Merge-back targets the fork parent, but the run selection stays
+        // empty here: this fixture's newest run is still `running`, and an
+        // active run blocks merge-back (see `resolveLatestMergeBackRun`).
         XCTAssertEqual(relationships.mergeTargetThreadID, scoped("thread-parent"))
-        XCTAssertEqual(relationships.latestMergeBackRunID, "run-active")
-        XCTAssertTrue(relationships.canMerge)
+        XCTAssertNil(relationships.latestMergeBackRunID)
+        XCTAssertFalse(relationships.canMerge)
         XCTAssertTrue(relationships.canDetach)
 
         await fixture.client.disconnect()
@@ -146,10 +148,9 @@ final class NativeAdapterProjectionTests: XCTestCase {
         defer { fixture.tearDown() }
 
         _ = try await fixture.client.initialSnapshot()
-        // Nothing has read the server config yet, so Work honestly reports
-        // itself unresolvable rather than attaching to an arbitrary project.
-        XCTAssertTrue(fixture.client.workspaceServerConfigs().isEmpty)
 
+        // The catalog read guarantees the config regardless of whether the
+        // config subscription's own snapshot already delivered it above.
         _ = try await fixture.client.scheduledTaskModelCatalog(environmentID: "environment-1")
 
         let configs = fixture.client.workspaceServerConfigs()
@@ -228,6 +229,7 @@ final class NativeAdapterProjectionTests: XCTestCase {
                 "scheduledTasks.list",
                 "scheduledTasks.upsert",
                 "scheduledTasks.setEnabled",
+                "scheduledTasks.runNow",
                 "scheduledTasks.delete",
             ]
         )

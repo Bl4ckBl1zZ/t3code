@@ -343,3 +343,91 @@ final class ModelOptionsTests: XCTestCase {
         XCTAssertFalse(ModelOptions.isHermesProvider(nil, in: Self.scopedFeatureProviders))
     }
 }
+
+/// Mirrors the "model visibility preferences" block in
+/// apps/mobile/src/lib/modelOptions.test.ts.
+final class ProviderModelPreferencesTests: XCTestCase {
+    private func config(hidden: String, order: String) throws -> ServerConfigSnapshot {
+        try JSONDecoder.t3.decode(
+            ServerConfigSnapshot.self,
+            from: Data(
+                #"""
+                {
+                  "settings": {
+                    "defaultThreadEnvMode": "local",
+                    "newWorktreesStartFromOrigin": true,
+                    "providerModelPreferences": {
+                      "hermes": { "hiddenModels": \#(hidden), "modelOrder": \#(order) }
+                    }
+                  },
+                  "providers": [{
+                    "instanceId": "hermes",
+                    "driver": "hermes",
+                    "displayName": "Hermes",
+                    "enabled": true,
+                    "installed": true,
+                    "status": "ready",
+                    "auth": { "status": "authenticated" },
+                    "checkedAt": "2026-08-02T12:00:00.000Z",
+                    "models": [
+                      { "slug": "alpha", "name": "Alpha", "isCustom": false },
+                      { "slug": "beta", "name": "Beta", "isCustom": false },
+                      { "slug": "mine", "name": "Mine", "isCustom": true }
+                    ]
+                  }]
+                }
+                """#.utf8
+            )
+        )
+    }
+
+    func testHidesModelsTheUserHidOnAnotherClient() throws {
+        let config = try config(hidden: #"["beta"]"#, order: "[]")
+        XCTAssertEqual(
+            ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
+            ["hermes:alpha", "hermes:mine"]
+        )
+    }
+
+    func testNeverHidesACustomModel() throws {
+        let config = try config(hidden: #"["mine"]"#, order: "[]")
+        XCTAssertTrue(
+            ModelOptions.build(config: config, fallbackSelection: nil).map(\.key)
+                .contains("hermes:mine")
+        )
+    }
+
+    func testAppliesOrderingAndLeavesUnorderedModelsBehindIt() throws {
+        let config = try config(hidden: "[]", order: #"["mine", "beta"]"#)
+        XCTAssertEqual(
+            ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
+            ["hermes:mine", "hermes:beta", "hermes:alpha"]
+        )
+    }
+
+    func testAServerWithoutThePreferenceLeavesTheCatalogIntact() throws {
+        let config = try JSONDecoder.t3.decode(
+            ServerConfigSnapshot.self,
+            from: Data(
+                #"""
+                {
+                  "providers": [{
+                    "instanceId": "hermes",
+                    "driver": "hermes",
+                    "enabled": true,
+                    "installed": true,
+                    "status": "ready",
+                    "auth": { "status": "authenticated" },
+                    "checkedAt": "2026-08-02T12:00:00.000Z",
+                    "models": [{ "slug": "alpha", "name": "Alpha", "isCustom": false }]
+                  }]
+                }
+                """#.utf8
+            )
+        )
+        XCTAssertEqual(
+            ModelOptions.build(config: config, fallbackSelection: nil).map(\.key),
+            ["hermes:alpha"]
+        )
+    }
+}

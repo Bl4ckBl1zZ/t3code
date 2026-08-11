@@ -256,7 +256,10 @@ export const layer: Layer.Layer<
             providerTurnId: null,
             nativeItemRef: null,
             parentItemId: null,
-            ordinal: (targetOrdinal + 1) * 100,
+            // The position store bands run-scoped ordinals at runOrdinal *
+            // 1_000_000; the start of the rolled-back run's band sits past
+            // every surviving item and ahead of the next run's first item.
+            ordinal: (targetOrdinal + 1) * 1_000_000,
             status: "completed",
             title: "Rolled back",
             startedAt: now,

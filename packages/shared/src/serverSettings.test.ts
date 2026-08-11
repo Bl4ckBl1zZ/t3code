@@ -264,6 +264,39 @@ describe("serverSettings helpers", () => {
     expect(settings.sourceControlWriterModelSelection).toBe(sourceControlWriterModelSelection);
   });
 
+  it("replaces providerModelPreferences so un-hiding a model actually un-hides it", () => {
+    const hermesId = ProviderInstanceId.make("hermes");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerModelPreferences: {
+        [hermesId]: { hiddenModels: ["alpha", "beta"], modelOrder: [] },
+      },
+    };
+
+    // A deep merge would union the arrays and leave "beta" hidden forever.
+    expect(
+      applyServerSettingsPatch(current, {
+        providerModelPreferences: {
+          [hermesId]: { hiddenModels: ["alpha"], modelOrder: [] },
+        },
+      }).providerModelPreferences[hermesId],
+    ).toEqual({ hiddenModels: ["alpha"], modelOrder: [] });
+  });
+
+  it("drops providerModelPreferences instance keys the settings editor removed", () => {
+    const hermesId = ProviderInstanceId.make("hermes");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerModelPreferences: {
+        [hermesId]: { hiddenModels: ["alpha"], modelOrder: [] },
+      },
+    };
+
+    expect(
+      applyServerSettingsPatch(current, { providerModelPreferences: {} }).providerModelPreferences,
+    ).toEqual({});
+  });
+
   it("replaces providerInstances maps so omitted instance fields are cleared", () => {
     const codexId = ProviderInstanceId.make("codex");
     const current = {

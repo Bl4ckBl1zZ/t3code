@@ -160,7 +160,9 @@ final class NativeMultiEnvironmentTests: XCTestCase {
 
         _ = try await fixture.client.initialSnapshot()
 
-        await fulfillment(of: [retryObserved], timeout: 1)
+        // Generous rather than tight: a loaded CI simulator can stall the 5ms
+        // refresh loop long past a 1-second window and fail a passing retry.
+        await fulfillment(of: [retryObserved], timeout: 10)
         let retryCallCount = await loader.callCount
         XCTAssertGreaterThanOrEqual(retryCallCount, 2)
         await fixture.client.disconnect()
@@ -417,7 +419,11 @@ private actor FailOnceAggregateEnvironmentLoader {
         if callCount == 1 {
             throw URLError(.cannotOpenFile)
         }
-        retryObserved.fulfill()
+        // Only the first retry fulfills: the refresh loop keeps calling, and a
+        // second fulfill would trip XCTest's over-fulfillment assertion.
+        if callCount == 2 {
+            retryObserved.fulfill()
+        }
         return try await runtime.environments()
     }
 }

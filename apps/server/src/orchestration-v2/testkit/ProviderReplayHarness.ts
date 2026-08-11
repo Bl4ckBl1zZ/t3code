@@ -12,6 +12,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import type { UpstreamMigrationJournalError } from "../../persistence/Migrations.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { layer as mcpSessionRegistryTestLayer } from "../../mcp/McpSessionRegistry.testkit.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
@@ -173,7 +174,7 @@ export function runOrchestratorV2ProviderReplayScenario<
   options: {
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
+      MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
@@ -185,7 +186,8 @@ export function runOrchestratorV2ProviderReplayScenario<
   | Error
   | MigrationError
   | PlatformError.PlatformError
-  | SqlError,
+  | SqlError
+  | UpstreamMigrationJournalError,
   never
 > {
   const layer = makeOrchestratorV2ProviderReplayLayer(scenario, harness, options);
@@ -202,12 +204,15 @@ export function makeOrchestratorV2ProviderReplayLayer<
   options: {
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
+      MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
   } = {},
-): Layer.Layer<OrchestratorV2, Error | MigrationError | PlatformError.PlatformError | SqlError> {
+): Layer.Layer<
+  OrchestratorV2,
+  Error | MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
+> {
   const registryLayer = harness.makeProviderAdapterRegistryLayer(scenario.transcript);
   return makeOrchestratorV2ReplayLayerWithRegistry(scenario, registryLayer, options);
 }
@@ -218,12 +223,15 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   options: {
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
+      MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
   } = {},
-): Layer.Layer<OrchestratorV2, Error | MigrationError | PlatformError.PlatformError | SqlError> {
+): Layer.Layer<
+  OrchestratorV2,
+  Error | MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
+> {
   const serverConfigLayer = Layer.effect(
     ServerConfig,
     makeReplayServerConfig(scenario.name).pipe(Effect.orDie),

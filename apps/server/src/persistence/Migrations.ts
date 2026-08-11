@@ -9,6 +9,7 @@
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -266,6 +267,7 @@ export const adoptAppliedForkMigrations = Effect.fn("adoptAppliedForkMigrations"
   const journaled = new Set(rows.map((row) => row.migration_id));
 
   const adopted: Array<string> = [];
+  const adoptedAt = DateTime.formatIso(yield* DateTime.now);
   for (const [id, marker] of forkMigrationMarkers) {
     if (journaled.has(id)) continue;
     if (!(yield* markerExists(marker))) break;
@@ -273,7 +275,7 @@ export const adoptAppliedForkMigrations = Effect.fn("adoptAppliedForkMigrations"
     if (name === undefined) break;
     yield* sql`
       INSERT INTO effect_sql_migrations (migration_id, name, created_at)
-      VALUES (${id}, ${name}, ${new Date().toISOString()})
+      VALUES (${id}, ${name}, ${adoptedAt})
     `;
     adopted.push(`${id}_${name}`);
   }

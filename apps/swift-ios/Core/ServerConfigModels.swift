@@ -132,6 +132,67 @@ public enum ServerThreadEnvironmentMode: String, Codable, Equatable, Sendable {
     case worktree
 }
 
+/// Per-provider-instance model visibility and ordering, mirroring
+/// `ProviderModelPreferences` in `packages/contracts`.
+///
+/// The server keeps sending the full provider catalog; this is what narrows it
+/// to the models the user actually wants to see. Without it the native pickers
+/// list every model the driver reports, ignoring the hides configured on
+/// desktop or web.
+public struct ProviderModelPreferencesSnapshot: Codable, Equatable, Sendable {
+    public let hiddenModels: [String]
+    /// Explicit user ordering; slugs absent from it keep their catalog order
+    /// behind the ones listed here.
+    public let modelOrder: [String]
+
+    public init(hiddenModels: [String] = [], modelOrder: [String] = []) {
+        self.hiddenModels = hiddenModels
+        self.modelOrder = modelOrder
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hiddenModels
+        case modelOrder
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hiddenModels = try container.decodeIfPresent([String].self, forKey: .hiddenModels) ?? []
+        modelOrder = try container.decodeIfPresent([String].self, forKey: .modelOrder) ?? []
+    }
+
+    /// Drops hidden models and applies the user's ordering, mirroring
+    /// `applyInstanceModelPreferences` in `apps/web/src/modelSelection.ts`.
+    ///
+    /// Custom models are deliberately never hidden: the web settings editor
+    /// omits the hide toggle for them, so a slug the user typed by hand can
+    /// only be removed by deleting it, not by a stale hide entry.
+    public func apply(
+        to models: [ServerProviderModelSnapshot]
+    ) -> [ServerProviderModelSnapshot] {
+        let hidden = Set(hiddenModels)
+        let visible = models.filter { $0.isCustom || !hidden.contains($0.slug) }
+
+        guard !modelOrder.isEmpty else { return visible }
+
+        // Slugs the user ordered come first in that order; everything else
+        // keeps its catalog position behind them. `enumerated` supplies the
+        // tiebreak that makes this a stable sort.
+        var rankBySlug: [String: Int] = [:]
+        for (index, slug) in modelOrder.enumerated() where rankBySlug[slug] == nil {
+            rankBySlug[slug] = index
+        }
+        return visible.enumerated()
+            .sorted { lhs, rhs in
+                let lhsRank = rankBySlug[lhs.element.slug] ?? Int.max
+                let rhsRank = rankBySlug[rhs.element.slug] ?? Int.max
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+}
+
 /// New-thread preferences are server-authoritative, so every saved environment
 /// can resolve these differently even though they share one mobile client.
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
@@ -145,22 +206,29 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// explicit "never". A server that never sends the key gets the default
     /// instead, so absence and "never" stay distinguishable.
     public let sidebarAutoSettleAfterDays: Double?
+    /// Keyed by provider instance id (the default instance for a driver uses
+    /// the driver kind, so `"hermes"`, `"codex"`, `"claudeAgent"`, …). Empty
+    /// against a server that predates the setting being server-authoritative.
+    public let providerModelPreferences: [String: ProviderModelPreferencesSnapshot]
 
     public init(
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
         newWorktreesStartFromOrigin: Bool = true,
         sidebarAutoSettleAfterDays: Double? = ServerSettingsSnapshot
-            .defaultSidebarAutoSettleAfterDays
+            .defaultSidebarAutoSettleAfterDays,
+        providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:]
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.providerModelPreferences = providerModelPreferences
     }
 
     private enum CodingKeys: String, CodingKey {
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
         case sidebarAutoSettleAfterDays
+        case providerModelPreferences
     }
 
     public init(from decoder: any Decoder) throws {
@@ -176,6 +244,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         sidebarAutoSettleAfterDays = container.contains(.sidebarAutoSettleAfterDays)
             ? try container.decodeIfPresent(Double.self, forKey: .sidebarAutoSettleAfterDays)
             : Self.defaultSidebarAutoSettleAfterDays
+        providerModelPreferences = try container.decodeIfPresent(
+            [String: ProviderModelPreferencesSnapshot].self,
+            forKey: .providerModelPreferences
+        ) ?? [:]
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -185,6 +257,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         // Encoded as explicit null so "never" survives a round trip instead of
         // decoding back as the absent-key default.
         try container.encode(sidebarAutoSettleAfterDays, forKey: .sidebarAutoSettleAfterDays)
+        try container.encode(providerModelPreferences, forKey: .providerModelPreferences)
     }
 }
 

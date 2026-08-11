@@ -164,6 +164,7 @@ async function openClient(
   factory: FakeSocketFactory,
   options: Partial<ConstructorParameters<typeof HermesGatewayClient>[0]> & {
     readonly discoverySupports?: ReadonlyArray<string>;
+    readonly discoveryImplements?: ReadonlyArray<string>;
   } = {},
   readyFrame: unknown = fullyNegotiatedReady,
 ): Promise<{ readonly client: HermesGatewayClient; readonly socket: FakeSocket }> {
@@ -184,15 +185,24 @@ async function openClient(
   // handshake until every probe settles. Default to answering "unsupported"
   // so callers keep the strictly-empty legacy capability set unless they opt
   // into `discoverySupports`.
-  await answerDiscoveryProbes(socket, options.discoverySupports ?? []);
+  await answerDiscoveryProbes(
+    socket,
+    options.discoverySupports ?? [],
+    options.discoveryImplements ?? [],
+  );
   await connecting;
   return { client, socket };
 }
 
-/** Replies to any outstanding discovery probes: success for `supported`, -32601 otherwise. */
+/**
+ * Replies to any outstanding discovery probes: success for `supported`, the
+ * gateway's "session not found" for `implemented` (what a real gateway answers
+ * a session-scoped existence probe), and -32601 otherwise.
+ */
 async function answerDiscoveryProbes(
   socket: FakeSocket,
   supported: ReadonlyArray<string>,
+  implemented: ReadonlyArray<string> = [],
 ): Promise<void> {
   for (let pass = 0; pass < 4; pass += 1) {
     await Promise.resolve();
@@ -205,6 +215,12 @@ async function answerDiscoveryProbes(
       seen.add(frame.id!);
       if (frame.method !== undefined && supported.includes(frame.method)) {
         socket.receive({ jsonrpc: "2.0", id: frame.id, result: {} });
+      } else if (frame.method !== undefined && implemented.includes(frame.method)) {
+        socket.receive({
+          jsonrpc: "2.0",
+          id: frame.id,
+          error: { code: 4001, message: "session not found" },
+        });
       } else {
         socket.receive({
           jsonrpc: "2.0",
@@ -1569,11 +1585,47 @@ describe("HermesGatewayClient skills", () => {
       "profile.import",
       "cron.manage",
       "skills.manage",
-      "attachments.image",
+      "events.approvals",
     ]) {
       expect(capabilities).not.toContain(privileged);
     }
     await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    client.close();
+  });
+
+  it("grants attachment capabilities a legacy gateway answers a session error for", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(
+      factory,
+      {
+        discoverySupports: ["session.list"],
+        discoveryImplements: ["image.attach_bytes", "pdf.attach", "file.attach"],
+      },
+      legacyReady,
+    );
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("attachments.image");
+    expect(capabilities).toContain("attachments.pdf");
+    expect(capabilities).toContain("attachments.file");
+    // The probe must not name a session the gateway could act on.
+    const probes = sentFrames(socket).filter((frame) => frame.method === "image.attach_bytes");
+    expect(probes).toHaveLength(1);
+    expect(probes[0]!.params).toEqual({ session_id: "t3-code:capability-probe" });
+    expect(probes[0]!.params["content_base64"]).toBeUndefined();
+    client.close();
+  });
+
+  it("withholds attachment capabilities a legacy gateway reports as unknown methods", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(
+      factory,
+      { discoverySupports: ["session.list"], discoveryImplements: ["image.attach_bytes"] },
+      legacyReady,
+    );
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("attachments.image");
+    expect(capabilities).not.toContain("attachments.pdf");
+    expect(capabilities).not.toContain("attachments.file");
     client.close();
   });
 
