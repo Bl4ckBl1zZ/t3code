@@ -101,6 +101,9 @@ it.effect("production mcp layer lists worktree tools over http", () =>
         headers: {
           accept: "application/json, text/event-stream",
           authorization: auth,
+          // Required on every request after initialize since the 2025-06-18
+          // protocol revision; the transport rejects the call without it.
+          "mcp-protocol-version": "2025-06-18",
           ...(sessionId ? { "mcp-session-id": sessionId } : {}),
         },
         body: HttpBody.text(

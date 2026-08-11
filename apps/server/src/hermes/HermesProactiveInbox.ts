@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -124,6 +125,10 @@ export class HermesProactiveInbox extends Context.Reference<HermesProactiveInbox
 
 const inboxError = (operation: string, message: string) =>
   new HermesProactiveInboxError({ operation, message });
+
+/** Schema-aware rather than `instanceof`: the error is a schema class, so a
+    value decoded from one is one even when it crossed a module boundary. */
+const isInboxError = Schema.is(HermesProactiveInboxError);
 
 /**
  * Titles the notification for a run Hermes executed on its own schedule. The
@@ -285,7 +290,7 @@ export const make = Effect.fn("HermesProactiveInbox.make")(function* (
       return { updated, snapshot: yield* snapshot };
     }).pipe(
       Effect.mapError((error) =>
-        error instanceof HermesProactiveInboxError
+        isInboxError(error)
           ? error
           : inboxError("mark", "Could not update the Hermes notifications."),
       ),

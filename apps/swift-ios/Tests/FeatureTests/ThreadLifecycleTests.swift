@@ -38,10 +38,41 @@ final class ThreadLifecycleTests: XCTestCase {
     }
 
     func testCheckpointsStayInTheWorkLogRatherThanBecomingDividers() {
-        XCTAssertFalse(ThreadLifecycle.isLifecycleTimelineItem(item("checkpoint")))
-        XCTAssertTrue(ThreadLifecycle.isLifecycleTimelineItem(item("checkpoint_rollback")))
-        XCTAssertFalse(ThreadLifecycle.isLifecycleTimelineItem(item("assistant_message")))
-        XCTAssertTrue(ThreadLifecycle.isLifecycleTimelineItem(item("subagent")))
+        // Checkpoint and subagent variants decode strictly, so the fixtures
+        // must carry their required payload fields like production data does.
+        let checkpointFields: [String: JSONValue] = [
+            "checkpointId": .string("checkpoint-1"),
+            "scopeId": .string("scope-1"),
+        ]
+        XCTAssertFalse(
+            ThreadLifecycle.isLifecycleTimelineItem(item("checkpoint", extra: checkpointFields))
+        )
+        XCTAssertTrue(
+            ThreadLifecycle.isLifecycleTimelineItem(
+                item("checkpoint_rollback", extra: checkpointFields)
+            )
+        )
+        XCTAssertFalse(
+            ThreadLifecycle.isLifecycleTimelineItem(
+                item(
+                    "assistant_message",
+                    extra: ["messageId": .string("message-1"), "text": .string("Hi")]
+                )
+            )
+        )
+        XCTAssertTrue(
+            ThreadLifecycle.isLifecycleTimelineItem(
+                item(
+                    "subagent",
+                    extra: [
+                        "subagentId": .string("node-sub"),
+                        "origin": .string("app_owned"),
+                        "driver": .string("codex"),
+                        "providerInstanceId": .string("codex"),
+                    ]
+                )
+            )
+        )
     }
 
     func testRollbackDetailPluralisesAndOmitsEmptyParts() {

@@ -15,6 +15,11 @@ import { readWorkflowScript } from "./WorkflowScriptQuery.ts";
  */
 const root = NodePath.join(NodeOS.homedir(), ".claude", "projects");
 
+// CI runs the suite as a freshly created user whose homedir has never seen the
+// app, so the root these tests namespace themselves under must be created —
+// without it every containment probe collapses into `root-unavailable`.
+await NodeFSP.mkdir(root, { recursive: true });
+
 // acquireUseRelease keeps the cleanup guarantee of the old try/finally without
 // a nested runtime: the body stays an Effect the test can yield directly.
 const withScriptDir = <A, E, R>(
