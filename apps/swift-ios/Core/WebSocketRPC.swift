@@ -60,6 +60,11 @@ private actor URLSessionWebSocketConnection: WebSocketConnection {
 
     init(session: URLSession, request: URLRequest) {
         task = session.webSocketTask(with: request)
+        // URLSessionWebSocketTask rejects frames above 1 MiB by default with
+        // "Message too long" and kills the socket. Server shell snapshots for a
+        // large workspace exceed that, which made every (re)subscribe drop the
+        // connection in an endless reconnect loop.
+        task.maximumMessageSize = 64 * 1024 * 1024
     }
 
     func open() {
@@ -280,6 +285,9 @@ public actor WebSocketRPCClient {
     }
 
     public func stop() async {
+        ConnectionLog.logger.info(
+            "[conn] stopped deliberate=true subscriptions=\(self.subscriptions.count)"
+        )
         let closingConnection = connection
         desired = false
         loopID = nil
@@ -441,6 +449,14 @@ public actor WebSocketRPCClient {
                 // server restart doesn't trigger simultaneous ticket mints.
                 let backoff = min(5.0, 0.35 * pow(1.7, Double(retry - 1)))
                 let delay = backoff * Double.random(in: 0.5...1.0)
+                let event = openedID == nil ? "dial-failed" : "socket-dropped"
+                ConnectionLog.logger.warning(
+                    """
+                    [conn] \(event, privacy: .public) \
+                    error=\(ConnectionLog.describe(error), privacy: .public) \
+                    retry=\(retry) delay=\(String(format: "%.1f", delay), privacy: .public)s
+                    """
+                )
                 try? await Task.sleep(for: .seconds(delay))
             }
         }
@@ -482,6 +498,9 @@ public actor WebSocketRPCClient {
     }
 
     private func connected() async {
+        ConnectionLog.logger.info(
+            "[conn] connected resend-unary=\(self.unary.count) resubscribe=\(self.subscriptions.count)"
+        )
         keepaliveTask?.cancel()
         if let connectionID {
             let owner = WeakOwner(self)
@@ -583,6 +602,9 @@ public actor WebSocketRPCClient {
         } catch {
             // A response, disconnect, or stop may have completed the request
             // while send was suspended. Only its current owner may resume it.
+            ConnectionLog.logger.warning(
+                "[conn] send-failed op=unary error=\(ConnectionLog.describe(error), privacy: .public)"
+            )
             completeUnary(id, with: .failure(RPCError.disconnected))
             await disconnected(expectedConnectionID: connectionID)
         }
@@ -611,6 +633,12 @@ public actor WebSocketRPCClient {
         } catch {
             // Retain the subscription for the next socket, but make the send
             // failure visible to the connection loop by closing this socket.
+            ConnectionLog.logger.warning(
+                """
+                [conn] send-failed op=subscribe tag=\(subscription.tag, privacy: .public) \
+                error=\(ConnectionLog.describe(error), privacy: .public)
+                """
+            )
             await disconnected(expectedConnectionID: connectionID)
         }
     }
@@ -654,6 +682,14 @@ public actor WebSocketRPCClient {
                 JSONEncoder.t3.encode(RPCControlEnvelope(tag, requestID: requestID))
             )
         } catch {
+            // Ping failures land here too: a dead keepalive is the only signal
+            // a half-open socket produces, so the cause must be attributable.
+            ConnectionLog.logger.warning(
+                """
+                [conn] send-failed op=\(tag, privacy: .public) \
+                error=\(ConnectionLog.describe(error), privacy: .public)
+                """
+            )
             await disconnected(expectedConnectionID: connectionID)
             throw RPCError.disconnected
         }

@@ -180,7 +180,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         reconcileEnvironmentLoads(loads, savedEnvironments: environments)
         latestShell = shellsByEnvironmentID[environment.id]
-        startPolling(activeClient)
+        startPolling(activeClient, reason: "initial-snapshot")
         let activeIsReachable = loads.contains {
             $0.environment.id == environment.id && $0.shell != nil
         }
@@ -213,7 +213,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             pairedClient = try await runtime.pair(url: endpoint, clientLabel: "T3 Code Swift")
         }
         await adoptEnvironment(pairedClient.environment, client: pairedClient)
-        startPolling(pairedClient)
+        startPolling(pairedClient, reason: "pair")
     }
 
     func connectT3Environment(
@@ -287,14 +287,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             )
             publish(snapshot)
         }
-        startPolling(managedClient)
+        startPolling(managedClient, reason: "connect-managed")
     }
 
     func activateEnvironment(id: String) async throws {
         let activated = try await runtime.activate(id: id)
         await adoptEnvironment(activated.environment, client: activated)
         try await refresh(client: activated)
-        startPolling(activated)
+        startPolling(activated, reason: "activate-environment")
     }
 
     func removeEnvironment(id: String) async throws {
@@ -2569,7 +2569,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return String(tail)
     }
 
-    private func startPolling(_ activeClient: T3Client) {
+    private func startPolling(_ activeClient: T3Client, reason: String) {
+        // This tears down and re-creates the shell + config subscriptions even
+        // when nothing failed, so every invocation must be attributable.
+        ConnectionLog.logger.info(
+            """
+            [conn] start-polling reason=\(reason, privacy: .public) \
+            env=\(activeClient.environment.id, privacy: .public)
+            """
+        )
         pollingTask?.cancel()
         fallbackPollingTask?.cancel()
         configurationTask?.cancel()

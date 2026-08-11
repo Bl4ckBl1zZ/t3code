@@ -15,7 +15,7 @@ struct T3CodeApp: App {
         )
         PlatformBackgroundRefreshCoordinator.shared.install { [weak model] in
             guard let model else { return false }
-            await model.reload()
+            await model.reload(reason: "background-refresh")
             return !Task.isCancelled
         }
     }

@@ -95,7 +95,7 @@ public struct WorkspaceView: View {
                     startFromOrigin: request.startFromOrigin,
                     attachments: request.attachments.map(\.uploadValue)
                 )
-                await model.reload()
+                await model.reload(reason: "thread-created")
                 return thread
             } catch {
                 return nil
@@ -443,7 +443,7 @@ public struct WorkspaceView: View {
                     .lineLimit(2)
                     .font(.system(size: 13, weight: .semibold))
                 Button("Reconnect") {
-                    Task { await model.reload() }
+                    Task { await model.reload(reason: "reconnect-button") }
                 }
                 .font(.caption.weight(.bold))
                 .buttonStyle(.plain)
@@ -496,7 +496,7 @@ public struct WorkspaceView: View {
                     .lineLimit(2)
                     .font(.system(size: 13, weight: .semibold))
                 Button("Reconnect") {
-                    Task { await model.reload() }
+                    Task { await model.reload(reason: "reconnect-button") }
                 }
                 .font(.caption.weight(.bold))
                 .buttonStyle(.plain)
