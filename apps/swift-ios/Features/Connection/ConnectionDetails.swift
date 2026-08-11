@@ -39,9 +39,15 @@ enum ConnectionDetailsParser {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ConnectionDetailsError.empty }
 
-        let extracted = trimmed.lowercased().hasPrefix("t3code:")
-            ? trimmed
-            : (firstURL(in: trimmed) ?? trimmed)
+        // Every native scheme skips URL detection, not just the release one:
+        // running the detector over a `t3code-debug://connect?endpoint=…` link
+        // would extract the embedded endpoint URL (with the token glued on)
+        // instead of the pairing link itself.
+        let loweredTrimmed = trimmed.lowercased()
+        let hasNativeScheme = ["t3:", "t3code:", "t3code-debug:"].contains {
+            loweredTrimmed.hasPrefix($0)
+        }
+        let extracted = hasNativeScheme ? trimmed : (firstURL(in: trimmed) ?? trimmed)
         let candidate = trimmingTrailingProsePunctuation(extracted)
         let loweredCandidate = candidate.lowercased()
         if candidate.contains("://")
