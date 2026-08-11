@@ -217,9 +217,15 @@ struct DailyUXSidebarIndex {
             guard !thread.isArchived else { return false }
             return projectID == nil || thread.projectID == projectID
         }
-        let available = visible.filter { !$0.isEffectivelySnoozed(at: now) }
+        // The predicates say what the thread's state *is*; whether a shelf may
+        // claim the row is gated separately (environment capability, Main
+        // exemption), exactly as the web sidebar partitions.
+        let isShelfSnoozed = { (thread: FeatureThread) in
+            thread.canShelveSnoozed && thread.isEffectivelySnoozed(at: now)
+        }
+        let available = visible.filter { !isShelfSnoozed($0) }
         let isSettled = { (thread: FeatureThread) in
-            thread.isEffectivelySettled(
+            thread.canShelveSettled && thread.isEffectivelySettled(
                 at: now,
                 changeRequestState: changeRequests[thread.id]?.state
             )
@@ -234,7 +240,7 @@ struct DailyUXSidebarIndex {
             .sorted(by: Self.creationOrder)
 
         snoozed = visible
-            .filter { $0.isEffectivelySnoozed(at: now) }
+            .filter(isShelfSnoozed)
             .sorted { lhs, rhs in
                 let lhsUntil = lhs.snoozedUntil ?? .distantFuture
                 let rhsUntil = rhs.snoozedUntil ?? .distantFuture
@@ -301,7 +307,10 @@ enum DailyUXSidebarRefresh {
         changeRequests: [String: FeaturePullRequest] = [:]
     ) -> Date? {
         threads.reduce(nil as Date?) { earliest, thread in
-            let snoozeBoundary = thread.isEffectivelySnoozed(at: now)
+            // A thread no shelf may claim crosses no boundary; ticking for it
+            // would rebuild the list for a move that is not going to happen.
+            let snoozeBoundary = thread.canShelveSnoozed
+                && thread.isEffectivelySnoozed(at: now)
                 ? thread.snoozedUntil
                 : nil
             let settlementBoundary = automaticSettlementBoundary(
@@ -323,7 +332,8 @@ enum DailyUXSidebarRefresh {
         after now: Date,
         changeRequestState: String?
     ) -> Date? {
-        guard !thread.isArchived,
+        guard thread.canShelveSettled,
+              !thread.isArchived,
               !thread.isSettled,
               thread.pinnedAt == nil,
               !thread.keepsActive,

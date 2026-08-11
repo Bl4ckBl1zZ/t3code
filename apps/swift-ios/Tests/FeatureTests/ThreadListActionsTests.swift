@@ -86,6 +86,20 @@ final class ThreadListActionsTests: XCTestCase {
         XCTAssertTrue(actions.first { $0.id == "snooze" }?.disabled == true)
     }
 
+    func testSettleAndSnoozeAreOmittedWhereTheServerWouldRefuseThem() {
+        // An environment without the capability — or the Work Main thread —
+        // gets no Settle/Snooze rows at all, like title regeneration: omitted
+        // rather than offered and refused.
+        let actions = ThreadRowMenuActions.homeRowActions(
+            ThreadRowMenuContext(settlementSupported: false, snoozeSupported: false)
+        )
+
+        XCTAssertEqual(
+            actions.map(\.id),
+            ["rename", "archive", "pin", "copy-handoff-script", "delete"]
+        )
+    }
+
     func testSnoozeOpensTheSharedPresetSubmenu() {
         let now = Date(timeIntervalSince1970: 1_777_777_777)
         let actions = ThreadRowMenuActions.homeRowActions(ThreadRowMenuContext(), now: now)

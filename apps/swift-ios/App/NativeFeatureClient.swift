@@ -1884,10 +1884,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let cwd: String
     }
 
-    func threadChangeRequests(threadIDs: [String]) -> AsyncStream<[String: FeaturePullRequest]> {
+    func threadChangeRequests(
+        threadIDs: [String],
+        seed: [String: FeaturePullRequest]
+    ) -> AsyncStream<[String: FeaturePullRequest]> {
         AsyncStream { continuation in
             let task = Task { @MainActor [weak self] in
-                await self?.streamChangeRequests(threadIDs: threadIDs, into: continuation)
+                await self?.streamChangeRequests(
+                    threadIDs: threadIDs,
+                    seed: seed,
+                    into: continuation
+                )
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -1896,6 +1903,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private func streamChangeRequests(
         threadIDs: [String],
+        seed: [String: FeaturePullRequest],
         into continuation: AsyncStream<[String: FeaturePullRequest]>.Continuation
     ) async {
         var branchesByThreadID: [String: String] = [:]
@@ -1916,7 +1924,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         guard !threadIDsBySubscription.isEmpty else { return }
 
-        let accumulator = ChangeRequestAccumulator()
+        // Threads that lost their route (or their branch) since the seed was
+        // captured have no subscription to correct a stale entry, so they are
+        // dropped rather than carried forward indefinitely.
+        let accumulator = ChangeRequestAccumulator(
+            seed: seed.filter { branchesByThreadID[$0.key] != nil }
+        )
         await withTaskGroup(of: Void.self) { group in
             for (subscription, subscribedThreadIDs) in threadIDsBySubscription {
                 guard let client = environmentClients[subscription.environmentID] else { continue }
@@ -3979,9 +3992,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
         }
 
+        let latestRun = projection.runs.max(by: { $0.ordinal < $1.ordinal })
         var mappedThread = mapThread(
             projection.thread,
-            latestRun: projection.runs.max(by: { $0.ordinal < $1.ordinal }),
+            latestRun: latestRun,
             environment: environment
         )
         if !approvals.isEmpty {
@@ -3989,6 +4003,24 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         } else if !userInputs.isEmpty {
             mappedThread.state = .waitingForInput
         }
+        // Shell parity, from the projection's own transcript. This row lands in
+        // the same list as the shell mapper's rows, and the list's shelf
+        // assignment reads `lastActivityAt` while the row itself shows
+        // `preview` — leaving them lossy here made the open thread alternate
+        // between two shapes (and sometimes two shelves) as the shell and
+        // detail streams took turns publishing.
+        if let latestVisible = messages.last {
+            mappedThread.preview = previewText(latestVisible.text)
+            mappedThread.previewIsFromUser = latestVisible.role == .user
+        }
+        // Same formula as `lastActivityDate`: real activity wins; the mapper's
+        // own value (run completion, else the `updatedAt` floor) is the
+        // fallback.
+        let detailActivity = [
+            messages.last(where: { $0.role == .user })?.createdAt,
+            latestRun?.completedAt.flatMap(parseValidDate),
+        ].compactMap { $0 }.max()
+        mappedThread.lastActivityAt = detailActivity ?? mappedThread.lastActivityAt
 
         return FeatureThreadDetail(
             thread: mappedThread,
@@ -4313,6 +4345,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
+            supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
             isRegeneratingTitle: thread.titleRegeneration != nil,
@@ -4403,6 +4437,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
+            supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             // The two fields the workspaces sort on: `workInboxRole` is what
             // gives the T3 Work inbox a Main section at all, and
             // `relationshipToParent` is what keeps a subagent's thread out of
@@ -5329,7 +5365,14 @@ private struct NativeThreadRoute {
 /// Folds the per-checkout VCS statuses back into one map the thread list reads.
 @MainActor
 private final class ChangeRequestAccumulator {
-    private var pullRequestsByThreadID: [String: FeaturePullRequest] = [:]
+    private var pullRequestsByThreadID: [String: FeaturePullRequest]
+
+    /// Starts from what the previous stream had already established, so the
+    /// window between a restart and each checkout's first event does not read
+    /// as "no change request" for threads whose state was already known.
+    init(seed: [String: FeaturePullRequest] = [:]) {
+        pullRequestsByThreadID = seed
+    }
 
     /// Returns the merged map only when it actually changed. Remote status is
     /// polled, so most events restate what the list already shows, and a row

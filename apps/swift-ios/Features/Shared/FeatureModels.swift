@@ -211,6 +211,11 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var snoozedAt: Date?
     public var pinnedAt: Date?
     public var supportsPinning: Bool?
+    /// Whether the thread's environment supports the settled lifecycle at all.
+    /// Unlike ``supportsPinning``, absence is treated as "no": see
+    /// ``canShelveSettled``.
+    public var supportsSettlement: Bool?
+    public var supportsSnooze: Bool?
     /// `main` marks the thread the T3 Work inbox pins to the top as the current
     /// main line of work. Absent means an ordinary thread. The inbox's Main
     /// section does not exist without this.
@@ -259,6 +264,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
         supportsPinning: Bool? = nil,
+        supportsSettlement: Bool? = nil,
+        supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
         isRegeneratingTitle: Bool = false,
@@ -296,6 +303,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
         self.supportsPinning = supportsPinning
+        self.supportsSettlement = supportsSettlement
+        self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent
         self.isRegeneratingTitle = isRegeneratingTitle
@@ -324,6 +333,21 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// their own, so neither workspace lists them as a row.
     public var isSubagentThread: Bool {
         relationshipToParent == "subagent"
+    }
+
+    /// Whether the Settled shelf may claim this thread. Mirrors the web
+    /// sidebar's partition: the environment must affirmatively support
+    /// settlement — on a server without it (or while the descriptor is still
+    /// loading) auto-settling would strand rows on a shelf the user could not
+    /// reopen — and the Work inbox's Main thread never parks; the server
+    /// refuses to settle it.
+    public var canShelveSettled: Bool {
+        supportsSettlement == true && workInboxRole != "main"
+    }
+
+    /// The Snoozed-shelf counterpart of ``canShelveSettled``.
+    public var canShelveSnoozed: Bool {
+        supportsSnooze == true && workInboxRole != "main"
     }
 }
 

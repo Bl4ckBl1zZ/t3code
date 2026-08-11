@@ -89,11 +89,21 @@ public final class FeatureRootModel {
             changeRequestTask = nil
             return
         }
-        changeRequestTask = Task { @MainActor [weak self] in
+        // The retained entries seed the new stream so its first emissions carry
+        // everything already known; without that, each restart transiently
+        // reported nothing, a settled-by-merged-PR row bounced back to Active,
+        // the list reordered, and the reorder restarted the stream again — an
+        // endless resubscribe loop that shuffled rows between shelves.
+        changeRequestTask = Task { @MainActor [weak self, changeRequestsByThreadID] in
             guard let self else { return }
-            for await pullRequests in client.threadChangeRequests(threadIDs: threadIDs) {
-                if Task.isCancelled { return }
-                changeRequestsByThreadID = pullRequests
+            for await pullRequests in client.threadChangeRequests(
+                threadIDs: threadIDs,
+                seed: changeRequestsByThreadID
+            ) {
+                // A cancelled stream can still hold one last emission; applying
+                // it would overwrite the replacement stream's fresher state.
+                if Task.isCancelled || self.changeRequestThreadIDs != threadIDs { return }
+                self.changeRequestsByThreadID = pullRequests
             }
         }
     }

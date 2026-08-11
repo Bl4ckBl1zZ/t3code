@@ -28,6 +28,13 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
     /// conversation is either there or deleted, so Settle and Snooze never
     /// appear on its rows.
     public let offersParking: Bool
+    /// Whether this thread can be settled at all: the environment must report
+    /// the capability, and the Work Main thread never parks. As with title
+    /// regeneration, an unsupported action is omitted rather than offered and
+    /// refused by the server.
+    public let settlementSupported: Bool
+    /// The Snooze counterpart of ``settlementSupported``.
+    public let snoozeSupported: Bool
     public let handoffScriptSupported: Bool
     /// Version skew: older servers reject `regenerateTitle` outright, so the
     /// action is omitted rather than offered and refused.
@@ -42,6 +49,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         isSnoozed: Bool = false,
         canSnooze: Bool = true,
         offersParking: Bool = true,
+        settlementSupported: Bool = true,
+        snoozeSupported: Bool = true,
         handoffScriptSupported: Bool = true,
         titleRegenerationSupported: Bool = false,
         isRegeneratingTitle: Bool = false
@@ -53,6 +62,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         self.isSnoozed = isSnoozed
         self.canSnooze = canSnooze
         self.offersParking = offersParking
+        self.settlementSupported = settlementSupported
+        self.snoozeSupported = snoozeSupported
         self.handoffScriptSupported = handoffScriptSupported
         self.titleRegenerationSupported = titleRegenerationSupported
         self.isRegeneratingTitle = isRegeneratingTitle
@@ -126,7 +137,7 @@ public enum ThreadRowMenuActions {
                         : ThreadRowMenuAction(id: pinActionID, title: "Pin", symbol: "pin")
                 )
             }
-            if context.offersParking {
+            if context.offersParking, context.settlementSupported {
                 actions.append(
                     context.isSettled
                         ? ThreadRowMenuAction(
@@ -134,6 +145,8 @@ public enum ThreadRowMenuActions {
                         )
                         : ThreadRowMenuAction(id: settleActionID, title: "Settle", symbol: "checkmark")
                 )
+            }
+            if context.offersParking, context.snoozeSupported {
                 actions.append(
                     context.isSnoozed
                         ? ThreadRowMenuAction(id: unsnoozeActionID, title: "Unsnooze", symbol: "bell")
