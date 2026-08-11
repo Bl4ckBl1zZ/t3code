@@ -116,8 +116,28 @@ const HERMES_GATEWAY_INFERRED_CAPABILITIES = [
 ] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
 
 /**
- * Tier 2 is everything absent from the two lists above: `session_mcp`,
- * `profile.import`, `cron.manage`, `skills.manage`, attachment and approval
+ * Tier 1b: attachment capabilities, whose methods all stage bytes and so
+ * cannot be exercised as a read. Every one of them resolves the session
+ * first, so asking with a session id the gateway cannot hold answers
+ * "session not found" where the method exists and `-32601` where it does
+ * not — the same evidence as tier 1, read from the error instead of the
+ * result, and reaching no session state on the way.
+ */
+const HERMES_GATEWAY_EXISTENCE_PROBE_SESSION_ID = "t3-code:capability-probe";
+const HERMES_GATEWAY_EXISTENCE_PROBES = [
+  { capability: "attachments.image", method: "image.attach_bytes" },
+  { capability: "attachments.pdf", method: "pdf.attach" },
+  { capability: "attachments.file", method: "file.attach" },
+] as const satisfies ReadonlyArray<{
+  readonly capability: HermesGatewayCapabilityName;
+  readonly method: string;
+}>;
+
+const HERMES_GATEWAY_METHOD_NOT_FOUND = -32601;
+
+/**
+ * Tier 2 is everything absent from the three lists above: `session_mcp`,
+ * `profile.import`, `cron.manage`, `skills.manage`, and approval
  * capabilities. Those mint credentials, read or destroy history from other
  * transports, or mutate durable state, so they require explicit advertisement
  * and are never synthesized from a probe.
@@ -1668,13 +1688,30 @@ export class HermesGatewayClient {
         allowBeforeReady: true,
       });
 
-    const results = await Promise.allSettled(
-      HERMES_GATEWAY_DISCOVERY_PROBES.map((entry) => probe(entry.method, entry.params)),
-    );
+    const [results, existenceResults] = await Promise.all([
+      Promise.allSettled(
+        HERMES_GATEWAY_DISCOVERY_PROBES.map((entry) => probe(entry.method, entry.params)),
+      ),
+      Promise.allSettled(
+        HERMES_GATEWAY_EXISTENCE_PROBES.map((entry) =>
+          probe(entry.method, { session_id: HERMES_GATEWAY_EXISTENCE_PROBE_SESSION_ID }),
+        ),
+      ),
+    ]);
     const discovered = new Set<string>();
     results.forEach((result, index) => {
       if (result.status === "fulfilled")
         discovered.add(HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capability);
+    });
+    existenceResults.forEach((result, index) => {
+      // The probe carries no session, so an implemented method rejects. Only
+      // "unknown method" is evidence of absence; a transport failure or a
+      // timeout is evidence of nothing and leaves the capability ungranted.
+      const implemented =
+        result.status === "fulfilled" ||
+        (result.reason instanceof HermesGatewayRpcError &&
+          result.reason.code !== HERMES_GATEWAY_METHOD_NOT_FOUND);
+      if (implemented) discovered.add(HERMES_GATEWAY_EXISTENCE_PROBES[index]!.capability);
     });
     if (discovered.has("session.lifecycle")) {
       for (const capability of HERMES_GATEWAY_INFERRED_CAPABILITIES) discovered.add(capability);
