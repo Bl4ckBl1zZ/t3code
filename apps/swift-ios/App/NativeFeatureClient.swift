@@ -4548,15 +4548,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) -> [FeatureProvider] {
         if let providers = config?.providers, !providers.isEmpty {
             if let cached = providerCatalogCache[environmentID] { return cached }
-            let mapped = mapConfigProviders(providers)
+            let mapped = mapConfigProviders(
+                providers,
+                modelPreferences: config?.settings?.providerModelPreferences ?? [:]
+            )
             providerCatalogCache[environmentID] = mapped
             return mapped
         }
         return mapShellFallbackProviders(shell)
     }
 
+    /// Model visibility is applied here rather than in each picker: this is the
+    /// one boundary every model list on iOS comes through, and unlike web there
+    /// is no mobile settings editor that needs the unfiltered catalog.
     private func mapConfigProviders(
-        _ providers: [ServerProviderSnapshot]
+        _ providers: [ServerProviderSnapshot],
+        modelPreferences: [String: ProviderModelPreferencesSnapshot]
     ) -> [FeatureProvider] {
         Self.normalizedProviders(providers.map { provider in
                 FeatureProvider(
@@ -4571,7 +4578,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     driver: provider.driver,
                     requiresNewThreadForModelChange:
                         provider.requiresNewThreadForModelChange ?? false,
-                    models: provider.models.map { model in
+                    models: (modelPreferences[provider.instanceId]?.apply(to: provider.models)
+                        ?? provider.models).map { model in
                         let options = (model.capabilities?.optionDescriptors ?? [])
                             .map(mapOptionDescriptor)
                         return FeatureModel(
