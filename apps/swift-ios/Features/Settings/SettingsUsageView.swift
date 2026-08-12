@@ -16,10 +16,26 @@ public struct SettingsUsageView: View {
     /// Series and stack order, bottom band first — matches the Expo screen.
     private static let providerOrder = ["codex", "claude"]
 
+    /// The selectable reporting windows. The rolling past-24-hours window
+    /// requests hourly resolution (contract v4); the day windows stay daily.
+    private enum Window: Hashable {
+        case pastDay
+        case days(Int)
+
+        var isHourly: Bool { self == .pastDay }
+
+        var title: String {
+            switch self {
+            case .pastDay: "Past 24 hours"
+            case let .days(count): "Last \(count) days"
+            }
+        }
+    }
+
     @Bindable private var model: FeatureRootModel
 
     @State private var state: LoadState = .loading
-    @State private var windowDays = 30
+    @State private var window: Window = .days(30)
     @State private var showsCost = true
     /// Environments that answered nothing this refresh (offline, old server):
     /// their usage is absent, and the screen must say so rather than present
@@ -59,17 +75,18 @@ public struct SettingsUsageView: View {
         .background(T3Colors.background)
         .navigationTitle("Usage")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: windowDays) { await reload() }
+        .task(id: window) { await reload() }
         .refreshable { await reload() }
     }
 
     // MARK: - Sections
 
     private var windowSection: some View {
-        Picker("Window", selection: $windowDays) {
-            Text("7 days").tag(7)
-            Text("30 days").tag(30)
-            Text("90 days").tag(90)
+        Picker("Window", selection: $window) {
+            Text("24 hrs").tag(Window.pastDay)
+            Text("7 days").tag(Window.days(7))
+            Text("30 days").tag(Window.days(30))
+            Text("90 days").tag(Window.days(90))
         }
         .pickerStyle(.segmented)
         .padding(.horizontal, 20)
@@ -86,17 +103,23 @@ public struct SettingsUsageView: View {
 
     private func totalsSection(_ merged: FeatureMergedUsage) -> some View {
         SettingsSection(
-            title: "Last \(windowDays) days",
+            title: window.title,
             footer: "Cost is the API-equivalent price of these tokens; subscription plans bill separately."
         ) {
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
                     statCard("Total cost", Self.cost(merged.costUsd))
+                    // Averages skip quiet buckets so an idle stretch does not
+                    // drag the figure toward zero.
                     statCard(
-                        "Daily average",
-                        merged.activeDays == 0
-                            ? "—"
-                            : Self.cost(merged.costUsd / Double(merged.activeDays))
+                        window.isHourly ? "Hourly average" : "Daily average",
+                        window.isHourly
+                            ? (merged.activeHours == 0
+                                ? "—"
+                                : Self.cost(merged.costUsd / Double(merged.activeHours)))
+                            : (merged.activeDays == 0
+                                ? "—"
+                                : Self.cost(merged.costUsd / Double(merged.activeDays)))
                     )
                 }
                 HStack(spacing: 10) {
@@ -117,7 +140,11 @@ public struct SettingsUsageView: View {
     }
 
     private func chartSection(_ merged: FeatureMergedUsage) -> some View {
-        SettingsSection(title: showsCost ? "Daily cost" : "Daily tokens") {
+        SettingsSection(
+            title: window.isHourly
+                ? (showsCost ? "Hourly cost" : "Hourly tokens")
+                : (showsCost ? "Daily cost" : "Daily tokens")
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Metric", selection: $showsCost) {
                     Text("Cost").tag(true)
@@ -127,22 +154,63 @@ public struct SettingsUsageView: View {
                 .frame(maxWidth: 220)
 
                 Chart {
-                    ForEach(merged.daily) { day in
-                        ForEach(orderedProviders(in: day), id: \.self) { provider in
-                            if let slice = day.byProvider[provider] {
-                                BarMark(
-                                    x: .value("Day", Self.chartDate(day.day)),
-                                    y: .value(
-                                        showsCost ? "Cost" : "Tokens",
-                                        showsCost ? slice.costUsd : Double(slice.totalTokens)
+                    if window.isHourly {
+                        ForEach(merged.hourly) { hour in
+                            ForEach(
+                                orderedProviders(Array(hour.byProvider.keys)),
+                                id: \.self
+                            ) { provider in
+                                if let slice = hour.byProvider[provider] {
+                                    BarMark(
+                                        x: .value("Hour", Self.chartHourDate(hour.hourStart)),
+                                        y: .value(
+                                            showsCost ? "Cost" : "Tokens",
+                                            showsCost ? slice.costUsd : Double(slice.totalTokens)
+                                        ),
+                                        // Fixed width: 24 rolling buckets on a
+                                        // date axis otherwise render hairline
+                                        // bars with visible gaps.
+                                        width: .ratio(0.7)
                                     )
-                                )
-                                .foregroundStyle(by: .value("Provider", providerLabel(provider)))
+                                    .foregroundStyle(
+                                        by: .value("Provider", providerLabel(provider))
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(merged.daily) { day in
+                            ForEach(
+                                orderedProviders(Array(day.byProvider.keys)),
+                                id: \.self
+                            ) { provider in
+                                if let slice = day.byProvider[provider] {
+                                    BarMark(
+                                        x: .value("Day", Self.chartDate(day.day)),
+                                        y: .value(
+                                            showsCost ? "Cost" : "Tokens",
+                                            showsCost ? slice.costUsd : Double(slice.totalTokens)
+                                        )
+                                    )
+                                    .foregroundStyle(
+                                        by: .value("Provider", providerLabel(provider))
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 .chartForegroundStyleScale(providerScale(merged))
+                .chartXAxis {
+                    if window.isHourly {
+                        AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
+                            AxisGridLine()
+                            AxisValueLabel(format: .dateTime.hour())
+                        }
+                    } else {
+                        AxisMarks()
+                    }
+                }
                 .chartLegend(position: .bottom, spacing: 8)
                 .frame(height: 180)
 
@@ -233,7 +301,7 @@ public struct SettingsUsageView: View {
         }
         if case .loaded = state { } else { state = .loading }
 
-        let window = Self.window(days: windowDays)
+        let request = Self.requestWindow(for: window)
         let environments = model.snapshot.environments
         var usable: [FeatureEnvironmentUsage] = []
         var unreachable: [String] = []
@@ -244,9 +312,12 @@ public struct SettingsUsageView: View {
             do {
                 let summary = try await reader.usageSummary(
                     environmentID: environment.id,
-                    sinceDay: window.sinceDay,
-                    untilDay: window.untilDay,
-                    timeZone: TimeZone.current.identifier
+                    sinceDay: request.sinceDay,
+                    untilDay: request.untilDay,
+                    timeZone: TimeZone.current.identifier,
+                    resolution: request.resolution,
+                    sinceTime: request.sinceTime,
+                    untilTime: request.untilTime
                 )
                 usable.append(
                     FeatureEnvironmentUsage(
@@ -293,8 +364,8 @@ public struct SettingsUsageView: View {
 
     /// Stack order for one bar, bottom band first; providers the order list
     /// does not know sort after it so nothing silently disappears.
-    private func orderedProviders(in day: FeatureUsageDailyTotals) -> [String] {
-        day.byProvider.keys.sorted { left, right in
+    private func orderedProviders(_ providers: [String]) -> [String] {
+        providers.sorted { left, right in
             let li = Self.providerOrder.firstIndex(of: left) ?? Self.providerOrder.count
             let ri = Self.providerOrder.firstIndex(of: right) ?? Self.providerOrder.count
             return li == ri ? left < right : li < ri
@@ -338,16 +409,73 @@ public struct SettingsUsageView: View {
         return formatter
     }()
 
-    private static func window(days: Int) -> (sinceDay: String, untilDay: String) {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let since = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
-        return (dayFormatter.string(from: since), dayFormatter.string(from: today))
+    /// The wire window for one selection. Day windows are calendar arithmetic
+    /// in the local zone. The hourly window mirrors `usageFormat.makeWindow`:
+    /// a rolling `[now - 24h, now)` pair of minute-aligned UTC instants, with
+    /// `sinceDay`/`untilDay` set to the local calendar days those instants
+    /// fall on.
+    private static func requestWindow(
+        for window: Window,
+        now: Date = Date()
+    ) -> (
+        sinceDay: String, untilDay: String,
+        resolution: String?, sinceTime: String?, untilTime: String?
+    ) {
+        switch window {
+        case let .days(count):
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: now)
+            let since = calendar.date(byAdding: .day, value: -(count - 1), to: today) ?? today
+            // No explicit resolution: older servers reject unknown request
+            // fields, and daily is the wire default.
+            return (
+                dayFormatter.string(from: since),
+                dayFormatter.string(from: today),
+                nil,
+                nil,
+                nil
+            )
+        case .pastDay:
+            // Minute-aligned bounds keep labels readable while representing an
+            // exact rolling 24-hour duration; fixed-duration buckets stay
+            // correct across DST transitions.
+            let untilTime = Date(
+                timeIntervalSince1970: (now.timeIntervalSince1970 / 60).rounded(.down) * 60
+            )
+            let sinceTime = untilTime.addingTimeInterval(-24 * 60 * 60)
+            return (
+                dayFormatter.string(from: sinceTime),
+                dayFormatter.string(from: untilTime),
+                "hour",
+                instantFormatter.string(from: sinceTime),
+                instantFormatter.string(from: untilTime)
+            )
+        }
     }
 
     private static func chartDate(_ day: String) -> Date {
         dayFormatter.date(from: day) ?? Date(timeIntervalSince1970: 0)
     }
+
+    /// Bucket starts are the server's UTC instants (`toISOString`, so with
+    /// fractional seconds); tolerate both fractional and whole-second forms.
+    private static func chartHourDate(_ hourStart: String) -> Date {
+        instantWithFractionFormatter.date(from: hourStart)
+            ?? instantFormatter.date(from: hourStart)
+            ?? Date(timeIntervalSince1970: 0)
+    }
+
+    private static let instantFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let instantWithFractionFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     private static func cost(_ value: Double) -> String {
         value.formatted(.currency(code: "USD").precision(.fractionLength(2)))

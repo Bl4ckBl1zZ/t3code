@@ -32,11 +32,17 @@ public protocol FeatureThreadRoleAssigning: AnyObject {
 /// time so the caller can merge and report partial coverage per environment.
 @MainActor
 public protocol FeatureUsageReading: AnyObject {
+    /// `resolution`/`sinceTime`/`untilTime` are nil for daily windows; hourly
+    /// requests pass `"hour"` plus a `[sinceTime, untilTime)` pair of UTC
+    /// instants, and each returned bucket then carries `hourStart`.
     func usageSummary(
         environmentID: String,
         sinceDay: String,
         untilDay: String,
-        timeZone: String
+        timeZone: String,
+        resolution: String?,
+        sinceTime: String?,
+        untilTime: String?
     ) async throws -> UsageSummary
 }
 

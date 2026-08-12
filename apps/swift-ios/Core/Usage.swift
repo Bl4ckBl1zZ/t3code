@@ -1,6 +1,6 @@
 import Foundation
 
-// Ported from packages/contracts/src/usage.ts (contract version 3): the
+// Ported from packages/contracts/src/usage.ts (contract version 4): the
 // `server.getUsageSummary` shapes the web and Expo usage dashboards read.
 // Providers travel as plain strings rather than a closed enum so a server that
 // learns a new provider kind degrades to an unstyled series instead of a
@@ -9,7 +9,7 @@ import Foundation
 /// The usage contract this client understands. A summary reporting a different
 /// version is excluded from merging (its semantics may have changed) and the
 /// UI reports partial coverage instead of silently mixing incompatibles.
-public let usageContractVersion = 3
+public let usageContractVersion = 4
 
 /// Token totals for one bucket. `reasoningTokens` is a subset of
 /// `outputTokens` (Codex reports it separately, Claude folds thinking into
@@ -42,10 +42,12 @@ public struct UsageTokenTotals: Codable, Equatable, Sendable {
     }
 }
 
-/// One `(day, provider, model)` cell. `costUsd` is API-equivalent cost, not
-/// money spent — subscription plans bill separately.
+/// One `(day, hourStart?, provider, model)` cell. `costUsd` is API-equivalent
+/// cost, not money spent — subscription plans bill separately. `hourStart` is
+/// the UTC start instant of a rolling bucket, present only on hourly requests.
 public struct UsageBucket: Codable, Equatable, Sendable {
     public let day: String
+    public let hourStart: String?
     public let provider: String
     public let model: String
     public let totals: UsageTokenTotals
@@ -58,6 +60,7 @@ public struct UsageBucket: Codable, Equatable, Sendable {
 
     public init(
         day: String,
+        hourStart: String? = nil,
         provider: String,
         model: String,
         totals: UsageTokenTotals,
@@ -69,6 +72,7 @@ public struct UsageBucket: Codable, Equatable, Sendable {
         sessions: Int
     ) {
         self.day = day
+        self.hourStart = hourStart
         self.provider = provider
         self.model = model
         self.totals = totals
