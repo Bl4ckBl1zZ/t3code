@@ -53,6 +53,56 @@ final class UsageMergeTests: XCTestCase {
         XCTAssertEqual(merged.staleEnvironments, ["env-old"])
     }
 
+    func testAccumulatesHourlyBucketsByHourStart() {
+        // Two environments contribute to the same bucket hour; a second hour
+        // stays separate, and the entries come back sorted by hourStart.
+        let merged = FeatureUsageMerge.merge([
+            environment(
+                id: "env-a",
+                host: "host-a",
+                cost: 2,
+                tokens: 100,
+                sessions: 1,
+                hourStart: "2026-08-05T14:00:00.000Z"
+            ),
+            environment(
+                id: "env-b",
+                host: "host-b",
+                cost: 3,
+                tokens: 50,
+                sessions: 1,
+                hourStart: "2026-08-05T14:00:00.000Z"
+            ),
+            environment(
+                id: "env-c",
+                host: "host-c",
+                cost: 1,
+                tokens: 25,
+                sessions: 1,
+                hourStart: "2026-08-05T09:00:00.000Z"
+            ),
+        ])
+        XCTAssertEqual(merged.hourly.map(\.hourStart), [
+            "2026-08-05T09:00:00.000Z",
+            "2026-08-05T14:00:00.000Z",
+        ])
+        XCTAssertEqual(merged.hourly.last?.costUsd, 5)
+        XCTAssertEqual(merged.hourly.last?.totalTokens, 150)
+        XCTAssertEqual(merged.hourly.last?.byProvider["claude"]?.totalTokens, 150)
+        XCTAssertEqual(merged.activeHours, 2)
+        // Daily totals still accumulate from hourly cells.
+        XCTAssertEqual(merged.daily.count, 1)
+        XCTAssertEqual(merged.daily.first?.totalTokens, 175)
+    }
+
+    func testDailyBucketsProduceNoHourlyEntries() {
+        let merged = FeatureUsageMerge.merge([
+            environment(id: "env-a", host: "host-a", cost: 2, tokens: 100, sessions: 1)
+        ])
+        XCTAssertTrue(merged.hourly.isEmpty)
+        XCTAssertEqual(merged.activeHours, 0)
+    }
+
     func testReasoningTokensAreNotAddedOnTopOfOutput() {
         let totals = UsageTokenTotals(
             uncachedInputTokens: 10,
@@ -72,7 +122,8 @@ final class UsageMergeTests: XCTestCase {
         cost: Double,
         tokens: Int,
         sessions: Int,
-        contractVersion: Int = usageContractVersion
+        contractVersion: Int = usageContractVersion,
+        hourStart: String? = nil
     ) -> FeatureEnvironmentUsage {
         let fingerprint = UsageSourceFingerprint(
             hostId: host,
@@ -92,6 +143,7 @@ final class UsageMergeTests: XCTestCase {
                 buckets: [
                     UsageBucket(
                         day: "2026-08-05",
+                        hourStart: hourStart,
                         provider: "claude",
                         model: "claude-fable-5",
                         totals: UsageTokenTotals(

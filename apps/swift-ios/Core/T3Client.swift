@@ -820,19 +820,28 @@ public actor T3Client {
     /// Scans provider transcript directories on this server and returns the
     /// usage summary for an inclusive `[sinceDay, untilDay]` window of
     /// `YYYY-MM-DD` days bucketed in `timeZone` (IANA — an offset would be
-    /// wrong across a DST boundary).
+    /// wrong across a DST boundary). Passing `resolution: "hour"` with a
+    /// `[sinceTime, untilTime)` pair of UTC instants asks for rolling hourly
+    /// buckets (each cell then carries `hourStart`) instead of daily ones.
     public func getUsageSummary(
         sinceDay: String,
         untilDay: String,
-        timeZone: String
+        timeZone: String,
+        resolution: String? = nil,
+        sinceTime: String? = nil,
+        untilTime: String? = nil
     ) async throws -> UsageSummary {
-        try await rpc.request(
+        var payload: [String: JSONValue] = [
+            "sinceDay": .string(sinceDay),
+            "untilDay": .string(untilDay),
+            "timeZone": .string(timeZone),
+        ]
+        if let resolution { payload["resolution"] = .string(resolution) }
+        if let sinceTime { payload["sinceTime"] = .string(sinceTime) }
+        if let untilTime { payload["untilTime"] = .string(untilTime) }
+        return try await rpc.request(
             RPCMethod.serverGetUsageSummary.rawValue,
-            payload: .object([
-                "sinceDay": .string(sinceDay),
-                "untilDay": .string(untilDay),
-                "timeZone": .string(timeZone),
-            ]),
+            payload: .object(payload),
             as: UsageSummary.self
         )
     }

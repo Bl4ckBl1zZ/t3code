@@ -51,6 +51,19 @@ public struct FeatureUsageDailySlice: Sendable, Equatable {
     public var totalTokens: Int
 }
 
+/// One rolling hourly bucket, present only when the summaries were requested
+/// at hourly resolution. `hourStart` is the bucket's UTC start instant.
+public struct FeatureUsageHourlyTotals: Sendable, Equatable, Identifiable {
+    public let day: String
+    public let hourStart: String
+    public let costUsd: Double
+    public let totalTokens: Int
+    /// Provider → (cost, tokens) for the stacked chart.
+    public let byProvider: [String: FeatureUsageDailySlice]
+
+    public var id: String { hourStart }
+}
+
 public struct FeatureMergedUsage: Sendable, Equatable {
     public var costUsd: Double = 0
     public var cacheSavingsUsd: Double = 0
@@ -65,6 +78,9 @@ public struct FeatureMergedUsage: Sendable, Equatable {
     public var providers: [FeatureUsageProviderTotals] = []
     public var models: [FeatureUsageModelTotals] = []
     public var daily: [FeatureUsageDailyTotals] = []
+    /// Empty for daily requests; hourly requests fill one entry per bucket
+    /// hour that saw traffic.
+    public var hourly: [FeatureUsageHourlyTotals] = []
     /// Environments whose transcript directories were dropped as duplicates
     /// of another environment's (label: path).
     public var duplicateSources: [String] = []
@@ -82,6 +98,9 @@ public struct FeatureMergedUsage: Sendable, Equatable {
     /// Mean cost/tokens over days that saw any traffic, not over the window:
     /// a quiet week must not drag the average toward zero.
     public var activeDays: Int { daily.filter { $0.totalTokens > 0 }.count }
+
+    /// Hourly counterpart of `activeDays` for the past-24-hours window.
+    public var activeHours: Int { hourly.filter { $0.totalTokens > 0 }.count }
 }
 
 public enum FeatureUsageMerge {
@@ -126,6 +145,8 @@ public enum FeatureUsageMerge {
         var modelTotals: [String: (provider: String, model: String, costUsd: Double, tokens: Int)] =
             [:]
         var dailyTotals: [String: [String: FeatureUsageDailySlice]] = [:]
+        var hourlyTotals: [String: (day: String, byProvider: [String: FeatureUsageDailySlice])] =
+            [:]
 
         for environment in current {
             var ownedProviders: Set<String> = []
@@ -172,6 +193,18 @@ public enum FeatureUsageMerge {
                 slice.totalTokens += tokens
                 day[bucket.provider] = slice
                 dailyTotals[bucket.day] = day
+
+                if let hourStart = bucket.hourStart {
+                    var hour = hourlyTotals[hourStart] ?? (day: bucket.day, byProvider: [:])
+                    var hourSlice = hour.byProvider[bucket.provider] ?? FeatureUsageDailySlice(
+                        costUsd: 0,
+                        totalTokens: 0
+                    )
+                    hourSlice.costUsd += bucket.costUsd
+                    hourSlice.totalTokens += tokens
+                    hour.byProvider[bucket.provider] = hourSlice
+                    hourlyTotals[hourStart] = hour
+                }
             }
         }
 
@@ -201,6 +234,17 @@ public enum FeatureUsageMerge {
                 )
             }
             .sorted { $0.day < $1.day }
+        merged.hourly = hourlyTotals
+            .map { hourStart, hour in
+                FeatureUsageHourlyTotals(
+                    day: hour.day,
+                    hourStart: hourStart,
+                    costUsd: hour.byProvider.values.reduce(0) { $0 + $1.costUsd },
+                    totalTokens: hour.byProvider.values.reduce(0) { $0 + $1.totalTokens },
+                    byProvider: hour.byProvider
+                )
+            }
+            .sorted { $0.hourStart < $1.hourStart }
         return merged
     }
 }

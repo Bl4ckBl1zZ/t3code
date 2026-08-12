@@ -463,13 +463,19 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environmentID: String,
         sinceDay: String,
         untilDay: String,
-        timeZone: String
+        timeZone: String,
+        resolution: String?,
+        sinceTime: String?,
+        untilTime: String?
     ) async throws -> UsageSummary {
         let client = try await environmentClient(id: environmentID)
         return try await client.getUsageSummary(
             sinceDay: sinceDay,
             untilDay: untilDay,
-            timeZone: timeZone
+            timeZone: timeZone,
+            resolution: resolution,
+            sinceTime: sinceTime,
+            untilTime: untilTime
         )
     }
 
