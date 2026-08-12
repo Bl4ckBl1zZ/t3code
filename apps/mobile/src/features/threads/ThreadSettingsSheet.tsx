@@ -31,7 +31,7 @@ import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
 import { runtimeModeMenu } from "../../lib/runtimeModeMenu";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-menu";
+import { selectableChoices } from "./thread-settings-menu";
 import { pendingModelAfterPress } from "./thread-settings-sheet-state";
 import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet-presentation";
 
