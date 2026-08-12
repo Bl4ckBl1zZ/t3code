@@ -61,6 +61,10 @@ public protocol FeatureClient: AnyObject {
     func setThreadPinned(id: String, pinned: Bool) async throws
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws
+    /// Persists the model and its options (effort, context window) on the
+    /// thread, so the choice follows the thread across devices rather than
+    /// living in one device's composer.
+    func setModelSelection(id: String, selection: FeatureSelection) async throws
     func deleteThread(id: String) async throws
 
     func loadThread(id: String) async throws -> FeatureThreadDetail
@@ -224,6 +228,7 @@ public extension FeatureClient {
     func setThreadPinned(id: String, pinned: Bool) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
+    func setModelSelection(id: String, selection: FeatureSelection) async throws {}
 
     func generateHandoffScript(threadID: String) async throws -> String {
         throw FeatureCapabilityUnavailable("Handoff script")

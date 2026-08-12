@@ -17,6 +17,7 @@ import {
   type RunId,
   type RuntimeRequestId,
   type KeybindingCommand,
+  type ProviderOptionSelection,
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
@@ -1609,9 +1610,14 @@ function ChatViewContent(props: ChatViewProps) {
   const threadError = isServerThread
     ? (localServerError ?? serverRuntime?.lastError ?? null)
     : localDraftError;
-  const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-  const interactionMode =
-    composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+  // A server thread owns both modes the same way it owns the model selection,
+  // so the local composer draft only supplies them for not-yet-created threads.
+  const runtimeMode = isServerThread
+    ? (activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE)
+    : (composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE);
+  const interactionMode = isServerThread
+    ? (activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE)
+    : (composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE);
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -3534,6 +3540,14 @@ function ChatViewContent(props: ChatViewProps) {
   const handleRuntimeModeChange = useCallback(
     (mode: RuntimeMode) => {
       if (mode === runtimeMode) return;
+      if (isServerThread && serverThread) {
+        void setThreadRuntimeMode({
+          environmentId,
+          input: { threadId: serverThread.id, runtimeMode: mode },
+        });
+        scheduleComposerFocus();
+        return;
+      }
       setComposerDraftRuntimeMode(composerDraftTarget, mode);
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, { runtimeMode: mode });
@@ -3541,9 +3555,13 @@ function ChatViewContent(props: ChatViewProps) {
       scheduleComposerFocus();
     },
     [
+      environmentId,
       isLocalDraftThread,
+      isServerThread,
       runtimeMode,
       scheduleComposerFocus,
+      serverThread,
+      setThreadRuntimeMode,
       composerDraftTarget,
       setComposerDraftRuntimeMode,
       setDraftThreadContext,
@@ -3553,6 +3571,14 @@ function ChatViewContent(props: ChatViewProps) {
   const handleInteractionModeChange = useCallback(
     (mode: ProviderInteractionMode) => {
       if (mode === interactionMode) return;
+      if (isServerThread && serverThread) {
+        void setThreadInteractionMode({
+          environmentId,
+          input: { threadId: serverThread.id, interactionMode: mode },
+        });
+        scheduleComposerFocus();
+        return;
+      }
       setComposerDraftInteractionMode(composerDraftTarget, mode);
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, { interactionMode: mode });
@@ -3560,9 +3586,13 @@ function ChatViewContent(props: ChatViewProps) {
       scheduleComposerFocus();
     },
     [
+      environmentId,
       interactionMode,
       isLocalDraftThread,
+      isServerThread,
       scheduleComposerFocus,
+      serverThread,
+      setThreadInteractionMode,
       composerDraftTarget,
       setComposerDraftInteractionMode,
       setDraftThreadContext,
@@ -4022,6 +4052,46 @@ function ChatViewContent(props: ChatViewProps) {
       setThreadRuntimeMode,
       updateThreadMetadata,
     ],
+  );
+
+  // Model, effort and the two modes live on the thread, so a change made here
+  // is written through immediately rather than held until the next send. The
+  // server broadcasts it over the thread and shell subscriptions, which is what
+  // makes the same thread agree across every device viewing it.
+  const persistThreadModelSelection = useCallback(
+    (modelSelection: ModelSelection) => {
+      if (!serverThread) {
+        return;
+      }
+      void updateThreadMetadata({
+        environmentId,
+        input: { threadId: serverThread.id, modelSelection },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          toastManager.add({
+            type: "error",
+            title: "Could not change the model",
+            description: "The thread kept its previous model.",
+          });
+        }
+      });
+    },
+    [environmentId, serverThread, updateThreadMetadata],
+  );
+
+  const onThreadModelOptionsChange = useCallback(
+    (options: ReadonlyArray<ProviderOptionSelection> | undefined) => {
+      const current = serverThread?.modelSelection;
+      if (!current) {
+        return;
+      }
+      persistThreadModelSelection({
+        instanceId: current.instanceId,
+        model: current.model,
+        ...(options && options.length > 0 ? { options } : {}),
+      });
+    },
+    [persistThreadModelSelection, serverThread?.modelSelection],
   );
 
   // Debounce *showing* the scroll-to-bottom pill so it doesn't flash during
@@ -6557,17 +6627,33 @@ function ChatViewContent(props: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
-      setComposerDraftModelSelection(
-        scopeThreadRef(activeThread.environmentId, activeThread.id),
-        nextModelSelection,
-      );
+      // The sticky value is this browser's preference for the *next* new
+      // thread, so it is recorded either way.
       setStickyComposerModelSelection(nextModelSelection);
+      if (isServerThread) {
+        // Carry the thread's current options across a model change: the picker
+        // only chooses the model, and dropping effort here would silently reset
+        // it on every device.
+        persistThreadModelSelection({
+          ...nextModelSelection,
+          ...(activeThread.modelSelection?.options
+            ? { options: activeThread.modelSelection.options }
+            : {}),
+        });
+      } else {
+        setComposerDraftModelSelection(
+          scopeThreadRef(activeThread.environmentId, activeThread.id),
+          nextModelSelection,
+        );
+      }
       scheduleComposerFocus();
     },
     [
       activeThread,
       activeRuntime,
+      isServerThread,
       lockedProvider,
+      persistThreadModelSelection,
       supportsProviderSwitchingViaHandoff,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
@@ -7093,7 +7179,6 @@ function ChatViewContent(props: ChatViewProps) {
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
                             routeKind={routeKind}
-                            routeThreadRef={routeThreadRef}
                             draftId={draftId}
                             activeThreadId={activeThreadId}
                             activeThreadEnvironmentId={activeThread?.environmentId}
@@ -7133,6 +7218,7 @@ function ChatViewContent(props: ChatViewProps) {
                               activeProject?.defaultModelSelection
                             }
                             activeThreadModelSelection={activeThread?.modelSelection}
+                            onThreadModelOptionsChange={onThreadModelOptionsChange}
                             activeThreadVisibleTurnItems={serverVisibleTurnItems}
                             resolvedTheme={resolvedTheme}
                             settings={settings}

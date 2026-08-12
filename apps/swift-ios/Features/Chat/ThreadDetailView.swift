@@ -20,7 +20,6 @@ public struct ThreadDetailView: View {
     @SwiftUI.Environment(\.openURL) private var openURL
 
     @State private var draft = ""
-    @State private var selection: FeatureSelection?
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var bannerHeight: CGFloat = 0
     /// The glass composer floats over the transcript instead of displacing it,
@@ -104,7 +103,6 @@ public struct ThreadDetailView: View {
         }
         .onChange(of: draft) { scheduleDraftSave() }
         .onChange(of: attachments) { scheduleDraftSave() }
-        .onChange(of: selection) { scheduleDraftSave() }
         .onDisappear {
             model.releaseThread(thread.id)
             persistDraftBeforeLeaving()
@@ -516,10 +514,33 @@ public struct ThreadDetailView: View {
         }
     }
 
+    /// Reads the thread's selection and writes a pick straight back to it, so
+    /// changing the model or effort here reaches every other device on the
+    /// thread instead of staying in this composer.
+    ///
+    /// Opening the model picker materializes each option's default, which lands
+    /// here as a write. Comparing against the materialized form of what the
+    /// thread already holds keeps that from dispatching a command every time the
+    /// sheet appears.
+    private var composerSelection: Binding<FeatureSelection?> {
+        Binding(
+            get: { currentSelection },
+            set: { next in
+                guard let next else { return }
+                let providers = ProviderModelCatalogNormalizer.normalized(threadProviders)
+                let current =
+                    ProviderModelSelectionResolver.validated(currentSelection, in: providers)
+                    ?? currentSelection
+                guard next != current else { return }
+                Task { await model.setModelSelection(thread.id, selection: next) }
+            }
+        )
+    }
+
     private func composer(_ detail: FeatureThreadDetail) -> some View {
         FeatureComposerView(
             text: $draft,
-            selection: $selection,
+            selection: composerSelection,
             attachments: $attachments,
             providers: threadProviders,
             threadSelection: currentSelection,
@@ -562,7 +583,7 @@ public struct ThreadDetailView: View {
     }
 
     private var composerPowerFeatures: FeatureComposerPowerFeatures {
-        let selectedProviderID = selection?.providerID ?? currentSelection?.providerID
+        let selectedProviderID = currentSelection?.providerID
         let provider = threadProviders.first { $0.id == selectedProviderID }
         return FeatureComposerPowerFeatures(
             slashCommands: provider?.slashCommands ?? [],
@@ -838,7 +859,7 @@ public struct ThreadDetailView: View {
     }
 
     private func notePendingProviderSwitch() {
-        guard let selection,
+        guard let selection = currentSelection,
               let previous = detail?.timelineRuns.last,
               !previous.providerInstanceID.isEmpty,
               previous.providerInstanceID != selection.providerID else {
@@ -922,7 +943,7 @@ public struct ThreadDetailView: View {
                 FeatureMessageSubmission(
                 threadID: thread.id,
                 text: message,
-                selection: selection,
+                selection: currentSelection,
                 attachments: pendingAttachments
                 )
             )
@@ -965,19 +986,16 @@ public struct ThreadDetailView: View {
         guard !Task.isCancelled else { return }
 
         let liveDraft = composerDraft
-        var restored = FeatureComposerDraftRestoration.merge(
+        // Only text and attachments are restored: the thread owns the model
+        // selection now, so a stale one saved on this device must not shadow a
+        // pick made elsewhere.
+        let restored = FeatureComposerDraftRestoration.merge(
             saved: saved,
             baseline: baseline,
             current: liveDraft
         )
-        restored.selection = ThreadComposerModelSelectionPolicy.explicitSelection(
-            restored.selection,
-            inherited: currentSelection,
-            providers: threadProviders
-        )
         draft = restored.text
         attachments = restored.attachments
-        selection = restored.selection
         didRestoreDraft = true
 
         // Changes made while the file read or thread refresh was in flight did
@@ -1023,8 +1041,7 @@ public struct ThreadDetailView: View {
     private var composerDraft: FeatureComposerDraft {
         FeatureComposerDraft(
             text: draft,
-            attachments: attachments,
-            selection: selection
+            attachments: attachments
         )
     }
 

@@ -5,6 +5,7 @@ import type {
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
+  ProviderOptionSelection,
   ResolvedKeybindingsConfig,
   RuntimeMode,
   ScopedThreadRef,
@@ -531,7 +532,6 @@ export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   routeKind: "server" | "draft";
-  routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
 
   // Thread context
@@ -596,6 +596,12 @@ export interface ChatComposerProps {
   providerStatuses: ServerProvider[];
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
+  /**
+   * Persists a model-option change (effort, context window, …) onto a server
+   * thread. Supplied only on the server route; draft routes fall through to the
+   * composer draft store because they have no thread to write to yet.
+   */
+  onThreadModelOptionsChange: (options: ReadonlyArray<ProviderOptionSelection> | undefined) => void;
 
   // Context window
   activeThreadVisibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
@@ -661,7 +667,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerDraftTarget,
     environmentId,
     routeKind,
-    routeThreadRef,
     draftId,
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
@@ -699,6 +704,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerStatuses,
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
+    onThreadModelOptionsChange,
     activeThreadVisibleTurnItems,
     resolvedTheme,
     settings,
@@ -832,11 +838,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerInstanceEntries,
   ]);
 
+  // Once a server thread exists it owns the model selection, so a pick made on
+  // any device reaches every other one. Drafts have nowhere to persist yet and
+  // keep reading this browser's local pick.
+  const threadOwnsModelSelection = routeKind === "server";
+
   // Resolve which configured instance the composer is currently targeting.
   // Priority:
-  //   1. The composer draft's `activeProvider` — the user's unsaved pick
-  //      from the model picker (must win, otherwise the UI appears to
-  //      ignore picker selections).
+  //   1. The composer draft's `activeProvider` — the user's unsaved pick from
+  //      the model picker. Draft threads only: on a server thread the pick is
+  //      already written through, so honouring the local draft here would let a
+  //      stale browser value shadow another device's change.
   //   2. Thread's persisted instance id (server-side saved selection).
   //   3. Project default's instance id.
   //   4. First enabled entry matching the current driver kind.
@@ -844,7 +856,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   //
   const selectedInstanceId = useMemo<ProviderInstanceId>(() => {
     const candidates: Array<string | null | undefined> = [
-      composerDraft.activeProvider,
+      threadOwnsModelSelection ? null : composerDraft.activeProvider,
       activeThread?.runtime?.providerInstanceId,
       activeThreadModelSelection?.instanceId,
       activeProjectDefaultModelSelection?.instanceId,
@@ -889,6 +901,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     lockedProvider,
     providerInstanceEntries,
     requestedDriverKind,
+    threadOwnsModelSelection,
   ]);
 
   // Resolve the active instance's snapshot by `instanceId` so a custom
@@ -932,6 +945,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedInstanceId,
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
+    threadIsAuthoritative: threadOwnsModelSelection,
     settings,
   });
   const selectedProviderStatus = useMemo(
@@ -1286,11 +1300,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [composerDraftTarget, promptRef, scheduleComposerFocus, setComposerDraftPrompt],
   );
 
+  // On a server thread the effort/context knobs write through to the thread so
+  // the change reaches every device; drafts persist to the local draft store.
+  const traitsPersistence = threadOwnsModelSelection
+    ? { onModelOptionsChange: onThreadModelOptionsChange }
+    : draftId
+      ? { draftId }
+      : {};
   const providerTraitsMenuContent = renderProviderTraitsMenuContent({
     provider: selectedProvider,
     instanceId: selectedInstanceId,
-    ...(routeKind === "server" ? { threadRef: routeThreadRef } : {}),
-    ...(routeKind === "draft" && draftId ? { draftId } : {}),
+    ...traitsPersistence,
     model: selectedModel,
     models: selectedProviderModels,
     modelOptions: composerModelOptions?.[selectedInstanceId],
@@ -1300,8 +1320,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
     instanceId: selectedInstanceId,
-    ...(routeKind === "server" ? { threadRef: routeThreadRef } : {}),
-    ...(routeKind === "draft" && draftId ? { draftId } : {}),
+    ...traitsPersistence,
     model: selectedModel,
     models: selectedProviderModels,
     modelOptions: composerModelOptions?.[selectedInstanceId],

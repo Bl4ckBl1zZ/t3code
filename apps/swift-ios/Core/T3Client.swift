@@ -393,6 +393,22 @@ public actor T3Client {
     }
 
     @discardableResult
+    public func setModelSelection(
+        threadID: String,
+        model: ModelSelection,
+        currentInstanceID: String?
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.setModelSelection(
+                threadID: threadID,
+                model: model,
+                currentInstanceID: currentInstanceID
+            )
+        )
+    }
+
+
+    @discardableResult
     public func regenerateTitle(
         threadID: String,
         regenerate: Bool = true,
@@ -2237,6 +2253,26 @@ public enum OrchestrationCommands {
         ]
         for (key, field) in fields { value[key] = field }
         return .object(value)
+    }
+
+    /// Model and effort belong to the thread, so a pick here reaches every
+    /// device viewing it. Staying on the same provider instance is a plain
+    /// model change; crossing instances is a provider switch, which the server
+    /// handles differently because it has to move the session too.
+    public static func setModelSelection(
+        threadID: String,
+        model: ModelSelection,
+        currentInstanceID: String?,
+        commandID: String = UUID().uuidString
+    ) throws -> JSONValue {
+        .object([
+            "type": .string(
+                currentInstanceID == model.instanceId ? "thread.model-selection.set" : "provider.switch"
+            ),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "modelSelection": try .encode(model),
+        ])
     }
 
     public static func interrupt(

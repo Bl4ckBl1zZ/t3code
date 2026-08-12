@@ -44,7 +44,6 @@ import {
   mergeComposerDraftContent,
   removeComposerDraftAttachment,
   setComposerDraftText,
-  updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
@@ -137,9 +136,13 @@ export function useThreadComposerState(options?: {
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadShell;
-  const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
-  const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
+  // Model, effort and the two modes belong to the thread, not to this device:
+  // every client renders the server's value so a pick on the phone shows up on
+  // the desktop. The composer draft still carries these for the new-task flow,
+  // where no thread exists yet to hold them.
+  const modelSelection = selectedThread?.modelSelection ?? null;
+  const runtimeMode = selectedThread?.runtimeMode ?? null;
+  const interactionMode = selectedThread?.interactionMode ?? null;
   const selectedThreadRuntime = useMemo(
     () =>
       selectedThreadProjection
@@ -181,6 +184,12 @@ export function useThreadComposerState(options?: {
   const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
 
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
+  const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -242,9 +251,9 @@ export function useThreadComposerState(options?: {
       commandId: CommandId.make(metadata.commandId),
       text,
       attachments,
-      modelSelection: draft.modelSelection ?? thread.modelSelection,
-      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-      interactionMode: draft.interactionMode ?? thread.interactionMode,
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
       createdAt: metadata.createdAt,
     });
     clearComposerDraftContent(threadKey);
@@ -441,34 +450,58 @@ export function useThreadComposerState(options?: {
     [selectedThreadShell],
   );
 
+  // These three write straight through to the thread rather than to the local
+  // draft. The server echoes the change back over the shell subscription, which
+  // is what makes a pick on one device land on all the others.
   const onUpdateModelSelection = useCallback(
     (value: ModelSelection) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadShell) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { modelSelection: value });
+      void updateThreadMetadata({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, modelSelection: value },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          setPendingConnectionError("Failed to change the model.");
+        }
+      });
     },
-    [selectedThreadKey],
+    [selectedThreadShell, updateThreadMetadata],
   );
 
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadShell) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
+      void setThreadRuntimeMode({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, runtimeMode: value },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          setPendingConnectionError("Failed to change the runtime mode.");
+        }
+      });
     },
-    [selectedThreadKey],
+    [selectedThreadShell, setThreadRuntimeMode],
   );
 
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadShell) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { interactionMode: value });
+      void setThreadInteractionMode({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, interactionMode: value },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          setPendingConnectionError("Failed to change the interaction mode.");
+        }
+      });
     },
-    [selectedThreadKey],
+    [selectedThreadShell, setThreadInteractionMode],
   );
 
   return {

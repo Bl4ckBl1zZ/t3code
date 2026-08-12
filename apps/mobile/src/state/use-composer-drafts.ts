@@ -19,6 +19,8 @@ import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
+/** Key prefix for drafts that have no thread yet; see stripThreadScopedSettings. */
+export const NEW_TASK_DRAFT_KEY_PREFIX = "new-task:";
 const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
 const COMPOSER_DRAFTS_FILE = "drafts.json";
 const PERSIST_DEBOUNCE_MS = 200;
@@ -135,10 +137,28 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
   );
 }
 
+/**
+ * New-task drafts own their model/mode settings because no thread exists yet to
+ * hold them. Thread drafts do not: the thread record is authoritative there, so
+ * a locally persisted selection would shadow a pick made on another device.
+ * Drop those on read to retire values written by older builds.
+ */
+function stripThreadScopedSettings(draftKey: string, draft: ComposerDraft): ComposerDraft {
+  if (draftKey.startsWith(NEW_TASK_DRAFT_KEY_PREFIX)) {
+    return draft;
+  }
+  const { modelSelection, runtimeMode, interactionMode, ...retained } = draft;
+  return modelSelection === undefined && runtimeMode === undefined && interactionMode === undefined
+    ? draft
+    : retained;
+}
+
 export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
   const parsed = decodePersistedComposerDraftsDocument(value);
   return Object.fromEntries(
-    Object.entries(parsed.drafts).filter(([, draft]) => !isEmptyDraft(draft)),
+    Object.entries(parsed.drafts)
+      .map(([draftKey, draft]) => [draftKey, stripThreadScopedSettings(draftKey, draft)] as const)
+      .filter(([, draft]) => !isEmptyDraft(draft)),
   );
 }
 

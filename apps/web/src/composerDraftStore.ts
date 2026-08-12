@@ -1016,6 +1016,13 @@ export function deriveEffectiveComposerModelState(input: {
   selectedInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
+  /**
+   * True once a server thread exists to hold the selection. The thread record
+   * is then the only source of truth, so a pick made on another device shows up
+   * here instead of being shadowed by this browser's saved draft selection.
+   * Drafts have no thread yet, so they keep reading their local selection.
+   */
+  threadIsAuthoritative?: boolean;
   settings: UnifiedSettings;
 }): EffectiveComposerModelState {
   const baseModelCandidate =
@@ -1041,11 +1048,13 @@ export function deriveEffectiveComposerModelState(input: {
   // driver-kind bucket so legacy kind-keyed drafts still resolve. Every
   // `ProviderDriverKind` literal is a valid `ProviderInstanceId` slug, so the
   // cast to the branded type is safe.
+  const draftSelections = input.threadIsAuthoritative
+    ? undefined
+    : input.draft?.modelSelectionByProvider;
   const instanceSelection = input.selectedInstanceId
-    ? input.draft?.modelSelectionByProvider?.[input.selectedInstanceId]
+    ? draftSelections?.[input.selectedInstanceId]
     : undefined;
-  const legacySelection =
-    input.draft?.modelSelectionByProvider?.[ProviderInstanceId.make(input.selectedProvider)];
+  const legacySelection = draftSelections?.[ProviderInstanceId.make(input.selectedProvider)];
   const activeSelection = instanceSelection ?? legacySelection;
   const activeSelectionInstanceId = instanceSelection
     ? (input.selectedInstanceId ?? ProviderInstanceId.make(input.selectedProvider))
@@ -1065,7 +1074,7 @@ export function deriveEffectiveComposerModelState(input: {
       ))
     : baseModel;
   const modelOptions =
-    modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
+    modelSelectionByProviderToOptions(draftSelections) ??
     providerSelectionsFromModelSelection(input.threadModelSelection) ??
     providerSelectionsFromModelSelection(input.projectModelSelection) ??
     null;
@@ -3623,6 +3632,8 @@ export function useEffectiveComposerModelState(input: {
   selectedInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
+  /** See `deriveEffectiveComposerModelState`. */
+  threadIsAuthoritative?: boolean;
   settings: UnifiedSettings;
 }): EffectiveComposerModelState {
   const draft = useComposerDraftModelState(input.threadRef ?? input.draftId ?? DraftId.make(""));
@@ -3636,6 +3647,9 @@ export function useEffectiveComposerModelState(input: {
         selectedInstanceId: input.selectedInstanceId,
         threadModelSelection: input.threadModelSelection,
         projectModelSelection: input.projectModelSelection,
+        ...(input.threadIsAuthoritative === undefined
+          ? {}
+          : { threadIsAuthoritative: input.threadIsAuthoritative }),
         settings: input.settings,
       }),
     [
@@ -3645,6 +3659,7 @@ export function useEffectiveComposerModelState(input: {
       input.projectModelSelection,
       input.selectedInstanceId,
       input.selectedProvider,
+      input.threadIsAuthoritative,
       input.threadModelSelection,
     ],
   );
