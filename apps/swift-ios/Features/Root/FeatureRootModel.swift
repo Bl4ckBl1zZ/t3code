@@ -377,6 +377,22 @@ public final class FeatureRootModel {
         }
     }
 
+    /// Model and effort are thread state, so a pick here is written through
+    /// immediately and mirrored into the local thread for the frame before the
+    /// server echo arrives.
+    public func setModelSelection(_ id: String, selection: FeatureSelection) async {
+        let environment = currentEnvironmentIdentity
+        await perform {
+            try await client.setModelSelection(id: id, selection: selection)
+            guard currentEnvironmentIdentity == environment else { return }
+            mutateThread(id: id) {
+                $0.providerID = selection.providerID
+                $0.modelID = selection.modelID
+                $0.modelOptions = selection.options
+            }
+        }
+    }
+
     public func deleteThread(_ id: String) async {
         let environment = currentEnvironmentIdentity
         await perform {

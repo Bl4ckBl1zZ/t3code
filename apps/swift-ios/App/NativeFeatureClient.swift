@@ -1423,6 +1423,24 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         threadHistoryEpoch &+= 1
     }
 
+    /// Writes a model/effort pick onto the thread instead of holding it in this
+    /// device's composer. The server broadcasts the change over the thread and
+    /// shell subscriptions, so every device on the thread follows along.
+    func setModelSelection(id: String, selection: FeatureSelection) async throws {
+        let route = try threadRoute(for: id)
+        let shellThread = shellsByEnvironmentID[route.environmentID]?.threads
+            .first(where: { $0.id == route.wireID })
+        _ = try await route.client.setModelSelection(
+            threadID: route.wireID,
+            model: coreModelSelection(selection),
+            currentInstanceID: shellThread?.modelSelection.instanceId
+        )
+        try? await refresh(client: route.client)
+        if activeThreadID == route.uiID {
+            try? await refreshThread(id: route.uiID, client: route.client)
+        }
+    }
+
     func sendMessage(
         threadID: String,
         text: String,
