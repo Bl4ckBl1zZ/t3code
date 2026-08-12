@@ -237,61 +237,6 @@ export function useCopyThreadHandoffScript(): (thread: EnvironmentThreadShell) =
   );
 }
 
-/**
- * Asks the server to rewrite the thread's title from its transcript. The
- * server arms a `titleRegeneration` marker on the shell and streams the new
- * title in, so there is nothing to await beyond the command ack; rows disable
- * the action while that marker is set. Repeat requests for the same thread are
- * ignored while one is in flight.
- */
-export function useRegenerateThreadTitle(): (thread: EnvironmentThreadShell) => void {
-  const updateMetadataMutation = useAtomCommand(threadEnvironment.updateMetadata, {
-    reportFailure: false,
-  });
-  const inFlightThreadKeys = useRef(new Set<string>());
-
-  return useCallback(
-    (thread: EnvironmentThreadShell) => {
-      void (async () => {
-        const key = scopedThreadKey(thread.environmentId, thread.id);
-        if (inFlightThreadKeys.current.has(key)) {
-          return;
-        }
-        // Version skew: older servers reject regenerateTitle outright, so the
-        // rows hide the action. Guard anyway for a capability that flipped
-        // between render and press.
-        if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
-          Alert.alert(
-            "Could not regenerate title",
-            "This environment's server does not support title regeneration yet. Update the server to use it.",
-          );
-          return;
-        }
-        inFlightThreadKeys.current.add(key);
-        selectionHaptic();
-        try {
-          const result = await updateMetadataMutation({
-            environmentId: thread.environmentId,
-            input: { threadId: thread.id, regenerateTitle: true },
-          });
-          if (result._tag === "Failure") {
-            const error = Cause.squash(result.cause);
-            Alert.alert(
-              "Could not regenerate title",
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : "The thread title could not be regenerated.",
-            );
-          }
-        } finally {
-          inFlightThreadKeys.current.delete(key);
-        }
-      })();
-    },
-    [updateMetadataMutation],
-  );
-}
-
 function useConfirmDeleteThread(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
 ) {
@@ -339,13 +284,18 @@ export function useThreadListActions(): {
     thread: EnvironmentThreadShell,
     direction: "up" | "down",
   ) => Promise<boolean>;
+  readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
+  const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -517,6 +467,47 @@ export function useThreadListActions(): {
     },
     [unpinMutation],
   );
+  const regenerateThreadTitle = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      const key = scopedThreadKey(thread.environmentId, thread.id);
+      if (
+        thread.titleRegeneration != null ||
+        titleRegenerationInFlightThreadKeys.current.has(key)
+      ) {
+        return false;
+      }
+      if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
+        Alert.alert(
+          "Could not regenerate title",
+          "This environment's server does not support title regeneration yet. Update the server to regenerate thread titles.",
+        );
+        return false;
+      }
+
+      titleRegenerationInFlightThreadKeys.current.add(key);
+      selectionHaptic();
+      try {
+        const result = await updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, regenerateTitle: true },
+        });
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not regenerate title",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread title could not be regenerated.",
+          );
+          return false;
+        }
+        return true;
+      } finally {
+        titleRegenerationInFlightThreadKeys.current.delete(key);
+      }
+    },
+    [updateThreadMetadata],
+  );
 
   // Move up / Move down for the pinned block. Computed against the CANONICAL
   // keyed pinned order (not the rendered list), so the move is valid even
@@ -609,6 +600,7 @@ export function useThreadListActions(): {
     pinThread,
     unpinThread,
     movePinnedThread,
+    regenerateThreadTitle,
   };
 }
 
