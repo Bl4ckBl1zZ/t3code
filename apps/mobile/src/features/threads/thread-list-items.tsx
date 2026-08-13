@@ -22,7 +22,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { useCopyThreadHandoffScript, useRegenerateThreadTitle } from "../home/useThreadListActions";
+import { useCopyThreadHandoffScript } from "../home/useThreadListActions";
 import { resolveThreadStatus } from "./threadPresentation";
 import { REGENERATE_TITLE_MENU_ACTION_ID, withTitleRegenerationMenuAction } from "./threadRowMenu";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
@@ -436,6 +436,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   readonly simultaneousSwipeGesture?: ComponentProps<
@@ -457,7 +458,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
 
-  const { thread, onSelectThread, onArchiveThread, onDeleteThread } = props;
+  const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
+    props;
   const status = resolveThreadStatus(thread);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
@@ -480,8 +482,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const copyHandoffScript = useCopyThreadHandoffScript();
-  const regenerateTitle = useRegenerateThreadTitle();
   const isRegeneratingTitle = thread.titleRegeneration != null;
+  const handleRegenerateTitle = useCallback(
+    () => onRegenerateThreadTitle(thread),
+    [onRegenerateThreadTitle, thread],
+  );
   const primaryAction = useMemo(
     () => ({
       accessibilityLabel: `Archive ${thread.title}`,
@@ -496,11 +501,18 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "copy-handoff-script") copyHandoffScript(thread);
       if (nativeEvent.event === REGENERATE_TITLE_MENU_ACTION_ID && !isRegeneratingTitle) {
-        regenerateTitle(thread);
+        handleRegenerateTitle();
       }
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [copyHandoffScript, handleArchive, handleDelete, isRegeneratingTitle, regenerateTitle, thread],
+    [
+      copyHandoffScript,
+      handleArchive,
+      handleDelete,
+      handleRegenerateTitle,
+      isRegeneratingTitle,
+      thread,
+    ],
   );
   const menuActions = useMemo(
     () =>

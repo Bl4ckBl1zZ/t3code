@@ -74,6 +74,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           "inline-flex h-7 shrink-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs",
           displayMode === "panel" && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
         )}
+        data-composer-context-control
       >
         {activeWorktreePath ? (
           <FolderGitIcon
@@ -129,6 +130,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
                 displayMode === "panel" && THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
               )}
               aria-label="Workspace"
+              data-composer-context-control
             />
           }
         >
@@ -148,11 +150,19 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           <span
             data-composer-label
             className={cn(
-              "min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0",
+              "min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0",
               displayMode === "panel" && "max-w-none flex-1 text-left",
             )}
           >
-            <SelectValue />
+            <span
+              data-composer-label-motion
+              className={cn(
+                "block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity",
+                displayMode === "panel" && "max-w-none text-left",
+              )}
+            >
+              <SelectValue />
+            </span>
           </span>
           {displayMode === "panel" ? (
             <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">

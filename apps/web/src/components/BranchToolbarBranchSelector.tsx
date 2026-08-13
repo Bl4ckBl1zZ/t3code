@@ -731,6 +731,7 @@ export function BranchToolbarBranchSelector({
           displayMode === "panel" ? "w-full flex-col items-stretch" : "items-center gap-1",
           className,
         )}
+        data-composer-context-control
       >
         {displayMode !== "panel" && branchPr && branchPrStatus ? (
           <Tooltip>
@@ -774,11 +775,16 @@ export function BranchToolbarBranchSelector({
             <span
               data-composer-label
               className={cn(
-                "min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0",
+                "min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0",
                 displayMode === "panel" && "max-w-none flex-1 text-left",
               )}
             >
-              {triggerLabel}
+              <span
+                data-composer-label-motion
+                className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+              >
+                {triggerLabel}
+              </span>
             </span>
             <ChevronDownIcon
               className={cn(

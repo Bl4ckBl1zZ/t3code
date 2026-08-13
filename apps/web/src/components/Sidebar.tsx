@@ -29,7 +29,12 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { ProviderDriverKind, type EnvironmentId, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type EnvironmentId,
+  type ScopedThreadRef,
+  type ThreadId,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -132,6 +137,7 @@ import {
   firstValidTimestampMs,
   hasUnseenCompletion,
   canPinWorkInboxThread,
+  isSidebarNestedLinkClick,
   isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -141,9 +147,10 @@ import {
   resolveSettledTimestamp,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
+  searchSidebarThreadsByTitle,
+  shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
   resolveWorkInboxBadge,
-  searchSidebarThreadsByTitle,
   sidebarProjectKey,
   sidebarProviderInstanceKey,
   sortSidebarV2ProjectGroups,
@@ -1191,10 +1198,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </span>
   );
 
+  // A real link so cmd/ctrl+click and middle-click open the host in the
+  // browser. A plain click still opens T3's pull request view.
   const prBadge =
     prStatus && pr ? (
-      <button
-        type="button"
+      <a
+        href={pr.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={handlePrClick}
         className={cn(
           // Sidebar chrome follows the interface font; tabular digits keep the
@@ -1209,7 +1221,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         aria-label={prStatus.tooltip}
       >
         #{pr.number}
-      </button>
+      </a>
     ) : null;
   // A t3-generated branch ("t3code/ffeef775") tells you nothing the row does
   // not already say. Once the work has a change request, that is the thing
@@ -1967,6 +1979,24 @@ export default function Sidebar() {
         stackedThreadToast({
           type: "error",
           title: "Failed to copy handoff script",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
+    onCopy: ({ threadId }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ID copied",
+        description: threadId,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -2892,6 +2922,7 @@ export default function Sidebar() {
         event.preventDefault();
         return;
       }
+      if (isSidebarNestedLinkClick(event.target)) return;
       const isMac = isMacPlatform(navigator.platform);
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const threadKey = scopedThreadKey(threadRef);
@@ -3353,6 +3384,7 @@ export default function Sidebar() {
               { id: "copy-path", label: "Copy path", icon: "copy" },
               ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
               { id: "copy-handoff-script", label: "Copy handoff script", icon: "copy" },
+              { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
             position,
@@ -3473,6 +3505,9 @@ export default function Sidebar() {
             copyHandoffScriptToClipboard(result.value.script);
             return;
           }
+          case "copy-thread-id":
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
+            return;
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -3515,6 +3550,7 @@ export default function Sidebar() {
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      copyThreadIdToClipboard,
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
@@ -3609,47 +3645,50 @@ export default function Sidebar() {
   // falling back to the top project) — same resolution the command palette
   // uses. The command palette already offers a "New thread in..." submenu
   // for multi-project setups.
-  const handleNewThreadClick = useCallback(() => {
-    if (workspace === "work" || workspace === "chat") {
-      if (!openWorkComposer()) {
-        toastManager.add({
-          type: "warning",
-          title: "Hermes is not ready",
-          description:
-            "Enable and configure Hermes, then wait for T3 Work to finish preparing its private conversation directory.",
-        });
+  const handleNewThreadClick = useCallback(
+    (event?: ReactMouseEvent) => {
+      if (workspace === "work" || workspace === "chat") {
+        if (!openWorkComposer()) {
+          toastManager.add({
+            type: "warning",
+            title: "Hermes is not ready",
+            description:
+              "Enable and configure Hermes, then wait for T3 Work to finish preparing its private conversation directory.",
+          });
+        }
+        return;
       }
-      return;
-    }
-    // One project: nothing to pick, create immediately.
-    if (projectGroups.length <= 1) {
+      // One project: nothing to pick, create immediately. Shift+click creates
+      // directly in the current project even with several projects, skipping
+      // the palette picker.
+      if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
+        if (isMobile) setOpenMobile(false);
+        void startNewThreadFromContext({
+          activeDraftThread: newThreadContext.activeDraftThread,
+          activeThread: newThreadContext.activeThread ?? undefined,
+          defaultProjectRef: newThreadContext.defaultProjectRef,
+          handleNewThread: newThreadContext.handleNewThread,
+        });
+        return;
+      }
       if (isMobile) setOpenMobile(false);
-      void startNewThreadFromContext({
-        activeDraftThread: newThreadContext.activeDraftThread,
-        activeThread: newThreadContext.activeThread ?? undefined,
-        defaultProjectRef: newThreadContext.defaultProjectRef,
-        handleNewThread: newThreadContext.handleNewThread,
-      });
-      return;
-    }
-    if (isMobile) setOpenMobile(false);
-    openCommandPalette({ open: "new-thread-in" });
-  }, [
-    isMobile,
-    newThreadContext,
-    openWorkComposer,
-    projectGroups.length,
-    setOpenMobile,
-    workspace,
-  ]);
+      openCommandPalette({ open: "new-thread-in" });
+    },
+    [isMobile, newThreadContext, openWorkComposer, projectGroups.length, setOpenMobile, workspace],
+  );
 
   // The button mirrors chat.new: in multi-project setups both route through
   // the command palette's "New thread in..." picker, and in single-project
-  // setups both create immediately. chat.newLocal always creates directly, so
-  // it is only a correct label when chat.new is unbound.
+  // setups both create immediately. In multi-project setups the label is only
+  // the picker's shortcut: falling back to chat.newLocal would advertise the
+  // same shortcut for both the picker and direct create. In single-project
+  // setups both commands create directly, so chat.newLocal is a valid
+  // fallback. The second tooltip line (multi-project only) advertises
+  // shift+click and its keyboard twin chat.newLocal for direct create.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
-    shortcutLabelForCommand(keybindings, "chat.newLocal");
+    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
+  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
       <SidebarChromeHeader
@@ -3762,9 +3801,25 @@ export default function Sidebar() {
                     }
                   />
                   <TooltipPopup side="right">
-                    {newThreadShortcutLabel
-                      ? `New thread (${newThreadShortcutLabel})`
-                      : "New thread"}
+                    {projectGroups.length > 1 ? (
+                      <span className="flex flex-col gap-0.5">
+                        <span>
+                          {newThreadShortcutLabel
+                            ? `New thread (${newThreadShortcutLabel})`
+                            : "New thread"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          New thread in current project: Shift+click
+                          {newThreadInProjectShortcutLabel
+                            ? ` (${newThreadInProjectShortcutLabel})`
+                            : ""}
+                        </span>
+                      </span>
+                    ) : newThreadShortcutLabel ? (
+                      `New thread (${newThreadShortcutLabel})`
+                    ) : (
+                      "New thread"
+                    )}
                   </TooltipPopup>
                 </Tooltip>
               </div>
