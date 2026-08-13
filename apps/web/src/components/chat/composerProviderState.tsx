@@ -41,6 +41,7 @@ type TraitsRenderInput = {
   instanceId?: ProviderInstanceId;
   threadRef?: ScopedThreadRef;
   draftId?: DraftId;
+  onModelOptionsChange?: (nextOptions: ReadonlyArray<ProviderOptionSelection> | undefined) => void;
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
@@ -89,26 +90,35 @@ function renderTraitsControl(
     instanceId,
     threadRef,
     draftId,
+    onModelOptionsChange,
     model,
     models,
     modelOptions,
     prompt,
     onPromptChange,
   } = input;
-  const hasTarget = threadRef !== undefined || draftId !== undefined;
+  // A server thread writes through `onModelOptionsChange`; drafts persist by
+  // id. Any one of the three is a valid persistence target.
+  const hasTarget =
+    threadRef !== undefined || draftId !== undefined || onModelOptionsChange !== undefined;
   if (
     !hasTarget ||
     !shouldRenderTraitsControls({ provider, models, model, modelOptions, prompt })
   ) {
     return null;
   }
+  const persistence = onModelOptionsChange
+    ? { onModelOptionsChange }
+    : {
+        ...(threadRef ? { threadRef } : {}),
+        ...(draftId ? { draftId } : {}),
+      };
   return (
     <Component
       provider={provider}
       {...(instanceId ? { instanceId } : {})}
       models={models}
-      {...(threadRef ? { threadRef } : {})}
-      {...(draftId ? { draftId } : {})}
+      {...persistence}
       model={model}
       modelOptions={modelOptions}
       prompt={prompt}

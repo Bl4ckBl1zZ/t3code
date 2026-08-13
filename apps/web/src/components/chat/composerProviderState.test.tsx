@@ -245,4 +245,22 @@ describe("provider traits render guards", () => {
     expect(renderProviderTraitsPicker(args)).toBeNull();
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
   });
+
+  it("renders on a server thread that persists through onModelOptionsChange", () => {
+    const models = modelWith([
+      selectDescriptor("effort", [{ id: "high", label: "High", isDefault: true }]),
+    ]);
+    const args = {
+      provider: PROVIDER,
+      model: MODEL,
+      models,
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: () => {},
+      onModelOptionsChange: () => {},
+    };
+
+    expect(renderProviderTraitsPicker(args)).not.toBeNull();
+    expect(renderProviderTraitsMenuContent(args)).not.toBeNull();
+  });
 });
