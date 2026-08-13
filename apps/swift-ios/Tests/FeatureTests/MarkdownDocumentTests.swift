@@ -296,4 +296,53 @@ struct MarkdownDocumentTests {
         #expect(runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
         #expect(runs.contains { $0.link == URL(string: "https://example.com") })
     }
+
+    /// Foundation's Markdown parser resolves HTML entities on its own, so this
+    /// app must never decode them a second time: another pass would turn an
+    /// author's escaped `&amp;#128512;` into the emoji they escaped, and would
+    /// let `&#42;` reach the parser as emphasis syntax. Entities inside code
+    /// spans stay verbatim.
+    @Test
+    func inlineFormatterResolvesHtmlEntitiesOnceAndKeepsCodeSpansRaw() {
+        #expect(
+            String(MarkdownInlineFormatter.format("Escape it as &amp; here").characters)
+                == "Escape it as & here"
+        )
+        #expect(
+            String(MarkdownInlineFormatter.format("Ship it &#128512; today").characters)
+                == "Ship it 😀 today"
+        )
+        #expect(
+            String(MarkdownInlineFormatter.format("Hex &#x1f680; rocket").characters)
+                == "Hex 🚀 rocket"
+        )
+        #expect(
+            String(MarkdownInlineFormatter.format("Double &amp;#128512; stays escaped").characters)
+                == "Double &#128512; stays escaped"
+        )
+        #expect(
+            String(MarkdownInlineFormatter.format("Star &#42; is literal").characters)
+                == "Star * is literal"
+        )
+
+        let codeSpan = MarkdownInlineFormatter.format("Code span `&amp;` stays raw")
+
+        #expect(String(codeSpan.characters) == "Code span &amp; stays raw")
+        #expect(codeSpan.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+    }
+
+    /// Out-of-range numeric entities are malformed input rather than a crash:
+    /// Swift's failable `Unicode.Scalar` gives the parser nothing to trap on,
+    /// so no equivalent of the Expo client's code-point guard is needed. The
+    /// exact fallback glyph is Foundation's business; only surviving is ours.
+    @Test
+    func inlineFormatterSurvivesOutOfRangeNumericEntities() {
+        #expect(
+            String(MarkdownInlineFormatter.format("Bad &#9999999999; value").characters)
+                == "Bad &#9999999999; value"
+        )
+        #expect(
+            !String(MarkdownInlineFormatter.format("Bad &#x110000; value").characters).isEmpty
+        )
+    }
 }
