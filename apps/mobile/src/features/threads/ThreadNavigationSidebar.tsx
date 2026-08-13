@@ -220,6 +220,7 @@ function ThreadNavigationSidebarPane(
     pinThread,
     unpinThread,
     movePinnedThread,
+    regenerateThreadTitle,
   } = useThreadListActions();
   const threadListV2FlagEnabled = useThreadListV2Enabled();
   const [workspace, setWorkspace] = useMobileWorkspace();
@@ -1055,10 +1056,11 @@ function ThreadNavigationSidebarPane(
               onSelectThread={handleSelectThread}
               onDeleteThread={confirmDeleteThread}
               onArchiveThread={archiveThread}
+              onRegenerateThreadTitle={regenerateThreadTitle}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
               onSettleThread={settleThread}
               snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
-              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
               pinReorderSupported={pinReorderEnvironmentIds.has(thread.environmentId)}
               canMovePinnedUp={
@@ -1174,6 +1176,7 @@ function ThreadNavigationSidebarPane(
               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               onArchiveThread={archiveThread}
               onDeleteThread={confirmDeleteThread}
+              onRegenerateThreadTitle={regenerateThreadTitle}
               onSelectThread={handleSelectThread}
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
@@ -1210,6 +1213,7 @@ function ThreadNavigationSidebarPane(
       projectByKey,
       projectCwdByKey,
       projectTitleByProjectKey,
+      regenerateThreadTitle,
       props.onNewThreadInProject,
       props.searchQuery,
       props.selectedThreadKey,
@@ -1217,6 +1221,7 @@ function ThreadNavigationSidebarPane(
       savedConnectionsById,
       serverConfigs,
       threadSearchMatchByKey,
+      titleRegenerationEnvironmentIds,
       settleThread,
       settlementEnvironmentIds,
       showMoreSettled,

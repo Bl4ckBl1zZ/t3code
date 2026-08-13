@@ -27,8 +27,9 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { useCopyThreadHandoffScript, useRegenerateThreadTitle } from "../home/useThreadListActions";
-import { REGENERATE_TITLE_MENU_ACTION_ID, withTitleRegenerationMenuAction } from "./threadRowMenu";
+import { useCopyThreadHandoffScript } from "../home/useThreadListActions";
+import { REGENERATE_TITLE_MENU_ACTION_ID } from "./threadRowMenu";
+import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -100,8 +101,8 @@ function threadTimeLabel(thread: EnvironmentThreadShell): string {
   return relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt);
 }
 
-// Menus stay lifecycle-focused: settle/un-settle plus delete. Archive keeps
-// its own surface (thread screen / settings) rather than crowding the row.
+// Menus keep lifecycle and title regeneration together. Archive keeps its
+// own surface (thread screen / settings) rather than crowding v2 rows.
 const CARD_MENU_ACTIONS: MenuAction[] = [
   { id: "settle", title: "Settle", image: "checkmark" },
   { id: "copy-handoff-script", title: "Copy handoff script", image: "doc.on.doc" },
@@ -411,6 +412,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly fullSwipeWidth?: number;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
@@ -457,6 +459,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     variant,
     onSelectThread,
     onDeleteThread,
+    onRegenerateThreadTitle,
     onSettleThread,
     onSnoozeThread,
     onUnsnoozeThread,
@@ -502,6 +505,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const preview = resolveThreadPreview(thread);
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
+  const handleRegenerateTitle = useCallback(
+    () => onRegenerateThreadTitle(thread),
+    [onRegenerateThreadTitle, thread],
+  );
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const handleSnooze = useCallback(
     (snoozedUntil: string) => onSnoozeThread(thread, snoozedUntil),
@@ -521,7 +528,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const copyHandoffScript = useCopyThreadHandoffScript();
-  const regenerateTitle = useRegenerateThreadTitle();
   const isRegeneratingTitle = thread.titleRegeneration != null;
 
   // Swipe: the v2 primary action is the lifecycle transition. Every settled
@@ -594,6 +600,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       props.pinningSupported,
     ],
   );
+  const titleRegenerationMenuItems = useMemo<MenuAction[]>(
+    () =>
+      buildThreadTitleRegenerationMenuItems({
+        supported: props.titleRegenerationSupported,
+        isRegenerating: thread.titleRegeneration != null,
+      }),
+    [props.titleRegenerationSupported, thread.titleRegeneration],
+  );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
       { id: "settle", title: "Settle", image: "checkmark" },
@@ -604,14 +618,36 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         subactions: snoozePresetActions,
       },
       ...pinMenuItem,
+      ...titleRegenerationMenuItems,
       { id: "copy-handoff-script", title: "Copy handoff script", image: "doc.on.doc" },
       { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
     ],
-    [pinMenuItem, snoozePresetActions],
+    [pinMenuItem, snoozePresetActions, titleRegenerationMenuItems],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
-    () => [CARD_MENU_ACTIONS[0]!, ...pinMenuItem, ...CARD_MENU_ACTIONS.slice(1)],
-    [pinMenuItem],
+    () => [
+      CARD_MENU_ACTIONS[0]!,
+      ...pinMenuItem,
+      ...titleRegenerationMenuItems,
+      ...CARD_MENU_ACTIONS.slice(1),
+    ],
+    [pinMenuItem, titleRegenerationMenuItems],
+  );
+  const slimMenuActions = useMemo<MenuAction[]>(
+    () => [SLIM_MENU_ACTIONS[0]!, ...titleRegenerationMenuItems, ...SLIM_MENU_ACTIONS.slice(1)],
+    [titleRegenerationMenuItems],
+  );
+  const snoozedMenuActions = useMemo<MenuAction[]>(
+    () => [
+      SNOOZED_MENU_ACTIONS[0]!,
+      ...titleRegenerationMenuItems,
+      ...SNOOZED_MENU_ACTIONS.slice(1),
+    ],
+    [titleRegenerationMenuItems],
+  );
+  const legacyMenuActions = useMemo<MenuAction[]>(
+    () => [LEGACY_MENU_ACTIONS[0]!, ...titleRegenerationMenuItems, ...LEGACY_MENU_ACTIONS.slice(1)],
+    [titleRegenerationMenuItems],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -625,7 +661,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "copy-handoff-script") copyHandoffScript(thread);
       if (nativeEvent.event === REGENERATE_TITLE_MENU_ACTION_ID && !isRegeneratingTitle) {
-        regenerateTitle(thread);
+        handleRegenerateTitle();
       }
       if (nativeEvent.event === "delete") handleDelete();
       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
@@ -643,6 +679,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       copyHandoffScript,
       handleArchive,
       handleDelete,
+      handleRegenerateTitle,
       handleMovePinnedDown,
       handleMovePinnedUp,
       handlePin,
@@ -652,34 +689,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleUnsettle,
       handleUnsnooze,
       isRegeneratingTitle,
-      regenerateTitle,
       snoozePresets,
       thread,
-    ],
-  );
-  const menuActions = useMemo(
-    () =>
-      withTitleRegenerationMenuAction(
-        snoozedRow
-          ? SNOOZED_MENU_ACTIONS
-          : !props.settlementSupported
-            ? LEGACY_MENU_ACTIONS
-            : canUnsettle
-              ? SLIM_MENU_ACTIONS
-              : swipeActions.secondary === "snooze"
-                ? snoozableCardMenuActions
-                : cardMenuActions,
-        { supported: props.titleRegenerationSupported, regenerating: isRegeneratingTitle },
-      ),
-    [
-      canUnsettle,
-      cardMenuActions,
-      isRegeneratingTitle,
-      props.settlementSupported,
-      props.titleRegenerationSupported,
-      snoozableCardMenuActions,
-      snoozedRow,
-      swipeActions.secondary,
     ],
   );
   const primaryAction = useMemo(() => {
@@ -1164,7 +1175,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => (
           <ControlPillMenu
-            actions={menuActions}
+            actions={
+              snoozedRow
+                ? snoozedMenuActions
+                : !props.settlementSupported
+                  ? legacyMenuActions
+                  : canUnsettle
+                    ? slimMenuActions
+                    : swipeActions.secondary === "snooze"
+                      ? snoozableCardMenuActions
+                      : cardMenuActions
+            }
             onPressAction={handleMenuAction}
             shouldOpenOnLongPress
           >

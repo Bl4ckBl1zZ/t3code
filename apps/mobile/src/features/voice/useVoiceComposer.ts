@@ -97,7 +97,10 @@ export function useVoiceComposer(input: {
     },
     onUnavailable: (reason) => {
       if (reason === "connect_openrouter") {
-        navigation.navigate("SettingsSheet", { screen: "SettingsOpenRouter" });
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "SettingsOpenRouter" },
+        });
       } else {
         Alert.alert("Sign in to use voice input");
       }

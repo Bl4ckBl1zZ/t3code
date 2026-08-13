@@ -55,7 +55,10 @@ export function ThreadDetailsLineage(props: {
     void Haptics.selectionAsync();
     props.onNavigate();
     if (archivedThread) {
-      navigation.navigate("SettingsSheet", { screen: "SettingsArchive" });
+      navigation.navigate("SettingsSheet", {
+        screen: "SettingsContent",
+        params: { screen: "SettingsArchive" },
+      });
       return;
     }
     navigation.navigate("Thread", { environmentId: props.environmentId, threadId });

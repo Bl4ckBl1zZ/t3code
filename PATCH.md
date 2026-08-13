@@ -33,6 +33,11 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   client-local whole-list manual order (`applyManualThreadOrderForSidebarV2`), which already lets
   users arrange pinned threads and would otherwise fight upstream's DnD over the same
   `DndContext`.
+- Replaces upstream's web thread context menu stack (`threadActionMenu.logic.ts`,
+  `useThreadActionMenu.ts`) with the fork's `apps/web/src/hooks/useThreadActions.ts` plus menu
+  items built inline in `Sidebar.tsx`. Upstream changes to those retired modules resolve to the
+  fork: port the menu feature itself (new items, handlers) into `Sidebar.tsx`/`useThreadActions.ts`
+  instead of merging the files.
 - Owns SQLite migration numbers 36 and up (orchestration V2, Hermes, scheduled tasks). Upstream
   migrations that claim those numbers must be renumbered or dropped on sync — applying two different
   migrations under one number would corrupt existing fork databases. Upstream's

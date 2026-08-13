@@ -31,6 +31,7 @@ import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
 import { runtimeModeMenu } from "../../lib/runtimeModeMenu";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-menu";
 import { pendingModelAfterPress } from "./thread-settings-sheet-state";
 import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet-presentation";
 
@@ -40,15 +41,6 @@ import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet
  * bury the list.
  */
 const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
-
-/**
- * Desktop-oriented effort keywords that don't belong in the phone picker.
- * Prompt-injected values (ultrathink and friends) are filtered from the
- * descriptor metadata; ultracode is a real option but a workflow trigger, not
- * a reasoning level. A value set elsewhere still displays, it just isn't
- * offered.
- */
-const HIDDEN_EFFORT_OPTION_IDS: ReadonlySet<string> = new Set(["ultracode"]);
 
 /**
  * Compact "Fable 5 · Max · Auto" style summary for the composer trigger pill,
@@ -75,13 +67,6 @@ export function threadSettingsSummaryLabel(input: {
     runtime.shortLabel,
     ...(input.interactionMode === "plan" ? ["Plan"] : []),
   ].join(" · ");
-}
-
-function selectableChoices(descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>) {
-  const injected = new Set(descriptor.promptInjectedValues ?? []);
-  return descriptor.options.filter(
-    (option) => !injected.has(option.id) && !HIDDEN_EFFORT_OPTION_IDS.has(option.id),
-  );
 }
 
 function ModelRow(props: {

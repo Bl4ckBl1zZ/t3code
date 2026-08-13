@@ -12,6 +12,7 @@ import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
+  getChangedTypographySettingLabels,
   hasChangedBackgroundActivitySettings,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
@@ -23,6 +24,19 @@ describe("settings navigation", () => {
   it("gives Hermes configuration one distinct T3 Work section", () => {
     expect(SETTINGS_NAV_ITEMS.filter((item) => item.label === "T3 Work")).toHaveLength(1);
     expect(SETTINGS_NAV_ITEMS.some((item) => item.label === "Hermes Cron")).toBe(false);
+  });
+});
+
+describe("typography settings restore", () => {
+  it("detects family and size changes by font row", () => {
+    expect(getChangedTypographySettingLabels(DEFAULT_UNIFIED_SETTINGS)).toEqual([]);
+    expect(
+      getChangedTypographySettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        fontSizeInterface: 18,
+        fontFamilyCode: "Fira Code",
+      }),
+    ).toEqual(["Interface font", "Code font"]);
   });
 });
 

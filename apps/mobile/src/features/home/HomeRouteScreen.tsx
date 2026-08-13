@@ -59,6 +59,7 @@ export function HomeRouteScreen() {
     pinThread,
     unpinThread,
     movePinnedThread,
+    regenerateThreadTitle,
     unsettleThread,
   } = useThreadListActions();
   const allPendingTasks = usePendingNewTasks();
@@ -171,7 +172,10 @@ export function HomeRouteScreen() {
           optionsVersion={workspace}
           options={getConnectionAwareBrandHeaderOptions({
             onOpenEnvironments: () =>
-              navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" }),
+              navigation.navigate("SettingsSheet", {
+                screen: "SettingsContent",
+                params: { screen: "SettingsEnvironments" },
+              }),
             workspaceMenu: { workspace, onWorkspaceChange: setWorkspace },
           })}
         />
@@ -188,9 +192,17 @@ export function HomeRouteScreen() {
           onWorkspaceChange={setWorkspace}
           onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironments" },
+            })
           }
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={startNewTask}
@@ -201,7 +213,10 @@ export function HomeRouteScreen() {
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironmentNew" },
+            })
           }
           onArchiveThread={archiveThread}
           onDeleteThread={confirmDeleteThread}
@@ -212,9 +227,15 @@ export function HomeRouteScreen() {
           onPinThread={pinThread}
           onUnpinThread={unpinThread}
           onMovePinnedThread={movePinnedThread}
+          onRegenerateThreadTitle={regenerateThreadTitle}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
