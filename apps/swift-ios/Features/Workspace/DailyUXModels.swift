@@ -337,10 +337,13 @@ enum DailyUXSidebarRefresh {
               !thread.isSettled,
               thread.pinnedAt == nil,
               !thread.keepsActive,
-              // A change request pins the shelf either way — merged/closed rows
-              // are settled now and open ones never inactivity-settle — so no
-              // clock tick moves them.
-              changeRequestState == nil,
+              // A change request that resolves the thread pins the shelf either
+              // way — those rows are settled now and open ones never
+              // inactivity-settle — so no clock tick moves them. A merge the
+              // user opted out of settling on is the exception: it leaves the
+              // row on the ordinary inactivity clock.
+              changeRequestState == nil
+              || (changeRequestState == "merged" && !thread.autoSettleOnMerge),
               let autoSettleAfterDays = thread.autoSettleAfterDays,
               let lastActivityAt = thread.lastActivityAt else {
             return nil
@@ -544,10 +547,11 @@ extension FeatureThread {
         if keepsActive {
             return false
         }
-        // A merged or closed PR is finished work; an open one is unfinished
+        // A closed PR is abandoned work and always settles; a merge only counts
+        // as finished when the user leaves that on. An open one is unfinished
         // business that blocks the inactivity path no matter how quiet the
         // thread has been.
-        if changeRequestState == "merged" || changeRequestState == "closed" {
+        if changeRequestState == "closed" || (changeRequestState == "merged" && autoSettleOnMerge) {
             return true
         }
         if changeRequestState == "open" {
