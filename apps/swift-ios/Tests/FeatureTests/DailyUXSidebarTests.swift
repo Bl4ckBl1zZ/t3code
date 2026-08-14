@@ -526,6 +526,48 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func mergeOptOutLeavesMergedThreadsOnTheInactivityClock() {
+        // Same rule as web's `changeRequestAutoSettles`: opting out of the merge
+        // half leaves the row on the ordinary inactivity path, while a close
+        // still settles it outright.
+        var freshMerge = thread(id: "fresh-merge", created: -10, updated: -10, state: .idle)
+        freshMerge.autoSettleOnMerge = false
+        var staleMerge = thread(id: "stale-merge", created: -400_000, updated: -300_000)
+        staleMerge.autoSettleOnMerge = false
+        var closed = thread(id: "closed", created: -10, updated: -10, state: .idle)
+        closed.autoSettleOnMerge = false
+
+        let index = makeIndex(
+            [freshMerge, staleMerge, closed],
+            changeRequests: [
+                "fresh-merge": pullRequest(state: "merged"),
+                "stale-merge": pullRequest(state: "merged"),
+                "closed": pullRequest(state: "closed"),
+            ]
+        )
+
+        #expect(index.active.map(\.id) == ["fresh-merge"])
+        #expect(Set(index.settled.map(\.id)) == ["stale-merge", "closed"])
+    }
+
+    @Test
+    func mergeOptOutKeepsTheSettlementBoundaryTicking() {
+        var resting = thread(id: "resting", created: -400_000, updated: -100_000)
+        resting.autoSettleAfterDays = 2
+        resting.autoSettleOnMerge = false
+
+        // A merge the user opted out of settling on no longer pins the shelf,
+        // so the row still needs a clock tick to move it.
+        #expect(
+            DailyUXSidebarRefresh.nextBoundary(
+                for: [resting],
+                after: now,
+                changeRequests: ["resting": pullRequest(state: "merged")]
+            ) == resting.lastActivityAt?.addingTimeInterval(2 * 24 * 60 * 60)
+        )
+    }
+
+    @Test
     func explicitOverridesOutrankChangeRequestState() {
         var reopened = thread(id: "reopened", created: -10, updated: -10, state: .idle)
         reopened.keepsActive = true

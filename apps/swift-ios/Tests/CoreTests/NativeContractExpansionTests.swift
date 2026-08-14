@@ -282,6 +282,36 @@ final class NativeContractExpansionTests: XCTestCase {
         }
         XCTAssertEqual(settings.defaultThreadEnvMode, .worktree)
         XCTAssertFalse(settings.newWorktreesStartFromOrigin)
+        // A server predating `sidebarAutoSettleOnMerge` must read as the
+        // contract's decoding default rather than as "off", which would leave
+        // merged threads on the active shelf forever.
+        XCTAssertTrue(settings.sidebarAutoSettleOnMerge)
+    }
+
+    func testServerConfigSettingsUpdateCarriesAutoSettleOnMergeOptOut() throws {
+        let event = try JSONDecoder.t3.decode(
+            ServerConfigStreamEvent.self,
+            from: Data(
+                """
+                {
+                  "version": 1,
+                  "type": "settingsUpdated",
+                  "payload": {
+                    "settings": {
+                      "defaultThreadEnvMode": "local",
+                      "newWorktreesStartFromOrigin": true,
+                      "sidebarAutoSettleOnMerge": false
+                    }
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        guard case let .settingsUpdated(settings) = event else {
+            return XCTFail("Expected a settings update")
+        }
+        XCTAssertFalse(settings.sidebarAutoSettleOnMerge)
     }
 
     func testProviderArraysDropOnlyUnknownProviderEntries() throws {
