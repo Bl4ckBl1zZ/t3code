@@ -977,8 +977,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
-  // Report the PR state up: the parent partitions rows with effectiveSettled,
-  // and a merged/closed PR auto-settles a thread — data only rows have.
+  // Report the PR state so the parent can apply the configured merge rule
+  // and the always-on close rule during partitioning — data only rows have.
   const prState = pr?.state ?? null;
   useEffect(() => {
     onChangeRequestState(threadKey, prState);
@@ -1351,11 +1351,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     aria-label="Wake thread now"
                     onClick={handleUnsnoozeClick}
                     className={cn(
-                      "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                      "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
                       isWoke && "group-hover/sidebar-row:static",
                     )}
                   >
-                    <AlarmClockOffIcon className="size-3" />
+                    <AlarmClockOffIcon className="mb-px size-3" />
                   </button>
                 )
               ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
@@ -1887,6 +1887,7 @@ export default function Sidebar() {
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
+  const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -2223,8 +2224,8 @@ export default function Sidebar() {
   // fresh clock whenever it recomputes.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
-  // PR states stream in per-row (rows own the VCS subscriptions); a merged or
-  // closed PR auto-settles its thread on the next partition.
+  // PR states stream in per-row (rows own the VCS subscriptions). The next
+  // partition applies the configured merge rule and the always-on close rule.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
     ReadonlyMap<string, "open" | "closed" | "merged">
   >(() => new Map());
@@ -2363,7 +2364,12 @@ export default function Sidebar() {
         !fixedInMain &&
         !durablyPinned &&
         supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+        effectiveSettled(thread, {
+          now,
+          autoSettleAfterDays,
+          autoSettleOnMerge,
+          changeRequestState,
+        })
       ) {
         settled.push(thread);
       } else {
@@ -2390,6 +2396,7 @@ export default function Sidebar() {
     };
   }, [
     autoSettleAfterDays,
+    autoSettleOnMerge,
     changeRequestStateByKey,
     nowMinute,
     pinnedThreadKeySet,
