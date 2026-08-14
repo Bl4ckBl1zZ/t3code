@@ -4362,6 +4362,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             keepsActive: thread.settledOverride == "active",
             settledAt: thread.settledAt.map(parseDate),
             autoSettleAfterDays: autoSettleAfterDays(environmentID: environment.id),
+            autoSettleOnMerge: autoSettleOnMerge(environmentID: environment.id),
             lastActivityAt: lastActivityDate(
                 latestUserMessageAt: nil,
                 latestRunCompletedAt: latestRun?.completedAt,
@@ -4454,6 +4455,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             keepsActive: thread.settledOverride == "active",
             settledAt: thread.settledAt.map(parseDate),
             autoSettleAfterDays: autoSettleAfterDays(environmentID: environment.id),
+            autoSettleOnMerge: autoSettleOnMerge(environmentID: environment.id),
             lastActivityAt: lastActivityDate(
                 latestUserMessageAt: thread.latestUserMessageAt,
                 latestRunCompletedAt: thread.latestRunCompletedAt,
@@ -4568,6 +4570,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return ServerSettingsSnapshot.defaultSidebarAutoSettleAfterDays
         }
         return settings.sidebarAutoSettleAfterDays
+    }
+
+    private func autoSettleOnMerge(environmentID: String) -> Bool {
+        guard let settings = serverConfigsByEnvironmentID[environmentID]?.settings else {
+            return ServerSettingsSnapshot.defaultSidebarAutoSettleOnMerge
+        }
+        return settings.sidebarAutoSettleOnMerge
     }
 
     private func mapRuntimeMode(_ mode: RuntimeMode) -> FeatureRuntimeMode {

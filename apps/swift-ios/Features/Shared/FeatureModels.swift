@@ -206,6 +206,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// thread's environment settings at map time (web's
     /// `sidebarAutoSettleAfterDays`). `nil` means the user chose "never".
     public var autoSettleAfterDays: Double?
+    /// Whether a merged change request settles the row on its own, resolved
+    /// from the thread's environment settings at map time (web's
+    /// `sidebarAutoSettleOnMerge`). A closed one always settles it.
+    public var autoSettleOnMerge: Bool
     public var lastActivityAt: Date?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
@@ -259,6 +263,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         keepsActive: Bool = false,
         settledAt: Date? = nil,
         autoSettleAfterDays: Double? = 3,
+        autoSettleOnMerge: Bool = true,
         lastActivityAt: Date? = nil,
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
@@ -298,6 +303,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.keepsActive = keepsActive
         self.settledAt = settledAt
         self.autoSettleAfterDays = autoSettleAfterDays
+        self.autoSettleOnMerge = autoSettleOnMerge
         self.lastActivityAt = lastActivityAt
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt

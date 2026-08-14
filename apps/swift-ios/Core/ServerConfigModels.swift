@@ -199,6 +199,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
     /// `packages/contracts`, applied when a server predates the setting.
     public static let defaultSidebarAutoSettleAfterDays: Double = 3
+    /// Matches `sidebarAutoSettleOnMerge`'s decoding default in
+    /// `packages/contracts`, applied when a server predates the setting.
+    public static let defaultSidebarAutoSettleOnMerge = true
 
     public let defaultThreadEnvMode: ServerThreadEnvironmentMode
     public let newWorktreesStartFromOrigin: Bool
@@ -206,6 +209,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// explicit "never". A server that never sends the key gets the default
     /// instead, so absence and "never" stay distinguishable.
     public let sidebarAutoSettleAfterDays: Double?
+    /// Whether a merged change request settles its thread on its own. A closed
+    /// one always does; only the merge half is configurable.
+    public let sidebarAutoSettleOnMerge: Bool
     /// Keyed by provider instance id (the default instance for a driver uses
     /// the driver kind, so `"hermes"`, `"codex"`, `"claudeAgent"`, …). Empty
     /// against a server that predates the setting being server-authoritative.
@@ -216,11 +222,14 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         newWorktreesStartFromOrigin: Bool = true,
         sidebarAutoSettleAfterDays: Double? = ServerSettingsSnapshot
             .defaultSidebarAutoSettleAfterDays,
+        sidebarAutoSettleOnMerge: Bool = ServerSettingsSnapshot
+            .defaultSidebarAutoSettleOnMerge,
         providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:]
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.providerModelPreferences = providerModelPreferences
     }
 
@@ -228,6 +237,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
         case sidebarAutoSettleAfterDays
+        case sidebarAutoSettleOnMerge
         case providerModelPreferences
     }
 
@@ -244,6 +254,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         sidebarAutoSettleAfterDays = container.contains(.sidebarAutoSettleAfterDays)
             ? try container.decodeIfPresent(Double.self, forKey: .sidebarAutoSettleAfterDays)
             : Self.defaultSidebarAutoSettleAfterDays
+        sidebarAutoSettleOnMerge = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .sidebarAutoSettleOnMerge
+        ) ?? Self.defaultSidebarAutoSettleOnMerge
         providerModelPreferences = try container.decodeIfPresent(
             [String: ProviderModelPreferencesSnapshot].self,
             forKey: .providerModelPreferences
@@ -257,6 +271,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         // Encoded as explicit null so "never" survives a round trip instead of
         // decoding back as the absent-key default.
         try container.encode(sidebarAutoSettleAfterDays, forKey: .sidebarAutoSettleAfterDays)
+        try container.encode(sidebarAutoSettleOnMerge, forKey: .sidebarAutoSettleOnMerge)
         try container.encode(providerModelPreferences, forKey: .providerModelPreferences)
     }
 }
