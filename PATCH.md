@@ -50,6 +50,16 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `052_ProjectionProjectsDefaultThreadEnvMode`. Upstream's
   `040_ProjectionProjectFaviconPath` likewise targets the project aggregate and is carried as
   `053_ProjectionProjectFaviconPath`.
+- Does not carry upstream's "nest mobile task settings in bottom sheets" restructure of the Expo
+  client (upstream `85389b988`: `ExistingThreadSettingsRouteScreen`, `thread-settings-options`,
+  `NewTaskContextPickerScreens`, `legacy-plan-mode`, the `ComposerToolbarTrigger` ->
+  `ComposerToolbar` rename, and the `@react-navigation/native-stack` /
+  `react-native-screens` patches it needs). It rewrites `ThreadComposer.tsx` and
+  `NewTaskDraftScreen.tsx` around a composer layout the fork has already diverged from — the fork's
+  composer carries voice input, its own attachment menu, and a push-to-talk gesture whose stability
+  depends on the pill never swapping view branches mid-hold. `apps/mobile` is being retired in
+  favour of `apps/swift-ios`, so the fork keeps its own composer, `thread-settings-menu.ts`, and
+  `ThreadSettingsSheet.tsx`. Follow-on upstream work on those files resolves to the fork.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.
