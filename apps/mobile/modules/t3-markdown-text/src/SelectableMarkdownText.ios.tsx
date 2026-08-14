@@ -71,6 +71,7 @@ export function SelectableMarkdownText({
           chunk.kind === "rich" ? (
             <NativeMarkdownBlock
               node={chunk.node}
+              skills={skills}
               textStyle={textStyle}
               highlightCode={highlightCode}
               renderHtmlEmbed={renderHtmlEmbed}
