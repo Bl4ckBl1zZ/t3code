@@ -110,16 +110,16 @@ public struct ProviderModelPicker: View {
     }
 
     private func materializeSelection() {
-        guard !normalizedProviders.isEmpty else { return }
-        let resolved = materializesDefaultSelection
-            ? ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
-            : ThreadComposerModelSelectionPolicy.explicitSelection(
-                selection,
-                inherited: threadSelection,
-                providers: normalizedProviders
-            )
-        guard selection != resolved else { return }
-        selection = resolved
+        guard let resolved = ComposerModelSelectionMaterializer.resolved(
+            selection: selection,
+            providers: providers,
+            threadSelection: threadSelection,
+            materializesDefaultSelection: materializesDefaultSelection
+        ) else {
+            return
+        }
+        guard selection != resolved.value else { return }
+        selection = resolved.value
     }
 
     private var normalizedProviders: [FeatureProvider] {
@@ -431,6 +431,43 @@ private struct ModelPickerSheet: View {
             next.insert(id)
         }
         favoriteStorage = next.sorted().joined(separator: "\n")
+    }
+}
+
+/// Resolves the selection a composer should hold once its catalog arrives.
+///
+/// This used to live inside ``ProviderModelPicker``, which meant mounting the
+/// picker was what materialized the default model. The composer now hides the
+/// picker behind its task-settings sheet, so the rule has to be callable from
+/// the composer itself — otherwise a thread would sit on a nil selection until
+/// the user happened to open the sheet.
+enum ComposerModelSelectionMaterializer {
+    /// Wrapped so "resolved to nil" (a deliberate no-explicit-override) stays
+    /// distinguishable from "nothing to do yet" (no catalog).
+    struct Resolution: Equatable {
+        let value: FeatureSelection?
+    }
+
+    static func resolved(
+        selection: FeatureSelection?,
+        providers: [FeatureProvider],
+        threadSelection: FeatureSelection?,
+        materializesDefaultSelection: Bool
+    ) -> Resolution? {
+        let normalized = ProviderModelCatalogNormalizer.normalized(providers)
+        guard !normalized.isEmpty else { return nil }
+        if materializesDefaultSelection {
+            return Resolution(
+                value: ProviderModelSelectionResolver.materialized(selection, in: normalized)
+            )
+        }
+        return Resolution(
+            value: ThreadComposerModelSelectionPolicy.explicitSelection(
+                selection,
+                inherited: threadSelection,
+                providers: normalized
+            )
+        )
     }
 }
 

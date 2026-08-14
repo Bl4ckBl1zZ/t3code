@@ -18,6 +18,8 @@ struct FeatureComposerView: View {
     /// open through the recording and restored after transcription.
     @State private var resumeFocusAfterVoice = false
     @State private var attachmentPreparation = FeatureAttachmentPreparationState()
+    /// The task-settings sheet: model plus every option the model publishes.
+    @State private var isPresentingTaskSettings = false
     @State private var pathEntries: [FeatureComposerPathEntry] = []
     @State private var isPathSearchLoading = false
     @State private var pathSearchError: String?
@@ -373,11 +375,11 @@ struct FeatureComposerView: View {
 
             composerRow
 
-            // Always present: the model, effort and context chips are the
-            // composer's identity, not editing chrome — hiding them on focus
-            // loss or mid-recording read as the controls randomly vanishing.
-            // Unconditional also means no structural change during a
-            // push-to-talk hold.
+            // Always present: the settings summary is the composer's identity,
+            // not editing chrome — hiding it on focus loss or mid-recording
+            // reads as the control randomly vanishing. Unconditional also means
+            // no structural change during a push-to-talk hold, which is what
+            // keeps the hold from being cancelled out from under the user.
             composerFooter
         }
     }
@@ -545,44 +547,103 @@ struct FeatureComposerView: View {
 
     private var composerFooter: some View {
         HStack(spacing: 6) {
-            ProviderModelPicker(
-                providers: providers,
-                selection: $selection,
-                style: .compact,
-                threadSelection: threadSelection,
-                materializesDefaultSelection: materializesDefaultSelection
-            )
-            .frame(maxWidth: 220, alignment: .leading)
+            settingsTrigger
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 8)
-
-            // Right-aligned, and never squeezed: the chips keep their ideal
-            // width ("Medium", not "Medi…") and the model picker is what
-            // shortens when the row runs out of room.
-            if let effort = selectOption(ids: Self.effortOptionIDs) {
-                effortChip(effort)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-
-            if let contextWindow = selectOption(ids: Self.contextOptionIDs) {
-                contextWindowChip(contextWindow)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-
+            // The meter is a readout, not a setting, so it stays on the row
+            // rather than moving behind the sheet. Never squeezed: it keeps its
+            // ideal width and the trigger label is what truncates.
             if let contextUsage {
                 FeatureContextMeter(usage: contextUsage)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
 
-    // MARK: Model option chips
+    /// One control for the model and everything it publishes. A single trigger
+    /// is what lets the row show the full summary — the old inline chips fought
+    /// the model name for width, so a long name truncated the setting the user
+    /// actually came to read.
+    private var settingsTrigger: some View {
+        Button {
+            isPresentingTaskSettings = true
+        } label: {
+            HStack(spacing: 5) {
+                providerMark
+                Text(settingsSummary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .fixedSize()
+            }
+            .font(T3Typography.supportingStrong)
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Task settings")
+        .accessibilityValue(settingsSummary)
+        .sheet(isPresented: $isPresentingTaskSettings) {
+            TaskSettingsSheet(
+                selection: $selection,
+                providers: providers,
+                threadSelection: threadSelection,
+                materializesDefaultSelection: materializesDefaultSelection
+            )
+        }
+        // The picker used to own this: mounting it was what materialized a
+        // missing selection. It lives behind the sheet now, so the composer has
+        // to keep the rule running whether or not the sheet is ever opened.
+        .onAppear(perform: materializeModelSelection)
+        .onChange(of: providers) { materializeModelSelection() }
+        .onChange(of: selection) { materializeModelSelection() }
+    }
 
-    /// The two option ids providers publish for these knobs; matched as a set
-    /// because drivers disagree on the spelling.
-    private static let effortOptionIDs: Set<String> = ["effort", "reasoningEffort"]
-    private static let contextOptionIDs: Set<String> = ["contextWindow", "context"]
+    @ViewBuilder
+    private var providerMark: some View {
+        if let provider = activeProvider {
+            ProviderIcon(
+                driver: provider.driver,
+                providerID: provider.id,
+                fallbackName: provider.name,
+                size: 14
+            )
+        } else {
+            Image(systemName: "cpu")
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 14, height: 14)
+        }
+    }
+
+    private var activeProvider: FeatureProvider? {
+        guard let active = activeSelection else { return nil }
+        return providers.first { $0.id == active.providerID }
+    }
+
+    private var settingsSummary: String {
+        TaskSettingsOptions.summary(
+            modelName: activeModel?.name,
+            model: activeModel,
+            selections: activeSelection?.options ?? []
+        )
+    }
+
+    private func materializeModelSelection() {
+        guard let resolved = ComposerModelSelectionMaterializer.resolved(
+            selection: selection,
+            providers: providers,
+            threadSelection: threadSelection,
+            materializesDefaultSelection: materializesDefaultSelection
+        ) else {
+            return
+        }
+        guard selection != resolved.value else { return }
+        selection = resolved.value
+    }
 
     private var activeSelection: FeatureSelection? { selection ?? threadSelection }
 
@@ -592,101 +653,6 @@ struct FeatureComposerView: View {
             return nil
         }
         return provider.models.first { $0.id == active.modelID }
-    }
-
-    private func selectOption(ids: Set<String>) -> FeatureModelOptionDescriptor? {
-        activeModel?.options.first { ids.contains($0.id) && $0.kind == .select && !$0.choices.isEmpty }
-    }
-
-    private func currentChoiceID(of descriptor: FeatureModelOptionDescriptor) -> String {
-        if let active = activeSelection,
-           case let .string(value)? = active.options.first(where: { $0.id == descriptor.id })?.value {
-            return value
-        }
-        if case let .string(value)? = descriptor.defaultValue { return value }
-        return descriptor.choices.first(where: \.isDefault)?.id
-            ?? descriptor.choices.first?.id
-            ?? ""
-    }
-
-    private func currentChoice(of descriptor: FeatureModelOptionDescriptor) -> FeatureModelOptionChoice? {
-        let id = currentChoiceID(of: descriptor)
-        return descriptor.choices.first { $0.id == id }
-    }
-
-    private func setOption(id: String, value: String) {
-        guard var next = activeSelection else { return }
-        next.options.removeAll { $0.id == id }
-        next.options.append(FeatureModelOptionSelection(id: id, value: .string(value)))
-        selection = next
-    }
-
-    /// Seven levels are a menu, not a cycle: nobody should tap through
-    /// Ultracode to get from High back to Medium.
-    private func effortChip(_ descriptor: FeatureModelOptionDescriptor) -> some View {
-        let current = currentChoiceID(of: descriptor)
-        return Menu {
-            ForEach(descriptor.choices) { choice in
-                Button {
-                    setOption(id: descriptor.id, value: choice.id)
-                } label: {
-                    if choice.id == current {
-                        Label(choice.label, systemImage: "checkmark")
-                    } else {
-                        Text(choice.label)
-                    }
-                }
-            }
-        } label: {
-            optionChipLabel(
-                icon: "brain",
-                text: currentChoice(of: descriptor)?.label ?? current
-            )
-        }
-        .menuOrder(.fixed)
-        .buttonStyle(.plain)
-        .accessibilityLabel("Reasoning effort")
-        .accessibilityValue(currentChoice(of: descriptor)?.label ?? current)
-    }
-
-    /// Two choices, so a tap just flips to the next one — no menu.
-    private func contextWindowChip(_ descriptor: FeatureModelOptionDescriptor) -> some View {
-        let current = currentChoiceID(of: descriptor)
-        return Button {
-            let choices = descriptor.choices
-            guard !choices.isEmpty else { return }
-            let index = choices.firstIndex { $0.id == current } ?? 0
-            let next = choices[(index + 1) % choices.count]
-            setOption(id: descriptor.id, value: next.id)
-        } label: {
-            optionChipLabel(
-                icon: "square.3.layers.3d",
-                text: currentChoice(of: descriptor)?.label ?? current
-            )
-            .contentTransition(.numericText())
-            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: current)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Context window")
-        .accessibilityValue(currentChoice(of: descriptor)?.label ?? current)
-        .accessibilityHint("Switches to the next size")
-    }
-
-    private func optionChipLabel(icon: String, text: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: .medium))
-            Text(text)
-                .lineLimit(1)
-        }
-        .font(T3Typography.supporting.weight(.semibold))
-        .foregroundStyle(T3Colors.textSecondary)
-        .padding(.horizontal, 9)
-        .frame(height: 26)
-        .background(T3Colors.subtle, in: Capsule())
-        .overlay { Capsule().stroke(T3Colors.border, lineWidth: 1) }
-        .contentShape(Capsule())
-        .frame(minHeight: T3Metrics.minimumTapTarget)
     }
 
     /// Send only: the mic beside it owns everything voice. Inverted rather than
