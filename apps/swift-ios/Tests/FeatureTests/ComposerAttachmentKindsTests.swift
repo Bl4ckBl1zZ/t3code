@@ -118,6 +118,45 @@ final class ComposerAttachmentKindsTests: XCTestCase {
         )
     }
 
+    func testSendableImageTypesMatchTheSendTurnContract() {
+        for mimeType in ["image/gif", "image/jpeg", "image/png", "image/webp"] {
+            XCTAssertTrue(ComposerAttachments.isSendableImageMIMEType(mimeType))
+        }
+        XCTAssertTrue(ComposerAttachments.isSendableImageMIMEType("IMAGE/PNG"))
+        // Still classified as images — the picker re-encodes what it can decode
+        // and only the undecodable ones surface as a type problem.
+        for mimeType in ["image/svg+xml", "image/heic", "image/tiff", "image/avif"] {
+            XCTAssertEqual(ComposerAttachments.classify(mimeType: mimeType), .image)
+            XCTAssertFalse(ComposerAttachments.isSendableImageMIMEType(mimeType))
+        }
+    }
+
+    func testDecodeFailureBlamesTheTypeOnlyWhenNoProviderCouldReadIt() {
+        // SVG cannot be decoded or re-encoded, so the reader is told which
+        // formats to use instead of "that photo could not be read".
+        XCTAssertEqual(
+            FeatureImageAttachmentError.decodeFailure(sourceMIMEType: "image/svg+xml"),
+            .unsupportedImageType
+        )
+        // A supported type that fails to decode is a corrupt file, not a
+        // supported-type problem.
+        XCTAssertEqual(
+            FeatureImageAttachmentError.decodeFailure(sourceMIMEType: "image/png"),
+            .invalidImage
+        )
+        // The photo and camera paths report no type at all.
+        XCTAssertEqual(
+            FeatureImageAttachmentError.decodeFailure(sourceMIMEType: nil),
+            .invalidImage
+        )
+        // A non-image type never reaches the image path; if it does, it is not
+        // an image-format complaint.
+        XCTAssertEqual(
+            FeatureImageAttachmentError.decodeFailure(sourceMIMEType: "application/pdf"),
+            .invalidImage
+        )
+    }
+
     func testOnlyTheImageBranchExposesAThumbnailSource() {
         let document = DraftComposerAttachment.document(
             DraftComposerDocumentAttachment(

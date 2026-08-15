@@ -142,130 +142,93 @@ struct FeatureComposerUserInputPanel: View {
     let isResponding: Bool
     let onSubmit: ([String: FeatureInputAnswer]) -> Void
 
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @State private var answers: [String: FeatureInputAnswer] = [:]
     @State private var questionIndex = 0
+    /// The question the reader collapsed, rather than a bare flag: the panel
+    /// takes over the whole composer pill, so a tall prompt buries the
+    /// transcript it is asking about. Keying on the id reopens the panel when
+    /// the prompt moves on, which happens without a tap — answering a
+    /// single-select question advances it.
+    @State private var collapsedQuestionID: String?
 
     var body: some View {
         Group {
             if let question = activeQuestion {
                 VStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 8) {
-                            Text(question.header)
-                                .font(T3Typography.eyebrow)
-                                .tracking(1.3)
-                                .textCase(.uppercase)
-                                .foregroundStyle(T3Colors.accent)
-
-                            Spacer()
-
-                            if input.questions.count > 1 {
-                                Text("\(questionIndex + 1)/\(input.questions.count)")
-                                    .font(T3Typography.supportingStrong.monospacedDigit())
-                                    .foregroundStyle(T3Colors.textTertiary)
-                            }
-                        }
-
-                        Text(question.question)
-                            .font(T3Typography.navigationTitle)
-                            .foregroundStyle(T3Colors.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 5)
-
-                        if question.allowsMultiple {
-                            Text("Select one or more options")
-                                .font(T3Typography.supporting)
-                                .foregroundStyle(T3Colors.textTertiary)
-                                .padding(.top, 4)
-                        }
-                    }
-                    .padding(.horizontal, 15)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(T3Colors.subtle)
-
-                    Divider().overlay(T3Colors.separator)
-
-                    ScrollView {
-                        VStack(spacing: 6) {
-                            ForEach(
-                                Array(question.options.enumerated()),
-                                id: \.element.label
-                            ) { index, option in
-                                optionButton(option, number: index + 1, question: question)
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.top, 10)
-                    }
-                    .frame(maxHeight: 320)
-                    .scrollIndicators(.hidden)
-
-                    HStack(spacing: 8) {
-                        Image(systemName: "pencil")
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-
-                        TextField(
-                            "Write custom answer",
-                            text: answerBinding(for: question),
-                            axis: .vertical
+                    Button {
+                        collapsedQuestionID = FeatureComposerPromptCollapse.toggled(
+                            collapsedQuestionID: collapsedQuestionID,
+                            activeQuestionID: question.id
                         )
-                        .font(T3Typography.composer)
-                        .lineLimit(1...4)
-                        .submitLabel(.return)
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: T3Metrics.minimumTapTarget)
-                    .background(
-                        T3Colors.input,
-                        in: RoundedRectangle(cornerRadius: 11)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 11)
-                            .stroke(T3Colors.inputBorder, lineWidth: 1)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 7)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 8) {
+                                Text(question.header)
+                                    .font(T3Typography.eyebrow)
+                                    .tracking(1.3)
+                                    .textCase(.uppercase)
+                                    .foregroundStyle(T3Colors.accent)
 
-                    HStack(spacing: 8) {
-                        if questionIndex > 0 {
-                            Button("Back") {
-                                questionIndex -= 1
+                                Spacer()
+
+                                if input.questions.count > 1 {
+                                    Text("\(questionIndex + 1)/\(input.questions.count)")
+                                        .font(T3Typography.supportingStrong.monospacedDigit())
+                                        .foregroundStyle(T3Colors.textTertiary)
+                                }
+
+                                Image(systemName: "chevron.down")
+                                    .font(T3Typography.supportingStrong)
+                                    .foregroundStyle(T3Colors.textTertiary)
+                                    .rotationEffect(.degrees(isCollapsed ? 0 : 180))
                             }
-                            .font(T3Typography.control.weight(.semibold))
-                            .foregroundStyle(T3Colors.textSecondary)
-                            .frame(
-                                minWidth: T3Metrics.minimumTapTarget,
-                                minHeight: T3Metrics.minimumTapTarget
-                            )
-                        }
 
-                        Spacer()
+                            // Collapsed, the question itself is the only thing
+                            // worth keeping on screen — without it the header
+                            // is an unlabelled bar.
+                            Text(question.question)
+                                .font(T3Typography.navigationTitle)
+                                .foregroundStyle(T3Colors.textPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(isCollapsed ? 1 : nil)
+                                .padding(.top, 5)
 
-                        Button(action: advanceOrSubmit) {
-                            Text(isLastQuestion ? "Submit" : "Next question")
-                                .font(T3Typography.control.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 18)
-                                .frame(height: T3Metrics.minimumTapTarget)
-                                .background(T3Colors.accent, in: Capsule())
+                            if question.allowsMultiple, !isCollapsed {
+                                Text("Select one or more options")
+                                    .font(T3Typography.supporting)
+                                    .foregroundStyle(T3Colors.textTertiary)
+                                    .padding(.top, 4)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!canAdvance)
-                        .opacity(canAdvance ? 1 : 0.3)
+                        .padding(.horizontal, 15)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 9)
-                    .padding(.bottom, 11)
+                    .buttonStyle(.plain)
+                    .background(T3Colors.subtle)
+                    .accessibilityLabel(question.header)
+                    .accessibilityValue(question.question)
+                    .accessibilityHint(isCollapsed ? "Show the options" : "Hide the options")
+
+                    if !isCollapsed {
+                        collapsibleBody(question)
+                    }
                 }
                 .disabled(isResponding)
                 .opacity(isResponding ? 0.56 : 1)
+                .animation(
+                    VoiceMorph.appearance(reduceMotion: reduceMotion),
+                    value: isCollapsed
+                )
             }
         }
         .onChange(of: input.id) {
             answers = [:]
             questionIndex = 0
+            collapsedQuestionID = nil
         }
         .onChange(of: questionIDs) { previousIDs, currentIDs in
             questionIndex = FeatureComposerQuestionReconciliation.index(
@@ -277,6 +240,93 @@ struct FeatureComposerUserInputPanel: View {
                 answers,
                 currentQuestionIDs: currentIDs
             )
+        }
+    }
+
+    private var isCollapsed: Bool {
+        FeatureComposerPromptCollapse.isCollapsed(
+            collapsedQuestionID: collapsedQuestionID,
+            activeQuestionID: activeQuestion?.id
+        )
+    }
+
+    @ViewBuilder
+    private func collapsibleBody(_ question: FeatureInputQuestion) -> some View {
+        VStack(spacing: 0) {
+            Divider().overlay(T3Colors.separator)
+
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(
+                        Array(question.options.enumerated()),
+                        id: \.element.label
+                    ) { index, option in
+                        optionButton(option, number: index + 1, question: question)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+            }
+            .frame(maxHeight: 320)
+            .scrollIndicators(.hidden)
+
+            HStack(spacing: 8) {
+                Image(systemName: "pencil")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textTertiary)
+
+                TextField(
+                    "Write custom answer",
+                    text: answerBinding(for: question),
+                    axis: .vertical
+                )
+                .font(T3Typography.composer)
+                .lineLimit(1...4)
+                .submitLabel(.return)
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .background(
+                T3Colors.input,
+                in: RoundedRectangle(cornerRadius: 11)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 11)
+                    .stroke(T3Colors.inputBorder, lineWidth: 1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 7)
+
+            HStack(spacing: 8) {
+                if questionIndex > 0 {
+                    Button("Back") {
+                        questionIndex -= 1
+                    }
+                    .font(T3Typography.control.weight(.semibold))
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .frame(
+                        minWidth: T3Metrics.minimumTapTarget,
+                        minHeight: T3Metrics.minimumTapTarget
+                    )
+                }
+
+                Spacer()
+
+                Button(action: advanceOrSubmit) {
+                    Text(isLastQuestion ? "Submit" : "Next question")
+                        .font(T3Typography.control.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .frame(height: T3Metrics.minimumTapTarget)
+                        .background(T3Colors.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canAdvance)
+                .opacity(canAdvance ? 1 : 0.3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 9)
+            .padding(.bottom, 11)
         }
     }
 
@@ -461,6 +511,26 @@ enum FeatureComposerCustomAnswer {
             selectedOptions = []
         }
         return .selections(text.isEmpty ? selectedOptions : selectedOptions + [text])
+    }
+}
+
+/// Which question the reader has collapsed, if any.
+///
+/// State is the collapsed question's id rather than a bool so the panel reopens
+/// on its own when the prompt advances: answering a single-select question
+/// moves to the next one without a tap, and a stale `true` would leave the
+/// reader staring at a header for a question they have not seen.
+enum FeatureComposerPromptCollapse {
+    static func isCollapsed(collapsedQuestionID: String?, activeQuestionID: String?) -> Bool {
+        guard let collapsedQuestionID, let activeQuestionID else { return false }
+        return collapsedQuestionID == activeQuestionID
+    }
+
+    static func toggled(collapsedQuestionID: String?, activeQuestionID: String) -> String? {
+        isCollapsed(
+            collapsedQuestionID: collapsedQuestionID,
+            activeQuestionID: activeQuestionID
+        ) ? nil : activeQuestionID
     }
 }
 

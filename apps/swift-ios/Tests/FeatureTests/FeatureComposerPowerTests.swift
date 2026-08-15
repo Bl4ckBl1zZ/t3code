@@ -161,6 +161,55 @@ struct FeatureComposerPowerTests {
     }
 
     @Test
+    func collapsingAPromptIsScopedToTheQuestionItWasCollapsedOn() {
+        // Nothing is collapsed until the reader says so.
+        #expect(
+            FeatureComposerPromptCollapse.isCollapsed(
+                collapsedQuestionID: nil,
+                activeQuestionID: "one"
+            ) == false
+        )
+
+        let collapsed = FeatureComposerPromptCollapse.toggled(
+            collapsedQuestionID: nil,
+            activeQuestionID: "one"
+        )
+        #expect(collapsed == "one")
+        #expect(
+            FeatureComposerPromptCollapse.isCollapsed(
+                collapsedQuestionID: collapsed,
+                activeQuestionID: "one"
+            )
+        )
+
+        // Advancing to the next question reopens the panel: answering a
+        // single-select question moves on without a tap, and the reader has
+        // not seen this one yet.
+        #expect(
+            FeatureComposerPromptCollapse.isCollapsed(
+                collapsedQuestionID: collapsed,
+                activeQuestionID: "two"
+            ) == false
+        )
+
+        // Tapping the header again expands the same question.
+        #expect(
+            FeatureComposerPromptCollapse.toggled(
+                collapsedQuestionID: collapsed,
+                activeQuestionID: "one"
+            ) == nil
+        )
+
+        // A prompt that has run out of questions cannot be collapsed.
+        #expect(
+            FeatureComposerPromptCollapse.isCollapsed(
+                collapsedQuestionID: collapsed,
+                activeQuestionID: nil
+            ) == false
+        )
+    }
+
+    @Test
     func changingInputQuestionsKeepsAValidActiveQuestionAndDropsStaleAnswers() {
         #expect(
             FeatureComposerQuestionReconciliation.index(
