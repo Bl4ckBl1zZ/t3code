@@ -45,6 +45,26 @@ public enum ComposerAttachments {
         kind == .image ? maximumImageBytes : maximumFileBytes
     }
 
+    /// `PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES` from the contract: the
+    /// raster formats a provider can actually read on a turn.
+    ///
+    /// Everything else classifies as `.image` all the same — the classifier
+    /// keys off the `image/` prefix — which is why the picker re-encodes what it
+    /// can decode (an iPhone's HEIC becomes JPEG) and only refuses what it
+    /// cannot, such as SVG.
+    public static let sendableImageMIMETypes: Set<String> = [
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    ]
+
+    public static func isSendableImageMIMEType(_ mimeType: String) -> Bool {
+        sendableImageMIMETypes.contains(
+            mimeType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
+    }
+
     /// The extension table the shared classifier keys off. Pickers routinely
     /// hand back a name and nothing else — Android `content://` URIs always do —
     /// so an extension is frequently the only signal available.

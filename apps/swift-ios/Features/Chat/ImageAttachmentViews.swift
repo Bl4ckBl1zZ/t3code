@@ -362,7 +362,10 @@ struct FeatureImageAttachmentPicker: View {
                         mimeType: attachment.mimeType,
                         name: attachment.filename
                     ) == .image, isEnabled {
-                        try await appendImage(attachment.data)
+                        try await appendImage(
+                            attachment.data,
+                            sourceMIMEType: attachment.mimeType
+                        )
                     } else {
                         attachments.append(attachment)
                     }
@@ -374,10 +377,18 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func appendImage(_ data: Data, ordinal: Int? = nil) async throws {
+    private func appendImage(
+        _ data: Data,
+        ordinal: Int? = nil,
+        sourceMIMEType: String? = nil
+    ) async throws {
         let ordinal = ordinal ?? attachments.count + 1
         let attachment = try await Task.detached(priority: .userInitiated) {
-            try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
+            try FeatureImageProcessor.attachment(
+                from: data,
+                ordinal: ordinal,
+                sourceMIMEType: sourceMIMEType
+            )
         }.value
         attachments.append(attachment)
     }
@@ -556,9 +567,14 @@ enum FeatureImageProcessor {
     private static let maximumDimension: CGFloat = 2_048
     private static let maximumEncodedBytes = 10 * 1_024 * 1_024
 
+    /// - Parameter sourceMIMEType: the type the picker reported, when it had
+    ///   one. Everything decodable is re-encoded to JPEG regardless, so this
+    ///   only sharpens the failure: a type no provider reads (SVG) gets told so
+    ///   instead of being reported as an unreadable photo.
     static func attachment(
         from sourceData: Data,
-        ordinal: Int
+        ordinal: Int,
+        sourceMIMEType: String? = nil
     ) throws -> FeatureDraftAttachment {
         guard let source = CGImageSourceCreateWithData(sourceData as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(
@@ -571,7 +587,7 @@ enum FeatureImageProcessor {
                       kCGImageSourceShouldCacheImmediately: true,
                   ] as CFDictionary
               ) else {
-            throw FeatureImageAttachmentError.invalidImage
+            throw FeatureImageAttachmentError.decodeFailure(sourceMIMEType: sourceMIMEType)
         }
 
         let preparedImage = UIImage(cgImage: image)
@@ -607,15 +623,30 @@ enum FeatureImageProcessor {
     }
 }
 
-enum FeatureImageAttachmentError: LocalizedError {
+enum FeatureImageAttachmentError: LocalizedError, Equatable {
     case invalidImage
+    case unsupportedImageType
     case encodingFailed
     case tooLarge
+
+    /// A decode that failed on a type providers cannot read is a supported-type
+    /// problem, not a corrupt file — the reader can act on the first and not on
+    /// the second, so they get different copy.
+    static func decodeFailure(sourceMIMEType: String?) -> FeatureImageAttachmentError {
+        guard let sourceMIMEType,
+              ComposerAttachments.classify(mimeType: sourceMIMEType) == .image,
+              !ComposerAttachments.isSendableImageMIMEType(sourceMIMEType) else {
+            return .invalidImage
+        }
+        return .unsupportedImageType
+    }
 
     var errorDescription: String? {
         switch self {
         case .invalidImage:
             "That photo could not be read."
+        case .unsupportedImageType:
+            "That is not a supported image type. Attach GIF, JPEG, PNG, or WebP images."
         case .encodingFailed:
             "That photo could not be prepared."
         case .tooLarge:
