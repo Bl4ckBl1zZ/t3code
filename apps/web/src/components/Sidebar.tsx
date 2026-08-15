@@ -164,10 +164,15 @@ import {
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
+  nextThreadChangeRequestSnapshot,
   prStatusIndicator,
-  resolveThreadPr,
+  resolveDisplayedThreadPr,
+  resolveDisplayedThreadPrProvider,
+  setThreadChangeRequestSnapshot,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
+  threadChangeRequestSnapshotsAtom,
+  type ThreadChangeRequestSnapshot,
   type TerminalStatusIndicator,
 } from "./ThreadStatusIndicators";
 import {
@@ -179,7 +184,11 @@ import {
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
-import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
+import {
+  deriveProviderInstanceEntries,
+  shouldShowInstanceBadge,
+  type ProviderInstanceEntry,
+} from "../providerInstances";
 import { primaryServerProvidersAtom } from "../state/server";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -354,7 +363,8 @@ function SidebarThreadTooltip({
   projectCwd,
   projectFaviconPath,
   environmentLabel,
-  driverKind,
+  providerEntry,
+  showInstanceBadge,
   modelInstanceId,
   modelLabel,
   branchMismatch,
@@ -367,7 +377,8 @@ function SidebarThreadTooltip({
   projectCwd: string | null;
   projectFaviconPath: string | null;
   environmentLabel: string | null;
-  driverKind: ProviderInstanceEntry["driverKind"] | null;
+  providerEntry: ProviderInstanceEntry | null;
+  showInstanceBadge: boolean;
   modelInstanceId: string;
   modelLabel: string;
   branchMismatch: {
@@ -378,6 +389,7 @@ function SidebarThreadTooltip({
   terminalProcessCount: number;
   showProjectContext: boolean;
 }) {
+  const driverKind = providerEntry?.driverKind ?? null;
   return (
     <TooltipPopup
       side="right"
@@ -426,10 +438,21 @@ function SidebarThreadTooltip({
             <div className="flex min-w-0 items-center gap-2">
               <ProviderInstanceIcon
                 driverKind={driverKind}
-                displayName={thread.runtime?.providerName ?? modelInstanceId}
+                displayName={
+                  providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
+                }
+                accentColor={providerEntry?.accentColor}
+                // Initials would swallow a size-3 glyph: accent dot, name in label.
+                showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
+                badgeContent="none"
+                badgeClassName="h-2 min-w-2 px-0"
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
               />
-              <div className="min-w-0 truncate text-foreground/75">{modelLabel}</div>
+              <div className="min-w-0 truncate text-foreground/75">
+                {showInstanceBadge && providerEntry
+                  ? `${modelLabel} · ${providerEntry.displayName}`
+                  : modelLabel}
+              </div>
             </div>
           ) : null}
           {terminalStatus ? (
@@ -475,19 +498,26 @@ function SnoozePopoverButton(props: {
   );
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Snooze thread"
-            onClick={(event) => event.stopPropagation()}
-            onDoubleClick={(event) => event.stopPropagation()}
-            className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-          />
-        }
-      >
-        <ClockIcon className="size-3" />
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Snooze thread"
+                  onClick={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                />
+              }
+            />
+          }
+        >
+          <ClockIcon className="size-3" />
+        </TooltipTrigger>
+        <TooltipPopup>Snooze thread</TooltipPopup>
+      </Tooltip>
       <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
         {presets.map((preset) => (
           <button
@@ -827,11 +857,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onTogglePin: (threadRef: ScopedThreadRef) => void;
-  onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
+  changeRequestSnapshot: ThreadChangeRequestSnapshot | null;
+  onChangeRequestSnapshot: (
+    threadKey: string,
+    snapshot: ThreadChangeRequestSnapshot | null,
+  ) => void;
 }) {
   const {
     isRenaming,
-    onChangeRequestState,
+    changeRequestSnapshot,
+    onChangeRequestSnapshot,
     onCancelRename,
     onCommitRename,
     onContextMenu,
@@ -936,6 +971,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
   const driverKind = providerEntry?.driverKind ?? null;
+  const showInstanceBadge =
+    providerEntry !== null &&
+    shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
   const isHermes = driverKind === "hermes" || (driverKind === null && modelInstanceId === "hermes");
   // Chat conversations are Hermes threads born on the Chat surface; the rest of
   // Hermes is the Work inbox. Same split the workspace filter makes, so a row
@@ -971,18 +1009,41 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const pr = resolveThreadPr({
+  // A local checkout keeps its terminal PR badge after the working copy moves
+  // to another branch: the snapshot remembers the pull request the thread's own
+  // branch had, so switching checkouts no longer blanks the row.
+  const retainTerminalOnBranchMismatch = thread.worktreePath === null;
+  const pr = resolveDisplayedThreadPr({
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
+    snapshot: changeRequestSnapshot,
+    retainTerminalOnBranchMismatch,
   });
-  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  const prProvider = resolveDisplayedThreadPrProvider({
+    threadBranch: thread.branch,
+    gitStatus: gitStatus.data,
+    snapshot: changeRequestSnapshot,
+    retainTerminalOnBranchMismatch,
+  });
+  const prStatus = prStatusIndicator(pr, prProvider);
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
-  // Report the PR state so the parent can apply the configured merge rule
-  // and the always-on close rule during partitioning — data only rows have.
-  const prState = pr?.state ?? null;
   useEffect(() => {
-    onChangeRequestState(threadKey, prState);
-  }, [onChangeRequestState, prState, threadKey]);
+    const nextSnapshot = nextThreadChangeRequestSnapshot({
+      threadBranch: thread.branch,
+      gitStatus: gitStatus.data,
+      snapshot: changeRequestSnapshot,
+      retainTerminalOnBranchMismatch,
+    });
+    if (nextSnapshot === undefined) return;
+    onChangeRequestSnapshot(threadKey, nextSnapshot);
+  }, [
+    changeRequestSnapshot,
+    gitStatus.data,
+    onChangeRequestSnapshot,
+    retainTerminalOnBranchMismatch,
+    thread.branch,
+    threadKey,
+  ]);
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
@@ -994,7 +1055,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectCwd={props.projectCwd}
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
-      driverKind={driverKind}
+      providerEntry={providerEntry}
+      showInstanceBadge={showInstanceBadge}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={isHermes ? null : branchMismatch}
@@ -1044,6 +1106,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const handleRenameKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
       event.stopPropagation();
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
       if (event.key === "Enter") {
         event.preventDefault();
         renameCommittedRef.current = true;
@@ -1491,15 +1554,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             />
           ) : null}
           {props.settlementSupported ? (
-            <button
-              type="button"
-              aria-label="Settle thread"
-              onClick={handleSettleClick}
-              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <CheckIcon className="size-3.5" />
-              Settle
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Settle thread"
+                    onClick={handleSettleClick}
+                    className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  />
+                }
+              >
+                <CheckIcon className="size-3.5" />
+                Settle
+              </TooltipTrigger>
+              <TooltipPopup>Settle thread</TooltipPopup>
+            </Tooltip>
           ) : null}
         </span>
       ) : null}
@@ -1785,6 +1855,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   });
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
+  const showInstanceBadge =
+    providerEntry !== null &&
+    shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
   const driverKind = providerEntry?.driverKind ?? null;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
@@ -1843,7 +1916,8 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           projectCwd={props.projectCwd}
           projectFaviconPath={props.projectFaviconPath}
           environmentLabel={props.environmentLabel}
-          driverKind={driverKind}
+          providerEntry={providerEntry}
+          showInstanceBadge={showInstanceBadge}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}
           branchMismatch={
@@ -1889,11 +1963,18 @@ export default function Sidebar() {
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
+  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, deleteThread } =
-    useThreadActions();
+  const {
+    settleThread,
+    unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
+    archiveThread,
+    deleteThread,
+  } = useThreadActions();
   const markThreadUnread = useMarkThreadUnread();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -2224,26 +2305,10 @@ export default function Sidebar() {
   // fresh clock whenever it recomputes.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
-  // PR states stream in per-row (rows own the VCS subscriptions). The next
-  // partition applies the configured merge rule and the always-on close rule.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
-  >(() => new Map());
-  const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
-      setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
-        const next = new Map(current);
-        if (state === null) {
-          next.delete(threadKey);
-        } else {
-          next.set(threadKey, state);
-        }
-        return next;
-      });
-    },
-    [],
-  );
+  // PR snapshots stream in per-row (rows own the VCS subscriptions) and
+  // outlive a checkout switch. The next partition applies the configured merge
+  // rule and the always-on close rule.
+  const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
 
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
@@ -2352,7 +2417,11 @@ export default function Sidebar() {
       const supportsSnooze =
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
+      const snapshot = changeRequestSnapshotByKey.get(threadKey);
+      const changeRequestState =
+        snapshot != null && (thread.worktreePath === null || snapshot.branch === thread.branch)
+          ? snapshot.pr.state
+          : null;
       // Snooze outranks settled classification: an explicitly snoozed thread
       // belongs to the shelf even if it would also auto-settle (the shelf's
       // wake time is a stronger statement about when it matters again).
@@ -2397,7 +2466,7 @@ export default function Sidebar() {
   }, [
     autoSettleAfterDays,
     autoSettleOnMerge,
-    changeRequestStateByKey,
+    changeRequestSnapshotByKey,
     nowMinute,
     pinnedThreadKeySet,
     providerDriverKindByInstance,
@@ -3325,6 +3394,8 @@ export default function Sidebar() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
+        const isThreadRunning =
+          thread.runtime?.status === "running" && thread.runtime.activeRunId != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = pinnedThreadKeySet.has(threadKey);
@@ -3392,6 +3463,10 @@ export default function Sidebar() {
               ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
               { id: "copy-handoff-script", label: "Copy handoff script", icon: "copy" },
               { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
+              // A running thread cannot be archived (the action would fail in
+              // useThreadActions), so the entry is present but disabled rather
+              // than silently missing.
+              { id: "archive", label: "Archive", disabled: isThreadRunning },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
             position,
@@ -3515,6 +3590,34 @@ export default function Sidebar() {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "archive": {
+            if (confirmThreadArchive) {
+              const confirmed = await settlePromise(() =>
+                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+              );
+              if (confirmed._tag === "Failure" || !confirmed.value) return;
+            }
+            let didArchive = false;
+            const result = await archiveThread(threadRef, {
+              onArchived: () => {
+                didArchive = true;
+              },
+            });
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: didArchive
+                    ? "Thread archived, but navigation failed"
+                    : "Failed to archive thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+              return;
+            }
+            return;
+          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -3550,10 +3653,12 @@ export default function Sidebar() {
       })();
     },
     [
+      archiveThread,
       attemptSettle,
       attemptSnooze,
       attemptUnsettle,
       attemptUnsnooze,
+      confirmThreadArchive,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
@@ -3745,9 +3850,9 @@ export default function Sidebar() {
                 {isSearchingThreads ? (
                   <Button
                     type="button"
-                    size="icon-xs"
+                    size="icon-micro"
                     variant="ghost"
-                    className="size-5 shrink-0 rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
+                    className="shrink-0 text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
                     aria-label="Clear thread search"
                     onClick={() => {
                       clearThreadSearch();
@@ -3888,18 +3993,19 @@ export default function Sidebar() {
                               className="size-4 shrink-0"
                             />
                             <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <button
-                              type="button"
+                            <Button
+                              size="icon-xs"
+                              variant="ghost-muted"
                               aria-label={`Project settings for ${project.displayName}`}
                               title={`Project settings for ${project.displayName}`}
-                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
                               onPointerDown={(event) => event.stopPropagation()}
                               onClick={(event) => {
                                 void handleProjectSettings(event, project);
                               }}
                             >
                               <SettingsIcon className="size-3.5" />
-                            </button>
+                            </Button>
                           </MenuRadioItem>
                         );
                       })}
@@ -4147,7 +4253,8 @@ export default function Sidebar() {
                           onSnooze: attemptSnooze,
                           onUnsnooze: attemptUnsnooze,
                           onTogglePin: toggleThreadPin,
-                          onChangeRequestState: handleChangeRequestState,
+                          changeRequestSnapshot: changeRequestSnapshotByKey.get(threadKey) ?? null,
+                          onChangeRequestSnapshot: setThreadChangeRequestSnapshot,
                         };
                         // Only active cards are draggable: snoozed and settled
                         // rows sort by wake/settled time, so a manual position

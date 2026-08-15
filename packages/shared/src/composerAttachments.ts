@@ -13,6 +13,7 @@
  * @module composerAttachments
  */
 import {
+  isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -265,6 +266,15 @@ export function validateComposerAttachment(
   }
 
   const type = classifyComposerAttachment(mimeType, name);
+  // Every `image/*` type classifies as an image, but providers only read the
+  // raster formats the send-turn contract lists. Reject the rest here rather
+  // than letting an SVG or a HEIC ride all the way to a failed turn.
+  if (type === "image" && !isProviderSendTurnSupportedImageMimeType(mimeType)) {
+    return {
+      accepted: false,
+      message: `'${name}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`,
+    };
+  }
   const maxBytes = maxAttachmentBytesForKind(type);
   if (descriptor.sizeBytes > maxBytes) {
     const limit = `${Math.round(maxBytes / (1024 * 1024))} MB`;

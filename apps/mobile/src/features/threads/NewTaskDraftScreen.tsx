@@ -60,6 +60,7 @@ import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/re
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
+import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { useCreateProjectThread } from "./use-project-actions";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
@@ -910,14 +911,20 @@ export function NewTaskDraftScreen(props: {
     // -only Activity start. If creation fails, the token registration's replay
     // finds no work and ends the card within seconds.
     armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: selectedProject.environmentId,
       threadTitle: deriveThreadTitleFromPrompt(initialMessageText),
       projectTitle: isWorkConversation ? "Hermes" : selectedProject.title,
+    });
+    const creationBranch = resolveProjectThreadCreationBranch({
+      workspaceMode,
+      selectedBranch: selectedBranchName,
+      currentCheckoutBranch: flow.currentCheckoutBranchName,
     });
     const result = await createProjectThread({
       project: selectedProject,
       modelSelection,
       envMode: workspaceMode,
-      branch: selectedBranchName,
+      branch: creationBranch,
       worktreePath: workspaceMode === "worktree" ? null : selectedWorktreePath,
       startFromOrigin,
       prepareWorkspace: isWorkConversation ? false : undefined,
