@@ -672,6 +672,34 @@ for (const failurePoint of ["worktree", "setup"] as const) {
   );
 }
 
+it.effect("reports a preparation failure to the launcher that dispatched it", () =>
+  Effect.gen(function* () {
+    // The scheduler records its run outcome from `launch`, which returns before
+    // preparation runs. Without this callback a run that dies provisioning is
+    // still filed as a success.
+    const reported = yield* Deferred.make<string>();
+    const harness = makeHarness({
+      createWorktree: () => Effect.fail(new Error("worktree add refused") as never),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:report-preparation-failure",
+          thread: "thread:launch:report-preparation-failure",
+          message: "Fail during provisioning",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+        onPreparationFailure: (detail) => Deferred.succeed(reported, detail).pipe(Effect.asVoid),
+      });
+
+      const detail = yield* Deferred.await(reported);
+      assert.match(detail, /Workspace preparation failed during provision worktree/u);
+      assert.match(detail, /worktree add refused/u);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("deduplicates retried launch side effects in-process", () =>
   Effect.gen(function* () {
     const setupEntered = yield* Deferred.make<void>();

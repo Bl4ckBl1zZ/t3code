@@ -574,6 +574,61 @@ function gitCommandContext(
   } as const;
 }
 
+/**
+ * Recognised git failure shapes, each mapped to a constant description.
+ *
+ * `detail` reaches the user, and it deliberately carries neither stderr nor the
+ * argument list: git echoes its arguments back in most messages, and those can
+ * hold remote URLs with embedded credentials (guarded by the "does not retain
+ * git arguments or stderr in command failures" test). Matching stderr against
+ * fixed patterns and emitting one of these constants names the failure without
+ * ever copying process output into the error — otherwise every non-zero exit
+ * surfaces as an unactionable "git <verb> failed".
+ */
+const GIT_FAILURE_SIGNATURES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/is already checked out at/i, "that ref is already checked out in another worktree"],
+  [/already exists/i, "the branch or destination path already exists"],
+  [
+    /not a valid object name|unknown revision or path|bad revision|couldn't find remote ref/i,
+    "the requested revision does not exist",
+  ],
+  [
+    /could not resolve host|network is unreachable|connection timed out|connection refused/i,
+    "the remote could not be reached",
+  ],
+  [
+    /authentication failed|could not read username|invalid username or password/i,
+    "authentication with the remote failed",
+  ],
+  // Distinct from an auth failure: git reports a local filesystem denial the
+  // same way, so the description stays neutral about which one it was.
+  [/permission denied|access denied|operation not permitted/i, "permission was denied"],
+  [
+    /would be overwritten|local changes|unmerged files|you have unstaged changes/i,
+    "local changes block the operation",
+  ],
+  [/no space left on device/i, "the disk is full"],
+  [
+    /index\.lock|unable to create.*\.lock|another git process/i,
+    "another git process holds the repository lock",
+  ],
+  [/refusing to merge unrelated histories/i, "the histories are unrelated"],
+  [/conflict/i, "the operation stopped on a conflict"],
+];
+
+/**
+ * Names a git failure from its stderr, returning one of a fixed set of
+ * constants. Never returns any part of its input.
+ */
+function classifyGitFailure(stderr: string): string | null {
+  for (const [pattern, description] of GIT_FAILURE_SIGNATURES) {
+    if (pattern.test(stderr)) {
+      return description;
+    }
+  }
+  return null;
+}
+
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
@@ -1062,10 +1117,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (options.allowNonZeroExit || result.exitCode === 0) {
           return Effect.succeed(result);
         }
+        const fallbackDetail =
+          options.fallbackErrorDetail ?? "Git command exited with a non-zero status.";
+        const classified = classifyGitFailure(result.stderr);
         return Effect.fail(
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
-            detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
+            detail: classified === null ? fallbackDetail : `${fallbackDetail}: ${classified}`,
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
@@ -1132,6 +1190,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const resolveAvailableBranchName = Effect.fn("resolveAvailableBranchName")(function* (
     cwd: string,
     desiredBranch: string,
+    operation = "GitVcsDriver.renameBranch",
   ) {
     const isDesiredTaken = yield* branchExists(cwd, desiredBranch);
     if (!isDesiredTaken) {
@@ -1148,11 +1207,51 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     return yield* new GitCommandError({
       ...gitCommandContext({
-        operation: "GitVcsDriver.renameBranch",
+        operation,
         cwd,
         args: ["branch", "-m", "--", desiredBranch],
       }),
       detail: `Could not find an available branch name for '${desiredBranch}'.`,
+    });
+  });
+
+  /**
+   * Picks a worktree directory that does not exist yet.
+   *
+   * The derived path is a function of the branch name alone, so a repeated
+   * launch — a scheduled task re-running the same prompt, or any flow that
+   * proposes a name a previous worktree already claimed — lands on a directory
+   * that is still on disk, and `git worktree add` aborts. Suffixing mirrors
+   * `resolveAvailableBranchName` so branch and directory stay legible together.
+   */
+  const resolveAvailableWorktreePath = Effect.fn("resolveAvailableWorktreePath")(function* (
+    cwd: string,
+    branch: string,
+  ) {
+    const basePath = path.join(worktreesDir, path.basename(cwd), branch.replaceAll("/", "-"));
+    // An unreadable path is treated as free: git remains the final arbiter and
+    // fails the add itself rather than this helper spinning through suffixes.
+    const isTaken = (candidate: string) =>
+      fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
+
+    if (!(yield* isTaken(basePath))) {
+      return basePath;
+    }
+
+    for (let suffix = 1; suffix <= 100; suffix += 1) {
+      const candidate = `${basePath}-${suffix}`;
+      if (!(yield* isTaken(candidate))) {
+        return candidate;
+      }
+    }
+
+    return yield* new GitCommandError({
+      ...gitCommandContext({
+        operation: "GitVcsDriver.createWorktree",
+        cwd,
+        args: ["worktree", "add", basePath],
+      }),
+      detail: `Could not find an available worktree directory for '${branch}'.`,
     });
   });
 
@@ -3023,28 +3122,41 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input) {
-    const targetBranch = input.newRefName ?? input.refName;
-    const sanitizedBranch = targetBranch.replace(/\//g, "-");
-    const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+    // `git worktree add` refuses outright when the branch or the destination
+    // directory is already taken, which turns a repeated launch into a failed
+    // run rather than a second workspace. Callers that generate a name from the
+    // prompt (scheduled tasks re-fire the same prompt daily) collide constantly,
+    // so resolve both to free names before handing anything to git. An explicit
+    // `path` stays untouched: that caller picked the directory deliberately.
+    const newRefName =
+      input.newRefName == null
+        ? null
+        : yield* resolveAvailableBranchName(
+            input.cwd,
+            input.newRefName,
+            "GitVcsDriver.createWorktree",
+          );
+    const targetBranch = newRefName ?? input.refName;
+    const worktreePath =
+      input.path ?? (yield* resolveAvailableWorktreePath(input.cwd, targetBranch));
+    const args = newRefName
+      ? ["worktree", "add", "-b", newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
     });
 
-    if (input.newRefName) {
+    if (newRefName) {
       yield* runGit(
         "GitVcsDriver.createWorktree.markOwnedBranch",
         input.cwd,
-        ["config", worktreeOwnedBranchConfigKey(input.newRefName), "true"],
+        ["config", worktreeOwnedBranchConfigKey(newRefName), "true"],
         true,
       );
     }
 
-    if (input.newRefName && input.baseRefName) {
+    if (newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
         input.baseRefName,
@@ -3053,7 +3165,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
       yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
         "config",
-        `branch.${input.newRefName}.gh-merge-base`,
+        `branch.${newRefName}.gh-merge-base`,
         baseBranch,
       ]);
     }
