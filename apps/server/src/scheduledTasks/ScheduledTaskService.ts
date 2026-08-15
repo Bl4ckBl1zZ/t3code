@@ -18,6 +18,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -387,6 +388,38 @@ export const layer = Layer.effect(
         ),
       );
 
+    // Workspace preparation (worktree provisioning, setup scripts) continues
+    // after `launch` returns, so a run can still die once this fire has already
+    // been recorded as succeeded. Downgrade that record, guarded on the run's
+    // own start time so a later fire is never clobbered, and on 'succeeded' so
+    // the markRunning → markCompleted transition stays the only writer of
+    // run_count and next_run_at.
+    const markDispatchedRunFailed = (input: {
+      readonly id: ScheduledTaskId;
+      readonly startedAtIso: string;
+      readonly error: string;
+    }) =>
+      Effect.gen(function* () {
+        const now = yield* localNow;
+        yield* sql`
+          UPDATE scheduled_tasks
+          SET updated_at = ${iso(now)},
+              last_run_status = 'failed',
+              last_run_error = ${input.error}
+          WHERE task_id = ${input.id}
+            AND last_run_at = ${input.startedAtIso}
+            AND last_run_status = 'succeeded'
+        `;
+        yield* notifyChanged;
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not record schedule task workspace failure", {
+            taskId: input.id,
+            cause,
+          }),
+        ),
+      );
+
     // Best-effort escape hatch: if anything fails between markRunning and
     // markCompleted, write a full terminal record so runDueTasks neither skips
     // the task forever (it filters out 'running' rows) nor re-fires it
@@ -473,6 +506,11 @@ export const layer = Layer.effect(
         // after the poll read are honoured.
         const prompt = automationPrompt(active);
 
+        // Preparation failures arrive from a background fiber that can outpace
+        // this one. Gating the downgrade on the dispatch record keeps the two
+        // writers ordered, so the callback can only ever see a settled row.
+        const dispatchRecorded = yield* Deferred.make<void>();
+
         // Effect.exit (not Effect.result) so defects and interruptions in the
         // dispatch are also captured and recorded as a failed run instead of
         // aborting before markCompleted.
@@ -494,6 +532,16 @@ export const layer = Layer.effect(
                   },
                   createdBy: active.createdBy,
                   creationSource: active.creationSource,
+                  onPreparationFailure: (detail) =>
+                    Deferred.await(dispatchRecorded).pipe(
+                      Effect.andThen(() =>
+                        markDispatchedRunFailed({
+                          id: active.id,
+                          startedAtIso,
+                          error: detail,
+                        }),
+                      ),
+                    ),
                 }),
               )
             : yield* Effect.exit(
@@ -511,38 +559,43 @@ export const layer = Layer.effect(
                 }),
               );
 
-        const completedAt = yield* localNow;
-        const runSucceeded = result._tag === "Success";
-        const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
-        const lastRunError = runSucceeded ? null : errorMessage(result.cause);
-        // Re-read the task so the next run is computed from the schedule as it
-        // is *now* (the user may have edited or deleted it while we ran).
-        const current = yield* findTask(task.id);
-        const scheduleSource = current ?? task;
-        const completed: ScheduledTask = {
-          ...scheduleSource,
-          updatedAt: iso(completedAt),
-          lastRunAt: startedAtIso,
-          nextRunAt: nextRunAt(scheduleSource, completedAt),
-          lastRunStatus,
-          lastRunError,
-          runCount: scheduleSource.runCount + 1,
-        };
-        if (current !== null) {
-          // startedAtIso in the guard ensures this writes only to the row this
-          // run marked as running — a task deleted mid-run and recreated with
-          // the same id (idempotent commandId replay) must not be stamped.
-          yield* markCompleted({
-            id: task.id,
-            completedAtIso: completed.updatedAt,
-            nextRunAtIso: completed.nextRunAt,
-            status: lastRunStatus,
-            error: lastRunError,
-            startedAtIso,
-          });
-          yield* notifyChanged;
-        }
-        return completed;
+        // `ensuring` releases the preparation callback on every exit, including
+        // a failure between here and markCompleted: a fiber left awaiting the
+        // deferred would hang until the server shuts down.
+        return yield* Effect.gen(function* () {
+          const completedAt = yield* localNow;
+          const runSucceeded = result._tag === "Success";
+          const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
+          const lastRunError = runSucceeded ? null : errorMessage(result.cause);
+          // Re-read the task so the next run is computed from the schedule as it
+          // is *now* (the user may have edited or deleted it while we ran).
+          const current = yield* findTask(task.id);
+          const scheduleSource = current ?? task;
+          const completed: ScheduledTask = {
+            ...scheduleSource,
+            updatedAt: iso(completedAt),
+            lastRunAt: startedAtIso,
+            nextRunAt: nextRunAt(scheduleSource, completedAt),
+            lastRunStatus,
+            lastRunError,
+            runCount: scheduleSource.runCount + 1,
+          };
+          if (current !== null) {
+            // startedAtIso in the guard ensures this writes only to the row this
+            // run marked as running — a task deleted mid-run and recreated with
+            // the same id (idempotent commandId replay) must not be stamped.
+            yield* markCompleted({
+              id: task.id,
+              completedAtIso: completed.updatedAt,
+              nextRunAtIso: completed.nextRunAt,
+              status: lastRunStatus,
+              error: lastRunError,
+              startedAtIso,
+            });
+            yield* notifyChanged;
+          }
+          return completed;
+        }).pipe(Effect.ensuring(Deferred.succeed(dispatchRecorded, undefined)));
       }).pipe(
         Effect.onError((cause) => releaseStuckRun(task, errorMessage(cause))),
         Effect.ensuring(

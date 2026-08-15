@@ -67,6 +67,13 @@ export interface ThreadLaunchInput {
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /**
+   * Invoked when workspace preparation fails, which happens after `launch` has
+   * already returned. Callers that record a launch outcome of their own (the
+   * scheduler writes `last_run_status`) need this to learn the run died during
+   * provisioning instead of reporting a success that never started.
+   */
+  readonly onPreparationFailure?: ((detail: string) => Effect.Effect<void>) | undefined;
 }
 
 export interface ThreadLaunchResult {
@@ -349,42 +356,62 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  // Best-effort: a launcher that cannot record the failure must not keep the
+  // preparation fiber from marking the run itself.
+  const notifyPreparationFailure = (input: ThreadLaunchInput, cause: unknown) =>
+    input.onPreparationFailure === undefined
+      ? Effect.void
+      : input.onPreparationFailure(failureDetail(cause)).pipe(
+          Effect.catchCause((notifyCause) =>
+            Effect.logWarning("Failed to report thread workspace preparation failure", {
+              commandId: input.commandId,
+              cause,
+              notifyCause,
+            }),
+          ),
+        );
+
   const failPreparedRun = (
     input: ThreadLaunchInput,
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
   ) =>
-    runId === null
-      ? Effect.logWarning("Thread workspace preparation failed", {
-          commandId: input.commandId,
-          threadId,
-          cause,
-        })
-      : threads
-          .dispatch({
-            type: "prepared-run.fail",
-            commandId: CommandId.make(`${input.commandId}:fail`),
+    // The thread's own failure item goes first: `onPreparationFailure` may
+    // block on the launcher's bookkeeping, and the UI must not wait on that.
+    Effect.andThen(
+      runId === null
+        ? Effect.logWarning("Thread workspace preparation failed", {
+            commandId: input.commandId,
             threadId,
-            runId,
-            failure: makeProviderFailure({
-              cause,
-              message: failureDetail(cause),
-              class: "validation_error",
-              retryable: false,
-            }),
+            cause,
           })
-          .pipe(
-            Effect.mapError(mapError(input, "fail-run", threadId)),
-            Effect.catchCause((persistCause) =>
-              Effect.logWarning("Failed to persist thread workspace preparation failure", {
-                commandId: input.commandId,
-                threadId,
+        : threads
+            .dispatch({
+              type: "prepared-run.fail",
+              commandId: CommandId.make(`${input.commandId}:fail`),
+              threadId,
+              runId,
+              failure: makeProviderFailure({
                 cause,
-                persistCause,
+                message: failureDetail(cause),
+                class: "validation_error",
+                retryable: false,
               }),
+            })
+            .pipe(
+              Effect.mapError(mapError(input, "fail-run", threadId)),
+              Effect.catchCause((persistCause) =>
+                Effect.logWarning("Failed to persist thread workspace preparation failure", {
+                  commandId: input.commandId,
+                  threadId,
+                  cause,
+                  persistCause,
+                }),
+              ),
             ),
-          );
+      () => notifyPreparationFailure(input, cause),
+    );
 
   const reservePreparation = (commandId: CommandId) =>
     Ref.modify(scheduledLaunches, (scheduled) => {

@@ -1773,6 +1773,108 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("gives a repeat launch its own branch and directory", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // A scheduled task re-running the same prompt proposes the same branch
+        // every fire. Both fires must get a workspace.
+        const first = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "sync/upstream",
+        });
+        const second = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "sync/upstream",
+          baseRefName: initialBranch,
+        });
+
+        assert.equal(first.worktree.refName, "sync/upstream");
+        assert.equal(second.worktree.refName, "sync/upstream-1");
+        assert.notEqual(first.worktree.path, second.worktree.path);
+        assert.equal(
+          yield* git(second.worktree.path, ["branch", "--show-current"]),
+          "sync/upstream-1",
+        );
+        // Per-branch config follows the resolved name, not the one that was
+        // asked for — otherwise it lands on the earlier run's branch.
+        assert.equal(
+          yield* git(cwd, ["config", "--get", "branch.sync/upstream-1.gh-merge-base"]),
+          initialBranch,
+        );
+      }),
+    );
+
+    it.effect("steps past a directory already sitting on the derived worktree path", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const first = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/derived",
+        });
+        // Leftover directory from a worktree that was deleted without git's
+        // help: the branch is gone, so only the path collides.
+        yield* driver.removeWorktree({ cwd, path: first.worktree.path });
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(first.worktree.path, { recursive: true });
+
+        const second = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/derived",
+        });
+
+        assert.equal(second.worktree.refName, "feature/derived");
+        assert.equal(second.worktree.path, `${first.worktree.path}-1`);
+      }),
+    );
+
+    it.effect("names a caller-supplied path collision without echoing git output", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "explicit");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // An explicit path is honoured verbatim, so the second add collides and
+        // git fails — the error has to say why without copying stderr, which
+        // repeats the arguments back.
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/explicit",
+        });
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/explicit",
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(
+          error.detail,
+          "git worktree add failed: the branch or destination path already exists",
+        );
+        assert.notInclude(error.detail, worktreePath);
+      }),
+    );
+
     it.effect("prunes the worktree registry when removal fails", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
