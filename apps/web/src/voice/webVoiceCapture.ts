@@ -1,15 +1,29 @@
 import type { VoiceCaptureAdapter, VoiceRecording } from "@t3tools/client-runtime/voice";
 import type { VoiceAudioFormat } from "@t3tools/contracts/voice";
 
+// OpenRouter's transcription endpoint accepts m4a/ogg/wav/mp3/aac but not WebM, which is what
+// Chromium's MediaRecorder picks by default — so probe only containers the provider can read.
+// Safari lands on audio/mp4 and Firefox on audio/ogg, matching what mobile already sends.
 const MIME_TYPES: ReadonlyArray<{ readonly mimeType: string; readonly format: VoiceAudioFormat }> =
   [
-    { mimeType: "audio/webm;codecs=opus", format: "webm" },
     { mimeType: "audio/mp4;codecs=mp4a.40.2", format: "m4a" },
     { mimeType: "audio/mp4", format: "m4a" },
     { mimeType: "audio/ogg;codecs=opus", format: "ogg" },
   ];
 
+const TRANSCRIBABLE_FORMATS = new Set<VoiceAudioFormat>(["m4a", "ogg", "wav", "mp3", "aac"]);
+
 const LEVEL_SAMPLE_INTERVAL_MS = 100;
+
+export function selectRecordingMimeType(
+  isTypeSupported: (mimeType: string) => boolean,
+): { readonly mimeType: string; readonly format: VoiceAudioFormat } | undefined {
+  return MIME_TYPES.find(({ mimeType }) => isTypeSupported(mimeType));
+}
+
+export function isTranscribableFormat(format: VoiceAudioFormat): boolean {
+  return TRANSCRIBABLE_FORMATS.has(format);
+}
 
 export function voiceFormatFromMimeType(mimeType: string): VoiceAudioFormat | null {
   const container = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
@@ -110,7 +124,9 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
   }): Promise<void> {
     const stream = this.#stream;
     if (!stream) throw new Error("Microphone permission was not granted.");
-    const supported = MIME_TYPES.find(({ mimeType }) => MediaRecorder.isTypeSupported(mimeType));
+    const supported = selectRecordingMimeType((mimeType) =>
+      MediaRecorder.isTypeSupported(mimeType),
+    );
     this.#chunks = [];
     this.#recorder = new MediaRecorder(
       stream,
@@ -119,6 +135,10 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
     // When no probed type matched, the browser records in its default container; the real format
     // is resolved from the recorder/blob MIME type at stop() instead of being assumed here.
     this.#format = supported?.format ?? voiceFormatFromMimeType(this.#recorder.mimeType) ?? null;
+    // Fail before the user speaks rather than uploading audio the provider will reject.
+    if (this.#format !== null && !isTranscribableFormat(this.#format)) {
+      throw new Error("This browser records an audio format transcription cannot accept.");
+    }
     this.#recorder.addEventListener("dataavailable", (event) => {
       if (event.data.size > 0) this.#chunks.push(event.data);
     });
@@ -159,6 +179,10 @@ export class WebVoiceCapture implements VoiceCaptureAdapter {
     this.#release();
     if (blob.size === 0) throw new Error("The recording did not contain usable audio.");
     if (!format) throw new Error("This browser records an unsupported audio format.");
+    // Covers the case where the container was only knowable from the finished blob.
+    if (!isTranscribableFormat(format)) {
+      throw new Error("This browser records an audio format transcription cannot accept.");
+    }
     const data = await blobToBase64(blob);
     return {
       data,
