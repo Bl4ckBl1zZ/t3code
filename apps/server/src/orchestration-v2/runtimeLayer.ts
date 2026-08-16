@@ -47,6 +47,11 @@ import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts"
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
 import { layer as attachmentMaterializationLayer } from "../attachments/AttachmentMaterialization.ts";
 import { layer as workspacePathsLayer } from "../workspace/WorkspacePaths.ts";
+import { layer as worktreeRegistryLayer } from "../worktree/WorktreeRegistry.ts";
+import { layer as worktreeInventoryLayer } from "../worktree/WorktreeInventoryService.ts";
+import { layer as worktreeOperationCoordinatorLayer } from "../worktree/WorktreeOperationCoordinator.ts";
+import { layer as worktreeProvisioningLayer } from "../worktree/WorktreeProvisioningService.ts";
+import { layer as worktreeRetentionServiceLayer } from "../worktree/WorktreeRetentionService.ts";
 
 export const ProjectServiceLayerLive = projectServiceLayer.pipe(
   Layer.provide(Layer.merge(ProjectionProjectRepositoryLive, OrchestrationLayerLive)),
@@ -79,6 +84,11 @@ const eventSinkProvided = OrchestrationV2EventSinkLayerLive;
 const projectionMaintenanceProvided = projectionMaintenanceLayer.pipe(Layer.provide(storesLayer));
 const legacyV1ThreadImporterProvided = legacyV1ThreadImporterLayer.pipe(
   Layer.provide(Layer.mergeAll(eventSinkProvided, eventStoreProvided)),
+);
+
+const worktreeInventoryProvided = worktreeInventoryLayer.pipe(Layer.provide(worktreeRegistryLayer));
+const worktreeProvisioningProvided = worktreeProvisioningLayer.pipe(
+  Layer.provide(Layer.mergeAll(worktreeInventoryProvided, worktreeOperationCoordinatorLayer)),
 );
 
 const providerEventIngestorProvided = providerEventIngestorLayer.pipe(
@@ -224,7 +234,16 @@ const orchestratorProvided = orchestratorLayer.pipe(
 );
 
 const threadManagementProvided = threadManagementServiceLayer.pipe(
-  Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      orchestratorProvided,
+      legacyV1ThreadImporterProvided,
+      worktreeRegistryLayer,
+      worktreeInventoryProvided,
+      worktreeOperationCoordinatorLayer,
+      worktreeProvisioningProvided,
+    ),
+  ),
 );
 export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
   Layer.provide(ProjectServiceLayerLive),
@@ -237,14 +256,30 @@ const threadLaunchProvided = threadLaunchServiceLayer.pipe(
       threadManagementProvided,
       commandReceiptStoreProvided,
       idAllocatorLayer,
+      worktreeRegistryLayer,
+      worktreeInventoryProvided,
+      worktreeOperationCoordinatorLayer,
+      worktreeProvisioningProvided,
+    ),
+  ),
+);
+const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
+  Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
+);
+const worktreeRetentionProvided = worktreeRetentionServiceLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectServiceLayerLive,
+      scheduledTaskProvided,
+      threadManagementProvided,
+      worktreeRegistryLayer,
+      worktreeInventoryProvided,
+      worktreeOperationCoordinatorLayer,
     ),
   ),
 );
 const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
   Layer.provide(threadManagementProvided),
-);
-const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
-  Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
 );
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
@@ -275,4 +310,8 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLifecycleProvided,
   scheduledTaskProvided,
   providerContinuationWorkerProvided,
+  worktreeInventoryProvided,
+  worktreeOperationCoordinatorLayer,
+  worktreeProvisioningProvided,
+  worktreeRetentionProvided,
 );

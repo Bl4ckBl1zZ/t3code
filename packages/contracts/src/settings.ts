@@ -821,6 +821,46 @@ export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyle
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
+export const DEFAULT_WORKTREE_RETENTION_SCAN_INTERVAL = Duration.hours(24);
+export const MIN_WORKTREE_RETENTION_SCAN_INTERVAL = Duration.hours(1);
+export const MAX_WORKTREE_RETENTION_SCAN_INTERVAL = Duration.days(7);
+
+export const WorktreeRetentionMode = Schema.Literals(["off", "report", "delete"]);
+export type WorktreeRetentionMode = typeof WorktreeRetentionMode.Type;
+
+const PositiveWorktreeRetentionDuration = Schema.DurationFromMillis.check(
+  Schema.makeFilter((duration) =>
+    Duration.toMillis(duration) > 0 ? undefined : "duration must be greater than zero",
+  ),
+);
+
+const WorktreeRetentionScanIntervalDuration = Schema.DurationFromMillis.check(
+  Schema.makeFilter((duration) => {
+    const millis = Duration.toMillis(duration);
+    return millis >= Duration.toMillis(MIN_WORKTREE_RETENTION_SCAN_INTERVAL) &&
+      millis <= Duration.toMillis(MAX_WORKTREE_RETENTION_SCAN_INTERVAL)
+      ? undefined
+      : `scan interval must be between ${Duration.toMillis(MIN_WORKTREE_RETENTION_SCAN_INTERVAL)} and ${Duration.toMillis(MAX_WORKTREE_RETENTION_SCAN_INTERVAL)} milliseconds`;
+  }),
+);
+
+export const WorktreeRetentionSettings = Schema.Struct({
+  schemaVersion: Schema.Literal(1).pipe(Schema.withDecodingDefault(Effect.succeed(1 as const))),
+  mode: WorktreeRetentionMode.pipe(Schema.withDecodingDefault(Effect.succeed("off" as const))),
+  maxAge: Schema.NullOr(PositiveWorktreeRetentionDuration).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  staleAfter: Schema.NullOr(PositiveWorktreeRetentionDuration).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  deleteOnPullRequestMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  scanInterval: WorktreeRetentionScanIntervalDuration.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(Duration.toMillis(DEFAULT_WORKTREE_RETENTION_SCAN_INTERVAL)),
+    ),
+  ),
+}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type WorktreeRetentionSettings = typeof WorktreeRetentionSettings.Type;
 
 export const BackgroundActivityProfile = Schema.Literals([
   "balanced",
@@ -893,6 +933,7 @@ export const ServerSettings = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  worktreeRetention: WorktreeRetentionSettings,
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
@@ -1088,6 +1129,16 @@ export const ServerSettingsPatch = Schema.Struct({
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  worktreeRetention: Schema.optionalKey(
+    Schema.Struct({
+      schemaVersion: Schema.optionalKey(Schema.Literal(1)),
+      mode: Schema.optionalKey(WorktreeRetentionMode),
+      maxAge: Schema.optionalKey(Schema.NullOr(PositiveWorktreeRetentionDuration)),
+      staleAfter: Schema.optionalKey(Schema.NullOr(PositiveWorktreeRetentionDuration)),
+      deleteOnPullRequestMerge: Schema.optionalKey(Schema.Boolean),
+      scanInterval: Schema.optionalKey(WorktreeRetentionScanIntervalDuration),
+    }),
+  ),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(

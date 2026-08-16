@@ -18,6 +18,7 @@ import { ScheduledTaskService } from "../../../scheduledTasks/ScheduledTaskServi
 import * as ServerSettings from "../../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
+import * as WorktreeRegistry from "../../../worktree/WorktreeRegistry.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -52,6 +53,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(VcsStatusBroadcaster)({}),
+  Layer.mock(WorktreeRegistry.WorktreeRegistry)({}),
   WorkspacePaths.layer,
   ServerConfig.layerTest(process.cwd(), { prefix: "mcp-registration-test-" }),
 );

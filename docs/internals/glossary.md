@@ -28,6 +28,14 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
 
+#### Purged worktree
+
+A worktree removed by the server's retention policy after it passed the configured age or pull-request
+rule and every safety check. The thread clears `worktreePath` and records `worktreeStatus: "purged"`
+so a later send or terminal open can reprovision it instead of silently using the project root. The
+existing Git removal path may also remove a T3-owned local branch with safe `git branch -d`; recovery
+returns a typed error if that branch is no longer available.
+
 ### Thread timeline
 
 #### Thread

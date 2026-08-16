@@ -68,6 +68,8 @@ import Migration0050 from "./Migrations/050_HermesImportInheritedBoundary.ts";
 import Migration0051 from "./Migrations/051_HermesCronRunWatermarks.ts";
 import Migration0052 from "./Migrations/052_ProjectionProjectsDefaultThreadEnvMode.ts";
 import Migration0053 from "./Migrations/053_ProjectionProjectFaviconPath.ts";
+import Migration0054 from "./Migrations/054_WorktreeRetentionRegistry.ts";
+import Migration0055 from "./Migrations/055_WorktreeRetentionLifecycle.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -133,6 +135,8 @@ export const migrationEntries = [
   [51, "HermesCronRunWatermarks", Migration0051],
   [52, "ProjectionProjectsDefaultThreadEnvMode", Migration0052],
   [53, "ProjectionProjectFaviconPath", Migration0053],
+  [54, "WorktreeRetentionRegistry", Migration0054],
+  [55, "WorktreeRetentionLifecycle", Migration0055],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -215,6 +219,8 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [51, { kind: "table", table: "hermes_cron_run_watermarks" }],
   [52, { kind: "column", table: "projection_projects", column: "default_thread_env_mode" }],
   [53, { kind: "column", table: "projection_projects", column: "favicon_path" }],
+  [54, { kind: "table", table: "worktree_retention_registry" }],
+  [55, { kind: "index", index: "idx_worktree_retention_registry_claim" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {

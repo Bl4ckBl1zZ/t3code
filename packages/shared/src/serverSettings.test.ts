@@ -352,6 +352,25 @@ describe("serverSettings helpers", () => {
     );
   });
 
+  it("merges partial worktree retention patches without resetting other rules", () => {
+    const configured = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      worktreeRetention: {
+        mode: "report",
+        maxAge: Duration.days(30),
+        staleAfter: Duration.days(14),
+        deleteOnPullRequestMerge: true,
+      },
+    });
+    const next = applyServerSettingsPatch(configured, {
+      worktreeRetention: { mode: "delete" },
+    });
+
+    expect(next.worktreeRetention.mode).toBe("delete");
+    expect(next.worktreeRetention.maxAge).toEqual(Duration.days(30));
+    expect(next.worktreeRetention.staleAfter).toEqual(Duration.days(14));
+    expect(next.worktreeRetention.deleteOnPullRequestMerge).toBe(true);
+  });
+
   it("turns legacy interval patches into custom background activity overrides", () => {
     const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       automaticGitFetchInterval: Duration.seconds(15),

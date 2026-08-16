@@ -25,7 +25,10 @@ payload. That had three costs:
 <cwd>/.t3code/uploads/<thread8>/<attach8>-<name>
 ```
 
-`cwd` is the agent's working directory: `thread.worktreePath ?? project.workspaceRoot`.
+`cwd` is the agent's working directory: the thread worktree when present, otherwise the project
+workspace root. A thread marked `worktreeStatus: "purged"` with no path is not a valid fallback-to-root
+case: follow-up sends and terminal opens reprovision first, while `RuntimePolicyV2` rejects a raced
+provider turn and workspace-file asset access returns a typed purged error.
 
 `thread8` is `sha256(threadId)` truncated to 8 hex; a raw `ThreadId` sanitizes to a ~117-character
 directory name. `attach8` reuses the UUID half of the attachment id, which

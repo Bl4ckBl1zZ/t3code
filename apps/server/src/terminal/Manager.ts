@@ -187,6 +187,9 @@ export class TerminalManager extends Context.Service<
      */
     readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
+    /** Whether a live terminal session currently holds the thread open. */
+    readonly hasActiveSessionForThread: (threadId: string) => Effect.Effect<boolean>;
+
     /**
      * Subscribe to terminal runtime events with a direct callback.
      *
@@ -2769,6 +2772,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }),
     );
 
+  const hasActiveSessionForThread = (threadId: string) =>
+    sessionsForThread(threadId).pipe(
+      Effect.map((sessions) =>
+        sessions.some((session) => session.status === "starting" || session.status === "running"),
+      ),
+    );
+
   return TerminalManager.of({
     open,
     attachStream,
@@ -2777,6 +2787,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     clear,
     restart,
     close,
+    hasActiveSessionForThread,
     subscribe,
     subscribeMetadata,
   });

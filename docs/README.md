@@ -11,6 +11,7 @@
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
+- [Worktree retention](./user/worktree-retention.md)
 - [Background commands](./user/background-commands.md)
 - [Voice input](./user/voice-input.md)
 - [Background service (Linux)](./user/background-service.md)
@@ -36,6 +37,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [Resource telemetry](./internals/resource-telemetry.md)
 - [Environment auth](./internals/environment-auth.md)
 - [T3 Connect](./internals/t3-connect.md)
+- [Worktree retention internals](./internals/worktree-retention.md)
 - [CI gates](./internals/ci.md)
 
 ### Runbooks
@@ -43,4 +45,5 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)
+- [Worktree retention](./operations/worktree-retention.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)

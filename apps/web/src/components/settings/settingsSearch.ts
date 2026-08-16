@@ -148,6 +148,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "worktree-retention",
+    title: "Worktree retention",
+    to: "/settings/general",
+  },
+  {
     id: "start-from-origin",
     title: "Start from origin",
     to: "/settings/general",

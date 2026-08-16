@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -62,6 +63,10 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { detectPrTemplate } from "../sourceControl/PrTemplateDetection.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
+import * as WorktreeInventoryService from "../worktree/WorktreeInventoryService.ts";
+import * as WorktreeOperationCoordinator from "../worktree/WorktreeOperationCoordinator.ts";
+import * as WorktreeProvisioningService from "../worktree/WorktreeProvisioningService.ts";
+import * as WorktreeRegistry from "../worktree/WorktreeRegistry.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -99,6 +104,10 @@ export class GitManager extends Context.Service<
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+    readonly findFreshPullRequestState: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+    }) => Effect.Effect<"merged" | "not_merged", GitManagerServiceError>;
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
       options?: GitRunStackedActionOptions,
@@ -601,6 +610,23 @@ export const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const crypto = yield* Crypto.Crypto;
+  const worktreeInventory = yield* Effect.serviceOption(
+    WorktreeInventoryService.WorktreeInventoryService,
+  );
+  const worktreeCoordinator = yield* Effect.serviceOption(
+    WorktreeOperationCoordinator.WorktreeOperationCoordinator,
+  );
+  const worktreeProvisioning = yield* Effect.contextWith((context: Context.Context<never>) =>
+    Effect.succeed(
+      Context.getOption(
+        context as Context.Context<
+          WorktreeProvisioningService.WorktreeProvisioningService["Service"]
+        >,
+        WorktreeProvisioningService.WorktreeProvisioningService,
+      ),
+    ),
+  );
+  const worktreeRegistry = yield* Effect.serviceOption(WorktreeRegistry.WorktreeRegistry);
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
@@ -1331,6 +1357,24 @@ export const make = Effect.gen(function* () {
     }
     return parsed[0] ?? null;
   });
+
+  const findFreshPullRequestState = Effect.fn("findFreshPullRequestState")(function* (input: {
+    readonly cwd: string;
+    readonly branch: string;
+  }): Effect.fn.Return<"merged" | "not_merged", GitManagerServiceError> {
+    const remoteName = yield* readConfigValueNullable(input.cwd, `branch.${input.branch}.remote`);
+    const mergeRef = yield* readConfigValueNullable(input.cwd, `branch.${input.branch}.merge`);
+    const upstreamRef =
+      remoteName !== null && mergeRef !== null
+        ? `refs/remotes/${remoteName}/${mergeRef.replace(/^refs\/heads\//u, "")}`
+        : null;
+    const headContext = yield* resolveBranchHeadContext(input.cwd, {
+      branch: input.branch,
+      upstreamRef,
+    });
+    const latest = yield* findLatestPrForHeadContext(input.cwd, headContext);
+    return latest?.state === "merged" ? "merged" : "not_merged";
+  });
   const buildCompletionToast = Effect.fn("buildCompletionToast")(function* (
     cwd: string,
     result: Pick<GitRunStackedActionResult, "action" | "branch" | "commit" | "push" | "pr">,
@@ -2059,11 +2103,133 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      const worktree = yield* gitCore.createWorktree({
-        cwd: input.cwd,
-        refName: localPullRequestBranch,
-        path: null,
-      });
+      let createdPath: string | null = null;
+      const createAndRegister = Effect.gen(function* () {
+        if (Option.isSome(worktreeProvisioning)) {
+          return yield* worktreeProvisioning.value
+            .create(
+              {
+                git: {
+                  cwd: input.cwd,
+                  refName: localPullRequestBranch,
+                  path: null,
+                },
+                projectId: null,
+                threadId: input.threadId === undefined ? null : String(input.threadId),
+                ownership: "t3-created",
+              },
+              {
+                create: () =>
+                  gitCore.createWorktree({
+                    cwd: input.cwd,
+                    refName: localPullRequestBranch,
+                    path: null,
+                  }),
+                remove: (path) => gitCore.removeWorktree({ cwd: input.cwd, path }),
+              },
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitManagerError({
+                    operation: "preparePullRequestThread",
+                    cwd: input.cwd,
+                    detail: "The new pull-request worktree could not be recorded.",
+                    cause,
+                  }),
+              ),
+            );
+        }
+        const created = yield* gitCore.createWorktree({
+          cwd: input.cwd,
+          refName: localPullRequestBranch,
+          path: null,
+        });
+        createdPath = created.worktree.path;
+        const observedAtMs = yield* Clock.currentTimeMillis;
+        if (Option.isSome(worktreeInventory)) {
+          yield* worktreeInventory.value
+            .register({
+              repositoryRoot: input.cwd,
+              worktreePath: created.worktree.path,
+              projectId: null,
+              threadId: input.threadId === undefined ? null : String(input.threadId),
+              branch: created.worktree.refName,
+              ownership: "t3-created",
+              createdAtMs: observedAtMs,
+              discoveredAtMs: observedAtMs,
+              lastActivityAtMs: observedAtMs,
+              observedAtMs,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitManagerError({
+                    operation: "preparePullRequestThread",
+                    cwd: input.cwd,
+                    detail: "The new pull-request worktree could not be recorded.",
+                    cause,
+                  }),
+              ),
+            );
+        } else if (Option.isSome(worktreeRegistry)) {
+          yield* worktreeRegistry.value
+            .register({
+              repositoryRoot: input.cwd,
+              worktreePath: created.worktree.path,
+              projectId: null,
+              threadId: input.threadId === undefined ? null : String(input.threadId),
+              branch: created.worktree.refName,
+              ownership: "t3-created",
+              createdAtMs: observedAtMs,
+              discoveredAtMs: observedAtMs,
+              lastActivityAtMs: observedAtMs,
+              observedAtMs,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new GitManagerError({
+                    operation: "preparePullRequestThread",
+                    cwd: input.cwd,
+                    detail: "The new pull-request worktree could not be recorded.",
+                    cause,
+                  }),
+              ),
+            );
+        }
+        return created;
+      }).pipe(
+        Effect.onError(() =>
+          createdPath === null
+            ? Effect.void
+            : gitCore.removeWorktree({ cwd: input.cwd, path: createdPath }).pipe(
+                Effect.tap(() =>
+                  Clock.currentTimeMillis.pipe(
+                    Effect.flatMap((removedAtMs) => {
+                      const removal = {
+                        repositoryRoot: input.cwd,
+                        worktreePath: createdPath!,
+                        removedAtMs,
+                        reason: "prepare_pull_request_registration_failed",
+                      } as const;
+                      return Option.isSome(worktreeInventory)
+                        ? worktreeInventory.value.markRemoved(removal)
+                        : Option.isSome(worktreeRegistry)
+                          ? worktreeRegistry.value.markRemoved(removal)
+                          : Effect.void;
+                    }),
+                  ),
+                ),
+                Effect.ignore,
+              ),
+        ),
+      );
+      const worktree = yield* Option.isSome(worktreeProvisioning)
+        ? createAndRegister
+        : Option.isSome(worktreeCoordinator)
+          ? worktreeCoordinator.value.withRepositoryLock(input.cwd, createAndRegister)
+          : createAndRegister;
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
       yield* maybeRunSetupScript(worktree.worktree.path);
 
@@ -2329,6 +2495,7 @@ export const make = Effect.gen(function* () {
     invalidateStatus,
     resolvePullRequest,
     preparePullRequestThread,
+    findFreshPullRequestState,
     runStackedAction,
   });
 });

@@ -10,6 +10,7 @@ import {
   type WorktreeMcpStatusResult,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -23,6 +24,10 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as WorktreeInventoryService from "../worktree/WorktreeInventoryService.ts";
+import * as WorktreeOperationCoordinator from "../worktree/WorktreeOperationCoordinator.ts";
+import * as WorktreeProvisioningService from "../worktree/WorktreeProvisioningService.ts";
+import * as WorktreeRegistry from "../worktree/WorktreeRegistry.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
 export class WorktreeMcpService extends Context.Service<
@@ -64,6 +69,47 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const worktreeRegistry = yield* WorktreeRegistry.WorktreeRegistry;
+  const worktreeInventory = yield* Effect.contextWith((context: Context.Context<never>) =>
+    Effect.succeed(
+      Context.getOption(
+        context as Context.Context<WorktreeInventoryService.WorktreeInventoryService["Service"]>,
+        WorktreeInventoryService.WorktreeInventoryService,
+      ),
+    ),
+  );
+  const worktreeCoordinator = yield* Effect.contextWith((context: Context.Context<never>) =>
+    Effect.succeed(
+      Context.getOption(
+        context as Context.Context<
+          WorktreeOperationCoordinator.WorktreeOperationCoordinator["Service"]
+        >,
+        WorktreeOperationCoordinator.WorktreeOperationCoordinator,
+      ),
+    ),
+  );
+  const worktreeProvisioning = yield* Effect.contextWith((context: Context.Context<never>) =>
+    Effect.succeed(
+      Context.getOption(
+        context as Context.Context<
+          WorktreeProvisioningService.WorktreeProvisioningService["Service"]
+        >,
+        WorktreeProvisioningService.WorktreeProvisioningService,
+      ),
+    ),
+  );
+
+  const registerWorktree = (
+    input: Parameters<WorktreeRegistry.WorktreeRegistry["Service"]["register"]>[0],
+  ) =>
+    Option.isSome(worktreeInventory)
+      ? worktreeInventory.value.register(input)
+      : worktreeRegistry.register(input);
+
+  const withRepositoryLock = <A, E>(repositoryRoot: string, effect: Effect.Effect<A, E>) =>
+    Option.isSome(worktreeCoordinator)
+      ? worktreeCoordinator.value.withRepositoryLock(repositoryRoot, effect)
+      : effect;
 
   // Serializes handoffs per thread: two concurrent calls could otherwise both
   // pass the worktreePath === null check and each create a worktree, leaving
@@ -244,16 +290,34 @@ const make = Effect.gen(function* () {
     // request's connection and interrupt the fiber).
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        const createInput = {
+          cwd: projectCwd,
+          refName: worktreeBaseRef,
+          newRefName: input.branch,
+          baseRefName: baseRef,
+          path: input.path ?? null,
+        } as const;
+        const createWorktree = Option.isSome(worktreeProvisioning)
+          ? worktreeProvisioning.value
+              .create(
+                {
+                  git: createInput,
+                  projectId: String(projection.thread.projectId),
+                  threadId: String(scope.threadId),
+                  ownership: input.path === undefined ? "t3-created" : "unmanaged",
+                },
+                {
+                  create: () => gitWorkflow.createWorktree(createInput),
+                  remove: (path) => gitWorkflow.removeWorktree({ cwd: projectCwd, path }),
+                },
+              )
+              .pipe(Effect.map(({ worktree }) => ({ worktree })))
+          : gitWorkflow.createWorktree(createInput);
         const worktree = yield* restore(
-          gitWorkflow
-            .createWorktree({
-              cwd: projectCwd,
-              refName: worktreeBaseRef,
-              newRefName: input.branch,
-              baseRefName: baseRef,
-              path: input.path ?? null,
-            })
-            .pipe(asOperationFailed("Unable to create the worktree")),
+          (Option.isSome(worktreeProvisioning)
+            ? createWorktree
+            : withRepositoryLock(projectCwd, createWorktree)
+          ).pipe(asOperationFailed("Unable to create the worktree")),
         );
         const worktreePath = worktree.worktree.path;
 
@@ -273,17 +337,50 @@ const make = Effect.gen(function* () {
         // the worktree must succeed before deleting its freshly created branch;
         // otherwise the branch may still be checked out there.
         const removeCreatedWorktree = Effect.suspend(() =>
-          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force: true }).pipe(
-            Effect.andThen(
-              Effect.suspend(() =>
-                gitWorkflow.deleteLocalBranch({
+          Option.isSome(worktreeProvisioning)
+            ? worktreeProvisioning.value.rollbackWithinRepositoryLock(
+                {
                   cwd: projectCwd,
-                  refName: worktree.worktree.refName,
-                  force: true,
-                }),
+                  worktreePath,
+                  branch: worktree.worktree.refName,
+                  deleteBranch: true,
+                  reason: "handoff_rollback",
+                },
+                {
+                  remove: (path) => gitWorkflow.removeWorktree({ cwd: projectCwd, path }),
+                  deleteBranch: (refName) =>
+                    gitWorkflow.deleteLocalBranch({
+                      cwd: projectCwd,
+                      refName,
+                      force: true,
+                    }),
+                },
+              )
+            : gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath }).pipe(
+                Effect.tap(() =>
+                  Clock.currentTimeMillis.pipe(
+                    Effect.flatMap((removedAtMs) =>
+                      worktreeRegistry
+                        .markRemoved({
+                          repositoryRoot: projectCwd,
+                          worktreePath,
+                          removedAtMs,
+                          reason: "handoff_rollback",
+                        })
+                        .pipe(Effect.ignoreCause({ log: true })),
+                    ),
+                  ),
+                ),
+                Effect.andThen(
+                  Effect.suspend(() =>
+                    gitWorkflow.deleteLocalBranch({
+                      cwd: projectCwd,
+                      refName: worktree.worktree.refName,
+                      force: true,
+                    }),
+                  ),
+                ),
               ),
-            ),
-          ),
         ).pipe(Effect.ignoreCause({ log: true }));
 
         const recheckAndBind = Effect.gen(function* () {
@@ -304,6 +401,22 @@ const make = Effect.gen(function* () {
               `Thread '${scope.threadId}' was archived while the worktree was being created; the handoff was rolled back.`,
             );
           }
+          const observedAtMs = yield* Clock.currentTimeMillis;
+          const registration = Option.isSome(worktreeProvisioning)
+            ? Effect.void
+            : registerWorktree({
+                repositoryRoot: projectCwd,
+                worktreePath,
+                projectId: String(projection.thread.projectId),
+                threadId: String(scope.threadId),
+                branch: worktree.worktree.refName,
+                ownership: input.path === undefined ? "t3-created" : "unmanaged",
+                createdAtMs: input.path === undefined ? observedAtMs : null,
+                discoveredAtMs: observedAtMs,
+                lastActivityAtMs: observedAtMs,
+                observedAtMs,
+              });
+          yield* registration.pipe(asOperationFailed("Unable to record the worktree"));
           yield* threadManagement
             .dispatch({
               type: "thread.metadata.update",
@@ -311,6 +424,7 @@ const make = Effect.gen(function* () {
               threadId: scope.threadId,
               branch: worktree.worktree.refName,
               worktreePath,
+              worktreeStatus: "present",
               expectedWorktreePath: null,
             })
             .pipe(
@@ -378,7 +492,9 @@ const make = Effect.gen(function* () {
                   ),
           );
 
-        const continuation = yield* recheckAndBind.pipe(Effect.andThen(queueContinuation));
+        const continuation = yield* withRepositoryLock(projectCwd, recheckAndBind).pipe(
+          Effect.andThen(queueContinuation),
+        );
 
         yield* vcsStatusBroadcaster
           .refreshStatus(worktreePath)
@@ -491,4 +607,5 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
+  | WorktreeRegistry.WorktreeRegistry
 > = Layer.effect(WorktreeMcpService, make);

@@ -24,6 +24,7 @@ const modelSelection = {
 function makeThread(input: {
   readonly now: DateTime.Utc;
   readonly worktreePath: string | null;
+  readonly worktreeStatus?: "purged";
 }): OrchestrationV2AppThread {
   const threadId = ThreadId.make("thread:runtime-policy");
   return {
@@ -38,6 +39,7 @@ function makeThread(input: {
     interactionMode: "default",
     branch: null,
     worktreePath: input.worktreePath,
+    ...(input.worktreeStatus === undefined ? {} : { worktreeStatus: input.worktreeStatus }),
     activeProviderThreadId: null,
     lineage: {
       parentThreadId: null,
@@ -98,6 +100,21 @@ it.layer(TestLayer)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-worktree");
+    }),
+  );
+
+  it.effect("does not fall back to the project root after retention purges a worktree", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const error = yield* Effect.flip(
+        policy.resolve({
+          thread: makeThread({ now, worktreePath: null, worktreeStatus: "purged" }),
+          modelSelection,
+        }),
+      );
+      assert.equal(error._tag, "RuntimePolicyResolveError");
+      assert.match(String(error.cause), /purged/);
     }),
   );
 });
