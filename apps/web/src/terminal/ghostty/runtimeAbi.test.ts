@@ -83,6 +83,79 @@ describe("vendored libghostty-vt WebAssembly", () => {
     }
   });
 
+  it("blinks the default cursor until a program asks for a steady one", async () => {
+    const result = await WebAssembly.instantiate(
+      decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,
+      { env: { log: () => {} } },
+    );
+    const instance = result instanceof WebAssembly.Instance ? result : result.instance;
+    const memory = instance.exports.memory as WebAssembly.Memory;
+    const call = (name: string, ...args: number[]) =>
+      (instance.exports[name] as WasmFunction)(...args);
+    const alloc = (size: number) => call("ghostty_wasm_alloc_u8_array", size);
+    const options = alloc(8);
+    const optionsView = new DataView(memory.buffer, options, 8);
+    optionsView.setUint16(0, 80, true);
+    optionsView.setUint16(2, 24, true);
+    const terminalSlot = call("ghostty_wasm_alloc_opaque");
+    expect(call("ghostty_terminal_new", 0, terminalSlot, options)).toBe(0);
+    const terminal = new DataView(memory.buffer).getUint32(terminalSlot, true);
+    const renderStateSlot = call("ghostty_wasm_alloc_opaque");
+    expect(call("ghostty_render_state_new", 0, renderStateSlot)).toBe(0);
+    const renderState = new DataView(memory.buffer).getUint32(renderStateSlot, true);
+    const scratch = alloc(4);
+
+    const blinking = () => {
+      expect(call("ghostty_render_state_update", renderState, terminal)).toBe(0);
+      expect(call("ghostty_render_state_get", renderState, 12, scratch)).toBe(0);
+      return new DataView(memory.buffer, scratch, 4).getUint8(0) !== 0;
+    };
+    const write = (data: string) => {
+      const bytes = new TextEncoder().encode(data);
+      const pointer = alloc(bytes.length);
+      new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
+      call("ghostty_terminal_vt_write", terminal, pointer, bytes.length);
+      call("ghostty_wasm_free_u8_array", pointer, bytes.length);
+    };
+    const setDefaultCursorBlink = (blink: boolean) => {
+      const value = alloc(1);
+      new Uint8Array(memory.buffer, value, 1)[0] = blink ? 1 : 0;
+      expect(call("ghostty_terminal_set", terminal, 23, value)).toBe(0);
+      call("ghostty_wasm_free_u8_array", value, 1);
+    };
+
+    // Ghostty's own default is a steady cursor, so the blink the web terminal
+    // inherited from xterm.js only exists because option 23 asks for it.
+    expect(blinking()).toBe(false);
+    setDefaultCursorBlink(true);
+    expect(blinking()).toBe(true);
+
+    // Programs still own the cursor: DECSCUSR steady block and DEC mode 12 both
+    // stop the blink, and DECSCUSR reset returns to the embedder default.
+    write("\u001b[2 q");
+    expect(blinking()).toBe(false);
+    write("\u001b[0 q");
+    expect(blinking()).toBe(true);
+    write("\u001b[?12l");
+    expect(blinking()).toBe(false);
+    write("\u001b[?12h");
+    expect(blinking()).toBe(true);
+
+    // RIS restores Ghostty's built-in steady default rather than the embedder's,
+    // which is why the core reapplies the option around a session replay.
+    call("ghostty_terminal_reset", terminal);
+    expect(blinking()).toBe(false);
+    setDefaultCursorBlink(true);
+    expect(blinking()).toBe(true);
+
+    call("ghostty_wasm_free_u8_array", scratch, 4);
+    call("ghostty_render_state_free", renderState);
+    call("ghostty_wasm_free_opaque", renderStateSlot);
+    call("ghostty_terminal_free", terminal);
+    call("ghostty_wasm_free_opaque", terminalSlot);
+    call("ghostty_wasm_free_u8_array", options, 8);
+  });
+
   it("reports and scrolls the viewport with Ghostty's scrollbar state", async () => {
     const result = await WebAssembly.instantiate(
       decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,
@@ -554,6 +627,78 @@ describe("vendored libghostty-vt WebAssembly", () => {
     call("ghostty_wasm_free_opaque", eventSlot);
     call("ghostty_wasm_free_opaque", encoderSlot);
     free(kittyModePointer, kittyMode.length);
+    call("ghostty_terminal_free", terminal);
+    call("ghostty_wasm_free_opaque", terminalSlot);
+    free(terminalOptions, 8);
+  });
+
+  it("encodes Ctrl as a control code but ignores Super", async () => {
+    const result = await WebAssembly.instantiate(
+      decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,
+      { env: { log: () => {} } },
+    );
+    const instance = result instanceof WebAssembly.Instance ? result : result.instance;
+    const memory = instance.exports.memory as WebAssembly.Memory;
+    const call = (name: string, ...args: number[]) =>
+      (instance.exports[name] as WasmFunction)(...args);
+    const alloc = (size: number) => call("ghostty_wasm_alloc_u8_array", size);
+    const free = (pointer: number, size: number) =>
+      call("ghostty_wasm_free_u8_array", pointer, size);
+
+    const terminalOptions = alloc(8);
+    const terminalOptionsView = new DataView(memory.buffer, terminalOptions, 8);
+    terminalOptionsView.setUint16(0, 80, true);
+    terminalOptionsView.setUint16(2, 24, true);
+    const terminalSlot = call("ghostty_wasm_alloc_opaque");
+    expect(call("ghostty_terminal_new", 0, terminalSlot, terminalOptions)).toBe(0);
+    const terminal = new DataView(memory.buffer).getUint32(terminalSlot, true);
+    const encoderSlot = call("ghostty_wasm_alloc_opaque");
+    const eventSlot = call("ghostty_wasm_alloc_opaque");
+    expect(call("ghostty_key_encoder_new", 0, encoderSlot)).toBe(0);
+    expect(call("ghostty_key_event_new", 0, eventSlot)).toBe(0);
+    const view = new DataView(memory.buffer);
+    const keyEncoder = view.getUint32(encoderSlot, true);
+    const keyEvent = view.getUint32(eventSlot, true);
+    const written = call("ghostty_wasm_alloc_usize");
+
+    const encode = (mods: number) => {
+      call("ghostty_key_encoder_setopt_from_terminal", keyEncoder, terminal);
+      call("ghostty_key_event_set_action", keyEvent, 1);
+      call("ghostty_key_event_set_key", keyEvent, ghosttyKeyForCode("KeyC"));
+      call("ghostty_key_event_set_mods", keyEvent, mods);
+      call("ghostty_key_event_set_consumed_mods", keyEvent, 0);
+      call("ghostty_key_event_set_composing", keyEvent, 0);
+      call("ghostty_key_event_set_unshifted_codepoint", keyEvent, "c".codePointAt(0)!);
+      const text = new TextEncoder().encode("c");
+      const textPointer = alloc(text.length);
+      new Uint8Array(memory.buffer, textPointer, text.length).set(text);
+      call("ghostty_key_event_set_utf8", keyEvent, textPointer, text.length);
+      expect(call("ghostty_key_encoder_encode", keyEncoder, keyEvent, 0, 0, written)).toBe(-3);
+      const outputSize = new DataView(memory.buffer, written, 4).getUint32(0, true);
+      const output = alloc(outputSize);
+      expect(
+        call("ghostty_key_encoder_encode", keyEncoder, keyEvent, output, outputSize, written),
+      ).toBe(0);
+      const outputLength = new DataView(memory.buffer, written, 4).getUint32(0, true);
+      const encoded = new TextDecoder().decode(new Uint8Array(memory.buffer, output, outputLength));
+      free(output, outputSize);
+      free(textPointer, text.length);
+      return encoded;
+    };
+
+    // Ctrl+C must reach the PTY as SIGINT, which is the only way to interrupt a
+    // foreground command from the terminal.
+    expect(encode(1 << 1)).toBe("\u0003");
+    // Super is not part of any PTY encoding, so Ghostty falls back to the event
+    // text: an unhandled Cmd chord would type its bare letter. The surface
+    // therefore never forwards a Cmd chord to the PTY.
+    expect(encode(1 << 3)).toBe("c");
+
+    call("ghostty_wasm_free_usize", written);
+    call("ghostty_key_event_free", keyEvent);
+    call("ghostty_key_encoder_free", keyEncoder);
+    call("ghostty_wasm_free_opaque", eventSlot);
+    call("ghostty_wasm_free_opaque", encoderSlot);
     call("ghostty_terminal_free", terminal);
     call("ghostty_wasm_free_opaque", terminalSlot);
     free(terminalOptions, 8);

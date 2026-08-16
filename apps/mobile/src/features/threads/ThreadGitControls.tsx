@@ -14,7 +14,16 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { useThreadEndpoints, type MobileThreadEndpoint } from "../../state/use-thread-endpoints";
+import {
+  portEndpointIcon,
+  portEndpointLabel,
+  portEndpointSubtitle,
+  portsMenuAccessibilityLabel,
+  portsMenuTintColor,
+} from "./threadPortsMenu";
 import {
   basename,
   getTerminalStatusLabel,
@@ -22,6 +31,9 @@ import {
   projectScriptMenuLabel,
   type TerminalMenuSession,
 } from "../terminal/terminalMenu";
+
+/** Stable identity so the memo below does not re-key the endpoint merge. */
+const EMPTY_PINNED_URLS: ReadonlyArray<string> = Object.freeze([]);
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -68,8 +80,7 @@ type HeaderItem = Record<string, unknown>;
 type HeaderItems = HeaderItem[];
 type ThreadGitHeaderActionItems = {
   readonly terminal: HeaderItem;
-  readonly files: HeaderItem;
-  readonly git: HeaderItem;
+  readonly details: HeaderItem;
 };
 type QuickActionIcon =
   | "arrow.down.circle"
@@ -84,7 +95,6 @@ export type ThreadGitMenuProps = {
   readonly currentBranch: string | null;
   readonly gitStatus: VcsStatusResult | null;
   readonly gitOperationLabel: string | null;
-  readonly onOpenFilesInspector?: () => void;
   readonly onOpenGitInspector?: () => void;
   readonly onPull: () => Promise<void>;
   readonly onRunAction: (input: GitActionRequestInput) => Promise<GitRunStackedActionResult | null>;
@@ -96,11 +106,13 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
     readonly onPress: () => void;
   };
   readonly canOpenTerminal: boolean;
-  readonly canOpenFiles: boolean;
   readonly projectScripts: ReadonlyArray<ProjectScript>;
+  /** `previewUrl` from the project's checked-in `t3.json`, if it declares one. */
+  readonly pinnedPreviewUrl?: string | null | undefined;
+  /** Ids of single-run project scripts with an active (pending or running) run. */
+  readonly activeProjectScriptIds: ReadonlyArray<string>;
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
   readonly showActionControls?: boolean;
-  readonly showDirectFileControl?: boolean;
   readonly onOpenTerminal: (terminalId?: string | null) => void;
   readonly onOpenNewTerminal: () => void;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
@@ -204,17 +216,6 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     }
   }, [onPull, openExistingPr, quickAction, runActionWithPrompt]);
 
-  const openFiles = useCallback(() => {
-    if (props.onOpenFilesInspector) {
-      props.onOpenFilesInspector();
-      return;
-    }
-    navigation.navigate("ThreadFiles", {
-      environmentId: String(environmentId),
-      threadId: String(threadId),
-    });
-  }, [environmentId, props.onOpenFilesInspector, navigation, threadId]);
-
   const openReview = useCallback(() => {
     navigation.navigate("ThreadReview", {
       environmentId: EnvironmentId.make(String(environmentId)),
@@ -233,10 +234,19 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     });
   }, [environmentId, props.onOpenGitInspector, navigation, threadId]);
 
+  // Everything the old files and git header buttons reached now lives inside
+  // the details sheet, which mirrors the desktop thread details panel.
+  const openDetails = useCallback(() => {
+    navigation.navigate("ThreadDetails", {
+      environmentId: String(environmentId),
+      threadId: String(threadId),
+    });
+  }, [environmentId, navigation, threadId]);
+
   return {
     currentBranchLabel,
     isRepo,
-    openFiles,
+    openDetails,
     openGitInspector,
     openReview,
     quickAction,
@@ -259,13 +269,21 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         label: "Terminal",
         menu: {
           items: [
-            ...props.projectScripts.map((script) => ({
-              description: script.command,
-              icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
-              label: projectScriptMenuLabel(script),
-              onPress: () => void props.onRunProjectScript(script),
-              type: "action" as const,
-            })),
+            ...props.projectScripts.map((script) => {
+              const isActive = props.activeProjectScriptIds.includes(script.id);
+              return {
+                description: script.command,
+                icon: {
+                  name: isActive ? "stop.fill" : projectScriptMenuIcon(script.icon),
+                  type: "sfSymbol" as const,
+                },
+                label: isActive
+                  ? `Stop ${projectScriptMenuLabel(script)}`
+                  : projectScriptMenuLabel(script),
+                onPress: () => void props.onRunProjectScript(script),
+                type: "action" as const,
+              };
+            }),
             ...(props.projectScripts.length === 0
               ? [
                   {
@@ -307,80 +325,22 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         type: "menu",
         variant: "plain",
       },
-      files: {
-        accessibilityLabel: "Open files",
-        disabled: !props.canOpenFiles,
-        icon: { name: "folder", type: "sfSymbol" },
-        identifier: "thread-right-files",
-        label: "Files",
-        onPress: model.openFiles,
+      details: {
+        accessibilityLabel: "Thread details",
+        // The desktop panel's lucide ListFilter, as its SF Symbol counterpart.
+        icon: { name: "line.3.horizontal.decrease", type: "sfSymbol" },
+        identifier: "thread-right-details",
+        label: "Details",
+        onPress: model.openDetails,
         sharesBackground: true,
         type: "button",
         variant: "plain",
       },
-      git: {
-        accessibilityLabel: "Git actions",
-        icon: { name: "point.topleft.down.curvedto.point.bottomright.up", type: "sfSymbol" },
-        identifier: "thread-right-git",
-        label: "Git",
-        menu: {
-          items: [
-            {
-              description: compactMenuStatus(props.gitStatus),
-              disabled: true,
-              icon: {
-                name: "point.topleft.down.curvedto.point.bottomright.up",
-                type: "sfSymbol",
-              },
-              label: compactMenuBranchLabel(model.currentBranchLabel),
-              onPress: (): void => {},
-              type: "action",
-            },
-            {
-              description: model.quickActionHint ?? undefined,
-              disabled: model.quickAction.disabled,
-              icon: { name: model.quickActionIcon, type: "sfSymbol" },
-              label: model.quickAction.label,
-              onPress: (): void => void model.runQuickAction(),
-              type: "action",
-            },
-            {
-              description: "Turn diffs and worktree changes",
-              disabled: !model.isRepo,
-              icon: { name: "text.bubble", type: "sfSymbol" },
-              label: "Review changes",
-              onPress: model.openReview,
-              type: "action",
-            },
-            {
-              description: "Commit, files, branches",
-              icon: { name: "ellipsis", type: "sfSymbol" },
-              label: "More",
-              onPress: model.openGitInspector,
-              type: "action",
-            },
-          ],
-          title: "Git",
-        },
-        sharesBackground: true,
-        type: "menu",
-        variant: "plain",
-      },
     }),
     [
-      model.currentBranchLabel,
-      model.isRepo,
-      model.openFiles,
-      model.openGitInspector,
-      model.openReview,
-      model.quickAction.disabled,
-      model.quickAction.label,
-      model.quickActionHint,
-      model.quickActionIcon,
-      model.runQuickAction,
-      props.canOpenFiles,
+      model.openDetails,
+      props.activeProjectScriptIds,
       props.canOpenTerminal,
-      props.gitStatus,
       props.onOpenNewTerminal,
       props.onOpenTerminal,
       props.onRunProjectScript,
@@ -392,23 +352,69 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
 
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
-  return useMemo(
-    () => [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems,
-    [actionItems],
-  );
+  return useMemo(() => [actionItems.details, actionItems.terminal] as HeaderItems, [actionItems]);
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
-  return useMemo(
-    () => [actionItems.files, actionItems.git, actionItems.terminal] as HeaderItems,
-    [actionItems],
-  );
+  return useMemo(() => [actionItems.terminal, actionItems.details] as HeaderItems, [actionItems]);
 }
 
 export function ThreadGitControls(props: ThreadGitControlsProps) {
   const model = useThreadGitControlModel(props);
   const showActionControls = props.showActionControls ?? true;
+  // The icon's presence is the status signal: the toolbar sprouts a globe when
+  // this thread starts serving, and loses it when nothing is listening. That
+  // costs no transcript space and survives any scroll position, which a card
+  // in the feed header would not — the transcript sits pinned to the bottom.
+  const endpoints = useThreadEndpoints({
+    // Props are loosely typed as `Id | string` for legacy callers; the hook
+    // keys atom families, so it needs the branded forms.
+    environmentId: EnvironmentId.make(String(props.environmentId)),
+    threadId: ThreadId.make(String(props.threadId)),
+    declaredUrls: useMemo(
+      () =>
+        props.projectScripts
+          .map((script) => script.previewUrl)
+          .filter((url): url is string => typeof url === "string" && url.trim().length > 0),
+      [props.projectScripts],
+    ),
+    pinnedUrls: useMemo(
+      () =>
+        typeof props.pinnedPreviewUrl === "string" && props.pinnedPreviewUrl.trim().length > 0
+          ? [props.pinnedPreviewUrl]
+          : EMPTY_PINNED_URLS,
+      [props.pinnedPreviewUrl],
+    ),
+  });
+
+  const openEndpoint = useCallback(async (endpoint: MobileThreadEndpoint) => {
+    if (endpoint.reachability.kind === "unreachable") {
+      Alert.alert("Cannot open this port", endpoint.reachability.reason);
+      return;
+    }
+    // A stale row is a server that stopped answering. Opening it would hand the
+    // user a connection error with no explanation of why.
+    if (endpoint.status === "stale") {
+      Alert.alert(
+        "Port no longer responding",
+        "This server has stopped. Start it again to open it.",
+      );
+      return;
+    }
+    const opened = await tryOpenExternalUrl(endpoint.reachability.url, "dev-server");
+    if (!opened) {
+      Alert.alert("Could not open port", "No app on this device could open that address.");
+    }
+  }, []);
+
+  const copyEndpointUrl = useCallback((endpoint: MobileThreadEndpoint) => {
+    // Copy the reachable form when there is one; otherwise the announced URL is
+    // still useful to paste somewhere that can reach it.
+    const url =
+      endpoint.reachability.kind === "reachable" ? endpoint.reachability.url : endpoint.url;
+    copyTextWithHaptic(url, { target: "port URL" });
+  }, []);
 
   if (!showActionControls) {
     return null;
@@ -416,6 +422,42 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
 
   return (
     <NativeHeaderToolbar placement="right">
+      {endpoints.length > 0 ? (
+        <NativeHeaderToolbar.Menu
+          icon="globe"
+          accessibilityLabel={portsMenuAccessibilityLabel(endpoints)}
+          title="Ports"
+          tintColor={portsMenuTintColor(endpoints)}
+          separateBackground
+        >
+          {endpoints.map((endpoint) => (
+            <NativeHeaderToolbar.MenuAction
+              key={endpoint.key}
+              icon={portEndpointIcon(endpoint)}
+              disabled={endpoint.reachability.kind === "unreachable" || endpoint.status === "stale"}
+              onPress={() => void openEndpoint(endpoint)}
+              subtitle={portEndpointSubtitle(endpoint)}
+            >
+              <NativeHeaderToolbar.Label>
+                {portEndpointLabel(endpoint, props.projectScripts)}
+              </NativeHeaderToolbar.Label>
+            </NativeHeaderToolbar.MenuAction>
+          ))}
+          <NativeHeaderToolbar.Menu icon="doc.on.doc" title="Copy URL">
+            {endpoints.map((endpoint) => (
+              <NativeHeaderToolbar.MenuAction
+                key={endpoint.key}
+                icon="doc.on.doc"
+                onPress={() => copyEndpointUrl(endpoint)}
+              >
+                <NativeHeaderToolbar.Label>
+                  {portEndpointLabel(endpoint, props.projectScripts)}
+                </NativeHeaderToolbar.Label>
+              </NativeHeaderToolbar.MenuAction>
+            ))}
+          </NativeHeaderToolbar.Menu>
+        </NativeHeaderToolbar.Menu>
+      ) : null}
       {showActionControls && props.auxiliaryPaneControl ? (
         <NativeHeaderToolbar.Button
           accessibilityLabel={props.auxiliaryPaneControl.accessibilityLabel}
@@ -431,18 +473,23 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           separateBackground
         >
           {props.projectScripts.length > 0 ? (
-            props.projectScripts.map((script) => (
-              <NativeHeaderToolbar.MenuAction
-                key={script.id}
-                icon={projectScriptMenuIcon(script.icon)}
-                onPress={() => void props.onRunProjectScript(script)}
-                subtitle={script.command}
-              >
-                <NativeHeaderToolbar.Label>
-                  {projectScriptMenuLabel(script)}
-                </NativeHeaderToolbar.Label>
-              </NativeHeaderToolbar.MenuAction>
-            ))
+            props.projectScripts.map((script) => {
+              const isActive = props.activeProjectScriptIds.includes(script.id);
+              return (
+                <NativeHeaderToolbar.MenuAction
+                  key={script.id}
+                  icon={isActive ? "stop.fill" : projectScriptMenuIcon(script.icon)}
+                  onPress={() => void props.onRunProjectScript(script)}
+                  subtitle={script.command}
+                >
+                  <NativeHeaderToolbar.Label>
+                    {isActive
+                      ? `Stop ${projectScriptMenuLabel(script)}`
+                      : projectScriptMenuLabel(script)}
+                  </NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              );
+            })
           ) : (
             <NativeHeaderToolbar.MenuAction
               icon="play"
@@ -480,16 +527,14 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           </NativeHeaderToolbar.MenuAction>
         </NativeHeaderToolbar.Menu>
       ) : null}
-      {showActionControls && props.showDirectFileControl ? (
+      {showActionControls ? (
         <NativeHeaderToolbar.Button
-          accessibilityLabel="Open files"
-          disabled={!props.canOpenFiles}
-          icon="folder"
-          onPress={model.openFiles}
+          accessibilityLabel="Thread details"
+          icon="line.3.horizontal.decrease"
+          onPress={model.openDetails}
           separateBackground
         />
       ) : null}
-      {showActionControls ? <ThreadGitMenu {...props} /> : null}
     </NativeHeaderToolbar>
   );
 }

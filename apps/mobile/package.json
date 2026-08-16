@@ -26,6 +26,7 @@
     "ios:preview": "APP_VARIANT=preview EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios",
     "ios:prod": "APP_VARIANT=production EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios",
     "ios:release": "APP_VARIANT=production EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios --configuration Release --no-bundler",
+    "ios:testflight": "./scripts/ios-testflight.sh",
     "eas:ios:dev": "eas build --profile development -p ios",
     "eas:ios:preview": "eas build --profile preview -p ios",
     "eas:ios:preview:dev": "eas build --profile preview:dev -p ios",
@@ -49,7 +50,7 @@
     "@expo-google-fonts/dm-sans": "^0.4.2",
     "@expo/metro-runtime": "~56.0.15",
     "@expo/ui": "~56.0.18",
-    "@legendapp/list": "3.3.3",
+    "@legendapp/list": "catalog:",
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
     "@pierre/diffs": "catalog:",
@@ -82,6 +83,7 @@
     "expo-constants": "~56.0.18",
     "expo-crypto": "~56.0.4",
     "expo-dev-client": "~56.0.20",
+    "expo-document-picker": "~56.0.4",
     "expo-file-system": "~56.0.8",
     "expo-font": "~56.0.7",
     "expo-glass-effect": "~56.0.4",
@@ -138,6 +140,11 @@
         "react-native-screens",
         "@react-native-menu/menu"
       ]
+    }
+  },
+  "reanimated": {
+    "staticFeatureFlags": {
+      "DISABLE_COMMIT_PAUSING_MECHANISM": true
     }
   }
 }

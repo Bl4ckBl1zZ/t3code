@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -10,7 +10,7 @@ import {
 import { SidebarInset } from "../components/ui/sidebar";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useThread, useThreadRefs } from "../state/entities";
+import { useThreadRefs, useThreadShell } from "../state/entities";
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
@@ -26,7 +26,7 @@ function DraftChatThreadRouteView() {
       ) ?? null)
     : null;
   const serverThreadRef = draftSession?.promotedTo ?? inferredThreadRef;
-  const serverThread = useThread(serverThreadRef);
+  const serverThread = useThreadShell(serverThreadRef);
   const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
 
@@ -59,12 +59,21 @@ function DraftChatThreadRouteView() {
     };
   }, [canonicalThreadRef, navigate]);
 
+  const navigationPending = useRouterState({ select: (state) => state.status === "pending" });
+
   useEffect(() => {
     if (draftSession || canonicalThreadRef) {
       return;
     }
+    // Starting a fresh draft for the same logical project deletes this one
+    // before the navigation to its replacement commits; redirecting to "/"
+    // during that window would race the in-flight navigation and land the
+    // user in an unrelated project's draft.
+    if (navigationPending) {
+      return;
+    }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate]);
+  }, [canonicalThreadRef, draftSession, navigate, navigationPending]);
 
   if (!draftSession) {
     return null;

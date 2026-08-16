@@ -1,11 +1,46 @@
 import { memo, useCallback, useEffect, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
   onClose: () => void;
+}
+
+/**
+ * `download` is ignored on cross-origin anchors, so the click would navigate
+ * the chat document away instead of saving the file.
+ */
+function isCrossOriginSource(src: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const url = new URL(src, window.location.href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return url.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+async function downloadCrossOriginImage(src: string, name: string): Promise<void> {
+  // Fetching keeps the download same-origin (an object URL); when CORS
+  // forbids it we open a new tab so the document itself never navigates.
+  try {
+    const response = await fetch(src, { mode: "cors", credentials: "omit" });
+    if (!response.ok) throw new Error(`Unexpected response ${response.status}`);
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = name;
+    anchor.rel = "noopener";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch {
+    window.open(src, "_blank", "noopener,noreferrer");
+  }
 }
 
 export const ExpandedImageDialog = memo(function ExpandedImageDialog({
@@ -56,7 +91,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
       <button
         type="button"
         className="absolute inset-0 z-0 cursor-zoom-out"
-        aria-label="Close image preview"
+        aria-label="Dismiss image preview"
         onClick={onClose}
       />
       {preview.images.length > 1 && (
@@ -72,16 +107,36 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         </Button>
       )}
       <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw]">
-        <Button
-          type="button"
-          size="icon-xs"
-          variant="ghost"
-          className="absolute right-2 top-2"
-          onClick={onClose}
-          aria-label="Close image preview"
-        >
-          <XIcon />
-        </Button>
+        <div className="absolute right-2 top-2 z-20 flex items-center gap-1">
+          <Button
+            render={
+              <a
+                href={item.src}
+                download={item.name}
+                onClick={(event) => {
+                  if (!isCrossOriginSource(item.src)) return;
+                  event.preventDefault();
+                  void downloadCrossOriginImage(item.src, item.name);
+                }}
+              />
+            }
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`Download ${item.name}`}
+            title={`Download ${item.name}`}
+          >
+            <DownloadIcon />
+          </Button>
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close image preview"
+          >
+            <XIcon />
+          </Button>
+        </div>
         <img
           src={item.src}
           alt={item.name}

@@ -3,6 +3,7 @@ import {
   type EditorId,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type ServerLifecycleLegacyThreadMigrationPayload,
   type ServerLifecycleWelcomePayload,
   type ServerProvider,
   type ServerSettings,
@@ -33,7 +34,7 @@ interface PrimaryServerState {
 }
 
 const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
-const EMPTY_SERVER_PROVIDERS: ReadonlyArray<ServerProvider> = [];
+export const EMPTY_SERVER_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_PRIMARY_SERVER_STATE: PrimaryServerState = {
   config: null,
   latestEvent: null,
@@ -70,6 +71,18 @@ export const primaryServerConfigEventAtom = Atom.make(
 export const primaryServerWelcomeAtom = Atom.make(
   (get): ServerLifecycleWelcomePayload | null => get(primaryServerStateAtom).welcome,
 ).pipe(Atom.withLabel("web-primary-server-welcome"));
+
+export const primaryServerLegacyThreadMigrationAtom = Atom.make(
+  (get): ServerLifecycleLegacyThreadMigrationPayload | null => {
+    const environmentId = get(primaryEnvironmentIdAtom);
+    if (environmentId === null) {
+      return null;
+    }
+    return Option.getOrNull(
+      AsyncResult.value(get(serverEnvironment.legacyThreadMigration({ environmentId, input: {} }))),
+    );
+  },
+).pipe(Atom.withLabel("web-primary-server-legacy-thread-migration"));
 
 export const primaryServerSettingsAtom = Atom.make(
   (get): ServerSettings => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,

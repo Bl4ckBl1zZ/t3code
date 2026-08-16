@@ -1,5 +1,6 @@
 import {
   DesktopUpdateChannelSchema,
+  EnvironmentActivitySnapshot,
   type DesktopRuntimeInfo,
   type DesktopUpdateActionResult,
   type DesktopUpdateChannel,
@@ -17,6 +18,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -37,6 +39,8 @@ import {
   reduceDesktopUpdateStateOnDownloadFailure,
   reduceDesktopUpdateStateOnDownloadProgress,
   reduceDesktopUpdateStateOnDownloadStart,
+  reduceDesktopUpdateStateOnAutoInstallWait,
+  reduceDesktopUpdateStateOnAutoUpdatePreferenceChange,
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
@@ -44,6 +48,9 @@ import {
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
+const AUTO_INSTALL_IDLE_POLL_INTERVAL = "30 seconds";
+const BACKEND_ACTIVITY_PATH = "/.well-known/t3/activity";
+const BACKEND_ACTIVITY_PROBE_TIMEOUT = Duration.seconds(5);
 
 const AppUpdateYmlConfig = Schema.Record(Schema.String, Schema.String);
 type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
@@ -86,6 +93,18 @@ export class DesktopUpdateChannelPersistenceError extends Schema.TaggedErrorClas
 ) {
   override get message(): string {
     return `Failed to persist the ${this.channel} desktop update channel.`;
+  }
+}
+
+export class DesktopUpdateAutoUpdatePersistenceError extends Schema.TaggedErrorClass<DesktopUpdateAutoUpdatePersistenceError>()(
+  "DesktopUpdateAutoUpdatePersistenceError",
+  {
+    enabled: Schema.Boolean,
+    cause: Schema.instanceOf(DesktopAppSettings.DesktopSettingsWriteError),
+  },
+) {
+  override get message(): string {
+    return `Failed to persist the automatic update preference (${this.enabled ? "enabled" : "disabled"}).`;
   }
 }
 
@@ -156,6 +175,9 @@ export class DesktopUpdates extends Context.Service<
     readonly setChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopUpdateState, DesktopUpdateSetChannelError>;
+    readonly setAutoUpdateEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopUpdateState, DesktopUpdateAutoUpdatePersistenceError>;
     readonly check: (reason: string) => Effect.Effect<DesktopUpdateCheckResult>;
     readonly download: Effect.Effect<DesktopUpdateActionResult>;
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
@@ -186,11 +208,13 @@ function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYm
 function createBaseUpdateState(
   channel: DesktopUpdateChannel,
   enabled: boolean,
+  autoUpdateEnabled: boolean,
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
 ): DesktopUpdateState {
   return {
     ...createInitialDesktopUpdateState(environment.appVersion, environment.runtimeInfo, channel),
     enabled,
+    autoUpdateEnabled,
     status: enabled ? "idle" : "disabled",
   };
 }
@@ -253,12 +277,14 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const httpClient = yield* HttpClient.HttpClient;
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const updateCheckInFlightRef = yield* Ref.make(false);
   const updateDownloadInFlightRef = yield* Ref.make(false);
   const updateInstallInFlightRef = yield* Ref.make(false);
   const updaterConfiguredRef = yield* Ref.make(false);
+  const autoInstallWatchActiveRef = yield* Ref.make(false);
   const lastLoggedDownloadMilestoneRef = yield* Ref.make(-1);
   const updateStateRef = yield* Ref.make<DesktopUpdateState>(
     createInitialDesktopUpdateState(
@@ -523,6 +549,104 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.withSpan("desktop.updates.installDownloadedUpdate"));
 
+  // Ask one local backend whether any agent run is active, or any background
+  // command is still going. Every inconclusive answer (backend has no resolved
+  // config, probe times out, request fails, body doesn't parse) counts as
+  // "busy": the automatic restart must only happen when we positively know
+  // nothing is running.
+  //
+  // Background work needs saying separately because it is the case that looks
+  // idle from the outside: the turn that launched a `run_in_background` command
+  // is long settled, so no run is active, while the command itself is still
+  // going and dies with the provider CLI process the restart kills.
+  // `pendingBackgroundWork` is the adapters' own answer to the same question,
+  // and covers what no turn item records.
+  const backendHasAgentActivity = Effect.fn("desktop.updates.backendHasAgentActivity")(function* (
+    instance: DesktopBackendPool.DesktopBackendInstance,
+  ) {
+    const snapshot = yield* instance.snapshot;
+    if (Option.isNone(snapshot.activePid)) {
+      // Backend process is not running, so restarting cannot interrupt it.
+      return false;
+    }
+    const config = yield* instance.currentConfig;
+    if (Option.isNone(config)) {
+      return true;
+    }
+    const activityUrl = new URL(BACKEND_ACTIVITY_PATH, config.value.httpBaseUrl);
+    return yield* httpClient.get(activityUrl.toString()).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap(HttpClientResponse.schemaBodyJson(EnvironmentActivitySnapshot)),
+      Effect.map(
+        (activity) =>
+          activity.activeRunCount > 0 ||
+          (activity.backgroundProcessCount ?? 0) > 0 ||
+          activity.pendingBackgroundWork === true,
+      ),
+      Effect.timeoutOption(BACKEND_ACTIVITY_PROBE_TIMEOUT),
+      Effect.map(Option.getOrElse(() => true)),
+      Effect.orElseSucceed(() => true),
+    );
+  });
+
+  const hasAnyAgentActivity = pool.list.pipe(
+    Effect.flatMap((instances) =>
+      Effect.forEach(instances, backendHasAgentActivity, { concurrency: "unbounded" }),
+    ),
+    Effect.map((results) => results.some(Boolean)),
+    Effect.withSpan("desktop.updates.hasAnyAgentActivity"),
+  );
+
+  // Waits until every local backend reports zero agent activity, then
+  // installs the downloaded update. Exits without installing when the
+  // downloaded update goes away (new check, download retry), the user turns
+  // the auto-update preference off, or an install attempt fails. At most one
+  // watcher runs at a time.
+  const autoInstallWhenIdle = Effect.gen(function* () {
+    const alreadyWatching = yield* Ref.getAndSet(autoInstallWatchActiveRef, true);
+    if (alreadyWatching) {
+      return;
+    }
+    yield* Effect.gen(function* () {
+      while (true) {
+        const state = yield* Ref.get(updateStateRef);
+        if (state.status !== "downloaded" || (yield* Ref.get(desktopState.quitting))) {
+          break;
+        }
+        if (!(yield* desktopSettings.get).autoUpdateEnabled) {
+          break;
+        }
+        if (!(yield* hasAnyAgentActivity)) {
+          yield* logUpdaterInfo("no agent or background activity detected; installing update", {
+            version: state.downloadedVersion,
+          });
+          yield* installDownloadedUpdate;
+          break;
+        }
+        if (!state.autoInstallPending) {
+          yield* logUpdaterInfo("activity detected; deferring update install until idle", {
+            version: state.downloadedVersion,
+          });
+        }
+        yield* updateState((current) => reduceDesktopUpdateStateOnAutoInstallWait(current, true));
+        yield* Effect.sleep(AUTO_INSTALL_IDLE_POLL_INTERVAL);
+      }
+      yield* updateState((current) => reduceDesktopUpdateStateOnAutoInstallWait(current, false));
+    }).pipe(
+      Effect.ensuring(Ref.set(autoInstallWatchActiveRef, false)),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.void;
+        }
+        const error = new DesktopUpdaterReportedError({ operation: "install", cause });
+        return logUpdaterError(error.message, {
+          errorTag: error._tag,
+          operation: error.operation,
+        });
+      }),
+    );
+  }).pipe(Effect.withSpan("desktop.updates.autoInstallWhenIdle"));
+
   const startUpdatePollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     yield* Effect.sleep(AUTO_UPDATE_STARTUP_DELAY).pipe(
       Effect.andThen(checkForUpdates("startup")),
@@ -583,6 +707,13 @@ export const make = Effect.gen(function* () {
             version: info.version,
             releaseNoteGroups: releaseNotes.length,
           });
+
+          if ((yield* desktopSettings.get).autoUpdateEnabled) {
+            yield* logUpdaterInfo("automatic updates enabled; downloading update", {
+              version: info.version,
+            });
+            yield* downloadAvailableUpdate;
+          }
         }),
       ),
       Effect.catchCause((cause) => {
@@ -688,6 +819,10 @@ export const make = Effect.gen(function* () {
           const state = yield* Ref.get(updateStateRef);
           yield* setState(reduceDesktopUpdateStateOnDownloadComplete(state, info.version));
           yield* logUpdaterInfo("update downloaded", { version: info.version });
+
+          if ((yield* desktopSettings.get).autoUpdateEnabled) {
+            yield* Effect.forkDetach(autoInstallWhenIdle);
+          }
         }),
       ),
       Effect.catchCause((cause) => {
@@ -725,7 +860,14 @@ export const make = Effect.gen(function* () {
 
       const settings = yield* desktopSettings.get;
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      yield* setState(
+        createBaseUpdateState(
+          settings.updateChannel,
+          enabled,
+          settings.autoUpdateEnabled,
+          environment,
+        ),
+      );
       if (!enabled) {
         return;
       }
@@ -795,7 +937,10 @@ export const make = Effect.gen(function* () {
         );
 
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(nextChannel, enabled, environment));
+      const currentSettings = yield* desktopSettings.get;
+      yield* setState(
+        createBaseUpdateState(nextChannel, enabled, currentSettings.autoUpdateEnabled, environment),
+      );
 
       if (!enabled || !(yield* Ref.get(updaterConfiguredRef))) {
         return yield* Ref.get(updateStateRef);
@@ -807,6 +952,34 @@ export const make = Effect.gen(function* () {
       yield* checkForUpdates("channel-change").pipe(
         Effect.ensuring(electronUpdater.setAllowDowngrade(allowDowngrade).pipe(Effect.ignore)),
       );
+      return yield* Ref.get(updateStateRef);
+    }),
+    setAutoUpdateEnabled: Effect.fn("desktop.updates.setAutoUpdateEnabled")(function* (
+      enabled: boolean,
+    ) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+      yield* desktopSettings
+        .setAutoUpdateEnabled(enabled)
+        .pipe(
+          Effect.mapError(
+            (cause) => new DesktopUpdateAutoUpdatePersistenceError({ enabled, cause }),
+          ),
+        );
+      const state = yield* updateState((current) =>
+        reduceDesktopUpdateStateOnAutoUpdatePreferenceChange(current, enabled),
+      );
+      yield* logUpdaterInfo("automatic update preference changed", { enabled });
+
+      // Turning the preference on mid-flight picks up whatever step the
+      // manual flow already reached; the disable path just lets the idle
+      // watcher observe the setting and wind down on its next iteration.
+      if (enabled && (yield* Ref.get(updaterConfiguredRef))) {
+        if (state.status === "available") {
+          yield* Effect.forkDetach(downloadAvailableUpdate);
+        } else if (state.status === "downloaded") {
+          yield* Effect.forkDetach(autoInstallWhenIdle);
+        }
+      }
       return yield* Ref.get(updateStateRef);
     }),
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {

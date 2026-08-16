@@ -3,16 +3,22 @@ import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 
-import { getCompactBrandHeaderOptions } from "../../components/CompactBrandTitle";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
+import {
+  buildProviderDriverMap,
+  isHermesProviderInstance,
+  isMobileWorkspaceThread,
+} from "../../lib/mobileWorkspace";
+import { useStartHermesConversation } from "../threads/use-start-hermes-conversation";
+import { useMobileWorkspace } from "../../state/preferences";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
-import { checkForAppUpdateOnLaunch } from "../updates/app-updates";
+import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
@@ -20,6 +26,7 @@ import { useHomeListOptions } from "./home-list-options";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
+import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -27,6 +34,13 @@ export function HomeRouteScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
   const threads = useThreadShells();
+  const serverConfigs = useServerConfigs();
+  const [workspace, setWorkspace] = useMobileWorkspace();
+  const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
+  const visibleThreads = useMemo(
+    () => threads.filter((thread) => isMobileWorkspaceThread(thread, workspace, providerDrivers)),
+    [providerDrivers, threads, workspace],
+  );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -34,6 +48,7 @@ export function HomeRouteScreen() {
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
+    startAppUpdateForegroundRecheck();
   }, []);
 
   const {
@@ -42,9 +57,28 @@ export function HomeRouteScreen() {
     settleThread,
     snoozeThread,
     unsnoozeThread,
+    pinThread,
+    unpinThread,
+    movePinnedThread,
+    regenerateThreadTitle,
     unsettleThread,
   } = useThreadListActions();
-  const pendingTasks = usePendingNewTasks();
+  const allPendingTasks = usePendingNewTasks();
+  const pendingTasks = useMemo(
+    () =>
+      workspace === "code"
+        ? allPendingTasks
+        : allPendingTasks.filter(
+            (task) =>
+              task.message.modelSelection !== undefined &&
+              isHermesProviderInstance(
+                task.message.environmentId,
+                task.message.modelSelection.instanceId,
+                providerDrivers,
+              ),
+          ),
+    [allPendingTasks, providerDrivers, workspace],
+  );
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(() => {
     const connectionStateByEnvironmentId = new Map(
@@ -94,6 +128,16 @@ export function HomeRouteScreen() {
       setSelectedProjectKey(null);
     }
   }, [projectFilterOptions, selectedProjectKey]);
+  const startHermesConversation = useStartHermesConversation({
+    requiredEnvironmentId: selectedEnvironmentId,
+  });
+  const startNewTask = () => {
+    if (workspace === "code") {
+      navigation.navigate("NewTaskSheet", { screen: "NewTask" });
+      return;
+    }
+    startHermesConversation();
+  };
 
   // In split layouts the persistent sidebar IS the thread list — Home becomes
   // an empty detail pane so selecting a thread never transitions layouts.
@@ -108,38 +152,61 @@ export function HomeRouteScreen() {
             <NativeHeaderToolbar.Button
               accessibilityLabel="New task"
               icon="square.and.pencil"
-              onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+              onPress={startNewTask}
             />
           }
         />
-        <WorkspaceEmptyDetail
-          onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-        />
+        <WorkspaceEmptyDetail onStartNewTask={startNewTask} />
       </>
     );
   }
 
   return (
-    <AndroidHomeFabLayout
-      onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-    >
+    <AndroidHomeFabLayout onStartNewTask={startNewTask}>
       <>
-        {/* Restore the compact title after the split branch blanks the detail header. */}
-        <NativeStackScreenOptions options={getCompactBrandHeaderOptions()} />
+        {/* Restore the compact title after the split branch blanks the detail
+            header. The brand slot doubles as the connection status surface:
+            while an environment reconnects, the lockup fades to a status label
+            in place (no layout shift in the list below); while connected it
+            stays the workspace-switcher trigger. */}
+        <NativeStackScreenOptions
+          optionsVersion={workspace}
+          options={getConnectionAwareBrandHeaderOptions({
+            onOpenEnvironments: () =>
+              navigation.navigate("SettingsSheet", {
+                screen: "SettingsContent",
+                params: { screen: "SettingsEnvironments" },
+              }),
+            workspaceMenu: { workspace, onWorkspaceChange: setWorkspace },
+          })}
+        />
         <HomeHeader
           environments={environments}
-          projects={projectFilterOptions}
+          workspace={workspace}
+          projects={workspace === "work" ? [] : projectFilterOptions}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
-          selectedProjectKey={selectedProjectKey}
+          selectedProjectKey={workspace === "work" ? null : selectedProjectKey}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
           onEnvironmentChange={setSelectedEnvironmentId}
+          onWorkspaceChange={setWorkspace}
           onProjectChange={setSelectedProjectKey}
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenEnvironments={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironments" },
+            })
+          }
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
-          onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+          onStartNewTask={startNewTask}
           onThreadSortOrderChange={setThreadSortOrder}
         />
 
@@ -147,7 +214,10 @@ export function HomeRouteScreen() {
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironmentNew" },
+            })
           }
           onArchiveThread={archiveThread}
           onDeleteThread={confirmDeleteThread}
@@ -155,12 +225,18 @@ export function HomeRouteScreen() {
           onSnoozeThread={snoozeThread}
           onUnsnoozeThread={unsnoozeThread}
           onUnsettleThread={unsettleThread}
+          onPinThread={pinThread}
+          onUnpinThread={unpinThread}
+          onMovePinnedThread={movePinnedThread}
+          onRegenerateThreadTitle={regenerateThreadTitle}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
-          onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
           }
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
@@ -183,7 +259,7 @@ export function HomeRouteScreen() {
               },
             });
           }}
-          onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+          onStartNewTask={startNewTask}
           onThreadSortOrderChange={setThreadSortOrder}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
@@ -192,8 +268,9 @@ export function HomeRouteScreen() {
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
-          selectedProjectKey={selectedProjectKey}
-          threads={threads}
+          selectedProjectKey={workspace === "work" ? null : selectedProjectKey}
+          threads={visibleThreads}
+          workspace={workspace}
           threadSortOrder={listOptions.threadSortOrder}
         />
       </>

@@ -1,25 +1,182 @@
 import type {
   EnvironmentId,
-  OrchestrationMessage,
+  MessageId,
   OrchestrationProjectShell,
-  OrchestrationShellSnapshot,
-  OrchestrationThread,
-  OrchestrationThreadShell,
+  OrchestrationV2RunStatus,
+  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2ThreadShell,
+  PlanId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 export interface EnvironmentProject extends OrchestrationProjectShell {
   readonly environmentId: EnvironmentId;
 }
 
-export interface EnvironmentThreadShell extends OrchestrationThreadShell {
+/**
+ * A pristine V2 thread projection paired with the environment that produced it.
+ *
+ * The projection stays nested so the server projection and all structurally
+ * shared collections retain their identities. Rich consumers read V2 state
+ * directly instead of a second presentation-shaped thread graph.
+ */
+export interface EnvironmentThread {
   readonly environmentId: EnvironmentId;
+  readonly projection: OrchestrationV2ThreadProjection;
 }
 
-export type EnvironmentMessage = OrchestrationMessage;
+export interface ThreadRunSummary {
+  readonly runId: RunId;
+  readonly status: OrchestrationV2RunStatus;
+  readonly requestedAt: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly assistantMessageId: MessageId | null;
+  readonly sourcePlanRef?: {
+    readonly threadId: ThreadId;
+    readonly planId: PlanId;
+  };
+}
 
-export interface EnvironmentThread extends OrchestrationThread {
+export interface ThreadRuntimeSummary {
+  readonly status: OrchestrationV2RunStatus | "idle";
+  readonly activeRunId: RunId | null;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerName: string | null;
+  readonly lastError: string | null;
+  readonly updatedAt: string;
+}
+
+export function threadRuntimeIsActive(runtime: ThreadRuntimeSummary | null | undefined): boolean {
+  return runtime !== null && runtime !== undefined && threadRunStatusIsActive(runtime.status);
+}
+
+export function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolean {
+  return (
+    status === "preparing" ||
+    status === "queued" ||
+    status === "starting" ||
+    status === "running" ||
+    status === "waiting"
+  );
+}
+
+export interface EnvironmentThreadShell {
   readonly environmentId: EnvironmentId;
+  readonly id: ThreadId;
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly modelSelection: OrchestrationV2ThreadShell["modelSelection"];
+  readonly runtimeMode: OrchestrationV2ThreadShell["runtimeMode"];
+  readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly lineage: OrchestrationV2ThreadShell["lineage"];
+  readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
+  readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
+  readonly latestRun: ThreadRunSummary | null;
+  readonly runtime: ThreadRuntimeSummary | null;
+  readonly latestUserMessageAt: string | null;
+  /**
+   * The most recent visible message, for list rows that lead with what was
+   * last said rather than with where the work lives. `role` rides along so a
+   * conversation row can mark its own turns — without it there is no telling
+   * the last word apart from the last answer.
+   */
+  readonly latestVisibleMessage: {
+    readonly role: string;
+    readonly text: string;
+  } | null;
+  readonly hasPendingApprovals: boolean;
+  readonly hasPendingUserInput: boolean;
+  readonly hasActionableProposedPlan: boolean;
+  /**
+   * Background commands still running for this thread. Nonzero means the thread
+   * is idle now but will speak again on its own.
+   */
+  readonly backgroundProcessCount: number;
+  readonly itemCount: number;
+  readonly visibleItemCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly archivedAt: string | null;
+  readonly settledOverride: "settled" | "active" | null;
+  readonly settledAt: string | null;
+  readonly pinnedAt: string | null;
+  /** Fractional sort key for the user-arranged pinned run; null on threads
+      pinned before reordering existed (they sort below arranged ones). */
+  readonly pinOrderKey: string | null;
+  readonly workInboxRole: "main" | "chat" | null;
+  readonly timelineClearedAt?: string | null;
+  readonly snoozedUntil: string | null;
+  readonly snoozedAt: string | null;
+  /**
+   * Server-tracked visited watermark. `undefined` means the environment's
+   * server predates visited tracking and clients should fall back to any
+   * local visited state they keep.
+   */
+  readonly lastVisitedAt?: string | null;
+  /** Pending title regeneration marker; null when no request is in flight. */
+  readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
+  readonly deletedAt: string | null;
+  readonly source: OrchestrationV2ThreadShell;
+}
+
+/**
+ * The last thing said in a thread, flattened to one line for a list row.
+ *
+ * Shared by every client: a row that leads with the last message rather than
+ * with a repo it does not have is the same idea on web, iOS and Android, and
+ * the flattening rules (collapse whitespace, cap the length) have to agree or
+ * the same thread reads differently per platform.
+ */
+export function resolveThreadPreview(
+  thread: Pick<EnvironmentThreadShell, "latestVisibleMessage">,
+): { readonly text: string; readonly fromUser: boolean } | null {
+  const message = thread.latestVisibleMessage;
+  if (!message) return null;
+  const text = message.text.split(/\s+/u).filter(Boolean).join(" ");
+  if (text.length === 0) return null;
+  return {
+    text: text.length > 160 ? `${text.slice(0, 157)}...` : text,
+    fromUser: message.role === "user",
+  };
+}
+
+function iso(value: DateTime.Utc): string {
+  return DateTime.formatIso(value);
+}
+
+function nullableIso(value: DateTime.Utc | null): string | null {
+  return value === null ? null : iso(value);
+}
+
+function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
+  return (
+    status === "completed" ||
+    status === "interrupted" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "rolled_back"
+  );
+}
+
+function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
+  if (thread.latestRunId === null && thread.activeProviderThreadId === null) return null;
+  return {
+    status: thread.status,
+    activeRunId: thread.activeRunId,
+    providerInstanceId: thread.providerInstanceId,
+    providerName: null,
+    lastError: thread.lastError ?? null,
+    updatedAt: iso(thread.updatedAt),
+  };
 }
 
 export function scopeProject(
@@ -29,25 +186,93 @@ export function scopeProject(
   return { ...project, environmentId };
 }
 
-export function scopeThreadShell(
+export function presentThreadShell(
   environmentId: EnvironmentId,
-  thread: OrchestrationThreadShell,
+  thread: OrchestrationV2ThreadShell,
 ): EnvironmentThreadShell {
-  return { ...thread, environmentId };
+  const updatedAt = iso(thread.updatedAt);
+  const latestRun =
+    thread.latestRunId === null
+      ? null
+      : ({
+          runId: thread.latestRunId,
+          status: thread.status === "idle" ? "completed" : thread.status,
+          requestedAt: nullableIso(thread.latestRunRequestedAt ?? null),
+          startedAt: nullableIso(thread.latestRunStartedAt ?? null),
+          completedAt:
+            thread.latestRunCompletedAt === undefined
+              ? thread.status === "idle" || terminalRunStatus(thread.status)
+                ? updatedAt
+                : null
+              : nullableIso(thread.latestRunCompletedAt),
+          assistantMessageId: null,
+        } satisfies ThreadRunSummary);
+  return {
+    environmentId,
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    providerInstanceId: thread.providerInstanceId,
+    modelSelection: thread.modelSelection,
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    lineage: thread.lineage,
+    forkedFrom: thread.forkedFrom,
+    activeProviderThreadId: thread.activeProviderThreadId,
+    latestRun,
+    runtime: shellRuntime(thread),
+    latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
+    latestVisibleMessage:
+      thread.latestVisibleMessage === null || thread.latestVisibleMessage === undefined
+        ? null
+        : {
+            role: thread.latestVisibleMessage.role,
+            text: thread.latestVisibleMessage.text,
+          },
+    hasPendingApprovals:
+      thread.pendingRuntimeRequest !== null &&
+      thread.pendingRuntimeRequest.kind !== "user_input" &&
+      thread.pendingRuntimeRequest.kind !== "auth_refresh",
+    hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    backgroundProcessCount: thread.backgroundProcessCount ?? 0,
+    itemCount: thread.itemCount,
+    visibleItemCount: thread.visibleItemCount,
+    createdAt: iso(thread.createdAt),
+    updatedAt,
+    archivedAt: nullableIso(thread.archivedAt),
+    settledOverride: thread.settledOverride,
+    settledAt: nullableIso(thread.settledAt),
+    pinnedAt: nullableIso(thread.pinnedAt ?? null),
+    pinOrderKey: thread.pinOrderKey ?? null,
+    workInboxRole: thread.workInboxRole ?? null,
+    timelineClearedAt: nullableIso(thread.timelineClearedAt ?? null),
+    snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
+    snoozedAt: nullableIso(thread.snoozedAt ?? null),
+    ...(thread.lastVisitedAt === undefined
+      ? {}
+      : { lastVisitedAt: nullableIso(thread.lastVisitedAt) }),
+    titleRegeneration:
+      thread.titleRegeneration == null
+        ? null
+        : {
+            requestId: thread.titleRegeneration.requestId,
+            startedAt: iso(thread.titleRegeneration.startedAt),
+          },
+    deletedAt: nullableIso(thread.deletedAt),
+    source: thread,
+  };
 }
 
-export function scopeThread(
-  environmentId: EnvironmentId,
-  thread: OrchestrationThread,
-): EnvironmentThread {
-  return { ...thread, environmentId };
-}
+export const scopeThreadShell = presentThreadShell;
 
 export function selectEnvironmentThreadShell(
-  snapshot: OrchestrationShellSnapshot | null,
+  snapshot: OrchestrationV2ShellSnapshot | null,
   environmentId: EnvironmentId,
   threadId: ThreadId,
 ): EnvironmentThreadShell | null {
   const thread = snapshot?.threads.find((candidate) => candidate.id === threadId) ?? null;
-  return thread ? scopeThreadShell(environmentId, thread) : null;
+  return thread ? presentThreadShell(environmentId, thread) : null;
 }

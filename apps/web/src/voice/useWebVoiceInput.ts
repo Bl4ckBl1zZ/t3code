@@ -1,136 +1,70 @@
-import {
-  createVoicePreflightCache,
-  voicePreflightReady,
-  VoiceInputController,
-  type VoiceInputState,
-} from "@t3tools/client-runtime/voice";
-import type { VoiceTranscriptionRequest } from "@t3tools/contracts/voice";
+import { type VoiceInputState } from "@t3tools/client-runtime/voice";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  getOpenRouterIntegration,
-  getVoiceInputSettings,
-  transcribeVoice,
-} from "../cloud/voiceInput";
-import { WebVoiceCapture } from "./webVoiceCapture";
+  bindVoiceComposer,
+  cancelVoiceSession,
+  getVoiceSessionState,
+  primeVoicePreflight,
+  retryVoiceSession,
+  setVoiceSessionCleanup,
+  subscribeVoiceLevel,
+  subscribeVoiceSessionState,
+  toggleVoiceSession,
+  type VoiceCompletion,
+  type VoiceUnavailableReason,
+} from "./webVoiceSession";
 
-const voicePreflight = createVoicePreflightCache({
-  getIntegration: getOpenRouterIntegration,
-  getSettings: getVoiceInputSettings,
-});
+export { invalidateVoicePreflight } from "./webVoiceSession";
 
-/** Call after Voice Input settings or the OpenRouter connection change. */
-export function invalidateVoicePreflight(): void {
-  voicePreflight.invalidate();
-}
-
+/**
+ * Binder onto the app-scoped voice session (webVoiceSession.ts). The hook subscribes to the
+ * singleton's state/level and registers this composer as the completion target while mounted.
+ * Unmounting only unsubscribes — an active recording or transcription keeps running, so
+ * navigating away from the chat route no longer drops audio.
+ */
 export function useWebVoiceInput(input: {
-  readonly onCompleted: (result: {
-    readonly requestId: string;
-    readonly rawText: string;
-    readonly text: string;
-    readonly cleanupApplied: boolean;
-  }) => void;
-  readonly onUnavailable: (reason: "sign_in" | "connect_openrouter" | "unsupported") => void;
+  readonly identity: string;
+  readonly onCompleted: (result: VoiceCompletion) => void;
+  readonly onUnavailable: (reason: VoiceUnavailableReason) => void;
 }) {
-  const completedRef = useRef(input.onCompleted);
-  completedRef.current = input.onCompleted;
-  const levelListenersRef = useRef(new Set<(level: number) => void>());
-  const controllerRef = useRef<VoiceInputController | null>(null);
-  if (controllerRef.current === null && typeof window !== "undefined") {
-    const levelListeners = levelListenersRef.current;
-    controllerRef.current = new VoiceInputController({
-      capture: new WebVoiceCapture(),
-      client: {
-        transcribe: (request, signal) =>
-          transcribeVoice(request as VoiceTranscriptionRequest, signal),
-      },
-      onLevel: (level) => {
-        for (const listener of levelListeners) listener(level);
-      },
-    });
-  }
-  const [state, setState] = useState<VoiceInputState>({ type: "idle" });
-  const lastCompletedRequestRef = useRef<string | null>(null);
+  // Latest-props ref: the session routes through stable callbacks that always read the current
+  // identity and handlers, so binding once per mount is safe even as the composer re-renders.
+  const inputRef = useRef(input);
+  inputRef.current = input;
 
-  useEffect(() => {
-    const controller = controllerRef.current;
-    if (!controller) return;
-    return controller.subscribe((next) => {
-      setState(next);
-      if (next.type === "completed" && lastCompletedRequestRef.current !== next.requestId) {
-        lastCompletedRequestRef.current = next.requestId;
-        completedRef.current(next);
-      }
-    });
-  }, []);
-
-  // Warm the preflight cache so the first mic tap can open the microphone synchronously with
-  // the user gesture (required on iOS Safari).
-  useEffect(() => {
-    if (controllerRef.current) voicePreflight.prime();
-  }, []);
-
+  const [state, setState] = useState<VoiceInputState>(getVoiceSessionState);
+  useEffect(() => subscribeVoiceSessionState(setState), []);
   useEffect(
-    () => () => {
-      controllerRef.current?.dispose();
-    },
+    () =>
+      bindVoiceComposer({
+        getIdentity: () => inputRef.current.identity,
+        onCompleted: (result) => inputRef.current.onCompleted(result),
+      }),
+    [],
+  );
+  useEffect(() => {
+    primeVoicePreflight();
+  }, []);
+
+  const toggle = useCallback(
+    (cleanupOverride?: boolean) =>
+      toggleVoiceSession({
+        identity: inputRef.current.identity,
+        cleanupOverride,
+        onUnavailable: (reason) => inputRef.current.onUnavailable(reason),
+      }),
     [],
   );
 
-  const toggle = useCallback(
-    async (cleanupOverride?: boolean) => {
-      const controller = controllerRef.current;
-      if (!controller) {
-        input.onUnavailable("unsupported");
-        return;
-      }
-      if (controller.state.type === "recording") {
-        await controller.stop();
-        return;
-      }
-      if (
-        controller.state.type === "requesting_permission" ||
-        controller.state.type === "stopping" ||
-        controller.state.type === "transcribing"
-      ) {
-        return;
-      }
-      const cached = voicePreflight.read();
-      if (cached && voicePreflightReady(cached)) {
-        voicePreflight.prime();
-        await controller.start(cleanupOverride ?? cached.settings.cleanup.enabled);
-        return;
-      }
-      // A stale "not connected" snapshot must not block a user who just connected.
-      voicePreflight.invalidate();
-      try {
-        const fresh = await voicePreflight.refresh();
-        if (!voicePreflightReady(fresh)) {
-          input.onUnavailable("connect_openrouter");
-          return;
-        }
-        await controller.start(cleanupOverride ?? fresh.settings.cleanup.enabled);
-      } catch {
-        input.onUnavailable("sign_in");
-      }
-    },
-    [input],
-  );
-
-  const subscribeLevel = useCallback((listener: (level: number) => void) => {
-    levelListenersRef.current.add(listener);
-    return () => {
-      levelListenersRef.current.delete(listener);
-    };
-  }, []);
+  const retry = useCallback(() => retryVoiceSession(inputRef.current.identity), []);
 
   return {
     state,
     toggle,
-    subscribeLevel,
-    cancel: () => controllerRef.current?.cancel() ?? Promise.resolve(),
-    retry: () => controllerRef.current?.retry() ?? Promise.resolve(false),
-    setCleanup: (cleanup: boolean) => controllerRef.current?.setRecordingCleanup(cleanup) ?? false,
+    subscribeLevel: subscribeVoiceLevel,
+    cancel: cancelVoiceSession,
+    retry,
+    setCleanup: setVoiceSessionCleanup,
   };
 }

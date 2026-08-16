@@ -16,7 +16,13 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
-export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
+// Cold thread loads fetch only the most recent visible turn items; the rest of
+// the history streams in on demand when the user scrolls to the top (see
+// requestThreadFullHistory in ThreadFeed).
+export const THREAD_SNAPSHOT_WINDOW = 200;
+export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime, {
+  snapshotWindow: THREAD_SNAPSHOT_WINDOW,
+});
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );
@@ -38,8 +44,9 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
-  return Option.getOrElse(
+  const state = Option.getOrElse(
     AsyncResult.value(result),
     () => EMPTY_ENVIRONMENT_THREAD_STATE,
   ) as EnvironmentThreadState;
+  return state;
 }

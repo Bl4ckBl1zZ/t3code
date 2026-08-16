@@ -31,6 +31,7 @@ import {
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as ProjectTeardownScriptRunner from "../project/ProjectTeardownScriptRunner.ts";
 
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
@@ -65,10 +66,15 @@ export class GitWorkflowService extends Context.Service<
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
     readonly fetchRemote: (input: {
       readonly cwd: string;
       readonly remoteName: string;
     }) => Effect.Effect<void, GitCommandError>;
+    readonly remoteExists: (input: {
+      readonly cwd: string;
+      readonly remoteName: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
     readonly resolveRemoteTrackingCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -79,6 +85,9 @@ export class GitWorkflowService extends Context.Service<
     >;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
+    ) => Effect.Effect<void, GitCommandError>;
+    readonly deleteLocalBranch: (
+      input: GitVcsDriver.GitDeleteLocalBranchInput,
     ) => Effect.Effect<void, GitCommandError>;
     readonly createRef: (
       input: VcsCreateRefInput,
@@ -106,6 +115,7 @@ function nonRepositoryLocalStatus(): VcsStatusLocalResult {
       insertions: 0,
       deletions: 0,
     },
+    branchDiff: null,
   };
 }
 
@@ -134,6 +144,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const teardownScriptRunner = yield* ProjectTeardownScriptRunner.ProjectTeardownScriptRunner;
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
@@ -299,9 +310,17 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input)),
       ),
+    listLocalBranchNames: (cwd) =>
+      ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
+        Effect.andThen(git.listLocalBranchNames(cwd)),
+      ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
         Effect.andThen(git.fetchRemote(input)),
+      ),
+    remoteExists: (input) =>
+      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(
+        Effect.andThen(git.remoteExists(input)),
       ),
     resolveRemoteTrackingCommit: (input) =>
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
@@ -309,7 +328,19 @@ export const make = Effect.gen(function* () {
       ),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
+        // Best-effort teardown script (runOnWorktreeDelete) runs while the
+        // worktree still exists; the runner never fails, so removal proceeds.
+        Effect.andThen(
+          teardownScriptRunner.runForWorktree({
+            projectCwd: input.cwd,
+            worktreePath: input.path,
+          }),
+        ),
         Effect.andThen(git.removeWorktree(input)),
+      ),
+    deleteLocalBranch: (input) =>
+      ensureGitCommand("GitWorkflowService.deleteLocalBranch", input.cwd).pipe(
+        Effect.andThen(git.deleteLocalBranch(input)),
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(

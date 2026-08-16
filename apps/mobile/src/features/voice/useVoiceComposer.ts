@@ -1,21 +1,55 @@
 import { useNavigation } from "@react-navigation/native";
-import { voiceInputErrorMessage } from "@t3tools/client-runtime/voice";
 import {
-  insertVoiceTranscript,
-  replaceVoiceInsertionWithRaw,
-  undoVoiceInsertion,
-  type VoiceInsertionRecovery,
-} from "@t3tools/shared/voiceInput";
+  createVoiceTranscriptStash,
+  VOICE_GESTURE_DEFAULTS,
+  VOICE_GESTURE_IDLE,
+  voiceGestureCancelProgress,
+  voiceGestureTransition,
+  voiceInputErrorMessage,
+  type VoiceGestureEvent,
+  type VoiceGestureState,
+  type VoiceInputState,
+} from "@t3tools/client-runtime/voice";
+import { insertVoiceTranscript } from "@t3tools/shared/voiceInput";
+import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Linking } from "react-native";
+import { Gesture } from "react-native-gesture-handler";
+import {
+  ReduceMotion,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useMobileVoiceInput } from "./useMobileVoiceInput";
 
+/** Per-call-site config for the combo button gesture: what a tap does when not recording. */
+export type VoiceComboButton = {
+  readonly canSend: boolean;
+  readonly onSend: () => void;
+};
+
+/** How long after a real touch the accessibility activate fallback stays suppressed. */
+const GESTURE_ACTIVATE_SUPPRESS_MS = 500;
+
+const GESTURE_UI_IDLE = { holdActive: false, cancelArmed: false, cancelProgress: 0 } as const;
+
+// One app-wide stash: the mounted composer survives thread/workspace switches (only its
+// identity prop changes), so a transcript that completes after a switch parks here under the
+// identity it was recorded against and is inserted when that composer is active again.
+const transcriptStash = createVoiceTranscriptStash();
+
+/** Timing for the subtle press-down/release scale on the gesture-driven mic buttons. */
+const PRESS_TIMING = { duration: 120, reduceMotion: ReduceMotion.System } as const;
+const PRESS_SCALE = 0.92;
+
 /**
  * Shared composer glue for Voice Input: anchors the insertion point when recording starts,
  * inserts the transcript on completion (falling back to the current cursor when the draft
- * changed mid-recording), owns the raw/undo recovery affordance, and surfaces failures.
+ * changed mid-recording), and surfaces failures.
  */
 export function useVoiceComposer(input: {
   /** Guards against inserting into a different draft than the one recorded against. */
@@ -34,14 +68,18 @@ export function useVoiceComposer(input: {
     readonly selection: ComposerEditorSelection;
     readonly identity: string;
   } | null>(null);
-  const [recovery, setRecovery] = useState<VoiceInsertionRecovery | null>(null);
 
   const voice = useMobileVoiceInput({
     onCompleted: (result) => {
       const current = latest.current;
       const anchor = anchorRef.current;
-      if (!anchor || anchor.identity !== current.identity) {
+      if (!anchor) {
         Alert.alert("Voice transcript discarded", "The composer changed during transcription.");
+        return;
+      }
+      if (anchor.identity !== current.identity) {
+        transcriptStash.put(anchor.identity, result.text);
+        Alert.alert("Voice transcript saved", "Switch back to that conversation to insert it.");
         return;
       }
       const useFallback = current.draft !== anchor.draft;
@@ -51,22 +89,41 @@ export function useVoiceComposer(input: {
       const insertion = insertVoiceTranscript({
         draft: current.draft,
         range,
-        rawText: result.rawText,
         cleanedText: result.text,
       });
       current.setDraft(insertion.text);
       current.setSelection({ start: insertion.caret, end: insertion.caret });
-      setRecovery(insertion.recovery);
       requestAnimationFrame(() => latest.current.focusAt(insertion.caret));
     },
     onUnavailable: (reason) => {
       if (reason === "connect_openrouter") {
-        navigation.navigate("SettingsSheet", { screen: "SettingsOpenRouter" });
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "SettingsOpenRouter" },
+        });
       } else {
         Alert.alert("Sign in to use voice input");
       }
     },
   });
+
+  // Deliver any stashed transcript for this identity once the composer settles on it (mount or
+  // switch back). Runs after render, so latest.current already holds the new identity's draft
+  // and this never fights an in-flight gesture on the old composer.
+  const identity = input.identity;
+  useEffect(() => {
+    const entry = transcriptStash.take(identity);
+    if (!entry) return;
+    const current = latest.current;
+    const insertion = insertVoiceTranscript({
+      draft: current.draft,
+      range: current.selection,
+      cleanedText: entry.text,
+    });
+    current.setDraft(insertion.text);
+    current.setSelection({ start: insertion.caret, end: insertion.caret });
+    requestAnimationFrame(() => latest.current.focusAt(insertion.caret));
+  }, [identity]);
 
   const toggle = useCallback(() => {
     // Capture the anchor on start as well as on manual stop: a recording that stops on its own
@@ -77,15 +134,221 @@ export function useVoiceComposer(input: {
       selection: current.selection,
       identity: current.identity,
     };
-    if (voice.state.type !== "recording") setRecovery(null);
     void voice.toggle();
   }, [voice]);
 
+  // Combined send/record button gesture, driven by the shared press/move/release machine.
+  // Tap: send when the draft has content, start hands-free recording when it's empty, stop when
+  // recording. Hold (300ms): push-to-talk — the finger can wander anywhere and release still
+  // confirms; only a swipe up past the cancel distance that is *still* past it on release
+  // discards, plus a graze released under tooShortMs. If the finger lifts before the async
+  // start reaches "recording" (permission prompt, preflight), the release is remembered and the
+  // recording stops as soon as startup completes.
+  const voiceStateRef = useRef(voice.state);
+  voiceStateRef.current = voice.state;
+  const stopOnRecordingRef = useRef(false);
+  const voiceStateType = voice.state.type;
+  useEffect(() => {
+    if (voiceStateType === "recording") {
+      if (!stopOnRecordingRef.current) return;
+      stopOnRecordingRef.current = false;
+      toggle();
+      return;
+    }
+    // Startup failed or was cancelled before reaching "recording": nothing left to stop.
+    if (voiceStateType !== "requesting_permission") stopOnRecordingRef.current = false;
+  }, [voiceStateType, toggle]);
+
+  const gestureStateRef = useRef<VoiceGestureState>(VOICE_GESTURE_IDLE);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether the current hold started the recording itself (vs grabbing one that was already
+  // running hands-free): decides if a too-short release discards or just stops.
+  const holdOwnsSessionRef = useRef(false);
+  const lastGestureTouchAtRef = useRef(0);
+  const [gestureUi, setGestureUi] = useState<{
+    readonly holdActive: boolean;
+    readonly cancelArmed: boolean;
+    readonly cancelProgress: number;
+  }>(GESTURE_UI_IDLE);
+
+  const clearHoldTimer = useCallback(() => {
+    if (holdTimerRef.current !== null) clearTimeout(holdTimerRef.current);
+    holdTimerRef.current = null;
+  }, []);
+  useEffect(() => clearHoldTimer, [clearHoldTimer]);
+
+  // Subtle press feedback for the gesture-driven buttons: the manual gesture claims real
+  // touches (cancelling the Pressable's own pressed state), so the scale rides the same
+  // touch events. Skipped entirely under reduced motion.
+  const reducedMotion = useReducedMotion();
+  const pressScale = useSharedValue(1);
+  const comboPressStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressScale.value }],
+  }));
+
+  const voiceCancel = voice.cancel;
+  const dispatchGesture = useCallback(
+    (event: VoiceGestureEvent, button: VoiceComboButton) => {
+      const { state, effects } = voiceGestureTransition(gestureStateRef.current, event);
+      gestureStateRef.current = state;
+      if (state.type === "idle") clearHoldTimer();
+      for (const effect of effects) {
+        switch (effect.type) {
+          case "tap": {
+            stopOnRecordingRef.current = false;
+            if (voiceStateRef.current.type === "recording") {
+              toggle();
+              break;
+            }
+            if (button.canSend) {
+              button.onSend();
+              break;
+            }
+            toggle();
+            break;
+          }
+          case "hold_classified": {
+            // "completed" is a resting state: the controller stays in it after a transcription
+            // finishes (nothing resets it to idle), and start() accepts it just like
+            // idle/failed. Excluding it here left hold-to-record dead after the first
+            // successful dictation.
+            const stateType = voiceStateRef.current.type;
+            holdOwnsSessionRef.current =
+              stateType === "idle" || stateType === "failed" || stateType === "completed";
+            if (!holdOwnsSessionRef.current) break;
+            stopOnRecordingRef.current = false;
+            toggle();
+            break;
+          }
+          case "stop_and_transcribe": {
+            if (voiceStateRef.current.type === "recording") {
+              toggle();
+              break;
+            }
+            // Startup (preflight / permission prompt) hasn't reached "recording" yet: remember
+            // the release so the effect above stops the recording the moment it starts. From
+            // any settled state (auto-stop at the cap, failure) the flag is cleared again by
+            // that same effect and this is a no-op.
+            stopOnRecordingRef.current = true;
+            break;
+          }
+          case "cancel_recording": {
+            stopOnRecordingRef.current = false;
+            if (effect.reason === "too_short" && !holdOwnsSessionRef.current) {
+              // The hold grabbed a session it didn't start (hands-free recording already
+              // running): a graze-length release means "stop", never "throw away what was
+              // already being recorded". Only a slide-up held through the release discards.
+              if (voiceStateRef.current.type === "recording") toggle();
+              break;
+            }
+            if (effect.reason === "too_short") {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            }
+            void voiceCancel();
+            break;
+          }
+          case "cancel_armed_changed": {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            break;
+          }
+        }
+      }
+      // Quantized to 5% steps so finger movement re-renders at most 20 times per hold instead
+      // of on every move event.
+      const holdActive = state.type === "holding";
+      const cancelArmed = state.type === "holding" && state.cancelArmed;
+      const cancelProgress = Math.round(voiceGestureCancelProgress(state) * 20) / 20;
+      setGestureUi((previous) =>
+        previous.holdActive === holdActive &&
+        previous.cancelArmed === cancelArmed &&
+        previous.cancelProgress === cancelProgress
+          ? previous
+          : { holdActive, cancelArmed, cancelProgress },
+      );
+    },
+    [clearHoldTimer, toggle, voiceCancel],
+  );
+
+  // Manual gesture instead of Pressable handlers: press classification and slide-up cancel need
+  // touch-down, absolute-Y moves, and release/cancellation, and activating on touch-down keeps
+  // enclosing recognizers (sheet drag, scroll) from stealing the hold mid-recording.
+  const comboGesture = useCallback(
+    (button: VoiceComboButton) =>
+      Gesture.Manual()
+        .runOnJS(true)
+        .shouldCancelWhenOutside(false)
+        .onTouchesDown((event, manager) => {
+          const touch = event.allTouches[0];
+          if (!touch) return;
+          if (!reducedMotion) pressScale.value = withTiming(PRESS_SCALE, PRESS_TIMING);
+          lastGestureTouchAtRef.current = Date.now();
+          dispatchGesture({ type: "press", at: Date.now(), y: touch.absoluteY }, button);
+          if (gestureStateRef.current.type === "pressing") {
+            clearHoldTimer();
+            holdTimerRef.current = setTimeout(() => {
+              holdTimerRef.current = null;
+              dispatchGesture({ type: "hold_elapsed" }, button);
+            }, VOICE_GESTURE_DEFAULTS.holdClassifyMs);
+          }
+          manager.activate();
+        })
+        .onTouchesMove((event) => {
+          const touch = event.allTouches[0];
+          if (!touch) return;
+          dispatchGesture({ type: "move", y: touch.absoluteY }, button);
+        })
+        .onTouchesUp((event, manager) => {
+          if (event.numberOfTouches > 0) return;
+          pressScale.value = withTiming(1, PRESS_TIMING);
+          lastGestureTouchAtRef.current = Date.now();
+          dispatchGesture({ type: "release", at: Date.now() }, button);
+          manager.end();
+        })
+        // A cancelled touch sequence is the platform's decision, not the user's: the machine
+        // turns it into a stop-and-transcribe so a stolen touch keeps the dictation instead of
+        // silently discarding it.
+        .onTouchesCancelled((_event, manager) => {
+          pressScale.value = withTiming(1, PRESS_TIMING);
+          if (gestureStateRef.current.type !== "idle") {
+            dispatchGesture({ type: "interrupt" }, button);
+          }
+          manager.fail();
+        }),
+    [clearHoldTimer, dispatchGesture, pressScale, reducedMotion],
+  );
+
+  // Plain activation path for screen readers (VoiceOver/TalkBack fire the Pressable's onPress
+  // without real touches). Real touches are claimed by the gesture, which cancels the
+  // Pressable; the timestamp guard covers platforms where that cancellation is late.
+  const comboActivate = useCallback(
+    (button: VoiceComboButton) => {
+      if (Date.now() - lastGestureTouchAtRef.current < GESTURE_ACTIVATE_SUPPRESS_MS) return;
+      stopOnRecordingRef.current = false;
+      if (voiceStateRef.current.type === "recording") {
+        toggle();
+        return;
+      }
+      if (button.canSend) {
+        button.onSend();
+        return;
+      }
+      toggle();
+    },
+    [toggle],
+  );
+
   const voiceState = voice.state;
   const voiceRetry = voice.retry;
-  const voiceCancel = voice.cancel;
+  // One alert per failure: without this guard, any effect re-run while the state is still
+  // "failed" (re-renders churning dependency identities) stacks duplicate alerts.
+  const alertedFailureRef = useRef<VoiceInputState | null>(null);
   useEffect(() => {
-    if (voiceState.type !== "failed") return;
+    if (voiceState.type !== "failed") {
+      alertedFailureRef.current = null;
+      return;
+    }
+    if (alertedFailureRef.current === voiceState) return;
+    alertedFailureRef.current = voiceState;
     if (voiceState.stage === "permission") {
       if (voiceState.error.permanent) {
         Alert.alert(
@@ -96,6 +359,12 @@ export function useVoiceComposer(input: {
             { text: "Open Settings", onPress: () => void Linking.openSettings() },
           ],
         );
+      } else {
+        Alert.alert("Microphone access needed", "Allow microphone access to use Voice Input.", [
+          { text: "Cancel", style: "cancel" },
+          // retry() restarts the whole flow for a retryable permission failure, matching web.
+          { text: "Try again", onPress: () => void voiceRetry() },
+        ]);
       }
       return;
     }
@@ -110,29 +379,6 @@ export function useVoiceComposer(input: {
     }
   }, [voiceState, voiceCancel, voiceRetry]);
 
-  const useRaw = useCallback(() => {
-    if (!recovery) return;
-    const current = latest.current;
-    const replacement = replaceVoiceInsertionWithRaw(current.draft, recovery);
-    if (!replacement) {
-      setRecovery(null);
-      return;
-    }
-    current.setDraft(replacement.text);
-    current.setSelection({ start: replacement.caret, end: replacement.caret });
-    setRecovery(replacement.recovery);
-  }, [recovery]);
-
-  const undo = useCallback(() => {
-    if (!recovery) return;
-    const current = latest.current;
-    const undone = undoVoiceInsertion(current.draft, recovery);
-    setRecovery(null);
-    if (!undone) return;
-    current.setDraft(undone.text);
-    current.setSelection({ start: undone.caret, end: undone.caret });
-  }, [recovery]);
-
   const busy =
     voice.state.type === "requesting_permission" ||
     voice.state.type === "recording" ||
@@ -143,13 +389,15 @@ export function useVoiceComposer(input: {
     state: voice.state,
     busy,
     toggle,
+    comboGesture,
+    comboActivate,
+    comboPressStyle,
+    holdActive: gestureUi.holdActive,
+    cancelArmed: gestureUi.cancelArmed,
+    cancelProgress: gestureUi.cancelProgress,
     cancel: voice.cancel,
     retry: voice.retry,
     setCleanup: voice.setCleanup,
     subscribeLevel: voice.subscribeLevel,
-    recovery,
-    clearRecovery: () => setRecovery(null),
-    useRaw,
-    undo,
   };
 }

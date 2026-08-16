@@ -1,6 +1,7 @@
 import { HStack, Image, Spacer, Text, VStack, ZStack } from "@expo/ui/swift-ui";
 import type { ComponentProps } from "react";
 import {
+  activityBackgroundTint,
   font,
   foregroundStyle,
   frame,
@@ -92,6 +93,28 @@ export function AgentActivity(
     }
   };
 
+  // Wash the whole lock-screen card in the phase color when a human is blocked
+  // or work broke. `activityBackgroundTint` is the only edge-to-edge surface a
+  // Live Activity gets, so it reads from across a room in a way colored text
+  // does not. Translucent (#AARRGGBB) so it tints whatever material the OS
+  // supplies rather than fighting it, and skipped under reduced luminance,
+  // where the always-on display wants the dimmest possible card.
+  const phaseBackgroundTint = (phase: AgentActivityPhase | undefined): string | null => {
+    if (environment.isLuminanceReduced) {
+      return null;
+    }
+    switch (phase) {
+      case "waiting_for_approval":
+        return isLightScheme ? "#33f59e0b" : "#40f59e0b";
+      case "waiting_for_input":
+        return isLightScheme ? "#336366f1" : "#406366f1";
+      case "failed":
+        return isLightScheme ? "#33ef4444" : "#40ef4444";
+      default:
+        return null;
+    }
+  };
+
   // Order attention-first so whatever needs the user floats to the top of every
   // presentation, then failures, then in-flight work, then finished/stale.
   const phasePriority = (phase: AgentActivityPhase): number => {
@@ -145,6 +168,32 @@ export function AgentActivity(
       : "";
   const activeLabel = allDone ? doneLabel : `${props.activeCount} active`;
   const summary = attentionSuffix || activeLabel;
+
+  // A blocked agent is the one state the card exists to interrupt for, so it
+  // stops being a list and becomes a single large row. Everything else keeps
+  // the multi-row status list. Failures don't escalate: they're informational,
+  // and the row list still reports them (with the red background tint).
+  const escalated = attentionRow ?? null;
+  const escalatedHeadline = escalated ? "Waiting on you" : agentsLabel;
+  const otherAttention = attentionRows.length - 1;
+  const othersRunning = props.activities.filter(
+    (row) => row !== escalated && (row.phase === "running" || row.phase === "starting"),
+  ).length;
+  const escalatedFooter =
+    otherAttention > 0
+      ? `+${otherAttention} more waiting on you`
+      : othersRunning > 0
+        ? `+${othersRunning} other agent${othersRunning === 1 ? "" : "s"} running`
+        : "";
+
+  // SwiftUI renders a date-styled Text live, so the card keeps counting between
+  // pushes instead of looking frozen for the minutes an agent can sit silent —
+  // and it costs no APNs budget. `updatedAt` is when the row entered its
+  // current phase, so this reads as "blocked for 4 min".
+  const phaseSince = (iso: string): Date | null => {
+    const parsed = Date.parse(iso);
+    return Number.isNaN(parsed) ? null : new Date(parsed);
+  };
 
   // Any registered scheme variant routes back to this app; taps are delivered
   // to the widget's containing app, so the prod scheme is safe for all builds.
@@ -235,13 +284,104 @@ export function AgentActivity(
     </HStack>
   );
 
+  // Live elapsed text for whichever row the presentation leads with.
+  const renderElapsed = (row: AgentActivityRowProps, fontModifier: ReturnType<typeof font>) => {
+    const since = phaseSince(row.updatedAt);
+    if (!since) {
+      return null;
+    }
+    return (
+      <Text
+        date={since}
+        dateStyle="relative"
+        modifiers={[fontModifier, foregroundStyle(secondaryForeground), lineLimit(1)]}
+      />
+    );
+  };
+  // Rendered once so the "·" separator can't dangle when a row carries a
+  // timestamp we couldn't parse.
+  const escalatedElapsed = escalated ? renderElapsed(escalated, font({ size: 12 })) : null;
+  const heroElapsed = heroRow ? renderElapsed(heroRow, font({ textStyle: "caption2" })) : null;
+
+  // The Smart Stack card is the whole tap target on watchOS; without this the
+  // watch presentation was the one surface with no way into the thread.
+  const smallModifiers = deepLink
+    ? [padding({ all: 10 }), widgetURL(deepLink)]
+    : [padding({ all: 10 })];
+  const simplified = environment.levelOfDetail === "simplified";
+
+  const backgroundTint = phaseBackgroundTint(heroRow?.phase);
+  const bannerModifiers = [
+    padding({ all: 14 }),
+    ...(deepLink ? [widgetURL(deepLink)] : []),
+    ...(backgroundTint ? [activityBackgroundTint(backgroundTint)] : []),
+  ];
+
   return {
-    banner: (
-      <VStack
-        alignment="leading"
-        spacing={6}
-        modifiers={deepLink ? [padding({ all: 14 }), widgetURL(deepLink)] : [padding({ all: 14 })]}
-      >
+    banner: escalated ? (
+      // Blocked: one agent, large enough to read without picking the phone up,
+      // with the rest of the fleet demoted to a count.
+      <VStack alignment="leading" spacing={9} modifiers={bannerModifiers}>
+        <HStack spacing={7} alignment="center">
+          {renderLogo(13, primaryForeground)}
+          <Text
+            modifiers={[
+              font({ weight: "semibold", size: 13 }),
+              foregroundStyle(headerTint),
+              lineLimit(1),
+            ]}
+          >
+            {escalatedHeadline}
+          </Text>
+          <Spacer minLength={0} />
+        </HStack>
+        <HStack spacing={10} alignment="center">
+          {renderGlyph(phaseSymbol(escalated.phase), 24, headerTint)}
+          <VStack alignment="leading" spacing={2}>
+            <Text
+              modifiers={[
+                font({ weight: "semibold", size: 17 }),
+                foregroundStyle(primaryForeground),
+                lineLimit(1),
+              ]}
+            >
+              {escalated.threadTitle}
+            </Text>
+            <HStack spacing={5} alignment="center">
+              <Text
+                modifiers={[font({ size: 12 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
+                {escalated.projectTitle}
+              </Text>
+              {escalatedElapsed ? (
+                <Text modifiers={[font({ size: 12 }), foregroundStyle(secondaryForeground)]}>
+                  ·
+                </Text>
+              ) : null}
+              {escalatedElapsed}
+            </HStack>
+          </VStack>
+          <Spacer minLength={8} />
+          <Text
+            modifiers={[
+              font({ weight: "semibold", size: 13 }),
+              foregroundStyle(headerTint),
+              layoutPriority(1),
+            ]}
+          >
+            {escalated.status}
+          </Text>
+        </HStack>
+        {escalatedFooter ? (
+          <Text
+            modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+          >
+            {escalatedFooter}
+          </Text>
+        ) : null}
+      </VStack>
+    ) : (
+      <VStack alignment="leading" spacing={6} modifiers={bannerModifiers}>
         {/* Logo pinned to the leading edge; the status texts centered across the
             full width (ZStack so the logo doesn't skew the centering). No footer —
             overflow beyond the visible rows is inferable from the count. */}
@@ -287,50 +427,100 @@ export function AgentActivity(
         {row4 ? renderCompactRow(row4) : null}
       </VStack>
     ),
-    // Compact card for the watchOS Smart Stack + CarPlay (the `.small` family):
-    // brand + count, then the single most important agent with its status glyph.
-    bannerSmall: (
-      <VStack alignment="leading" spacing={5} modifiers={[padding({ all: 10 })]}>
-        <HStack spacing={7} alignment="center">
+    // Compact card for the watchOS Smart Stack + CarPlay (the `.small` family).
+    // Text styles rather than fixed point sizes: the watch scales these with the
+    // wearer's Dynamic Type setting, which fixed sizes ignore. Sized off the
+    // hero row (whatever needs the user), not the arbitrary first row.
+    bannerSmall: simplified ? (
+      // The system asks for a simplified view when the card is being read at a
+      // distance or with the wrist down. One glyph and one number survive that;
+      // thread titles do not.
+      <HStack spacing={8} alignment="center" modifiers={smallModifiers}>
+        {renderGlyph(phaseSymbol(heroRow?.phase ?? "running"), 22, headerTint)}
+        <Text
+          modifiers={[
+            font({ textStyle: "title2", weight: "bold" }),
+            foregroundStyle(headerTint),
+            lineLimit(1),
+          ]}
+        >
+          {allDone
+            ? doneLabel
+            : `${attentionRows.length > 0 ? attentionRows.length : props.activeCount}`}
+        </Text>
+        <Spacer minLength={0} />
+      </HStack>
+    ) : (
+      <VStack alignment="leading" spacing={4} modifiers={smallModifiers}>
+        <HStack spacing={6} alignment="center">
           {renderLogo(14, primaryForeground)}
           <Text
             modifiers={[
-              font({ weight: "bold", size: 13 }),
+              font({ textStyle: "caption", weight: "semibold" }),
               foregroundStyle(headerTint),
               lineLimit(1),
             ]}
           >
             {attentionRows.length > 0 ? summary : activeLabel}
           </Text>
-          <Spacer minLength={6} />
+          <Spacer minLength={4} />
         </HStack>
-        {row0 ? (
-          <HStack spacing={7} alignment="center">
+        {heroRow ? (
+          <HStack spacing={6} alignment="center">
+            {renderGlyph(phaseSymbol(heroRow.phase), 14, phaseTint(heroRow.phase))}
             <Text
               modifiers={[
-                font({ weight: "semibold", size: 12 }),
+                font({ textStyle: "headline" }),
                 foregroundStyle(primaryForeground),
                 lineLimit(1),
               ]}
             >
-              {row0.threadTitle}
+              {heroRow.threadTitle}
             </Text>
-            <Spacer minLength={6} />
-            <Text modifiers={[font({ size: 11 }), foregroundStyle(phaseTint(row0.phase))]}>
-              {row0.status}
+            <Spacer minLength={4} />
+          </HStack>
+        ) : null}
+        {heroRow ? (
+          <HStack spacing={5} alignment="center">
+            <Text
+              modifiers={[
+                font({ textStyle: "caption2" }),
+                foregroundStyle(secondaryForeground),
+                lineLimit(1),
+              ]}
+            >
+              {heroRow.projectTitle}
             </Text>
+            {heroElapsed ? (
+              <Text
+                modifiers={[font({ textStyle: "caption2" }), foregroundStyle(secondaryForeground)]}
+              >
+                ·
+              </Text>
+            ) : null}
+            {heroElapsed}
+            <Spacer minLength={4} />
           </HStack>
         ) : null}
       </VStack>
     ),
     compactLeading: renderLogo(14, tint),
-    compactTrailing: (
+    // Glyph + bare count rather than a word: from iOS 27 the compact
+    // presentation also renders in landscape, where it can't grow in width, and
+    // "Approval" / "5 active" were the first things to get clipped. The glyph
+    // carries the phase, the leading logo carries the brand.
+    compactTrailing: attentionRow ? (
+      <HStack spacing={3} alignment="center">
+        {renderGlyph(phaseSymbol(attentionRow.phase), 12, tint)}
+        {attentionRows.length > 1 ? (
+          <Text modifiers={[font({ weight: "semibold", size: 11 }), foregroundStyle(tint)]}>
+            {`${attentionRows.length}`}
+          </Text>
+        ) : null}
+      </HStack>
+    ) : (
       <Text modifiers={[font({ weight: "semibold", size: 11 }), foregroundStyle(tint)]}>
-        {attentionRow
-          ? attentionRow.phase === "waiting_for_approval"
-            ? "Approval"
-            : "Input"
-          : activeLabel}
+        {allDone ? doneLabel : `${props.activeCount}`}
       </Text>
     ),
     // The shared/minimal form is a ~22pt circle — a single signal reads there,

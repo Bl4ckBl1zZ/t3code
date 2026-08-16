@@ -13,12 +13,15 @@ import * as Schema from "effect/Schema";
 import { useEffect } from "react";
 import { Atom } from "effect/unstable/reactivity";
 
-import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { writeFileAtomically } from "../lib/atomic-file";
+import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import type { DraftComposerAttachment } from "../lib/composerImages";
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
+/** Key prefix for drafts that have no thread yet; see stripThreadScopedSettings. */
+export const NEW_TASK_DRAFT_KEY_PREFIX = "new-task:";
 const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
 const COMPOSER_DRAFTS_FILE = "drafts.json";
 const PERSIST_DEBOUNCE_MS = 200;
@@ -39,7 +42,7 @@ export class ComposerDraftPersistenceError extends Schema.TaggedErrorClass<Compo
 
 export interface ComposerDraft {
   readonly text: string;
-  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly importedShareIds?: ReadonlyArray<string>;
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
@@ -49,7 +52,7 @@ export interface ComposerDraft {
 
 export interface ComposerDraftContent {
   readonly text: string;
-  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly sourceShareId?: string;
 }
 
@@ -74,7 +77,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
 
 const ComposerDraftSchema = Schema.Struct({
   text: Schema.String,
-  attachments: Schema.Array(DraftComposerImageAttachmentSchema),
+  attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
@@ -135,10 +138,28 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
   );
 }
 
+/**
+ * New-task drafts own their model/mode settings because no thread exists yet to
+ * hold them. Thread drafts do not: the thread record is authoritative there, so
+ * a locally persisted selection would shadow a pick made on another device.
+ * Drop those on read to retire values written by older builds.
+ */
+function stripThreadScopedSettings(draftKey: string, draft: ComposerDraft): ComposerDraft {
+  if (draftKey.startsWith(NEW_TASK_DRAFT_KEY_PREFIX)) {
+    return draft;
+  }
+  const { modelSelection, runtimeMode, interactionMode, ...retained } = draft;
+  return modelSelection === undefined && runtimeMode === undefined && interactionMode === undefined
+    ? draft
+    : retained;
+}
+
 export function decodePersistedComposerDrafts(value: unknown): Record<string, ComposerDraft> {
   const parsed = decodePersistedComposerDraftsDocument(value);
   return Object.fromEntries(
-    Object.entries(parsed.drafts).filter(([, draft]) => !isEmptyDraft(draft)),
+    Object.entries(parsed.drafts)
+      .map(([draftKey, draft]) => [draftKey, stripThreadScopedSettings(draftKey, draft)] as const)
+      .filter(([, draft]) => !isEmptyDraft(draft)),
   );
 }
 
@@ -188,10 +209,7 @@ async function writePersistedComposerDrafts(drafts: Record<string, ComposerDraft
     } as const;
     const encoded = JSON.stringify(document);
     operation = "write";
-    if (!file.exists) {
-      file.create({ intermediates: true, overwrite: true });
-    }
-    file.write(encoded);
+    await writeFileAtomically(file, encoded);
   } catch (cause) {
     throw new ComposerDraftPersistenceError({
       operation,
@@ -209,6 +227,26 @@ async function savePersistedComposerDrafts(drafts: Record<string, ComposerDraft>
     console.warn("[composer-drafts] failed to persist drafts", error);
     // Draft persistence is best-effort; in-memory drafts still keep working.
   }
+}
+
+/**
+ * Lands any debounced or in-flight draft write before the JS runtime is torn
+ * down (app update restart), so the freshest draft state survives it. A write
+ * failure propagates so the caller can decide whether the restart may proceed.
+ */
+export async function flushComposerDrafts(): Promise<void> {
+  // An edit during an awaited write schedules another debounced write, so
+  // keep landing snapshots until no debounce is pending after a queue drain.
+  do {
+    while (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+      await persistenceQueue.run(() =>
+        writePersistedComposerDrafts(appAtomRegistry.get(composerDraftsAtom)),
+      );
+    }
+    await persistenceQueue.run(() => Promise.resolve());
+  } while (persistTimer !== null);
 }
 
 function schedulePersistComposerDrafts(drafts: Record<string, ComposerDraft>): void {
@@ -291,7 +329,7 @@ export function appendComposerDraftText(draftKey: string, value: string): void {
 
 export function appendComposerDraftAttachments(
   draftKey: string,
-  attachments: ReadonlyArray<DraftComposerImageAttachment>,
+  attachments: ReadonlyArray<DraftComposerAttachment>,
 ): void {
   if (attachments.length === 0) {
     return;
@@ -310,7 +348,7 @@ export function appendComposerDraftAttachments(
 
 export function replaceComposerDraftAttachments(
   draftKey: string,
-  attachments: ReadonlyArray<DraftComposerImageAttachment>,
+  attachments: ReadonlyArray<DraftComposerAttachment>,
 ): void {
   updateComposerDrafts((current) => {
     const draft = {
@@ -578,7 +616,7 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
     persistTimer = null;
   }
   appAtomRegistry.set(composerDraftsAtom, next);
-  await writePersistedComposerDrafts(next);
+  await persistenceQueue.run(() => writePersistedComposerDrafts(next));
 }
 
 export function useComposerDraft(draftKey: string | null): ComposerDraft {

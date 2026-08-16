@@ -28,7 +28,12 @@ T3 Code has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
 **Desktop** is the main surface most users install first. It's a full Electron app that bundles the server runner as well. The desktop app can also be used as the host server, allowing remote connections from app.t3.codes or the mobile app.
 
-**Mobile** is a React Native app for both iOS and Android, available on the App Store and Google Play. The mobile app allows for connecting to any T3 Code server to control work remotely.
+**Mobile** ships as two clients, maintained in parallel:
+
+- `apps/swift-ios` — the native SwiftUI iOS app. This is what TestFlight and the App Store record `com.t3code.dev` now build from.
+- `apps/mobile` — the React Native client for iOS and Android.
+
+Treat them as distinct clients. UI, navigation, persistence, and build changes in one do not reach the other, and both speak `packages/contracts` directly — a schema change has to land in both. The SwiftUI client mirrors those contracts by hand with no codegen, so a contract change compiles clean there and fails at runtime; `node scripts/generate-swift-contract-fixtures.ts` plus its CI `--check` is what catches that.
 
 ## A note from Theo
 
@@ -79,8 +84,8 @@ The most common defect in this repo is a change that works on the path you teste
 - `vp i` installs. Worktrees get this from the t3.json setup script; if module resolution looks broken, it probably did not run.
 - `vp run dev` starts server and web. In a worktree, state defaults to that worktree's gitignored `.t3`, which deliberately outranks an ambient `T3CODE_HOME` so you cannot land on shared state by accident. An explicit `--home-dir` still wins.
 - Ports derive from the worktree path and are stable across restarts, but read the real ones from the `[dev-runner]` line since occupied ports shift.
-- `--share` publishes over the tailnet. Do not open the URL when you use this, just send it to the user with the pairing code included in url
-- The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to.
+- Sharing over the tailnet is three steps: run `vp run dev --share` in the background, wait for the `pairingUrl:` line in its output, paste that full URL (token included) in your reply. Do not wire up `tailscale serve` by hand for this, and do not open the URL yourself.
+- The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to. If the token got consumed, mint a fresh one with `node apps/server/src/bin.ts pair` — note it carries standard scopes, while the startup URL carries admin scopes (needed for Settings → Connections management).
 - Stop what you started, by the PID you tracked. See rule 1.
 
 ## Test data
@@ -107,14 +112,13 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 - **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite.
 - Backend behavior changes ship with focused tests for that behavior.
 - The server is event-sourced and its async flows emit typed receipts. Wait on receipts and worker drains, never on sleeps or polling. A test that needs a timeout to pass is wrong.
-- Upon request, user-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `test-t3-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Ask permission before doing computer use or spinning up browsers.
+- Upon request, user-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `ios-debugger-agent` for the SwiftUI iOS client. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Ask permission before doing computer use or spinning up browsers.
 
 ## Pull requests
 
 - Never make a PR unless the developer explicitly asks you to do so.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
 - Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.
-- **Rebase onto latest main before opening.** Stale branches conflict and burn a review round.
 - UI changes need before/after images. Motion or timing needs a short video.
 - One concern per PR. If the description says "also", split it.
 - When babysitting: poll checks and comments newer than the last push, verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.

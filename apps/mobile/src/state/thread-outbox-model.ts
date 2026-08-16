@@ -4,6 +4,7 @@ import {
   CommandId,
   EnvironmentId,
   IsoDateTime,
+  isQueuedTurnsUnsupportedDispatchError,
   MessageId,
   ModelSelection,
   ProjectId,
@@ -17,8 +18,8 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
@@ -34,6 +35,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  prepareWorkspace: Schema.optional(Schema.Boolean),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -43,7 +45,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
-  attachments: Schema.Array(DraftComposerImageAttachmentSchema),
+  attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
@@ -64,6 +66,7 @@ export interface QueuedThreadCreation {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly prepareWorkspace?: boolean;
 }
 
 export interface QueuedThreadMessage {
@@ -72,7 +75,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
-  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
@@ -153,7 +156,6 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
-  readonly threadBusy: boolean;
 }): ThreadOutboxDeliveryAction {
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
@@ -169,7 +171,10 @@ export function resolveThreadOutboxDeliveryAction(input: {
   if (!input.threadExists) {
     return input.shellStatus === "live" ? "remove" : "wait";
   }
-  return input.environmentConnected && !input.threadBusy ? "send" : "wait";
+  // Busy threads are no longer held locally: the turn dispatches with
+  // dispatchMode "queue" and the server persists it as a queued run, which
+  // syncs to every client instead of living only on this device.
+  return input.environmentConnected ? "send" : "wait";
 }
 
 /**
@@ -219,6 +224,11 @@ export function resolveThreadOutboxFailureAction(input: {
   if (
     input.stage === "settings-sync" ||
     input.interrupted ||
+    // The server rejects a queue-while-busy dispatch when the provider lacks
+    // queued-turn support. Classify from the dispatch error itself (not any
+    // pre-send busy snapshot, which can be stale): keep the message and retry
+    // so it delivers normally once the thread goes idle.
+    isQueuedTurnsUnsupportedDispatchError(input.error) ||
     shouldRetryThreadOutboxDelivery(input.error)
   ) {
     return "retry";

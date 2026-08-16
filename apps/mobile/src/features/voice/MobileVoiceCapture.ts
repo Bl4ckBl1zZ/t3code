@@ -1,18 +1,43 @@
 import type { VoiceCaptureAdapter, VoiceRecording } from "@t3tools/client-runtime/voice";
+import type { VoiceAudioFormat } from "@t3tools/contracts/voice";
 import {
   AudioModule,
+  IOSOutputFormat,
   RecordingPresets,
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   setIsAudioActiveAsync,
+  type RecordingOptions,
 } from "expo-audio";
 import { File } from "expo-file-system";
-import { AppState, type NativeEventSubscription } from "react-native";
+import { AppState, Platform, type NativeEventSubscription } from "react-native";
 
 const LEVEL_SAMPLE_INTERVAL_MS = 100;
 // Metering is reported in dBFS; treat -50 dB as silence for the visual meter.
 const LEVEL_FLOOR_DB = -50;
+
+// Transcription providers routinely reject iOS-encoded AAC/m4a with HTTP 400 even though the
+// container is valid; 16 kHz mono PCM WAV is the safest transcription input and stays well under
+// the 12 MB upload cap for a 120 s recording. Android's MediaRecorder cannot write WAV, so it
+// keeps the AAC preset.
+const RECORDING_FORMAT: VoiceAudioFormat = Platform.OS === "ios" ? "wav" : "m4a";
+const RECORDING_OPTIONS: RecordingOptions =
+  Platform.OS === "ios"
+    ? {
+        ...RecordingPresets.HIGH_QUALITY,
+        extension: ".wav",
+        sampleRate: 16_000,
+        numberOfChannels: 1,
+        ios: {
+          ...RecordingPresets.HIGH_QUALITY.ios,
+          outputFormat: IOSOutputFormat.LINEARPCM,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+      }
+    : RecordingPresets.HIGH_QUALITY;
 
 export class MobileVoiceCapture implements VoiceCaptureAdapter {
   #recorder: InstanceType<typeof AudioModule.AudioRecorder> | null = null;
@@ -45,7 +70,7 @@ export class MobileVoiceCapture implements VoiceCaptureAdapter {
     await setIsAudioActiveAsync(true);
     this.#interrupted = false;
     this.#recorder = new AudioModule.AudioRecorder({
-      ...RecordingPresets.HIGH_QUALITY,
+      ...RECORDING_OPTIONS,
       isMeteringEnabled: true,
     });
     await this.#recorder.prepareToRecordAsync();
@@ -86,7 +111,7 @@ export class MobileVoiceCapture implements VoiceCaptureAdapter {
     const data = await file.base64();
     return {
       data,
-      format: "m4a",
+      format: RECORDING_FORMAT,
       durationSeconds,
       dispose: () => {
         try {

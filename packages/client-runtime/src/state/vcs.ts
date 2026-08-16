@@ -22,7 +22,11 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { request, subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
+import {
+  vcsCommandConcurrency,
+  vcsCommandScheduler,
+  vcsLocalStatusConcurrency,
+} from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
   vcsRefsCacheStateAtom,
@@ -236,29 +240,32 @@ export function cachedVcsRefsChanges(
 export function createVcsEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | EnvironmentCacheStore | R, E>,
 ) {
-  const listRefsByEnvironment = Atom.family((environmentId: EnvironmentId) =>
-    Atom.family((inputKey: string) => {
-      const input = JSON.parse(inputKey) as VcsListRefsInput;
-      return runtime
-        .atom((get) => {
-          const state = get(vcsRefsCacheStateAtom({ environmentId }));
-          return cachedVcsRefsChanges(
-            environmentId,
-            input,
-            state.revision,
-            state.persistedCacheReadable,
-          );
-        })
-        .pipe(
-          Atom.setIdleTTL(VCS_REFS_IDLE_TTL_MS),
-          Atom.withLabel(`environment-data:vcs:list-refs:${environmentId}:${inputKey}`),
+  /**
+   * One flat family on purpose: families hold entries via WeakRef, so a nested
+   * per-environment family can be collected between lookups, dropping every
+   * cached page atom and collapsing paginated ref lists mid-scroll.
+   */
+  const listRefsFamily = Atom.family((key: string) => {
+    const [environmentId, input] = JSON.parse(key) as [EnvironmentId, VcsListRefsInput];
+    return runtime
+      .atom((get) => {
+        const state = get(vcsRefsCacheStateAtom({ environmentId }));
+        return cachedVcsRefsChanges(
+          environmentId,
+          input,
+          state.revision,
+          state.persistedCacheReadable,
         );
-    }),
-  );
+      })
+      .pipe(
+        Atom.setIdleTTL(VCS_REFS_IDLE_TTL_MS),
+        Atom.withLabel(`environment-data:vcs:list-refs:${key}`),
+      );
+  });
   const listRefs = (target: {
     readonly environmentId: EnvironmentId;
     readonly input: VcsListRefsInput;
-  }) => listRefsByEnvironment(target.environmentId)(JSON.stringify(target.input));
+  }) => listRefsFamily(JSON.stringify([target.environmentId, target.input]));
   const invalidateRefs = (
     target: { readonly environmentId: EnvironmentId; readonly input: { readonly cwd: string } },
     registry: AtomRegistry.AtomRegistry,
@@ -296,6 +303,15 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
+    }),
+    // Poll-friendly counterpart to `refreshStatus`: working tree only, so it
+    // costs a local `git` call instead of a remote/PR lookup, and overlapping
+    // polls join the in-flight request rather than queueing behind it.
+    refreshLocalStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:refresh-local-status",
+      tag: WS_METHODS.vcsRefreshLocalStatus,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsLocalStatusConcurrency,
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",

@@ -1,15 +1,48 @@
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { ProjectScriptIcon } from "./orchestration.ts";
+import { ThreadEnvMode } from "./environment.ts";
+import { ProjectScriptIcon } from "./project.ts";
 
 /** File name of the checked-in T3 project file, resolved at the workspace root. */
 export const T3_PROJECT_FILE_NAME = "t3.json";
 
-/** Public URL of the published JSON Schema for {@link T3ProjectFile}. */
-export const T3_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
+/**
+ * Path the relay serves the {@link T3ProjectFile} JSON Schema at.
+ *
+ * The relay is the only host every deployment already has, which is why the
+ * schema rides along with it rather than on a marketing domain: no extra DNS,
+ * no extra deploy, and a personal stage serves its own build's document
+ * instead of borrowing production's.
+ */
+export const T3_PROJECT_FILE_SCHEMA_PATH = "/schema/t3.json";
+
+/**
+ * URL of the schema published by the relay at `relayUrl`, or null when that is
+ * not a usable absolute URL.
+ *
+ * Deriving it rather than hardcoding a host keeps the document and the fields
+ * it describes on the same deployment. That matters because the schema forbids
+ * additional properties: validating against a build that lacks a field this
+ * one has turns that field into an editor error.
+ */
+export function t3ProjectFileSchemaUrl(relayUrl: string): string | null {
+  try {
+    return new URL(T3_PROJECT_FILE_SCHEMA_PATH, relayUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Environment variable overriding the derived schema URL, for deployments that
+ * publish the document somewhere other than their own relay (an internal
+ * mirror, a pinned older revision).
+ */
+export const T3_PROJECT_FILE_SCHEMA_URL_ENV_VAR = "T3CODE_PROJECT_FILE_SCHEMA_URL";
 
 const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
+const T3_PROJECT_FILE_URL_MAX_LENGTH = 2048;
 const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
 
 // Annotations go on the encoded (string) side so they survive into the
@@ -41,6 +74,12 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, the script runs automatically after a worktree is created for a new thread.",
     }),
   ),
+  runOnWorktreeDelete: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, the script runs automatically in the worktree right before it is removed.",
+    }),
+  ),
   previewUrl: Schema.optionalKey(
     trimmedNonEmpty({
       description:
@@ -53,6 +92,12 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, automatically open the preview panel at `previewUrl` the moment the script starts.",
     }),
   ),
+  singleRun: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, at most one run of this script can be active at a time; launching it again while running stops the active run instead.",
+    }),
+  ),
 }).annotate({
   description: "A project script that team members can import into T3 Code.",
 });
@@ -61,7 +106,7 @@ export type T3ProjectFileScript = typeof T3ProjectFileScript.Type;
 export const T3ProjectFile = Schema.Struct({
   $schema: Schema.optionalKey(
     Schema.String.annotate({
-      description: `URL of the JSON Schema for this file, typically "${T3_PROJECT_FILE_SCHEMA_URL}".`,
+      description: `URL of the JSON Schema for this file, served by your T3 Code relay at "${T3_PROJECT_FILE_SCHEMA_PATH}".`,
     }),
   ),
   iconPath: Schema.optionalKey(
@@ -73,6 +118,21 @@ export const T3ProjectFile = Schema.Struct({
       T3_PROJECT_FILE_PATH_MAX_LENGTH,
     ),
   ),
+  previewUrl: Schema.optionalKey(
+    trimmedNonEmpty(
+      {
+        description:
+          "The project's dev-server URL (e.g. \"http://localhost:5173\"). Always listed in the thread's Ports section, even before anything is listening, so it is one click away from the moment a thread opens. Any http(s) URL works, including a tunnel or staging origin; T3 Code can only report whether a loopback address is running, so a remote one is listed without a status.",
+      },
+      T3_PROJECT_FILE_URL_MAX_LENGTH,
+    ),
+  ),
+  defaultThreadEnvMode: Schema.optionalKey(
+    ThreadEnvMode.annotate({
+      description:
+        'Where new threads start for this repository: "worktree" for a fresh git worktree, "local" for the current checkout. A per-project setting in T3 Code overrides this; when neither is set, the global default applies.',
+    }),
+  ),
   scripts: Schema.optionalKey(
     Schema.Array(T3ProjectFileScript)
       .annotate({
@@ -82,7 +142,6 @@ export const T3ProjectFile = Schema.Struct({
   ),
 }).annotate({
   title: "T3 project file",
-  description:
-    "Checked-in project configuration for T3 Code (t3.json at the repository root). See https://t3.codes for documentation.",
+  description: "Checked-in project configuration for T3 Code (t3.json at the repository root).",
 });
 export type T3ProjectFile = typeof T3ProjectFile.Type;

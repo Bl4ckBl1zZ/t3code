@@ -3,10 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  filterProviderInstanceEntriesForScope,
   getDefaultProviderInstanceModel,
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
   resolveDefaultProviderModelSelection,
+  resolveProviderCatalogAvailability,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
 } from "./providerInstances";
@@ -65,6 +67,46 @@ describe("isProviderInstancePickerReady", () => {
     ]);
 
     expect(entry && isProviderInstancePickerReady(entry)).toBe(true);
+  });
+});
+
+describe("resolveProviderCatalogAvailability", () => {
+  const [entry] = deriveProviderInstanceEntries([
+    provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+  ]);
+
+  it("keeps the initial reactive config state distinct from an empty catalogue", () => {
+    expect(
+      resolveProviderCatalogAvailability({
+        catalogLoaded: false,
+        entries: [],
+        selectedEntry: undefined,
+      }),
+    ).toBe("loading");
+    expect(
+      resolveProviderCatalogAvailability({
+        catalogLoaded: true,
+        entries: [],
+        selectedEntry: undefined,
+      }),
+    ).toBe("unconfigured");
+  });
+
+  it("distinguishes a selected provider from configured but unusable providers", () => {
+    expect(
+      resolveProviderCatalogAvailability({
+        catalogLoaded: true,
+        entries: entry ? [entry] : [],
+        selectedEntry: entry,
+      }),
+    ).toBe("ready");
+    expect(
+      resolveProviderCatalogAvailability({
+        catalogLoaded: true,
+        entries: entry ? [entry] : [],
+        selectedEntry: undefined,
+      }),
+    ).toBe("unavailable");
   });
 });
 
@@ -458,5 +500,25 @@ describe("resolveDefaultProviderModelSelection", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("filterProviderInstanceEntriesForScope", () => {
+  const entries = deriveProviderInstanceEntries([
+    provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+    provider({ provider: ProviderDriverKind.make("hermes"), instanceId: "hermes" }),
+    provider({ provider: ProviderDriverKind.make("claude"), instanceId: "claude" }),
+  ]);
+
+  it("gives a T3 Work picker Hermes and nothing else", () => {
+    expect(
+      filterProviderInstanceEntriesForScope(entries, "only").map((entry) => entry.instanceId),
+    ).toEqual(["hermes"]);
+  });
+
+  it("keeps Hermes out of every Code picker", () => {
+    expect(
+      filterProviderInstanceEntriesForScope(entries, "hidden").map((entry) => entry.instanceId),
+    ).toEqual(["codex", "claude"]);
   });
 });

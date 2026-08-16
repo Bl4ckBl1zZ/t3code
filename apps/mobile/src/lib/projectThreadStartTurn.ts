@@ -8,7 +8,7 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 
-import { toUploadChatImageAttachments, type DraftComposerImageAttachment } from "./composerImages";
+import { toUploadChatAttachments, type DraftComposerAttachment } from "./composerImages";
 
 export function deriveThreadTitleFromPrompt(value: string): string {
   const trimmed = value.trim();
@@ -28,7 +28,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly messageId: string;
   readonly createdAt: string;
   readonly text: string;
-  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -36,6 +36,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin: boolean;
+  /** False for conversation providers whose backing project is routing-only. */
+  readonly prepareWorkspace?: boolean;
   /** Generated temp branch for worktree mode; unused for local mode. */
   readonly worktreeBranchName: string;
 }
@@ -50,18 +52,20 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
   const isWorktree = spec.workspaceMode === "worktree";
   return {
     commandId: CommandId.make(spec.commandId),
+    creationSource: "mobile" as const,
     threadId: ThreadId.make(spec.threadId),
     message: {
       messageId: MessageId.make(spec.messageId),
       role: "user" as const,
       text: spec.text,
-      attachments: toUploadChatImageAttachments(spec.attachments),
+      attachments: toUploadChatAttachments(spec.attachments),
     },
     modelSelection: spec.modelSelection,
     titleSeed: title,
     runtimeMode: spec.runtimeMode,
     interactionMode: spec.interactionMode,
     bootstrap: {
+      ...(spec.prepareWorkspace === undefined ? {} : { prepareWorkspace: spec.prepareWorkspace }),
       createThread: {
         projectId: spec.projectId,
         title,

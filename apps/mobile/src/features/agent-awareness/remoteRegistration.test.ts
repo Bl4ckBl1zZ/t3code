@@ -20,12 +20,15 @@ import {
   clearAgentAwarenessRegistrationRecord,
   loadAgentAwarenessRegistrationRecord,
   loadOrCreateAgentAwarenessDeviceId,
+  loadPreferences,
   saveAgentAwarenessRegistrationRecord,
 } from "../../persistence/imperative";
+import type { Preferences } from "../../persistence/mobile-preferences";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
 import {
   AgentAwarenessOperationError,
   __resetAgentAwarenessRemoteRegistrationForTest,
+  armAgentAwarenessLiveActivityForLocalWork,
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
   refreshActiveLiveActivityRemoteRegistration,
@@ -43,6 +46,13 @@ import * as Notifications from "expo-notifications";
 const secureStore = vi.hoisted(() => new Map<string, string>());
 const widgetMocks = vi.hoisted(() => ({
   getInstances: vi.fn(() => []),
+  start: vi.fn(() => ({})),
+}));
+const environmentConfigsMock = vi.hoisted(() => ({
+  configs: new Map<
+    string,
+    { environment: { capabilities: { agentActivityPublishing?: boolean } } }
+  >(),
 }));
 const backgroundRuntime = vi.hoisted(() => ({
   pending: [] as Array<{
@@ -77,7 +87,20 @@ vi.mock("expo-widgets", () => ({
 vi.mock("../../widgets/AgentActivity", () => ({
   default: {
     getInstances: widgetMocks.getInstances,
+    start: widgetMocks.start,
   },
+}));
+
+// The state modules pull the whole connection stack (and native expo modules)
+// into the import graph; the arming gate only needs the configs map.
+vi.mock("../../state/atom-registry", () => ({
+  appAtomRegistry: {
+    get: () => environmentConfigsMock.configs,
+  },
+}));
+
+vi.mock("../../state/server", () => ({
+  environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
 }));
 
 vi.mock("expo-notifications", () => ({
@@ -187,6 +210,16 @@ const relayTestLayer = managedRelayClientLayer("https://relay.example.test").pip
   Layer.provide(Layer.mergeAll(FetchHttpClient.layer, cryptoLayer)),
 );
 
+// Hermetic relay stub for reconciliation tests: the shared relayTestLayer goes
+// through real HTTP and captures the first test's stubbed fetch, which makes
+// fetch-based snapshot fixtures order-dependent across the file.
+function stubManagedRelaySnapshotLayer(snapshot: { readonly aggregate: unknown }) {
+  return Layer.succeed(ManagedRelay.ManagedRelayClient, {
+    getAgentActivitySnapshot: () => Effect.succeed(snapshot),
+    registerLiveActivity: () => Effect.void,
+  } as never);
+}
+
 const runBackgroundOperations = Effect.fn("TestRemoteRegistration.runBackgroundOperations")(
   function* () {
     let idlePasses = 0;
@@ -225,8 +258,12 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     vi.mocked(loadAgentAwarenessRegistrationRecord).mockClear();
     vi.mocked(clearAgentAwarenessRegistrationRecord).mockClear();
     vi.mocked(loadOrCreateAgentAwarenessDeviceId).mockResolvedValue("device-1");
+    vi.mocked(loadPreferences).mockReset();
+    vi.mocked(loadPreferences).mockResolvedValue({ liveActivitiesEnabled: false } as never);
     widgetMocks.getInstances.mockReset();
     widgetMocks.getInstances.mockReturnValue([]);
+    widgetMocks.start.mockClear();
+    environmentConfigsMock.configs.clear();
   });
 
   it("preserves disabled Live Activity preferences in relay registrations", () => {
@@ -354,9 +391,13 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     ).toEqual({ liveActivitiesEnabled: true, baseFontSize: 18 });
   });
 
-  it.effect("registers at most one listener while a Live Activity push token is pending", () => {
+  it.effect("replaces the pending Live Activity token listener instead of stacking", () => {
+    // getInstances() returns fresh wrapper objects on every call, so listener
+    // dedupe cannot key on object identity; re-registering must swap the
+    // single managed subscription rather than accumulate native listeners.
     registerAgentAwarenessConnection(savedConnection());
-    const addPushTokenListener = vi.fn();
+    const remove = vi.fn();
+    const addPushTokenListener = vi.fn(() => ({ remove }));
     const activity = {
       getPushToken: vi.fn(() => Promise.resolve(null)),
       addPushTokenListener,
@@ -367,7 +408,8 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       expect(yield* registerLiveActivityPushToken({ activity: activity as never })).toBe(false);
 
       expect(activity.getPushToken).toHaveBeenCalledTimes(2);
-      expect(addPushTokenListener).toHaveBeenCalledTimes(1);
+      expect(addPushTokenListener).toHaveBeenCalledTimes(2);
+      expect(remove).toHaveBeenCalledTimes(1);
     }).pipe(Effect.provide(relayTestLayer));
   });
 
@@ -411,6 +453,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
   it.effect(
     "registers APNS-started Live Activities for relay updates without mutating them locally",
     () => {
+      vi.mocked(loadPreferences).mockResolvedValue({} as never);
       const activity = {
         getPushToken: vi.fn(() => Promise.resolve("activity-token")),
         addPushTokenListener: vi.fn(),
@@ -432,9 +475,114 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     },
   );
 
+  it.effect("ends an armed card locally when Live Activities are disabled", () => {
+    // Default preferences mock: liveActivitiesEnabled false. Waiting for the
+    // relay's end push would strand the card whenever its token drifted, so
+    // the opt-out must end it locally.
+    const end = vi.fn(() => Promise.resolve());
+    const activity = {
+      getPushToken: vi.fn(() => Promise.resolve("activity-token")),
+      addPushTokenListener: vi.fn(),
+      end,
+    };
+    widgetMocks.getInstances.mockReturnValue([activity] as never);
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+
+    return Effect.gen(function* () {
+      activity.getPushToken.mockClear();
+      yield* refreshActiveLiveActivityRemoteRegistration();
+
+      expect(end).toHaveBeenCalledWith("immediate");
+      expect(activity.getPushToken).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(relayTestLayer));
+  });
+
+  it.effect("repaints an existing card from the relay snapshot on foreground", () => {
+    const snapshotAggregate = {
+      title: "T3 Code",
+      subtitle: "Agent work in progress",
+      activeCount: 1,
+      updatedAt: "1970-01-01T00:00:10.000Z",
+      activities: [
+        {
+          environmentId: "env-1",
+          threadId: "thread-1",
+          projectTitle: "Project",
+          threadTitle: "Thread",
+          modelTitle: "gpt-5.4",
+          phase: "running",
+          status: "Working",
+          updatedAt: "1970-01-01T00:00:10.000Z",
+          deepLink: "/",
+        },
+      ],
+    };
+    Constants.expoConfig!.extra = {
+      relay: {
+        url: "https://relay.example.test/",
+      },
+    };
+    vi.mocked(loadPreferences).mockResolvedValue({} as never);
+    const update = vi.fn(() => Promise.resolve());
+    const activity = {
+      getPushToken: vi.fn(() => Promise.resolve("activity-token")),
+      addPushTokenListener: vi.fn(),
+      update,
+      end: vi.fn(() => Promise.resolve()),
+    };
+    widgetMocks.getInstances.mockReturnValue([activity] as never);
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+
+    return Effect.gen(function* () {
+      yield* refreshActiveLiveActivityRemoteRegistration();
+
+      // The foregrounded app repaints the card locally instead of waiting for
+      // the APNs replay round-trip.
+      expect(update).toHaveBeenCalledWith({
+        title: snapshotAggregate.title,
+        subtitle: snapshotAggregate.subtitle,
+        activeCount: snapshotAggregate.activeCount,
+        updatedAt: snapshotAggregate.updatedAt,
+        activities: snapshotAggregate.activities,
+      });
+      expect(activity.end).not.toHaveBeenCalled();
+      expect(activity.getPushToken).toHaveBeenCalled();
+    }).pipe(Effect.provide(stubManagedRelaySnapshotLayer({ aggregate: snapshotAggregate })));
+  });
+
+  it.effect("ends an orphaned card when the relay has nothing left to show", () => {
+    Constants.expoConfig!.extra = {
+      relay: {
+        url: "https://relay.example.test/",
+      },
+    };
+    vi.mocked(loadPreferences).mockResolvedValue({} as never);
+    const end = vi.fn(() => Promise.resolve());
+    const activity = {
+      getPushToken: vi.fn(() => Promise.resolve("activity-token")),
+      addPushTokenListener: vi.fn(),
+      update: vi.fn(() => Promise.resolve()),
+      end,
+    };
+    widgetMocks.getInstances.mockReturnValue([activity] as never);
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+
+    return Effect.gen(function* () {
+      activity.getPushToken.mockClear();
+      yield* refreshActiveLiveActivityRemoteRegistration();
+
+      // The relay may no longer hold a working token for this card, so the
+      // end must not depend on a push arriving.
+      expect(end).toHaveBeenCalledWith("immediate");
+      expect(activity.update).not.toHaveBeenCalled();
+      expect(activity.getPushToken).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(stubManagedRelaySnapshotLayer({ aggregate: null })));
+  });
+
   it.effect(
     "re-registers active Live Activity tokens when the app returns to the foreground",
     () => {
+      vi.mocked(loadPreferences).mockResolvedValue({} as never);
       const activity = {
         getPushToken: vi.fn(() => Promise.resolve("activity-token")),
         addPushTokenListener: vi.fn(),
@@ -680,6 +828,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
         url: "https://relay.example.test/",
       },
     };
+    vi.mocked(loadPreferences).mockResolvedValue({} as never);
     const activity = {
       getPushToken: vi.fn(() => Promise.resolve("activity-token")),
       addPushTokenListener: vi.fn(),
@@ -856,4 +1005,55 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       }).pipe(Effect.provide(relayTestLayer));
     },
   );
+
+  it("skips the Live Activity seed when the environment reports publishing disabled", async () => {
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+    vi.mocked(loadPreferences).mockResolvedValueOnce({
+      liveActivitiesEnabled: true,
+    } as Preferences);
+    environmentConfigsMock.configs.set("env-1", {
+      environment: { capabilities: { agentActivityPublishing: false } },
+    });
+
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: "env-1" as EnvironmentId,
+      threadTitle: "Fix the flaky test",
+      projectTitle: "t3code",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(widgetMocks.start).not.toHaveBeenCalled();
+  });
+
+  it("seeds the Live Activity for publishing and pre-capability environments", async () => {
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+    environmentConfigsMock.configs.set("env-publishing", {
+      environment: { capabilities: { agentActivityPublishing: true } },
+    });
+
+    vi.mocked(loadPreferences).mockResolvedValueOnce({
+      liveActivitiesEnabled: true,
+    } as Preferences);
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: "env-publishing" as EnvironmentId,
+      threadTitle: "Fix the flaky test",
+      projectTitle: "t3code",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(widgetMocks.start).toHaveBeenCalledTimes(1);
+
+    // An environment without the capability may run an older server that
+    // still publishes; only an explicit false skips the seed.
+    widgetMocks.start.mockClear();
+    vi.mocked(loadPreferences).mockResolvedValueOnce({
+      liveActivitiesEnabled: true,
+    } as Preferences);
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: "env-pre-capability" as EnvironmentId,
+      threadTitle: "Fix the flaky test",
+      projectTitle: "t3code",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(widgetMocks.start).toHaveBeenCalledTimes(1);
+  });
 });

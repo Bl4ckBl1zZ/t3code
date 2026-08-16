@@ -60,6 +60,12 @@ export type TerminalAttachInput = Schema.Codec.Encoded<typeof TerminalAttachInpu
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   data: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
+  /**
+   * Project script id when this write launches a project script command.
+   * Attributes the terminal's subprocess activity to that script so clients
+   * can surface per-script running state.
+   */
+  scriptId: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(128))),
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
@@ -120,6 +126,21 @@ export const TerminalSummary = Schema.Struct({
   exitCode: Schema.NullOr(Schema.Int),
   exitSignal: Schema.NullOr(Schema.Int),
   hasRunningSubprocess: Schema.Boolean,
+  /**
+   * Project script this terminal is currently attributed to (set when a
+   * script command is written, cleared once the subprocess goes idle).
+   */
+  activeScriptId: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
+  /**
+   * Loopback dev-server URLs this terminal's process announced in its output,
+   * in the order first seen. Carries what a listening-socket scan cannot know:
+   * the scheme, base path, and query the server actually intends to serve.
+   *
+   * Optional so clients on older servers simply fall back to socket discovery
+   * rather than needing a capability negotiation. Cleared whenever the process
+   * is replaced, so a row can never outlive what produced it.
+   */
+  detectedUrls: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
   /** Server-computed display title (idle shell vs subprocess command). */
   label: Schema.String.check(Schema.isMaxLength(128)),
   updatedAt: Schema.String,

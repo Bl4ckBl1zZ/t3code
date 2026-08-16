@@ -2,7 +2,10 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  ConfiguredLocalServerUrls,
+  CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS,
   DiscoveredLocalServer,
+  PREVIEW_URL_MAX_LENGTH,
   PreviewEvent,
   PreviewNavStatus,
   PreviewSessionSnapshot,
@@ -14,6 +17,7 @@ import {
   PreviewAutomationOpenInput,
   PreviewAutomationResizeInput,
   PreviewAutomationResizeResult,
+  PreviewAutomationSnapshotInput,
   PreviewAutomationStatus,
 } from "./previewAutomation.ts";
 
@@ -21,10 +25,12 @@ const decodePreviewEvent = Schema.decodeUnknownSync(PreviewEvent);
 const decodeSnapshot = Schema.decodeUnknownSync(PreviewSessionSnapshot);
 const decodeNavStatus = Schema.decodeUnknownSync(PreviewNavStatus);
 const decodeServer = Schema.decodeUnknownSync(DiscoveredLocalServer);
+const decodeConfiguredLocalServerUrls = Schema.decodeUnknownSync(ConfiguredLocalServerUrls);
 const decodeViewport = Schema.decodeUnknownSync(PreviewViewportSetting);
 const decodeResizeInput = Schema.decodeUnknownSync(PreviewAutomationResizeInput);
 const decodeOpenInput = Schema.decodeUnknownSync(PreviewAutomationOpenInput);
 const decodeResizeResult = Schema.decodeUnknownSync(PreviewAutomationResizeResult);
+const decodeSnapshotInput = Schema.decodeUnknownSync(PreviewAutomationSnapshotInput);
 const decodeAutomationHost = Schema.decodeUnknownSync(PreviewAutomationHost);
 const decodeAutomationError = Schema.decodeUnknownSync(PreviewAutomationError);
 const decodeAutomationStatus = Schema.decodeUnknownSync(PreviewAutomationStatus);
@@ -137,6 +143,19 @@ describe("PreviewAutomationResizeInput", () => {
         viewport: { width: 180, height: 120 },
       }).viewport,
     ).toEqual({ width: 180, height: 120 });
+  });
+});
+
+describe("PreviewAutomationSnapshotInput", () => {
+  it("accepts one optional screenshot destination", () => {
+    expect(decodeSnapshotInput({ save: true })).toEqual({ save: true });
+    expect(decodeSnapshotInput({ savePath: "evidence/page.png" })).toEqual({
+      savePath: "evidence/page.png",
+    });
+  });
+
+  it("rejects save and savePath together", () => {
+    expect(() => decodeSnapshotInput({ save: true, savePath: "evidence/page.png" })).toThrow();
   });
 });
 
@@ -339,6 +358,22 @@ describe("DiscoveredLocalServer", () => {
         pid: null,
         terminal: null,
       }),
+    ).toThrow();
+  });
+});
+
+describe("ConfiguredLocalServerUrls", () => {
+  it("bounds the number and length of probe candidates", () => {
+    expect(() =>
+      decodeConfiguredLocalServerUrls(
+        Array.from(
+          { length: CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS + 1 },
+          (_, index) => `http://localhost:${3_000 + index}`,
+        ),
+      ),
+    ).toThrow();
+    expect(() =>
+      decodeConfiguredLocalServerUrls([`http://localhost/${"a".repeat(PREVIEW_URL_MAX_LENGTH)}`]),
     ).toThrow();
   });
 });

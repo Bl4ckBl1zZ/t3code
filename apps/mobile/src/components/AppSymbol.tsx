@@ -14,6 +14,8 @@ import {
   IconBellRinging,
   IconBolt,
   IconCamera,
+  IconCameraRotate,
+  IconChartBar,
   IconCheck,
   IconChevronDown,
   IconCode,
@@ -40,6 +42,7 @@ import {
   IconGitMerge,
   IconGitPullRequest,
   IconInfoCircle,
+  IconKey,
   IconKeyboard,
   IconKeyboardHide,
   IconLayoutColumns,
@@ -47,9 +50,14 @@ import {
   IconLetterSpacing,
   IconLink,
   IconMessage,
+  IconMicrophone,
   IconMinus,
   IconNetwork,
   IconPalette,
+  IconPaperclip,
+  IconPhoto,
+  IconPin,
+  IconPinnedOff,
   IconPlayerPlay,
   IconPlayerStopFilled,
   IconPlus,
@@ -67,6 +75,7 @@ import {
   IconTrash,
   IconTypography,
   IconUserCircle,
+  IconWaveSine,
   IconWifiOff,
   IconWorld,
   IconX,
@@ -74,6 +83,7 @@ import {
 } from "@tabler/icons-react-native";
 import { Platform } from "react-native";
 import { SymbolView as ExpoSymbolView, type SFSymbol, type SymbolViewProps } from "expo-symbols";
+import Animated, { ReduceMotion, ZoomIn, ZoomOut } from "react-native-reanimated";
 
 const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.branch": IconGitBranch,
@@ -82,6 +92,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.right.circle": IconArrowRightCircle,
   "arrow.triangle.branch": IconGitBranch,
   "arrow.triangle.pull": IconGitPullRequest,
+  "arrow.triangle.2.circlepath.camera": IconCameraRotate,
   "arrow.turn.left.up": IconArrowBackUp,
   "arrow.up": IconArrowUp,
   "arrow.up.circle": IconArrowUpCircle,
@@ -95,6 +106,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "bolt.circle": IconBolt,
   "bolt.horizontal.circle": IconBolt,
   camera: IconCamera,
+  "chart.bar.xaxis": IconChartBar,
   checkmark: IconCheck,
   "checkmark.circle": IconCircleCheck,
   clock: IconClock,
@@ -114,13 +126,22 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "folder.badge.plus": IconFolderPlus,
   "folder.fill": IconFolder,
   gearshape: IconSettings,
+  globe: IconWorld,
   "info.circle": IconInfoCircle,
+  key: IconKey,
   link: IconLink,
+  "line.3.horizontal.decrease": IconFilter,
   "line.3.horizontal.decrease.circle": IconFilter,
   "line.3.horizontal.decrease.circle.fill": IconFilter,
   magnifyingglass: IconSearch,
+  mic: IconMicrophone,
   paintbrush: IconPalette,
+  paperclip: IconPaperclip,
   "person.crop.circle": IconUserCircle,
+  photo: IconPhoto,
+  "photo.on.rectangle": IconPhoto,
+  pin: IconPin,
+  "pin.slash": IconPinnedOff,
   play: IconPlayerPlay,
   plus: IconPlus,
   "qrcode.viewfinder": IconQrcode,
@@ -141,6 +162,8 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "textformat.size.larger": IconTextIncrease,
   "textformat.size.smaller": IconTextDecrease,
   trash: IconTrash,
+  "wand.and.stars": IconSparkles,
+  waveform: IconWaveSine,
   "wifi.slash": IconWifiOff,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
@@ -200,5 +223,23 @@ export function SymbolView(props: SymbolViewProps) {
       style={props.style}
       testID={props.testID}
     />
+  );
+}
+
+const symbolSwapEnter = ZoomIn.duration(140).reduceMotion(ReduceMotion.System);
+const symbolSwapExit = ZoomOut.duration(100).reduceMotion(ReduceMotion.System);
+
+/**
+ * SymbolView that morphs when its symbol changes: the old glyph zooms out fast while the new
+ * one zooms in, instead of snapping between frames. Use for stateful buttons whose icon
+ * tracks a mode (mic → stop → send). Finite entering/exiting animations only, no loops.
+ */
+export function AnimatedSymbolSwap(props: SymbolViewProps) {
+  const swapKey =
+    typeof props.name === "string" ? props.name : (props.name.ios ?? props.name.android);
+  return (
+    <Animated.View key={swapKey} entering={symbolSwapEnter} exiting={symbolSwapExit}>
+      <SymbolView {...props} />
+    </Animated.View>
   );
 }

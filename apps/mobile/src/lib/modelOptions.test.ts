@@ -2,9 +2,55 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ProviderInstanceId, type ServerConfig } from "@t3tools/contracts";
 
-import { buildModelOptions, resolveSelectableModelSelection } from "./modelOptions";
+import {
+  buildModelOptions,
+  groupByProvider,
+  resolveDefaultableModelSelection,
+  resolveSelectableModelSelection,
+} from "./modelOptions";
 
 describe("mobile model options", () => {
+  it("groups models by provider and flags legacy entries", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              isCustom: false,
+              capabilities: null,
+            },
+            {
+              slug: "gpt-5.4",
+              name: "GPT-5.4",
+              isCustom: false,
+              isLegacy: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(groupByProvider(buildModelOptions(config, null))).toMatchObject([
+      {
+        providerKey: "codex",
+        providerLabel: "Codex",
+        models: [
+          { key: "codex:gpt-5.6-sol", label: "GPT-5.6 Sol", isLegacy: false },
+          { key: "codex:gpt-5.4", label: "GPT-5.4", isLegacy: true },
+        ],
+      },
+    ]);
+  });
+
   it("normalizes a legacy fallback selection against current capabilities", () => {
     const config = {
       providers: [
@@ -90,5 +136,138 @@ describe("mobile model options", () => {
     expect(resolveSelectableModelSelection(config, removed)).toBeNull();
     // No config (environment offline) — nothing to validate against.
     expect(resolveSelectableModelSelection(null, disabled)).toBe(disabled);
+  });
+
+  it("keeps legacy models out of implicit defaults", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null },
+            {
+              slug: "gpt-5.4",
+              name: "GPT-5.4",
+              isCustom: false,
+              isLegacy: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    const current = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
+    const legacy = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
+
+    expect(resolveDefaultableModelSelection(config, current)).toBe(current);
+    // A legacy last-used selection falls through to the provider default.
+    expect(resolveDefaultableModelSelection(config, legacy)).toBeNull();
+    // Offline: nothing to validate against, selection passes through.
+    expect(resolveDefaultableModelSelection(null, legacy)).toBe(legacy);
+  });
+});
+
+describe("model option provider scope", () => {
+  const config = {
+    providers: [
+      {
+        instanceId: "codex",
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null }],
+      },
+      {
+        instanceId: "hermes",
+        driver: "hermes",
+        displayName: "Hermes",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        models: [{ slug: "default", name: "Default", isCustom: false, capabilities: null }],
+      },
+    ],
+  } as unknown as ServerConfig;
+
+  it("offers a T3 Work picker Hermes models only", () => {
+    expect(buildModelOptions(config, null, "hermes-only").map((option) => option.key)).toEqual([
+      "hermes:default",
+    ]);
+  });
+
+  it("keeps Hermes out of a Code picker", () => {
+    expect(buildModelOptions(config, null, "exclude-hermes").map((option) => option.key)).toEqual([
+      "codex:gpt-5.6-sol",
+    ]);
+  });
+
+  it("leaves surfaces that are neither with the full list", () => {
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "codex:gpt-5.6-sol",
+      "hermes:default",
+    ]);
+  });
+});
+
+describe("model visibility preferences", () => {
+  const configWith = (
+    providerModelPreferences: Record<string, { hiddenModels: string[]; modelOrder: string[] }>,
+  ) =>
+    ({
+      settings: { providerModelPreferences },
+      providers: [
+        {
+          instanceId: "hermes",
+          driver: "hermes",
+          displayName: "Hermes",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            { slug: "alpha", name: "Alpha", isCustom: false, capabilities: null },
+            { slug: "beta", name: "Beta", isCustom: false, capabilities: null },
+            { slug: "mine", name: "Mine", isCustom: true, capabilities: null },
+          ],
+        },
+      ],
+    }) as unknown as ServerConfig;
+
+  it("hides models the user hid on another client", () => {
+    const config = configWith({ hermes: { hiddenModels: ["beta"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "hermes:alpha",
+      "hermes:mine",
+    ]);
+  });
+
+  it("never hides a custom model", () => {
+    const config = configWith({ hermes: { hiddenModels: ["mine"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toContain("hermes:mine");
+  });
+
+  it("applies the user's ordering and leaves unordered models behind it", () => {
+    const config = configWith({ hermes: { hiddenModels: [], modelOrder: ["mine", "beta"] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "hermes:mine",
+      "hermes:beta",
+      "hermes:alpha",
+    ]);
+  });
+
+  it("leaves preferences for a different instance alone", () => {
+    const config = configWith({ codex: { hiddenModels: ["alpha"], modelOrder: [] } });
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "hermes:alpha",
+      "hermes:beta",
+      "hermes:mine",
+    ]);
   });
 });

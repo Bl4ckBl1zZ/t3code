@@ -1,15 +1,19 @@
 import {
+  isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { estimateBase64ByteSize } from "./base64";
+import type { DraftComposerImageAttachment } from "./composerAttachmentKinds";
+import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 
-export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
-  readonly id: string;
-  readonly previewUri: string;
-}
+export type {
+  DraftComposerAttachment,
+  DraftComposerImageAttachment,
+} from "./composerAttachmentKinds";
+export { isDraftComposerImageAttachment, toUploadChatAttachments } from "./composerAttachmentKinds";
 
 /** Wire shape for startTurn: pure uploads without client draft id / previewUri. */
 export function toUploadChatImageAttachments(
@@ -65,13 +69,21 @@ export async function pickComposerImages(input: { readonly existingCount: number
     };
   }
 
-  const result = await imagePicker.launchImageLibraryAsync({
-    mediaTypes: ["images"],
-    allowsMultipleSelection: true,
-    selectionLimit: remainingSlots,
-    base64: true,
-    quality: 1,
-  });
+  // The picker covers the Android activity, which reports the app as
+  // backgrounded; the guard keeps background-triggered restarts away mid-pick.
+  const endHandoff = beginForegroundHandoff();
+  let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
+  try {
+    result = await imagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: remainingSlots,
+      base64: true,
+      quality: 1,
+    });
+  } finally {
+    endHandoff();
+  }
 
   if (result.canceled) {
     return {
@@ -87,6 +99,10 @@ export async function pickComposerImages(input: { readonly existingCount: number
     const mimeType = asset.mimeType?.toLowerCase();
     if (!mimeType?.startsWith("image/")) {
       error = `Unsupported file type for '${asset.fileName ?? "image"}'.`;
+      continue;
+    }
+    if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
+      error = `'${asset.fileName ?? "image"}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`;
       continue;
     }
 
@@ -116,6 +132,48 @@ export async function pickComposerImages(input: { readonly existingCount: number
   return {
     images: nextImages,
     error,
+  };
+}
+
+/**
+ * Wraps an in-app camera capture (expo-camera takePictureAsync with base64)
+ * as a draft attachment, enforcing the same slot and size limits as the
+ * library picker.
+ */
+export function composerImageFromCameraCapture(input: {
+  readonly base64: string;
+  readonly uri: string;
+  readonly existingCount: number;
+}): {
+  readonly image: DraftComposerImageAttachment | null;
+  readonly error: string | null;
+} {
+  if (input.existingCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+    return {
+      image: null,
+      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`,
+    };
+  }
+
+  const sizeBytes = estimateBase64ByteSize(input.base64);
+  if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+    return {
+      image: null,
+      error: "The captured photo exceeds the 10 MB attachment limit.",
+    };
+  }
+
+  return {
+    image: {
+      id: uuidv4(),
+      type: "image",
+      name: `camera-${Date.now()}.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes,
+      dataUrl: `data:image/jpeg;base64,${input.base64}`,
+      previewUri: input.uri,
+    },
+    error: null,
   };
 }
 

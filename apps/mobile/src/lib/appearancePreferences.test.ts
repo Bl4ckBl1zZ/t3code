@@ -25,6 +25,7 @@ describe("appearancePreferences", () => {
       terminalFontSize: null,
       codeFontSize: null,
       codeWordBreak: false,
+      alwaysExpandActivity: false,
     });
   });
 

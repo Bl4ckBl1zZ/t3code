@@ -1,6 +1,6 @@
 {
   "name": "@t3tools/contracts",
-  "version": "0.0.31",
+  "version": "0.0.33",
   "private": true,
   "files": [
     "dist"
@@ -22,6 +22,10 @@
     "./voice": {
       "types": "./src/voice.ts",
       "import": "./src/voice.ts"
+    },
+    "./legacy-orchestration": {
+      "types": "./src/orchestration.ts",
+      "import": "./src/orchestration.ts"
     }
   },
   "scripts": {

@@ -9,8 +9,10 @@ import {
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
+import { mobileWorkInboxSection, type MobileWorkInboxSection } from "../../lib/mobileWorkspace";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
 export { snoozeWakeLabel };
@@ -84,7 +86,7 @@ export function resolveThreadListV2SwipeActions(input: {
 export function resolveThreadListV2SnoozeGateExpiryMs(
   thread: Pick<
     EnvironmentThreadShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "latestUserMessageAt" | "latestTurn" | "session"
+    "hasPendingApprovals" | "hasPendingUserInput" | "latestUserMessageAt" | "latestRun" | "runtime"
   >,
   options: { readonly now: string },
 ): number | null {
@@ -102,27 +104,48 @@ export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
 /**
- * Thread List v2 is on by default on every app variant; the Settings → Beta
- * toggle is an opt-out. Preferences persist as sparse patches, so `undefined`
- * genuinely means "never chosen".
+ * The flat Thread List v2 is the default on every app variant; the Settings →
+ * Legacy toggle opts a device back into the grouped legacy list. Preferences
+ * persist as sparse patches, so `undefined` genuinely means "never chosen".
  *
  * `preferencesLoaded` guards the startup window: preferences load
  * asynchronously, and rendering one list before the stored choice arrives would
  * remount the whole thing a tick later. While loading, hold the default — that
- * is where every device without an explicit opt-out lands anyway.
+ * is where every device without an explicit legacy opt-in lands anyway.
  */
 export function resolveThreadListV2Enabled(input: {
-  readonly preference: boolean | undefined;
+  readonly legacyPreference: boolean | undefined;
   readonly preferencesLoaded: boolean;
 }): boolean {
   if (!input.preferencesLoaded) {
     return true;
   }
-  return input.preference ?? true;
+  return input.legacyPreference !== true;
+}
+
+/**
+ * Completed-but-not-yet-seen, mirroring the web sidebar's
+ * hasUnseenCompletion. The visited watermark is server state
+ * (thread.lastVisitedAt), so the marker agrees across web and mobile.
+ * Never-visited threads count as read — a fresh environment must not light
+ * up its whole history — and pre-tracking servers (field absent) never
+ * report unread.
+ */
+export function threadHasUnseenCompletion(
+  thread: Pick<EnvironmentThreadShell, "latestRun" | "lastVisitedAt">,
+): boolean {
+  const completedAt = thread.latestRun?.completedAt;
+  if (!completedAt) return false;
+  const completedAtMs = Date.parse(completedAt);
+  if (Number.isNaN(completedAtMs)) return false;
+  if (!thread.lastVisitedAt) return false;
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(lastVisitedAtMs)) return true;
+  return completedAtMs > lastVisitedAtMs;
 }
 
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
+  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime">,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
@@ -130,13 +153,46 @@ export function resolveThreadListV2Status(
   if (thread.hasPendingUserInput) {
     return "input";
   }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+  if (
+    thread.runtime !== null &&
+    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+  ) {
     return "working";
   }
-  if (thread.session?.status === "error") {
+  if (thread.runtime?.status === "failed") {
     return "failed";
   }
   return "ready";
+}
+
+/**
+ * The lozenge a T3 Work row leads with, in place of the project name a Code
+ * card carries there.
+ *
+ * Work is an inbox: every row is the same assistant on the same backing
+ * checkout, so naming that is a constant and what differs between rows is
+ * state. Approval and input collapse into one "Needs you" because the useful
+ * distinction is that it is blocked on you at all — what it wants is the line
+ * underneath. `null` for a resting thread, which leaves the row as title + age
+ * rather than badging "Ready" on everything idle.
+ */
+export type WorkInboxBadge = "needs-you" | "working" | "failed" | "done";
+
+export function resolveWorkInboxBadge(input: {
+  readonly status: ThreadListV2Status;
+  readonly hasUnseenCompletion: boolean;
+}): WorkInboxBadge | null {
+  switch (input.status) {
+    case "approval":
+    case "input":
+      return "needs-you";
+    case "working":
+      return "working";
+    case "failed":
+      return "failed";
+    case "ready":
+      return input.hasUnseenCompletion ? "done" : null;
+  }
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
@@ -180,6 +236,8 @@ export interface ThreadListV2Item {
   readonly variant: "card" | "slim";
   /** Snoozed-shelf row: shows the wake countdown and offers Wake. */
   readonly snoozed: boolean;
+  /** Pinned-block row: renders the pin glyph and offers Unpin. */
+  readonly pinned: boolean;
   readonly isLast: boolean;
 }
 
@@ -232,11 +290,53 @@ export interface ThreadListV2SettledShelfListItem {
   readonly expanded: boolean;
 }
 
+export interface ThreadListV2WorkSectionListItem {
+  readonly type: "v2-work-section";
+  readonly key: string;
+  readonly label: string;
+  /** "needs-you" draws in the attention tone; the rest are quiet dividers. */
+  readonly tone: "default" | "attention";
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
+  | ThreadListV2WorkSectionListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
+
+const WORK_SECTIONS = [
+  { section: "main", label: "Main", tone: "default" },
+  { section: "needs-you", label: "Needs you", tone: "attention" },
+  { section: "active", label: "Active", tone: "default" },
+] as const satisfies ReadonlyArray<{
+  readonly section: MobileWorkInboxSection;
+  readonly label: string;
+  readonly tone: "default" | "attention";
+}>;
+
+/**
+ * Splits the active block into the T3 Work sections, emitting a header only
+ * for sections that have rows so an empty inbox stays quiet rather than
+ * showing three bare labels.
+ */
+function withWorkSectionHeaders(
+  activeItems: ReadonlyArray<ThreadListV2ListItem>,
+): ThreadListV2ListItem[] {
+  const result: ThreadListV2ListItem[] = [];
+  for (const { section, label, tone } of WORK_SECTIONS) {
+    const rows = activeItems.filter(
+      (item) => item.type === "v2-thread" && mobileWorkInboxSection(item.item.thread) === section,
+    );
+    if (rows.length === 0) continue;
+    result.push({ type: "v2-work-section", key: `v2-work-section:${section}`, label, tone });
+    result.push(...rows);
+  }
+  // Anything that is not a thread row (defensive: future item kinds) keeps its
+  // place at the end of the active block rather than being dropped.
+  result.push(...activeItems.filter((item) => item.type !== "v2-thread"));
+  return result;
+}
 
 /**
  * Builds the shared mobile order: active → pending → snoozed shelf → settled.
@@ -253,6 +353,11 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
+  /**
+   * T3 Work only: group the active block into Main / Needs you / Active.
+   * Omitted in Code, which keeps one undifferentiated active block.
+   */
+  readonly workSections?: boolean;
 }): ThreadListV2ListItem[] {
   const threadItems = input.items.map(
     (item): ThreadListV2ListItem => ({
@@ -279,7 +384,12 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const activeItems = threadItems.slice(0, activeEnd);
+  const result: ThreadListV2ListItem[] =
+    input.workSections === true
+      ? withWorkSectionHeaders(activeItems)
+      : [...activeItems, ...pendingItems];
+  if (input.workSections === true) result.push(...pendingItems);
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",
@@ -303,9 +413,8 @@ export function buildThreadListV2ListItems(input: {
 
 /**
  * Partitions visible threads into the active card block (creation order) and
- * the settled recency tail, matching the web v2 list. `autoSettleAfterDays`
- * mirrors the web default of 3 — mobile has no client-settings sync yet, so
- * the default is fixed here rather than user-configurable.
+ * the settled recency tail, matching the web v2 list. Mobile stores these
+ * auto-settle preferences per device.
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -326,6 +435,7 @@ export function buildThreadListV2Items(input: {
       contract as settlementEnvironmentIds. */
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly autoSettleAfterDays?: number;
+  readonly autoSettleOnMerge?: boolean;
   /** Max settled rows to render; the rest are counted, not built. */
   readonly settledLimit?: number;
   /** Injectable for tests; defaults to now. */
@@ -346,16 +456,19 @@ export function buildThreadListV2Items(input: {
   const now = input.now ?? new Date().toISOString();
   const snoozeNow = input.snoozeNow ?? now;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
+  const autoSettleOnMerge = input.autoSettleOnMerge ?? true;
   const query = input.searchQuery.trim().toLocaleLowerCase();
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
 
+  const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   for (const thread of input.threads) {
+    if (thread.lineage.relationshipToParent === "subagent") continue;
     // Callers pass live (unarchived) shells; settled threads are among them
     // and partition into the tail via effectiveSettled.
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
@@ -378,9 +491,10 @@ export function buildThreadListV2Items(input: {
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
     const changeRequestState =
       input.changeRequestStateByKey?.get(`${thread.environmentId}:${thread.id}`) ?? null;
-    // Visibility parity with web: a snoozed thread leaves the list until it
-    // wakes (or raises its hand — effectiveSnoozed refuses blocked/failed
-    // work). Snooze outranks settled classification, same as web.
+    // Visibility parity with web: snooze outranks everything, including a
+    // pin — a snoozed thread leaves the list until it wakes (or raises its
+    // hand). The pin (and its pinOrderKey) survives underneath, so a woken
+    // thread reappears at its exact spot in the pinned block.
     if (supportsSnooze && effectiveSnoozed(thread, { now: snoozeNow })) {
       snoozed.push(thread);
       if (
@@ -392,9 +506,20 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
+    // A pin otherwise overrides the lifecycle: pinned threads render above
+    // the inbox and never auto-settle out of sight.
+    if (thread.pinnedAt != null) {
+      pinned.push(thread);
+      continue;
+    }
     if (
       supportsSettlement &&
-      effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+      effectiveSettled(thread, {
+        now,
+        autoSettleAfterDays,
+        autoSettleOnMerge,
+        changeRequestState,
+      })
     ) {
       settled.push(thread);
     } else {
@@ -434,11 +559,21 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
+  for (const thread of sortPinnedThreadsByOrderKey(pinned)) {
+    items.push({
+      thread,
+      variant: "card",
+      snoozed: false,
+      pinned: true,
+      isLast: false,
+    });
+  }
   for (const thread of orderedActive) {
     items.push({
       thread,
       variant: "card",
       snoozed: false,
+      pinned: false,
       isLast: false,
     });
   }
@@ -448,6 +583,7 @@ export function buildThreadListV2Items(input: {
       thread,
       variant: "slim",
       snoozed: true,
+      pinned: false,
       isLast: false,
     });
   }
@@ -457,6 +593,7 @@ export function buildThreadListV2Items(input: {
       thread,
       variant: "slim",
       snoozed: false,
+      pinned: false,
       isLast: false,
     });
   }

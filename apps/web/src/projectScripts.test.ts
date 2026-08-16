@@ -21,8 +21,10 @@ describe("projectScripts helpers", () => {
         command: "pnpm dev",
         icon: "debug",
         runOnWorktreeCreate: false,
+        runOnWorktreeDelete: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
+        singleRun: false,
       }),
     ).toEqual({
       id: "dev",
@@ -42,8 +44,10 @@ describe("projectScripts helpers", () => {
         command: "pnpm test",
         icon: "test",
         runOnWorktreeCreate: false,
+        runOnWorktreeDelete: false,
         previewUrl: null,
         autoOpenPreview: false,
+        singleRun: false,
       }),
     ).toEqual({
       id: "test",
@@ -52,6 +56,20 @@ describe("projectScripts helpers", () => {
       icon: "test",
       runOnWorktreeCreate: false,
     });
+  });
+
+  it("includes singleRun only when enabled", () => {
+    const base = {
+      name: "Dev server",
+      command: "pnpm dev",
+      icon: "play" as const,
+      runOnWorktreeCreate: false,
+      runOnWorktreeDelete: false,
+      previewUrl: null,
+      autoOpenPreview: false,
+    };
+    expect(buildProjectScript("dev", { ...base, singleRun: true }).singleRun).toBe(true);
+    expect(buildProjectScript("dev", { ...base, singleRun: false }).singleRun).toBeUndefined();
   });
 
   it("builds and parses script run commands", () => {

@@ -267,12 +267,23 @@ jobs:
   # job — the Windows artifact then ships a ready WSL backend binary with no
   # cross-compiling and no first-launch compiler/node-gyp/network on the user's
   # machine. node-pty is N-API, so one binary works across all WSL Node versions.
+  # WSL runs the same CPU arch as the Windows host, so each Windows artifact
+  # needs a prebuild matching its own arch — an x64 pty.node in an arm64 build
+  # would be staged as linux-arm64 and fail to load in the distro.
   build_wsl_node_pty:
-    name: Build WSL node-pty (linux-x64)
+    name: Build WSL node-pty (linux-${{ matrix.arch }})
     needs: [preflight]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: halifax-bl4ckbl1zz-t3code-db2e22d1
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -292,7 +303,7 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Build node-pty linux-x64 prebuild
+      - name: Build node-pty linux-${{ matrix.arch }} prebuild
         shell: bash
         run: |
           set -euo pipefail
@@ -306,10 +317,19 @@ jobs:
           cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
           file wsl-prebuild/pty.node
 
-      - name: Upload node-pty linux-x64 prebuild
+          # The runner arch is the prebuild arch; a mismatch here silently ships
+          # an unloadable binary, so fail loudly instead.
+          expected_arch="${{ matrix.arch }}"
+          actual_arch="$(node -p "process.arch")"
+          if [[ "$actual_arch" != "$expected_arch" ]]; then
+            echo "Expected a linux-$expected_arch runner but node reports $actual_arch." >&2
+            exit 1
+          fi
+
+      - name: Upload node-pty linux-${{ matrix.arch }} prebuild
         uses: actions/upload-artifact@v7
         with:
-          name: wsl-node-pty-x64
+          name: wsl-node-pty-${{ matrix.arch }}
           path: wsl-prebuild/pty.node
           if-no-files-found: error
 
@@ -363,11 +383,13 @@ jobs:
             arch: x64
             rust_target: x86_64-pc-windows-msvc
             resource_key: win32-x64
-          # - label: Windows arm64
-          #   runner: windows-11-arm
-          #   platform: win
-          #   target: nsis
-          #   arch: arm64
+          - label: Windows arm64
+            runner: windows-11-arm
+            platform: win
+            target: nsis
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+            resource_key: win32-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -413,19 +435,28 @@ jobs:
         if: matrix.platform == 'win'
         uses: actions/download-artifact@v7
         with:
-          name: wsl-node-pty-x64
+          name: wsl-node-pty-${{ matrix.arch }}
           path: wsl-prebuild
 
       - name: Install Spectre-mitigated MSVC libs
         if: matrix.platform == 'win'
         shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
         run: |
+          # The Spectre-mitigated runtime libs are per-target-architecture, so
+          # an arm64 build needs the ARM64 component, not the x86/x64 one.
+          $component = if ($env:BUILD_ARCH -eq "arm64") {
+            "Microsoft.VisualStudio.Component.VC.Tools.ARM64.Spectre"
+          } else {
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre"
+          }
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $installPath = & $vswhere -products * -latest -property installationPath
           $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
           $proc = Start-Process -FilePath $setupExe `
             -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
-            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre", "--quiet", "--norestart" `
+            $component, "--quiet", "--norestart" `
             -Wait -PassThru -NoNewWindow
           if ($null -eq $proc -or $proc.ExitCode -ne 0) {
             $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
@@ -618,17 +649,16 @@ jobs:
             done
           fi
 
-          # Enable if Windows arm64 builds are enabled.
           # Windows updater metadata is channel-specific (for example
           # "latest.yml" or "nightly.yml"). Suffix each per-arch copy so the
           # release job can merge matching arm64/x64 manifests back into one
           # canonical manifest per channel.
-          # if [[ "${{ matrix.platform }}" == "win" ]]; then
-          #   shopt -s nullglob
-          #   for manifest in release-publish/*.yml; do
-          #     mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
-          #   done
-          # fi
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            shopt -s nullglob
+            for manifest in release-publish/*.yml; do
+              mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
+            done
+          fi
 
       - name: Collect resource monitor
         shell: bash
@@ -742,16 +772,10 @@ jobs:
     needs: [preflight, build, publish_cli]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
-    timeout-minutes: 10
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
-      - id: app_token
-        name: Mint release app token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -789,38 +813,38 @@ jobs:
             fi
           done
 
-      # - name: Merge Windows updater manifests
-      #   run: |
-      #     shopt -s nullglob
-      #     found_windows_manifest=false
-      #     for x64_manifest in release-assets/*-win-x64.yml; do
-      #       if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
-      #         continue
-      #       fi
+      - name: Merge Windows updater manifests
+        run: |
+          shopt -s nullglob
+          found_windows_manifest=false
+          for x64_manifest in release-assets/*-win-x64.yml; do
+            if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
+              continue
+            fi
 
-      #       arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
-      #       output_manifest="${x64_manifest/-win-x64.yml/.yml}"
-      #       if [[ ! -f "$arm64_manifest" ]]; then
-      #         echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
-      #         exit 1
-      #       fi
+            arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
+            output_manifest="${x64_manifest/-win-x64.yml/.yml}"
+            if [[ ! -f "$arm64_manifest" ]]; then
+              echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
+              exit 1
+            fi
 
-      #       found_windows_manifest=true
-      #       node scripts/merge-update-manifests.ts --platform win \
-      #         "$arm64_manifest" \
-      #         "$x64_manifest" \
-      #         "$output_manifest"
-      #       rm -f "$arm64_manifest" "$x64_manifest"
-      #     done
+            found_windows_manifest=true
+            node scripts/merge-update-manifests.ts --platform win \
+              "$arm64_manifest" \
+              "$x64_manifest" \
+              "$output_manifest"
+            rm -f "$arm64_manifest" "$x64_manifest"
+          done
 
-      #     if [[ "$found_windows_manifest" != true ]]; then
-      #       echo "No Windows updater manifests found to merge." >&2
-      #       exit 1
-      #     fi
+          if [[ "$found_windows_manifest" != true ]]; then
+            echo "No Windows updater manifests found to merge." >&2
+            exit 1
+          fi
 
       - name: Publish release
         if: needs.preflight.outputs.previous_tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.ref }}
@@ -837,11 +861,11 @@ jobs:
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ github.token }}
 
       - name: Publish first release
         if: needs.preflight.outputs.previous_tag == ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.ref }}
@@ -857,7 +881,17 @@ jobs:
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ github.token }}
+
+  publish_aur:
+    name: Publish AUR package
+    needs: [preflight, release]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' }}
+    uses: ./.github/workflows/publish-aur.yml
+    with:
+      release_tag: ${{ needs.preflight.outputs.tag }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
   deploy_web:
     name: Deploy hosted web app

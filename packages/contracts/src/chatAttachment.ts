@@ -1,0 +1,188 @@
+import * as Schema from "effect/Schema";
+
+import { MessageId, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+
+export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
+export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
+export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 20 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES = [
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPE_SET = new Set<string>(
+  PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
+);
+
+/** Whether a pasted or picked image mime type can be sent on a provider turn. */
+export function isProviderSendTurnSupportedImageMimeType(mimeType: string): boolean {
+  return PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPE_SET.has(mimeType.toLowerCase());
+}
+const PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS = 28_000_000;
+const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
+const CHAT_ATTACHMENT_NAME_MAX_CHARS = 255;
+const CHAT_ATTACHMENT_MIME_MAX_CHARS = 100;
+
+const ChatAttachmentName = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CHAT_ATTACHMENT_NAME_MAX_CHARS),
+  Schema.isPattern(/^[^/\\\p{Cc}]+$/u),
+);
+
+const ChatAttachmentMimeType = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CHAT_ATTACHMENT_MIME_MAX_CHARS),
+  Schema.isPattern(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i),
+);
+
+// The generic "file" branch must not absorb MIME types that have their own
+// specialized attachment type (image, pdf, video); this mirrors
+// validateComposerAttachment's prefix classification.
+const GenericFileMimeType = ChatAttachmentMimeType.check(
+  Schema.makeFilter(
+    (value: string) =>
+      (!/^image\//i.test(value) &&
+        !/^video\//i.test(value) &&
+        !/^application\/pdf$/i.test(value)) ||
+      "Images, PDFs, and videos must use their dedicated attachment types.",
+  ),
+);
+
+/**
+ * Where an attachment ended up once the turn ran.
+ *
+ * `skipped` is the expected, silent path — a projectless conversation, or a
+ * provider whose agent may not share this filesystem. `failed` means there was
+ * a workspace and the write lost, which is worth telling the user about.
+ * Collapsing the two would put a permanent warning in front of every user who
+ * never had a workspace to begin with.
+ */
+export const ChatAttachmentMaterialization = Schema.Literals(["written", "skipped", "failed"]);
+export type ChatAttachmentMaterialization = typeof ChatAttachmentMaterialization.Type;
+
+/**
+ * Preview annotation screenshots are UI plumbing, not user uploads: they should
+ * not be written into the project. Optional because every already-persisted
+ * attachment predates the field.
+ */
+export const ChatAttachmentRole = Schema.Literals(["upload", "preview-annotation"]);
+export type ChatAttachmentRole = typeof ChatAttachmentRole.Type;
+
+/**
+ * Server-assigned, and every field is optional: `versionSkew.ts` exists because
+ * mixed client and server versions are normal here, and no historical message
+ * carries any of this.
+ */
+const chatAttachmentPlacementFields = {
+  /** Workspace-relative POSIX path, e.g. `.t3code/uploads/a3f19c2b/9f2c1a4b-spec.pdf`. */
+  workspacePath: Schema.optional(TrimmedNonEmptyString),
+  materialization: Schema.optional(ChatAttachmentMaterialization),
+  materializationReason: Schema.optional(TrimmedNonEmptyString),
+  role: Schema.optional(ChatAttachmentRole),
+};
+
+export const ChatAttachmentId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CHAT_ATTACHMENT_ID_MAX_CHARS),
+  Schema.isPattern(/^[a-z0-9_-]+$/i),
+);
+export type ChatAttachmentId = typeof ChatAttachmentId.Type;
+
+export const ChatImageAttachment = Schema.Struct({
+  type: Schema.Literal("image"),
+  id: ChatAttachmentId,
+  name: ChatAttachmentName,
+  mimeType: ChatAttachmentMimeType.check(Schema.isPattern(/^image\//i)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
+  ...chatAttachmentPlacementFields,
+});
+export type ChatImageAttachment = typeof ChatImageAttachment.Type;
+
+export const UploadChatImageAttachment = Schema.Struct({
+  type: Schema.Literal("image"),
+  name: ChatAttachmentName,
+  mimeType: ChatAttachmentMimeType.check(Schema.isPattern(/^image\//i)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
+  dataUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS)),
+  role: Schema.optional(ChatAttachmentRole),
+});
+export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
+
+const chatFileAttachment = <Type extends "file" | "pdf" | "video">(type: Type) =>
+  Schema.Struct({
+    type: Schema.Literal(type),
+    id: ChatAttachmentId,
+    name: ChatAttachmentName,
+    mimeType:
+      type === "pdf"
+        ? ChatAttachmentMimeType.check(Schema.isPattern(/^application\/pdf$/i))
+        : type === "video"
+          ? ChatAttachmentMimeType.check(Schema.isPattern(/^video\//i))
+          : GenericFileMimeType,
+    sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+    ...chatAttachmentPlacementFields,
+  });
+
+const uploadChatFileAttachment = <Type extends "file" | "pdf" | "video">(type: Type) =>
+  Schema.Struct({
+    type: Schema.Literal(type),
+    name: ChatAttachmentName,
+    mimeType:
+      type === "pdf"
+        ? ChatAttachmentMimeType.check(Schema.isPattern(/^application\/pdf$/i))
+        : type === "video"
+          ? ChatAttachmentMimeType.check(Schema.isPattern(/^video\//i))
+          : GenericFileMimeType,
+    sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+    dataUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS)),
+    role: Schema.optional(ChatAttachmentRole),
+  });
+
+export const ChatFileAttachment = chatFileAttachment("file");
+export type ChatFileAttachment = typeof ChatFileAttachment.Type;
+export const ChatPdfAttachment = chatFileAttachment("pdf");
+export type ChatPdfAttachment = typeof ChatPdfAttachment.Type;
+export const ChatVideoAttachment = chatFileAttachment("video");
+export type ChatVideoAttachment = typeof ChatVideoAttachment.Type;
+
+export const UploadChatFileAttachment = uploadChatFileAttachment("file");
+export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
+export const UploadChatPdfAttachment = uploadChatFileAttachment("pdf");
+export type UploadChatPdfAttachment = typeof UploadChatPdfAttachment.Type;
+export const UploadChatVideoAttachment = uploadChatFileAttachment("video");
+export type UploadChatVideoAttachment = typeof UploadChatVideoAttachment.Type;
+
+export const ChatAttachment = Schema.Union([
+  ChatImageAttachment,
+  ChatFileAttachment,
+  ChatPdfAttachment,
+  ChatVideoAttachment,
+]);
+export type ChatAttachment = typeof ChatAttachment.Type;
+
+export const UploadChatAttachment = Schema.Union([
+  UploadChatImageAttachment,
+  UploadChatFileAttachment,
+  UploadChatPdfAttachment,
+  UploadChatVideoAttachment,
+]);
+export type UploadChatAttachment = typeof UploadChatAttachment.Type;
+
+export const PersistChatAttachmentsInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  attachments: Schema.Array(UploadChatAttachment),
+});
+export type PersistChatAttachmentsInput = typeof PersistChatAttachmentsInput.Type;
+
+export const PersistChatAttachmentsResult = Schema.Struct({
+  attachments: Schema.Array(ChatAttachment),
+});
+export type PersistChatAttachmentsResult = typeof PersistChatAttachmentsResult.Type;
+
+export class PersistChatAttachmentsError extends Schema.TaggedErrorClass<PersistChatAttachmentsError>()(
+  "PersistChatAttachmentsError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}

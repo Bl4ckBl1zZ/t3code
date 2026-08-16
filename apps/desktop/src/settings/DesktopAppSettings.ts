@@ -16,10 +16,16 @@ import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import {
+  DEFAULT_LINUX_PASSWORD_STORE,
+  normalizeLinuxPasswordStorePreference,
+  type LinuxPasswordStorePreference,
+} from "../linuxSecretStorage.ts";
 import { resolveDefaultDesktopUpdateChannel } from "../updates/updateChannels.ts";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
+  readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
   readonly serverExposureMode: DesktopServerExposureMode;
@@ -27,6 +33,10 @@ export interface DesktopSettings {
   readonly tailscaleServePort: number;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
+  // When true, updates download as soon as they are detected and install
+  // automatically once no agent run and no background command is live on any
+  // local backend.
+  readonly autoUpdateEnabled: boolean;
   // Was a "local" | "wsl" swap mode in an earlier iteration of the WSL
   // integration. We now run Windows and WSL backends side by side, so the
   // setting is just whether the WSL backend should be running alongside the
@@ -67,6 +77,7 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
 } as const;
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
   serverExposureMode: "local-only",
@@ -74,6 +85,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
+  autoUpdateEnabled: false,
   wslBackendEnabled: false,
   wslDistro: null,
   wslOnly: false,
@@ -87,6 +99,7 @@ const DesktopWindowBoundsDocument = Schema.Struct({
 });
 
 const DesktopSettingsDocument = Schema.Struct({
+  linuxPasswordStore: Schema.optionalKey(Schema.Unknown),
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
@@ -94,6 +107,7 @@ const DesktopSettingsDocument = Schema.Struct({
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  autoUpdateEnabled: Schema.optionalKey(Schema.Boolean),
   // Newer form of the WSL toggle. `wslMode` is still accepted on load so
   // existing on-disk settings keep working; on the next persist we write the
   // new boolean and the legacy key drops out.
@@ -158,6 +172,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setAutoUpdateEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setWslBackendEnabled: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
@@ -216,6 +233,7 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
+    linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
     serverExposureMode:
@@ -226,6 +244,7 @@ function normalizeDesktopSettingsDocument(
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
     updateChannelConfiguredByUser,
+    autoUpdateEnabled: parsed.autoUpdateEnabled === true,
     wslBackendEnabled,
     wslDistro: normalizeWslDistro(parsed.wslDistro),
     wslOnly: parsed.wslOnly === true,
@@ -238,6 +257,9 @@ function toDesktopSettingsDocument(
 ): DesktopSettingsDocument {
   const document: Mutable<DesktopSettingsDocument> = {};
 
+  if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
+    document.linuxPasswordStore = settings.linuxPasswordStore;
+  }
   if (settings.mainWindowBounds !== null) {
     document.mainWindowBounds = settings.mainWindowBounds;
   }
@@ -258,6 +280,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.updateChannelConfiguredByUser !== defaults.updateChannelConfiguredByUser) {
     document.updateChannelConfiguredByUser = settings.updateChannelConfiguredByUser;
+  }
+  if (settings.autoUpdateEnabled !== defaults.autoUpdateEnabled) {
+    document.autoUpdateEnabled = settings.autoUpdateEnabled;
   }
   if (settings.wslBackendEnabled !== defaults.wslBackendEnabled) {
     document.wslBackendEnabled = settings.wslBackendEnabled;
@@ -327,6 +352,15 @@ function setUpdateChannel(
         ...settings,
         updateChannel: requestedChannel,
         updateChannelConfiguredByUser: true,
+      };
+}
+
+function setAutoUpdateEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.autoUpdateEnabled === enabled
+    ? settings
+    : {
+        ...settings,
+        autoUpdateEnabled: enabled,
       };
 }
 
@@ -518,6 +552,10 @@ export const make = Effect.gen(function* () {
       persist((settings) => setUpdateChannel(settings, channel)).pipe(
         Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
       ),
+    setAutoUpdateEnabled: (enabled) =>
+      persist((settings) => setAutoUpdateEnabled(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setAutoUpdateEnabled", { attributes: { enabled } }),
+      ),
     setWslBackendEnabled: (enabled) =>
       persist((settings) => setWslBackendEnabled(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setWslBackendEnabled", { attributes: { enabled } }),
@@ -569,6 +607,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setServerExposureMode(settings, mode)),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
+        setAutoUpdateEnabled: (enabled) =>
+          update((settings) => setAutoUpdateEnabled(settings, enabled)),
         setWslBackendEnabled: (enabled) =>
           update((settings) => setWslBackendEnabled(settings, enabled)),
         setWslDistro: (distro) => update((settings) => setWslDistro(settings, distro)),

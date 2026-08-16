@@ -1,0 +1,18 @@
+diff --git a/ios/LiveActivityFactory.swift b/ios/LiveActivityFactory.swift
+index caf1e050224d595d8c57c0a832de182fd35ad897..39d22bd8a79658b49098212b439de0cd66a57cf5 100644
+--- a/ios/LiveActivityFactory.swift
++++ b/ios/LiveActivityFactory.swift
+@@ -43,7 +43,12 @@ final class LiveActivityFactory: SharedObject {
+     guard #available(iOS 16.1, *) else { throw LiveActivitiesNotSupportedException() }
+ 
+     return Activity<LiveActivityAttributes>.activities.map { activity in
+-      LiveActivity(id: activity.id, name: name)
++      let instance = LiveActivity(id: activity.id, name: name)
++      // Recovered instances must observe token updates just like freshly
++      // started ones, otherwise addPushTokenListener never fires for
++      // activities retrieved after a cold start or JS reload.
++      instance.observePushTokenUpdates(for: activity, pushNotificationsEnabled: LiveActivityFactory.pushNotificationsEnabled)
++      return instance
+     }
+   }
+ }

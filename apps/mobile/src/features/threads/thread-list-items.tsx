@@ -22,7 +22,9 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { useCopyThreadHandoffScript } from "../home/useThreadListActions";
 import { resolveThreadStatus } from "./threadPresentation";
+import { REGENERATE_TITLE_MENU_ACTION_ID, withTitleRegenerationMenuAction } from "./threadRowMenu";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -134,6 +136,7 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
       >
         <ProjectFavicon
           environmentId={props.project.environmentId}
+          faviconPath={props.project.faviconPath}
           open={!props.collapsed}
           size={compact ? 22 : 18}
           projectTitle={props.project.title}
@@ -411,6 +414,7 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
 
 const THREAD_ROW_MENU_ACTIONS: MenuAction[] = [
   { id: "archive", title: "Archive", image: "archivebox" },
+  { id: "copy-handoff-script", title: "Copy handoff script", image: "doc.on.doc" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -419,6 +423,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
   readonly projectCwd: string | null;
+  /** False on servers that predate regenerateTitle on thread.meta.update:
+      the menu action is hidden rather than sent and rejected. */
+  readonly titleRegenerationSupported: boolean;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly isLast: boolean;
@@ -429,6 +436,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   readonly simultaneousSwipeGesture?: ComponentProps<
@@ -450,15 +458,18 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
 
-  const { thread, onSelectThread, onArchiveThread, onDeleteThread } = props;
+  const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
+    props;
   const status = resolveThreadStatus(thread);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
   const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
-  const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
-    Boolean(part),
+  // A t3-generated branch ("t3code/ffeef775") names nothing; the change
+  // request it produced does. The icon + number still trail the line.
+  const subtitleParts = [props.environmentLabel, pr ? pr.title : thread.branch].filter(
+    (part): part is string => Boolean(part),
   );
 
   const backgroundColor = compact ? screenColor : drawerColor;
@@ -470,6 +481,12 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const copyHandoffScript = useCopyThreadHandoffScript();
+  const isRegeneratingTitle = thread.titleRegeneration != null;
+  const handleRegenerateTitle = useCallback(
+    () => onRegenerateThreadTitle(thread),
+    [onRegenerateThreadTitle, thread],
+  );
   const primaryAction = useMemo(
     () => ({
       accessibilityLabel: `Archive ${thread.title}`,
@@ -482,9 +499,28 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "copy-handoff-script") copyHandoffScript(thread);
+      if (nativeEvent.event === REGENERATE_TITLE_MENU_ACTION_ID && !isRegeneratingTitle) {
+        handleRegenerateTitle();
+      }
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete],
+    [
+      copyHandoffScript,
+      handleArchive,
+      handleDelete,
+      handleRegenerateTitle,
+      isRegeneratingTitle,
+      thread,
+    ],
+  );
+  const menuActions = useMemo(
+    () =>
+      withTitleRegenerationMenuAction(THREAD_ROW_MENU_ACTIONS, {
+        supported: props.titleRegenerationSupported,
+        regenerating: isRegeneratingTitle,
+      }),
+    [isRegeneratingTitle, props.titleRegenerationSupported],
   );
 
   const statusPill = effectiveStatus ? (
@@ -673,7 +709,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         // ControlPillMenu injects onLongPress into the row and anchors the
         // token-styled dropdown to it; taps and swipes are untouched.
         <ControlPillMenu
-          actions={THREAD_ROW_MENU_ACTIONS}
+          actions={menuActions}
           onPressAction={handleMenuAction}
           shouldOpenOnLongPress
         >

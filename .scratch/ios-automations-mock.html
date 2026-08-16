@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>T3 Code Mobile — Automations UI draft</title>
+    <style>
+      :root {
+        --bg: #f2f2f7;
+        --panel: #ffffff;
+        --panel2: #ffffff;
+        --text: #000000;
+        --text2: rgba(60, 60, 67, 0.6);
+        --text3: rgba(60, 60, 67, 0.3);
+        --sep: rgba(60, 60, 67, 0.12);
+        --blue: #007aff;
+        --green: #34c759;
+        --red: #ff3b30;
+        --sky: #32ade6;
+        --amber: #ff9f0a;
+        --chip: rgba(118, 118, 128, 0.12);
+        --frame: #1c1c1e;
+        --page: #e8e8ee;
+        --shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+      }
+      .dark {
+        --bg: #000000;
+        --panel: #1c1c1e;
+        --panel2: #2c2c2e;
+        --text: #ffffff;
+        --text2: rgba(235, 235, 245, 0.6);
+        --text3: rgba(235, 235, 245, 0.3);
+        --sep: rgba(84, 84, 88, 0.5);
+        --blue: #0a84ff;
+        --green: #30d158;
+        --red: #ff453a;
+        --sky: #64d2ff;
+        --amber: #ffd60a;
+        --chip: rgba(118, 118, 128, 0.24);
+        --frame: #3a3a3c;
+        --page: #101014;
+        --shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+        background: var(--page);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 32px 16px 64px;
+        -webkit-font-smoothing: antialiased;
+        transition: background 0.25s;
+      }
+      .page-head {
+        max-width: 1180px;
+        margin: 0 auto 28px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .page-head h1 {
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .page-head p {
+        font-size: 13px;
+        color: var(--text2);
+        margin-top: 6px;
+        max-width: 560px;
+        line-height: 1.5;
+      }
+      .page-controls {
+        display: flex;
+        gap: 8px;
+      }
+      .pill-btn {
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--panel);
+        border: 1px solid var(--sep);
+        border-radius: 999px;
+        padding: 8px 16px;
+        cursor: pointer;
+      }
+      .pill-btn:hover {
+        border-color: var(--blue);
+      }
+
+      .phones {
+        max-width: 1180px;
+        margin: 0 auto;
+        display: flex;
+        gap: 40px;
+        justify-content: center;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .phone-col {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        align-items: center;
+      }
+      .phone-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text2);
+        text-align: center;
+        max-width: 360px;
+      }
+      .phone-label b {
+        color: var(--text);
+        display: block;
+        font-size: 14px;
+        margin-bottom: 2px;
+      }
+
+      .phone {
+        width: 340px;
+        height: 720px;
+        background: var(--bg);
+        border-radius: 46px;
+        border: 8px solid var(--frame);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+      }
+      .dynamic-island {
+        position: absolute;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 96px;
+        height: 26px;
+        background: #000;
+        border-radius: 14px;
+        z-index: 30;
+      }
+      .statusbar {
+        height: 46px;
+        flex: none;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        padding: 0 26px 2px;
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .home-indicator {
+        position: absolute;
+        bottom: 7px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 120px;
+        height: 4.5px;
+        border-radius: 3px;
+        background: var(--text);
+        opacity: 0.35;
+        z-index: 30;
+      }
+
+      .navbar {
+        flex: none;
+        padding: 6px 16px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .navbar .back {
+        color: var(--blue);
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        flex: 1;
+        min-width: 0;
+      }
+      .navbar .back svg {
+        flex: none;
+      }
+      .navbar .title {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 15.5px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .navbar .action {
+        flex: 1;
+        display: flex;
+        justify-content: flex-end;
+        color: var(--blue);
+      }
+      .icon-btn {
+        width: 30px;
+        height: 30px;
+        border-radius: 999px;
+        background: var(--chip);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--blue);
+        border: none;
+        cursor: pointer;
+      }
+
+      .scroll {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 16px 40px;
+      }
+      .large-title {
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        padding: 4px 2px 14px;
+      }
+
+      .group-label {
+        font-size: 12.5px;
+        font-weight: 400;
+        color: var(--text2);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 0 16px 7px;
+      }
+      .group-foot {
+        font-size: 12.5px;
+        color: var(--text2);
+        padding: 7px 16px 22px;
+        line-height: 1.45;
+      }
+      .inset {
+        background: var(--panel);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 14px;
+        position: relative;
+        min-height: 44px;
+      }
+      .row + .row::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 14px;
+        right: 0;
+        height: 1px;
+        background: var(--sep);
+      }
+      .row.indent-sep + .row::before {
+        left: 52px;
+      }
+      .row .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      .row .r-title {
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+      }
+      .row .r-title span.t {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row .r-sub {
+        font-size: 12.5px;
+        color: var(--text2);
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row .value {
+        font-size: 15px;
+        color: var(--text2);
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex: none;
+      }
+      .chev {
+        color: var(--text3);
+        flex: none;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        flex: none;
+      }
+      .dot.never {
+        background: var(--text3);
+      }
+      .dot.running {
+        background: var(--sky);
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      .dot.succeeded {
+        background: var(--green);
+      }
+      .dot.failed {
+        background: var(--red);
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+
+      .task-icon {
+        width: 30px;
+        height: 30px;
+        border-radius: 7px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        color: #fff;
+      }
+
+      .switch {
+        width: 46px;
+        height: 28px;
+        border-radius: 999px;
+        background: rgba(120, 120, 128, 0.32);
+        position: relative;
+        flex: none;
+        cursor: pointer;
+        transition: background 0.2s;
+        border: none;
+      }
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: #fff;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25);
+        transition: transform 0.2s;
+      }
+      .switch.on {
+        background: var(--green);
+      }
+      .switch.on::after {
+        transform: translateX(18px);
+      }
+
+      .run-btn {
+        border: none;
+        background: var(--chip);
+        color: var(--blue);
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 600;
+        padding: 5px 11px;
+        border-radius: 999px;
+        cursor: pointer;
+        flex: none;
+      }
+      .run-btn:disabled {
+        color: var(--text3);
+      }
+
+      .seg {
+        display: flex;
+        background: var(--chip);
+        border-radius: 9px;
+        padding: 2px;
+        gap: 2px;
+      }
+      .seg button {
+        flex: 1;
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text);
+        padding: 6px 0;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      .seg button.on {
+        background: var(--panel2);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+        font-weight: 600;
+      }
+
+      .weekdays {
+        display: flex;
+        gap: 6px;
+      }
+      .weekdays button {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        border: none;
+        background: var(--chip);
+        color: var(--text2);
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .weekdays button.on {
+        background: var(--blue);
+        color: #fff;
+      }
+
+      textarea.prompt,
+      input.title-input {
+        width: 100%;
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 15px;
+        color: var(--text);
+        resize: none;
+        outline: none;
+        padding: 12px 14px;
+        line-height: 1.45;
+      }
+      textarea.prompt::placeholder,
+      input.title-input::placeholder {
+        color: var(--text3);
+      }
+
+      .sheet-wrap {
+        position: absolute;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+      }
+      .sheet-dim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+      }
+      .sheet {
+        position: relative;
+        background: var(--bg);
+        border-radius: 24px 24px 0 0;
+        max-height: 92%;
+        display: flex;
+        flex-direction: column;
+        padding-bottom: 20px;
+      }
+      .grabber {
+        width: 38px;
+        height: 5px;
+        border-radius: 3px;
+        background: var(--text3);
+        margin: 8px auto 2px;
+        flex: none;
+      }
+      .sheet-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 16px 12px;
+        flex: none;
+      }
+      .sheet-head .cancel {
+        color: var(--blue);
+        font-size: 15.5px;
+      }
+      .sheet-head .save {
+        color: var(--blue);
+        font-size: 15.5px;
+        font-weight: 700;
+      }
+      .sheet-head .s-title {
+        font-size: 15.5px;
+        font-weight: 600;
+      }
+      .sheet-scroll {
+        overflow-y: auto;
+        padding: 0 16px 12px;
+      }
+
+      .thread-banner {
+        background: var(--panel);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .banner-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px 6px;
+      }
+      .banner-head h4 {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text2);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .bubble {
+        border-radius: 18px;
+        padding: 10px 14px;
+        font-size: 14.5px;
+        line-height: 1.45;
+        max-width: 84%;
+      }
+      .bubble.user {
+        background: var(--blue);
+        color: #fff;
+        margin-left: auto;
+        border-bottom-right-radius: 6px;
+      }
+      .bubble.agent {
+        background: var(--panel2);
+        border-bottom-left-radius: 6px;
+      }
+      .msg-meta {
+        font-size: 11px;
+        color: var(--text2);
+        margin: 12px 2px 5px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .badge {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: var(--chip);
+        color: var(--text2);
+      }
+      .badge.auto {
+        color: var(--amber);
+        background: color-mix(in srgb, var(--amber) 16%, transparent);
+      }
+
+      .composer {
+        flex: none;
+        padding: 8px 14px 26px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .composer .field {
+        flex: 1;
+        background: var(--panel);
+        border: 1px solid var(--sep);
+        border-radius: 20px;
+        padding: 9px 15px;
+        font-size: 14.5px;
+        color: var(--text3);
+      }
+      .composer .mic,
+      .composer .send {
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .composer .mic {
+        background: var(--chip);
+        color: var(--text2);
+      }
+      .composer .send {
+        background: var(--blue);
+        color: #fff;
+      }
+
+      svg {
+        display: block;
+      }
+    </style>
+  </head>
+  <body class="dark">
+    <div class="page-head">
+      <div>
+        <h1>iOS Automations — UI draft</h1>
+        <p>
+          Visual-only implementation draft for surfacing V2 scheduled tasks on the phone: a
+          settings-level list, the create/edit sheet, and the thread-bound automations section.
+          Mirrors web's <code>ScheduledTasksSettings</code> + <code>ThreadAutomationsPanel</code>,
+          restyled to the iOS grouped-list idiom.
+        </p>
+      </div>
+      <div class="page-controls">
+        <button class="pill-btn" onclick="document.body.classList.toggle('dark')">
+          Toggle light / dark
+        </button>
+      </div>
+    </div>
+
+    <div class="phones">
+      <!-- ============ SCREEN 1: Automations list ============ -->
+      <div class="phone-col">
+        <div class="phone">
+          <div class="dynamic-island"></div>
+          <div class="statusbar"><span>9:41</span><span>􀙇 􀛨</span></div>
+          <div class="navbar">
+            <div class="back">
+              <svg width="12" height="20" viewBox="0 0 12 20" fill="none">
+                <path
+                  d="M10 2L3 10l7 8"
+                  stroke="currentColor"
+                  stroke-width="2.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+              >Settings
+            </div>
+            <div class="action">
+              <button class="icon-btn" title="New automation">
+                <svg width="15" height="15" viewBox="0 0 15 15">
+                  <path
+                    d="M7.5 1.5v12M1.5 7.5h12"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="scroll">
+            <div class="large-title">Automations</div>
+
+            <div class="group-label">Active</div>
+            <div class="inset">
+              <div class="row indent-sep">
+                <div
+                  class="task-icon"
+                  style="background: linear-gradient(135deg, #5e5ce6, #0a84ff)"
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="#fff" stroke-width="1.6" />
+                    <path
+                      d="M8 4.8V8l2.2 1.4"
+                      stroke="#fff"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </div>
+                <div class="grow">
+                  <div class="r-title">
+                    <span class="dot succeeded"></span
+                    ><span class="t">Nightly dependency audit</span>
+                  </div>
+                  <div class="r-sub">Weekdays at 09:00 · next in 14h</div>
+                </div>
+                <button class="run-btn">Run</button>
+                <button class="switch on"></button>
+              </div>
+              <div class="row indent-sep">
+                <div
+                  class="task-icon"
+                  style="background: linear-gradient(135deg, #32ade6, #30d158)"
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="#fff" stroke-width="1.6" />
+                    <path
+                      d="M8 4.8V8l2.2 1.4"
+                      stroke="#fff"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </div>
+                <div class="grow">
+                  <div class="r-title">
+                    <span class="dot running"></span><span class="t">Triage new GitHub issues</span>
+                  </div>
+                  <div class="r-sub">Every 30 min · running now</div>
+                </div>
+                <button class="run-btn" disabled>Run</button>
+                <button class="switch on"></button>
+              </div>
+              <div class="row indent-sep">
+                <div
+                  class="task-icon"
+                  style="background: linear-gradient(135deg, #ff9f0a, #ff453a)"
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="#fff" stroke-width="1.6" />
+                    <path
+                      d="M8 4.8V8l2.2 1.4"
+                      stroke="#fff"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </div>
+                <div class="grow">
+                  <div class="r-title">
+                    <span class="dot failed"></span
+                    ><span class="t">Sync upstream + report conflicts</span>
+                  </div>
+                  <div class="r-sub">Daily at 07:30 · last run failed · next in 9h</div>
+                </div>
+                <button class="run-btn">Run</button>
+                <button class="switch on"></button>
+              </div>
+            </div>
+            <div class="group-foot">
+              Runs land in their bound thread. Status updates live while the scheduler works.
+            </div>
+
+            <div class="group-label">Paused</div>
+            <div class="inset">
+              <div class="row indent-sep">
+                <div
+                  class="task-icon"
+                  style="background: linear-gradient(135deg, #8e8e93, #636366)"
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="#fff" stroke-width="1.6" />
+                    <path
+                      d="M8 4.8V8l2.2 1.4"
+                      stroke="#fff"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </div>
+                <div class="grow">
+                  <div class="r-title">
+                    <span class="dot never"></span><span class="t">Weekly release notes draft</span>
+                  </div>
+                  <div class="r-sub">Fri at 16:00 · paused</div>
+                </div>
+                <button class="run-btn">Run</button>
+                <button class="switch"></button>
+              </div>
+            </div>
+            <div class="group-foot">
+              Paused automations keep their history and schedule but never fire on their own.
+            </div>
+          </div>
+          <div class="home-indicator"></div>
+        </div>
+        <div class="phone-label">
+          <b>1 · Settings › Automations</b>Grouped list mirroring the web settings page. Status dot
+          + schedule + next-run subtitle; run-now and enable toggle inline. Tap a row to edit.
+        </div>
+      </div>
+
+      <!-- ============ SCREEN 2: Create / edit sheet ============ -->
+      <div class="phone-col">
+        <div class="phone">
+          <div class="dynamic-island"></div>
+          <div class="statusbar"><span>9:41</span><span>􀙇 􀛨</span></div>
+          <div class="scroll" style="filter: blur(2px); opacity: 0.55">
+            <div class="large-title">Automations</div>
+            <div class="inset">
+              <div class="row">
+                <div class="grow">
+                  <div class="r-title">
+                    <span class="dot succeeded"></span
+                    ><span class="t">Nightly dependency audit</span>
+                  </div>
+                  <div class="r-sub">Weekdays at 09:00</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet-wrap">
+            <div class="sheet-dim"></div>
+            <div class="sheet">
+              <div class="grabber"></div>
+              <div class="sheet-head">
+                <span class="cancel">Cancel</span>
+                <span class="s-title">New Automation</span>
+                <span class="save">Save</span>
+              </div>
+              <div class="sheet-scroll">
+                <div class="inset" style="margin-bottom: 18px">
+                  <input class="title-input" placeholder="Title" value="Nightly dependency audit" />
+                </div>
+
+                <div class="group-label">Prompt</div>
+                <div class="inset" style="margin-bottom: 18px">
+                  <textarea class="prompt" rows="3">
+Check for outdated or vulnerable dependencies, summarize anything actionable, and open a draft PR for safe patch bumps.</textarea
+                  >
+                </div>
+
+                <div class="group-label">Schedule</div>
+                <div class="inset" style="margin-bottom: 18px">
+                  <div class="row">
+                    <div class="seg" style="flex: 1">
+                      <button class="on">Fixed time</button><button>Interval</button>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="grow r-title"><span class="t">Time</span></div>
+                    <div
+                      class="value"
+                      style="
+                        background: var(--chip);
+                        border-radius: 8px;
+                        padding: 5px 11px;
+                        color: var(--text);
+                      "
+                    >
+                      09:00
+                    </div>
+                  </div>
+                  <div class="row" style="justify-content: center">
+                    <div class="weekdays">
+                      <button class="on">Mo</button><button class="on">Tu</button
+                      ><button class="on">We</button><button class="on">Th</button
+                      ><button class="on">Fr</button><button>Sa</button><button>Su</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="group-label">Runs in</div>
+                <div class="inset" style="margin-bottom: 18px">
+                  <div class="row">
+                    <div class="grow r-title"><span class="t">Project</span></div>
+                    <div class="value">RestoreCord</div>
+                    <span class="chev">›</span>
+                  </div>
+                  <div class="row">
+                    <div class="grow r-title"><span class="t">Thread</span></div>
+                    <div class="value">New thread each run</div>
+                    <span class="chev">›</span>
+                  </div>
+                  <div class="row">
+                    <div class="grow r-title"><span class="t">Workspace</span></div>
+                    <div class="value">New worktree · main</div>
+                    <span class="chev">›</span>
+                  </div>
+                  <div class="row">
+                    <div class="grow r-title"><span class="t">Model</span></div>
+                    <div class="value">Claude · Fable 5</div>
+                    <span class="chev">›</span>
+                  </div>
+                </div>
+
+                <div class="inset">
+                  <div class="row">
+                    <div class="grow r-title"><span class="t">Enabled</span></div>
+                    <button class="switch on"></button>
+                  </div>
+                </div>
+                <div class="group-foot">
+                  First run is scheduled immediately after saving — tomorrow at 09:00.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="home-indicator"></div>
+        </div>
+        <div class="phone-label">
+          <b>2 · Create / edit sheet</b>Native bottom sheet replacing web's dialog. Same draft
+          model: title, prompt, fixed-time vs interval, weekday chips,
+          project/thread/workspace/model rows.
+        </div>
+      </div>
+
+      <!-- ============ SCREEN 3: Thread with bound automation ============ -->
+      <div class="phone-col">
+        <div class="phone">
+          <div class="dynamic-island"></div>
+          <div class="statusbar"><span>9:41</span><span>􀙇 􀛨</span></div>
+          <div class="navbar">
+            <div class="back">
+              <svg width="12" height="20" viewBox="0 0 12 20" fill="none">
+                <path
+                  d="M10 2L3 10l7 8"
+                  stroke="currentColor"
+                  stroke-width="2.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+              >RestoreCord
+            </div>
+            <div class="title">Dependency audit</div>
+            <div class="action">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="4" r="1.7" fill="currentColor" />
+                <circle cx="10" cy="10" r="1.7" fill="currentColor" />
+                <circle cx="10" cy="16" r="1.7" fill="currentColor" />
+              </svg>
+            </div>
+          </div>
+          <div class="scroll">
+            <div class="thread-banner" style="margin-bottom: 14px">
+              <div class="banner-head">
+                <h4>Automations</h4>
+                <button
+                  class="icon-btn"
+                  style="width: 26px; height: 26px"
+                  title="Manage automations"
+                >
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                    <path
+                      d="M7 4.6A2.4 2.4 0 1 0 7 9.4 2.4 2.4 0 0 0 7 4.6Zm5.2 2.4-.06.72 1.06.83-1 1.73-1.26-.42-.56.44-.2 1.3h-2l-.2-1.3-.56-.44-1.26.42-1-1.73 1.06-.83L6.16 7l.06-.72-1.06-.83 1-1.73 1.26.42.56-.44.2-1.3h2l.2 1.3.56.44 1.26-.42 1 1.73-1.06.83.06.72Z"
+                      stroke="currentColor"
+                      stroke-width="1.1"
+                      transform="translate(0.8 0)"
+                    />
+                  </svg>
+                </button>
+              </div>
+              <div class="row">
+                <div
+                  class="task-icon"
+                  style="
+                    background: linear-gradient(135deg, #5e5ce6, #0a84ff);
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 6px;
+                  "
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="#fff" stroke-width="1.6" />
+                    <path
+                      d="M8 4.8V8l2.2 1.4"
+                      stroke="#fff"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </div>
+                <div class="grow">
+                  <div class="r-title" style="font-size: 14px">
+                    <span class="dot succeeded"></span
+                    ><span class="t">Nightly dependency audit</span>
+                  </div>
+                  <div class="r-sub">Weekdays at 09:00 · next in 14h</div>
+                </div>
+                <button class="run-btn">Run</button>
+                <button class="switch on"></button>
+              </div>
+            </div>
+
+            <div class="msg-meta">
+              <span class="badge auto">Automation</span><span>Today, 09:00</span>
+            </div>
+            <div class="bubble user">
+              Check for outdated or vulnerable dependencies, summarize anything actionable, and open
+              a draft PR for safe patch bumps.
+            </div>
+            <div class="msg-meta"><span>Claude · Fable 5</span></div>
+            <div class="bubble agent">
+              Audit complete. 3 patch bumps are safe (effect, vitest, zod) — draft PR #97 opened.
+              One advisory needs a decision: <b>fast-xml-parser</b> has a moderate CVE fixed only in
+              a major bump…
+            </div>
+            <div class="msg-meta">
+              <span class="badge">Checkpoint</span><span>3 files changed</span>
+            </div>
+            <div class="bubble agent" style="font-size: 13px; color: var(--text2)">
+              package.json · pnpm-lock.yaml · .github/audit-report.md
+            </div>
+          </div>
+          <div class="composer">
+            <div class="field">Message</div>
+            <div class="mic">
+              <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+                <rect
+                  x="5"
+                  y="1.5"
+                  width="5"
+                  height="8"
+                  rx="2.5"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                />
+                <path
+                  d="M2.8 7.5a4.7 4.7 0 0 0 9.4 0M7.5 12.2v1.6"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </div>
+            <div class="send">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path
+                  d="M7 12V2M2.5 6.5 7 2l4.5 4.5"
+                  stroke="#fff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+          </div>
+          <div class="home-indicator"></div>
+        </div>
+        <div class="phone-label">
+          <b>3 · Thread screen</b>Bound-automation section above the transcript (mirrors
+          <code>ThreadAutomationsPanel</code>), plus an “Automation” intent badge on
+          scheduler-initiated user messages. Section hides when nothing is bound.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      document.querySelectorAll(".switch").forEach(function (el) {
+        el.addEventListener("click", function () {
+          el.classList.toggle("on");
+        });
+      });
+      document.querySelectorAll(".seg").forEach(function (seg) {
+        seg.querySelectorAll("button").forEach(function (b) {
+          b.addEventListener("click", function () {
+            seg.querySelectorAll("button").forEach(function (o) {
+              o.classList.remove("on");
+            });
+            b.classList.add("on");
+          });
+        });
+      });
+      document.querySelectorAll(".weekdays button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          b.classList.toggle("on");
+        });
+      });
+    </script>
+  </body>
+</html>

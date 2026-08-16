@@ -7,14 +7,18 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview";
+export const ALL_MCP_CAPABILITIES = ["preview", "orchestration", "worktree"] as const;
+export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
 export interface McpInvocationScope {
+  /** Opaque, non-secret handle suitable for audit correlation and revocation. */
+  readonly credentialId: string;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
   readonly capabilities: ReadonlySet<McpCapability>;
+  readonly audience: string;
   readonly issuedAt: number;
 }
 
@@ -24,7 +28,7 @@ export class McpInvocationContext extends Context.Service<
 >()("t3/mcp/McpInvocationContext") {}
 
 export const requireMcpCapability = Effect.fn("mcp.requireCapability")(function* (
-  capability: McpCapability,
+  capability: "preview",
 ) {
   const invocation = yield* McpInvocationContext;
   if (!invocation.capabilities.has(capability)) {

@@ -3,6 +3,30 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./Array": {
+      "types": "./src/Array.ts",
+      "import": "./src/Array.ts"
+    },
+    "./backgroundProcess": {
+      "types": "./src/backgroundProcess.ts",
+      "import": "./src/backgroundProcess.ts"
+    },
+    "./orchestrationV2Window": {
+      "types": "./src/orchestrationV2Window.ts",
+      "import": "./src/orchestrationV2Window.ts"
+    },
+    "./workflowObservability": {
+      "types": "./src/workflowObservability.ts",
+      "import": "./src/workflowObservability.ts"
+    },
+    "./changedFilesPreview": {
+      "types": "./src/changedFilesPreview.ts",
+      "import": "./src/changedFilesPreview.ts"
+    },
+    "./composerAttachments": {
+      "types": "./src/composerAttachments.ts",
+      "import": "./src/composerAttachments.ts"
+    },
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"
@@ -71,6 +95,22 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./t3McpToolPresentation": {
+      "types": "./src/t3McpToolPresentation.ts",
+      "import": "./src/t3McpToolPresentation.ts"
+    },
+    "./dynamicToolPreview": {
+      "types": "./src/dynamicToolPreview.ts",
+      "import": "./src/dynamicToolPreview.ts"
+    },
+    "./agentIdentity": {
+      "types": "./src/agentIdentity.ts",
+      "import": "./src/agentIdentity.ts"
+    },
+    "./delegatedTaskWake": {
+      "types": "./src/delegatedTaskWake.ts",
+      "import": "./src/delegatedTaskWake.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"
@@ -91,6 +131,10 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
+    "./threadEnvMode": {
+      "types": "./src/threadEnvMode.ts",
+      "import": "./src/threadEnvMode.ts"
+    },
     "./t3ProjectFile": {
       "types": "./src/t3ProjectFile.ts",
       "import": "./src/t3ProjectFile.ts"
@@ -98,6 +142,10 @@
     "./orchestrationTiming": {
       "types": "./src/orchestrationTiming.ts",
       "import": "./src/orchestrationTiming.ts"
+    },
+    "./orchestrationV2Timeline": {
+      "types": "./src/orchestrationV2Timeline.ts",
+      "import": "./src/orchestrationV2Timeline.ts"
     },
     "./remote": {
       "types": "./src/remote.ts",
@@ -163,9 +211,21 @@
       "types": "./src/composerInlineTokens.ts",
       "import": "./src/composerInlineTokens.ts"
     },
+    "./runtimeModes": {
+      "types": "./src/runtimeModes.ts",
+      "import": "./src/runtimeModes.ts"
+    },
     "./terminalLabels": {
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
+    },
+    "./terminalUrlDetection": {
+      "types": "./src/terminalUrlDetection.ts",
+      "import": "./src/terminalUrlDetection.ts"
+    },
+    "./threadEndpoints": {
+      "types": "./src/threadEndpoints.ts",
+      "import": "./src/threadEndpoints.ts"
     },
     "./relayClient": {
       "types": "./src/relayClient.ts",
@@ -210,6 +270,18 @@
     "./voiceInput": {
       "types": "./src/voiceInput.ts",
       "import": "./src/voiceInput.ts"
+    },
+    "./endpointReachability": {
+      "types": "./src/endpointReachability.ts",
+      "import": "./src/endpointReachability.ts"
+    },
+    "./usageMerge": {
+      "types": "./src/usageMerge.ts",
+      "import": "./src/usageMerge.ts"
+    },
+    "./usageFormat": {
+      "types": "./src/usageFormat.ts",
+      "import": "./src/usageFormat.ts"
     }
   },
   "scripts": {

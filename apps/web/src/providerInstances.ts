@@ -26,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
+import { HERMES_DRIVER_KIND } from "./t3WorkProject";
 
 /**
  * Local-only placeholder used while a draft has no provider it can safely
@@ -62,6 +63,24 @@ export interface ProviderInstanceEntry {
   readonly isAvailable: boolean;
   readonly snapshot: ServerProvider;
   readonly models: ReadonlyArray<ServerProviderModel>;
+}
+
+export type ProviderCatalogAvailability = "loading" | "ready" | "unavailable" | "unconfigured";
+
+/**
+ * Keep a provider catalogue that has not arrived yet distinct from a loaded
+ * catalogue with no usable entries. Environment config streams are reactive:
+ * treating their initial `null` as a final empty list strands otherwise
+ * recoverable threads behind a misleading "no providers" state.
+ */
+export function resolveProviderCatalogAvailability(input: {
+  readonly catalogLoaded: boolean;
+  readonly entries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly selectedEntry: ProviderInstanceEntry | undefined;
+}): ProviderCatalogAvailability {
+  if (!input.catalogLoaded) return "loading";
+  if (input.selectedEntry !== undefined) return "ready";
+  return input.entries.length === 0 ? "unconfigured" : "unavailable";
 }
 
 /**
@@ -107,6 +126,23 @@ function humanizeInstanceId(instanceId: ProviderInstanceId): string {
 
 function driverKindLabel(driverKind: ProviderDriverKind): string {
   return PROVIDER_DISPLAY_NAMES[driverKind] ?? formatProviderDriverKindLabel(driverKind);
+}
+
+/**
+ * Whether an instance's icon carries the account badge: accent color set, or
+ * several instances sharing a driver so the brand glyph alone is ambiguous.
+ * Shared by the composer trigger, the picker rail, and sidebar rows.
+ */
+export function shouldShowInstanceBadge(
+  entry: ProviderInstanceEntry,
+  entries: Iterable<ProviderInstanceEntry>,
+): boolean {
+  if (entry.accentColor) return true;
+  let sharedDriverCount = 0;
+  for (const candidate of entries) {
+    if (candidate.driverKind === entry.driverKind && ++sharedDriverCount > 1) return true;
+  }
+  return false;
 }
 
 export function normalizeProviderAccentColor(value: string | undefined): string | undefined {
@@ -241,6 +277,25 @@ export function sortProviderInstanceEntries(
     sorted.push(...defaults, ...customs);
   }
   return sorted;
+}
+
+/**
+ * Which providers a composer may offer. Hermes is the T3 Work assistant and
+ * the only thing T3 Work runs on, and it is not a coding provider — so a T3
+ * Work picker keeps Hermes and drops everything else, and every Code picker
+ * does the reverse.
+ */
+export type HermesProviderScope = "only" | "hidden";
+
+export function filterProviderInstanceEntriesForScope(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  scope: HermesProviderScope,
+): ReadonlyArray<ProviderInstanceEntry> {
+  return entries.filter((entry) =>
+    scope === "only"
+      ? entry.driverKind === HERMES_DRIVER_KIND
+      : entry.driverKind !== HERMES_DRIVER_KIND,
+  );
 }
 
 /**

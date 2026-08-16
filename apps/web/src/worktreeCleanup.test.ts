@@ -2,12 +2,17 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import { makeThreadFixture } from "./test-fixtures";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  mergeWorktreeOwners,
+} from "./worktreeCleanup";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
-  return {
+  return makeThreadFixture({
     id: ThreadId.make("thread-1"),
     environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
@@ -18,10 +23,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
-    session: null,
+    runtime: null,
     messages: [],
-    checkpoints: [],
-    activities: [],
     proposedPlans: [],
     createdAt: "2026-02-13T00:00:00.000Z",
     updatedAt: "2026-02-13T00:00:00.000Z",
@@ -29,11 +32,11 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     settledOverride: null,
     settledAt: null,
     deletedAt: null,
-    latestTurn: null,
+    latestRun: null,
     branch: null,
     worktreePath: null,
     ...overrides,
-  };
+  });
 }
 
 describe("getOrphanedWorktreePathForThread", () => {
@@ -108,5 +111,45 @@ describe("formatWorktreePathForDisplay", () => {
   it("ignores trailing slashes", () => {
     const result = formatWorktreePathForDisplay("/tmp/custom-worktrees/my-worktree/");
     expect(result).toBe("my-worktree");
+  });
+});
+
+describe("mergeWorktreeOwners", () => {
+  const worktreePath = "/Users/julius/.t3/worktrees/t3code/t3code-4e609bb8";
+
+  it("keeps an archived thread from being treated as gone", () => {
+    const active = makeThread({ id: ThreadId.make("thread-active"), worktreePath });
+    const archived = makeThread({ id: ThreadId.make("thread-archived"), worktreePath });
+
+    // Without the archived thread the active delete looks like the last
+    // reference and would take the worktree the archived thread still uses.
+    expect(getOrphanedWorktreePathForThread([active], active.id)).toBe(worktreePath);
+    expect(
+      getOrphanedWorktreePathForThread(mergeWorktreeOwners([active], [archived]), active.id),
+    ).toBeNull();
+  });
+
+  it("still reports an orphan when the archived threads use other worktrees", () => {
+    const active = makeThread({ id: ThreadId.make("thread-active"), worktreePath });
+    const archived = makeThread({
+      id: ThreadId.make("thread-archived"),
+      worktreePath: "/Users/julius/.t3/worktrees/t3code/t3code-other",
+    });
+
+    expect(
+      getOrphanedWorktreePathForThread(mergeWorktreeOwners([active], [archived]), active.id),
+    ).toBe(worktreePath);
+  });
+
+  it("counts a thread present in both stores once", () => {
+    const active = makeThread({ id: ThreadId.make("thread-1"), worktreePath });
+    const staleArchivedCopy = makeThread({ id: ThreadId.make("thread-1"), worktreePath: null });
+
+    const merged = mergeWorktreeOwners([active], [staleArchivedCopy]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.worktreePath).toBe(worktreePath);
+    // The duplicate must not shadow the active copy and make it look shared.
+    expect(getOrphanedWorktreePathForThread(merged, active.id)).toBe(worktreePath);
   });
 });

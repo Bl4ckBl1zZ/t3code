@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import type { SidebarProjectGroupingMode } from "@t3tools/contracts";
 
 import * as MobileDatabase from "./mobile-database";
 import * as MobileSecureStorage from "./mobile-secure-storage";
@@ -14,6 +15,7 @@ const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 
 export interface Preferences {
+  readonly workspace?: "work" | "code";
   readonly liveActivitiesEnabled?: boolean;
   readonly baseFontSize?: number;
   readonly terminalFontSize?: number | null;
@@ -22,14 +24,24 @@ export interface Preferences {
   readonly codeWordBreak?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
+  /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
+  readonly projectGroupingMode?: SidebarProjectGroupingMode;
+  readonly autoSettleOnMerge?: boolean;
   /**
-   * Device-local mirror of the web beta's `sidebarV2Enabled`. Mobile has no
-   * client-settings sync, so the flat v2 thread list is opted out of per
-   * device. Undefined means the user has never chosen, which resolves to on —
-   * see `resolveThreadListV2Enabled`.
+   * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
+   * no client-settings sync, so the legacy grouped thread list is opted into
+   * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
+   * opt-out): sanitizing drops the old key, so every device resets to the
+   * default flat list — see `resolveThreadListV2Enabled`.
    */
-  readonly threadListV2Enabled?: boolean;
+  readonly legacyThreadListEnabled?: boolean;
+  /**
+   * Scoped project key (`environmentId:projectId`) of the project the user last
+   * started a task in. The new-task flow preselects it so composing picks up
+   * where the previous task left off instead of asking again every time.
+   */
+  readonly lastNewTaskProjectKey?: string;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -80,7 +92,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
-    threadListV2Enabled?: boolean;
+    projectGroupingMode?: SidebarProjectGroupingMode;
+    autoSettleOnMerge?: boolean;
+    legacyThreadListEnabled?: boolean;
+    workspace?: "work" | "code";
+    lastNewTaskProjectKey?: string;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -110,8 +126,24 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.projectGroupingEnabled === "boolean") {
     preferences.projectGroupingEnabled = parsed.projectGroupingEnabled;
   }
-  if (typeof parsed.threadListV2Enabled === "boolean") {
-    preferences.threadListV2Enabled = parsed.threadListV2Enabled;
+  if (
+    parsed.projectGroupingMode === "repository" ||
+    parsed.projectGroupingMode === "repository_path" ||
+    parsed.projectGroupingMode === "separate"
+  ) {
+    preferences.projectGroupingMode = parsed.projectGroupingMode;
+  }
+  if (typeof parsed.autoSettleOnMerge === "boolean") {
+    preferences.autoSettleOnMerge = parsed.autoSettleOnMerge;
+  }
+  if (typeof parsed.legacyThreadListEnabled === "boolean") {
+    preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
+  }
+  if (parsed.workspace === "work" || parsed.workspace === "code") {
+    preferences.workspace = parsed.workspace;
+  }
+  if (typeof parsed.lastNewTaskProjectKey === "string" && parsed.lastNewTaskProjectKey.length > 0) {
+    preferences.lastNewTaskProjectKey = parsed.lastNewTaskProjectKey;
   }
   return preferences;
 }

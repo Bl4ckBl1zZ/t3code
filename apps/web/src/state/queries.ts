@@ -11,10 +11,8 @@ import {
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
-  OrchestrationThread,
   ProjectContentMatch,
   ProjectEntryKind,
-  ThreadId,
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
@@ -28,7 +26,6 @@ import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
 import { projectContentSearch, projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
-import { useEnvironmentThread } from "./threads";
 import { vcsEnvironment } from "./vcs";
 
 const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
@@ -55,14 +52,8 @@ const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
   labelPrefix: "web:thread-search",
 });
 
-export interface ThreadDetailView {
-  readonly data: OrchestrationThread | null;
-  readonly error: string | null;
-  readonly isPending: boolean;
-  readonly isDeleted: boolean;
-}
-
-function useDebouncedValue<A>(value: A, delayMs: number): A {
+/** Shared with the pull requests page, which debounces its search the same way. */
+export function useDebouncedValue<A>(value: A, delayMs: number): A {
   const [debounced, setDebounced] = useState(value);
 
   useEffect(() => {
@@ -99,19 +90,6 @@ export function useThreadSearch(
   return {
     matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
     isPending: canSearch && (isDebouncing || result.isLoading),
-  };
-}
-
-export function useThreadDetail(
-  environmentId: EnvironmentId | null,
-  threadId: ThreadId | null,
-): ThreadDetailView {
-  const state = useEnvironmentThread(environmentId, threadId);
-  return {
-    data: Option.getOrNull(state.data),
-    error: Option.getOrNull(state.error),
-    isPending: state.status === "synchronizing",
-    isDeleted: state.status === "deleted",
   };
 }
 
@@ -236,6 +214,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
 
 type ProjectPathSearchTarget = ComposerPathSearchTarget & {
   readonly kind?: ProjectEntryKind | undefined;
+  readonly imageOnly?: boolean | undefined;
 };
 
 export function areProjectPathSearchTargetsEqual(
@@ -246,7 +225,8 @@ export function areProjectPathSearchTargetsEqual(
     left.environmentId === right.environmentId &&
     left.cwd === right.cwd &&
     left.query === right.query &&
-    left.kind === right.kind
+    left.kind === right.kind &&
+    left.imageOnly === right.imageOnly
   );
 }
 
@@ -262,8 +242,9 @@ export function useProjectPathSearch(
       cwd: target.cwd,
       query: target.query == null ? null : target.query.trim(),
       kind: target.kind,
+      imageOnly: target.imageOnly,
     }),
-    [target.cwd, target.environmentId, target.kind, target.query],
+    [target.cwd, target.environmentId, target.imageOnly, target.kind, target.query],
   );
   const debouncedTarget = useDebouncedValue(normalizedTarget, PROJECT_PATH_SEARCH_DEBOUNCE_MS);
   const result = useEnvironmentQuery(
@@ -278,6 +259,7 @@ export function useProjectPathSearch(
             query: debouncedTarget.query,
             limit,
             ...(debouncedTarget.kind ? { kind: debouncedTarget.kind } : {}),
+            ...(debouncedTarget.imageOnly ? { imageOnly: true } : {}),
           },
         })
       : null,

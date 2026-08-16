@@ -21,6 +21,10 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
+import {
+  buildT3ProjectFileJsonSchema,
+  T3_PROJECT_FILE_SCHEMA_PATH,
+} from "@t3tools/shared/t3ProjectFile";
 
 import {
   RelayApi,
@@ -148,6 +152,13 @@ export const relayCors = HttpRouter.middleware(
   { global: true },
 );
 
+// Delegated-task thread ids embed the parent command id and a task slug, so
+// they routinely exceed find-my-way's default 100-character path-parameter
+// limit. Under that limit the router reports RouteNotFound for otherwise valid
+// requests. 512 comfortably covers current id shapes while still bounding
+// adversarial input.
+export const RELAY_MAX_PATH_PARAM_LENGTH = 512;
+
 export const relayNotFoundRoute = HttpRouter.add(
   "*",
   "/*",
@@ -159,6 +170,33 @@ export const relayDocsRedirectRoute = HttpRouter.add(
   "/",
   HttpServerResponse.redirect("/docs"),
 );
+
+/**
+ * Serves the `t3.json` JSON Schema, so editors validate and complete project
+ * files against the build this relay belongs to.
+ *
+ * Unauthenticated on purpose: an editor fetches `$schema` with no credentials,
+ * and the document is public API surface — it describes the shape of a file
+ * users check into their repositories.
+ *
+ * `schemaUrl` is the relay's own public address, so production, a nightly
+ * stage, and a developer's personal stage each publish their own. Passed in
+ * rather than read from the request: `Host` is caller-controlled, and a schema
+ * that names whatever host was asked for can be made to name someone else's.
+ */
+export const relayProjectFileSchemaRoute = (schemaUrl: string | null) => {
+  // Serialized once per worker instance. The document is fixed by the
+  // contracts this build was compiled with, so a change means a new deploy.
+  const body = `${JSON.stringify(buildT3ProjectFileJsonSchema({ id: schemaUrl }), null, 2)}\n`;
+  return HttpRouter.add(
+    "GET",
+    T3_PROJECT_FILE_SCHEMA_PATH,
+    HttpServerResponse.text(body, {
+      contentType: "application/json",
+      headers: { "cache-control": "public, max-age=3600" },
+    }),
+  );
+};
 
 // Shorter than the mobile client's 10s request timeout on purpose: when a
 // request hangs (e.g. a stuck upstream query), the client would otherwise

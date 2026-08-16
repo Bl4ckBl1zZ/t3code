@@ -3,8 +3,13 @@ import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
-import { DEFAULT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
-import { ModelSelection } from "./orchestration.ts";
+import { ThreadEnvMode } from "./environment.ts";
+import {
+  DEFAULT_TEXT_GENERATION_MODEL,
+  DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+  ProviderOptionSelections,
+} from "./model.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -58,12 +63,88 @@ export const GlassOpacity = Schema.Int.check(
 );
 export type GlassOpacity = typeof GlassOpacity.Type;
 export const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
+/**
+ * Font size preferences, in CSS pixels. The ranges are deliberately narrow:
+ * the interface size scales every rem-based dimension in the app, so the
+ * bounds keep layouts intact rather than offering unusable extremes.
+ */
+export const MIN_INTERFACE_FONT_SIZE = 12;
+export const MAX_INTERFACE_FONT_SIZE = 20;
+export const InterfaceFontSize = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_INTERFACE_FONT_SIZE, maximum: MAX_INTERFACE_FONT_SIZE }),
+);
+export type InterfaceFontSize = typeof InterfaceFontSize.Type;
+export const DEFAULT_INTERFACE_FONT_SIZE: InterfaceFontSize = 16;
+
+export const MIN_PROMPT_FONT_SIZE = 12;
+export const MAX_PROMPT_FONT_SIZE = 20;
+export const PromptFontSize = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_PROMPT_FONT_SIZE, maximum: MAX_PROMPT_FONT_SIZE }),
+);
+export type PromptFontSize = typeof PromptFontSize.Type;
+export const DEFAULT_PROMPT_FONT_SIZE: PromptFontSize = 14;
+
+export const MIN_CODE_FONT_SIZE = 10;
+export const MAX_CODE_FONT_SIZE = 18;
+export const CodeFontSize = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_CODE_FONT_SIZE, maximum: MAX_CODE_FONT_SIZE }),
+);
+export type CodeFontSize = typeof CodeFontSize.Type;
+export const DEFAULT_CODE_FONT_SIZE: CodeFontSize = 13;
+
+export const MIN_TERMINAL_FONT_SIZE = 8;
+export const MAX_TERMINAL_FONT_SIZE = 20;
+export const TerminalFontSize = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_TERMINAL_FONT_SIZE, maximum: MAX_TERMINAL_FONT_SIZE }),
+);
+export type TerminalFontSize = typeof TerminalFontSize.Type;
+export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
+
 export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
 
+/**
+ * A user-chosen font family (a single name or a comma-separated list). Empty
+ * means "use the app default"; clients compose their own fallback stacks.
+ */
+export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
+export type FontFamilyPreference = typeof FontFamilyPreference.Type;
+
+/**
+ * Per-provider-instance model visibility and ordering, keyed by
+ * `ProviderInstanceId` (the default instance for a driver uses the driver kind
+ * as its id, so `"hermes"`, `"codex"`, `"claudeAgent"`, …).
+ *
+ * Server-authoritative, because every client renders the same picker: hiding a
+ * model in the desktop app has to hide it in the browser and on mobile too.
+ * This lived in `ClientSettings` originally, which meant one copy per
+ * localStorage origin, one per desktop state dir, and none at all on mobile —
+ * so the native pickers rendered the full unfiltered catalog.
+ *
+ * The server keeps serving the *unfiltered* catalog in `server.getConfig`;
+ * only the preference travels. Clients filter at the picker, and the settings
+ * editor needs the hidden entries present so it can render their un-hide
+ * toggles.
+ */
+export const ProviderModelPreferences = Schema.Record(
+  ProviderInstanceId,
+  Schema.Struct({
+    hiddenModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+    modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  }),
+);
+export type ProviderModelPreferences = typeof ProviderModelPreferences.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
+  // Timelines fold a settled turn behind "Worked for …" and keep only the last
+  // entry of a work group, which reads well for a finished turn but hides the
+  // step-by-step stream a CLI shows. Turning this on keeps both open.
+  alwaysExpandActivity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Desktop-only: require holding the quit shortcut (Cmd/Ctrl+Q) before the
+  // app quits; a quick tap only shows a hint. Browser clients ignore it.
+  confirmQuit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -76,6 +157,25 @@ export const ClientSettingsSchema = Schema.Struct({
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
   ),
+  fontSizeInterface: InterfaceFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
+  ),
+  fontSizePrompt: PromptFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROMPT_FONT_SIZE)),
+  ),
+  fontSizeCode: CodeFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CODE_FONT_SIZE)),
+  ),
+  fontSizeTerminal: TerminalFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TERMINAL_FONT_SIZE)),
+  ),
+  fontFamilyCode: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  fontFamilyComposer: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  fontFamilySans: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  fontFamilyTerminal: FontFamilyPreference.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // Grayscale `-webkit-font-smoothing: antialiased` (thinner strokes);
+  // disabling restores the platform's heavier default. No effect off macOS.
+  fontSmoothing: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Model favorites. Historically keyed by provider kind, now
   // widened to `ProviderInstanceId` so users can favorite a specific model
   // on a custom provider instance (e.g. "Codex Personal · gpt-5") without
@@ -92,18 +192,34 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  providerModelPreferences: Schema.Record(
-    ProviderInstanceId,
-    Schema.Struct({
-      hiddenModels: Schema.Array(Schema.String).pipe(
-        Schema.withDecodingDefault(Effect.succeed([])),
-      ),
-      modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * @deprecated Migration shim only — the live value is
+   * `ServerSettings.providerModelPreferences`.
+   *
+   * Retained under the original key so the one-time upload in
+   * `migrateLegacyProviderModelPreferences` can still find what this device
+   * wrote before the setting became server-authoritative; decoding it away
+   * would silently discard every hide the user had already configured. The
+   * migration clears it once the server has the value, and
+   * `mergeEnvironmentSettings` always resolves this key from the server so a
+   * stale copy can never shadow the synced one.
+   */
+  providerModelPreferences: ProviderModelPreferences.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // Legacy plan mode. The composer's Build/Plan toggle was removed from the
+  // default UI; this beta flag restores it (plus the /plan and /default slash
+  // commands) for users who still rely on the old workflow.
+  planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Legacy sidebar (the original per-project tree). Deliberately a fresh key
+  // (was `sidebarV2Enabled` + `sidebarV2ConfiguredByUser`): decoding drops the
+  // old keys, so everyone, including prior beta opt-outs, resets to the new
+  // default sidebar.
+  legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
+  sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -120,13 +236,6 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
-  sidebarV2Enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // Whether `sidebarV2Enabled` reflects an explicit choice in Settings → Beta.
-  // Client settings persist as a whole blob, so every user who has ever touched
-  // any setting already has `sidebarV2Enabled: false` stored — without this bit
-  // there is no way to tell that apart from "left alone", and a channel-derived
-  // default could never reach them. Mirrors `updateChannelConfiguredByUser`.
-  sidebarV2ConfiguredByUser: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
@@ -138,8 +247,9 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 
 // ── Server Settings (server-authoritative) ────────────────────
 
-export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
-export type ThreadEnvMode = typeof ThreadEnvMode.Type;
+// Moved to environment.ts so orchestration contracts can use it without an
+// import cycle; re-exported here for compatibility with deep imports.
+export { ThreadEnvMode } from "./environment.ts";
 
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
@@ -298,31 +408,13 @@ export const CursorSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    binaryPath: makeBinaryPathSetting("cursor-agent").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the Cursor agent binary.",
-        providerSettingsForm: { placeholder: "cursor-agent", clearWhenEmpty: "omit" },
-      }),
-    ),
-    apiEndpoint: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "API endpoint",
-        description: "Override the Cursor API endpoint for this instance.",
-        providerSettingsForm: {
-          placeholder: "https://...",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
   {
-    order: ["binaryPath", "apiEndpoint"],
+    order: [],
   },
 );
 export type CursorSettings = typeof CursorSettings.Type;
@@ -350,6 +442,189 @@ export const GrokSettings = makeProviderSettingsSchema(
   },
 );
 export type GrokSettings = typeof GrokSettings.Type;
+
+export const AcpRegistryDistributionPreference = Schema.Literals(["auto", "binary", "npx", "uvx"]);
+export type AcpRegistryDistributionPreference = typeof AcpRegistryDistributionPreference.Type;
+
+export const AcpRegistrySettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    agentId: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Registry agent ID",
+        description: "Agent identifier from the official ACP Registry, for example 'devin'.",
+        providerSettingsForm: { placeholder: "devin", clearWhenEmpty: "persist" },
+      }),
+    ),
+    commandPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Executable override",
+        description:
+          "Optional local executable to use instead of installing the registry distribution. Registry arguments and environment are still applied.",
+        providerSettingsForm: { placeholder: "devin", clearWhenEmpty: "omit" },
+      }),
+    ),
+    authMethodId: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Authentication method",
+        description:
+          "Optional ACP authentication method ID. By default, the first agent-managed method is selected.",
+        providerSettingsForm: { placeholder: "auto", clearWhenEmpty: "omit" },
+      }),
+    ),
+    distribution: AcpRegistryDistributionPreference.pipe(
+      Schema.withDecodingDefault(Effect.succeed("auto")),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["agentId", "commandPath", "authMethodId"],
+  },
+);
+export type AcpRegistrySettings = typeof AcpRegistrySettings.Type;
+
+export const HermesAcpSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("hermes").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to a Hermes Agent CLI that exposes the `hermes acp` stdio protocol.",
+        providerSettingsForm: {
+          placeholder: "hermes",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type HermesAcpSettings = typeof HermesAcpSettings.Type;
+
+const SENSITIVE_QUERY_KEYS = new Set(["access_token", "apikey", "api_key", "password", "token"]);
+const hasSensitiveQueryKey = (url: URL): boolean =>
+  [...url.searchParams.keys()].some((key) => SENSITIVE_QUERY_KEYS.has(key.toLowerCase()));
+
+const OpenClawGatewayUrl = TrimmedString.check(
+  Schema.makeFilter((value) => {
+    if (value === "") return true;
+    let gatewayUrl: URL;
+    try {
+      gatewayUrl = new URL(value);
+    } catch {
+      return "OpenClaw Gateway URL must be a valid ws:// or wss:// URL.";
+    }
+    const hasSecretQuery = hasSensitiveQueryKey(gatewayUrl);
+    return (
+      (["ws:", "wss:"].includes(gatewayUrl.protocol) &&
+        !gatewayUrl.username &&
+        !gatewayUrl.password &&
+        !gatewayUrl.hash &&
+        !hasSecretQuery) ||
+      "OpenClaw Gateway URL must be credential-free; use environment, --token-file, or --password-file authentication."
+    );
+  }),
+);
+
+export const OpenClawSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("openclaw").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the OpenClaw CLI binary that exposes `openclaw acp`.",
+        providerSettingsForm: {
+          placeholder: "openclaw",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    url: OpenClawGatewayUrl.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Gateway URL",
+        description: "Optional OpenClaw Gateway URL passed to `openclaw acp --url`.",
+        providerSettingsForm: {
+          placeholder: "ws://127.0.0.1:18789",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    tokenFile: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Token file",
+        description:
+          "Optional path passed to `--token-file`. The token itself is never placed on the command line.",
+        providerSettingsForm: {
+          placeholder: "/path/to/openclaw-token",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    passwordFile: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Password file",
+        description:
+          "Optional path passed to `--password-file`. The password itself is never placed on the command line.",
+        providerSettingsForm: {
+          placeholder: "/path/to/openclaw-password",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    session: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Gateway session",
+        description: "Optional OpenClaw Gateway session override passed to `--session`.",
+        providerSettingsForm: {
+          placeholder: "agent:main:main",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    resetSession: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Reset gateway session",
+        description: "Start `openclaw acp` with `--reset-session`.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "persist" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "url", "tokenFile", "passwordFile", "session", "resetSession"],
+  },
+);
+export type OpenClawSettings = typeof OpenClawSettings.Type;
 
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
@@ -400,6 +675,125 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
   },
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
+
+const HermesGatewayEndpoint = TrimmedString.check(
+  Schema.makeFilter((value) => {
+    if (value === "") return true;
+    let endpoint: URL;
+    try {
+      endpoint = new URL(value);
+    } catch {
+      return "Hermes endpoint must be a valid WebSocket URL.";
+    }
+    const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpoint.hostname);
+    const hasToken = hasSensitiveQueryKey(endpoint);
+    return (
+      (((endpoint.protocol === "ws:" && loopback) || (endpoint.protocol === "wss:" && !loopback)) &&
+        !endpoint.username &&
+        !endpoint.password &&
+        !endpoint.hash &&
+        !hasToken) ||
+      "Hermes endpoint must be credential-free loopback ws:// or remote wss://; supply authentication through sensitive provider environment."
+    );
+  }),
+);
+
+const HermesProfileKey = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+);
+
+const HermesFeatureSwitch = (defaultValue: boolean, title: string, description: string) =>
+  Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(defaultValue)),
+    Schema.annotateKey({
+      title,
+      description,
+      providerSettingsForm: { control: "switch", clearWhenEmpty: "persist" },
+    }),
+  );
+
+export const HermesSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    endpoint: HermesGatewayEndpoint.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Gateway endpoint",
+        description:
+          "Leave blank to use ws://127.0.0.1:9119/api/ws. T3 attaches there first and can start Hermes Serve when it is unused.",
+        providerSettingsForm: {
+          placeholder: "ws://127.0.0.1:9119/api/ws",
+          clearWhenEmpty: "persist",
+        },
+      }),
+    ),
+    remoteAccessEnabled: HermesFeatureSwitch(
+      false,
+      "Remote gateway",
+      "Allow this instance to connect to a credential-free wss:// endpoint.",
+    ),
+    profileKey: HermesProfileKey.pipe(
+      Schema.withDecodingDefault(Effect.succeed("default")),
+      Schema.annotateKey({
+        title: "Profile key",
+        description: "Durable Hermes profile containing the sessions owned by this instance.",
+        providerSettingsForm: { placeholder: "default", clearWhenEmpty: "persist" },
+      }),
+    ),
+    managedServerEnabled: HermesFeatureSwitch(
+      true,
+      "Start Hermes automatically",
+      "Attach to a compatible gateway at this endpoint, or launch and supervise `hermes serve` when no local gateway is running.",
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    importEnabled: HermesFeatureSwitch(
+      false,
+      "Profile import",
+      "Expose import controls only when the gateway advertises a compatible import API.",
+    ),
+    mcpEnabled: HermesFeatureSwitch(
+      true,
+      "MCP",
+      "Allow MCP only when session-scoped registration and revocation are advertised.",
+    ),
+    attachmentsEnabled: HermesFeatureSwitch(
+      true,
+      "Attachments",
+      "Allow attachment uploads supported by the connected gateway.",
+    ),
+    proactiveEnabled: HermesFeatureSwitch(
+      true,
+      "Proactive mode",
+      "Keep Hermes threads subscribed so gateway-side runs stream in on their own, and answer requests those runs raise. Off still shows that work — it arrives when the thread is opened instead.",
+    ),
+    voiceEnabled: HermesFeatureSwitch(
+      false,
+      "Voice",
+      "Allow voice features only when explicitly supported by the gateway.",
+    ),
+  },
+  {
+    order: [
+      "endpoint",
+      "profileKey",
+      "managedServerEnabled",
+      "remoteAccessEnabled",
+      "importEnabled",
+      "mcpEnabled",
+      "attachmentsEnabled",
+      "proactiveEnabled",
+      "voiceEnabled",
+    ],
+  },
+);
+export type HermesSettings = typeof HermesSettings.Type;
 
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -468,7 +862,14 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const ServerSettings = Schema.Struct({
-  enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Legacy token-by-token assistant output. Deliberately a fresh key (was
+  // `enableAssistantStreaming`): decoding drops the old key, so everyone,
+  // including prior opt-ins, resets to the buffered default.
+  enableLegacyTokenStreaming: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  enableHermes: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  enableRemoteHermes: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
@@ -498,6 +899,12 @@ export const ServerSettings = Schema.Struct({
       Effect.succeed({
         instanceId: ProviderInstanceId.make("codex"),
         model: DEFAULT_TEXT_GENERATION_MODEL,
+        options: [
+          {
+            id: "reasoningEffort",
+            value: DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+          },
+        ],
       }),
     ),
   ),
@@ -519,6 +926,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
@@ -529,7 +937,33 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  providerModelPreferences: ProviderModelPreferences.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // Set once the client has copied a pre-sync, device-local
+  // `providerModelPreferences` up to the server. Without the marker every
+  // client would re-upload its own stale copy on every boot and clobber the
+  // others; see `migrateLegacyProviderModelPreferences`.
+  providerModelPreferencesMigrated: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Proactive mode shipped as opt-out, but every Hermes instance created
+  // before that has `proactiveEnabled: false` written into its config blob by
+  // the old default — a stored value a new schema default can never reach.
+  // The server rewrites those once and records it here, so a user who then
+  // turns the switch back off is not overruled on the next boot.
+  hermesProactiveDefaultApplied: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  // `t3.json` is the source of truth for a project's actions, so a project
+  // whose actions only ever existed in the database needs the file written
+  // once. Recorded here rather than inferred from a missing file: without a
+  // marker, every boot would recreate a `t3.json` the user deliberately
+  // deleted.
+  projectFileBackfillApplied: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -604,8 +1038,6 @@ const ClaudeSettingsPatch = Schema.Struct({
 
 const CursorSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  apiEndpoint: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
@@ -623,9 +1055,25 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const HermesSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  endpoint: Schema.optionalKey(HermesGatewayEndpoint),
+  remoteAccessEnabled: Schema.optionalKey(Schema.Boolean),
+  profileKey: Schema.optionalKey(HermesProfileKey),
+  managedServerEnabled: Schema.optionalKey(Schema.Boolean),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  importEnabled: Schema.optionalKey(Schema.Boolean),
+  mcpEnabled: Schema.optionalKey(Schema.Boolean),
+  attachmentsEnabled: Schema.optionalKey(Schema.Boolean),
+  proactiveEnabled: Schema.optionalKey(Schema.Boolean),
+  voiceEnabled: Schema.optionalKey(Schema.Boolean),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
-  enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
+  enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
+  enableHermes: Schema.optionalKey(Schema.Boolean),
+  enableRemoteHermes: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
@@ -662,6 +1110,7 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
+      hermes: Schema.optionalKey(HermesSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
     }),
   ),
@@ -670,16 +1119,33 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-map replacement, for the same reason as `providerInstances`: the web
+  // settings editor always sends a fully-formed map.
+  providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
+  providerModelPreferencesMigrated: Schema.optionalKey(Schema.Boolean),
+  hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
+  projectFileBackfillApplied: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  alwaysExpandActivity: Schema.optionalKey(Schema.Boolean),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
+  confirmQuit: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),
+  fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
+  fontSizePrompt: Schema.optionalKey(PromptFontSize),
+  fontSizeCode: Schema.optionalKey(CodeFontSize),
+  fontSizeTerminal: Schema.optionalKey(TerminalFontSize),
+  fontFamilyCode: Schema.optionalKey(FontFamilyPreference),
+  fontFamilyComposer: Schema.optionalKey(FontFamilyPreference),
+  fontFamilySans: Schema.optionalKey(FontFamilyPreference),
+  fontFamilyTerminal: Schema.optionalKey(FontFamilyPreference),
+  fontSmoothing: Schema.optionalKey(Schema.Boolean),
   favorites: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -688,20 +1154,12 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
-  providerModelPreferences: Schema.optionalKey(
-    Schema.Record(
-      ProviderInstanceId,
-      Schema.Struct({
-        hiddenModels: Schema.Array(Schema.String).pipe(
-          Schema.withDecodingDefault(Effect.succeed([])),
-        ),
-        modelOrder: Schema.Array(Schema.String).pipe(
-          Schema.withDecodingDefault(Effect.succeed([])),
-        ),
-      }),
-    ),
-  ),
+  /** @deprecated Migration shim — patched only to clear the legacy copy. */
+  providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
+  planModeEnabled: Schema.optionalKey(Schema.Boolean),
+  legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
+  sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
@@ -709,8 +1167,6 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
-  sidebarV2Enabled: Schema.optionalKey(Schema.Boolean),
-  sidebarV2ConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });

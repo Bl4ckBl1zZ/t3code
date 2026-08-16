@@ -1,3 +1,4 @@
+import { LiquidGlassView } from "@callstack/liquid-glass";
 import { MenuView } from "@react-native-menu/menu";
 import * as Haptics from "expo-haptics";
 import {
@@ -6,30 +7,65 @@ import {
   type ComponentProps,
   type ReactElement,
   type ReactNode,
+  useRef,
 } from "react";
 import { Platform, Pressable, useColorScheme, View } from "react-native";
 import { useThemeColor } from "../lib/useThemeColor";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 
 import { cn } from "../lib/cn";
 import { AndroidAnchoredMenu } from "./AndroidAnchoredMenu";
-import { SymbolView } from "./AppSymbol";
+import { AnimatedSymbolSwap, SymbolView } from "./AppSymbol";
 import { AppText as Text } from "./AppText";
 
 export function ControlPill(props: {
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly iconNode?: ReactNode;
+  /** Morph (zoom-crossfade) between icons when `icon` changes instead of snapping. */
+  readonly animateIconChanges?: boolean;
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly onPress?: () => void;
+  readonly onLongPress?: () => void;
+  readonly activateOnPressIn?: boolean;
   readonly variant?: "circle" | "pill" | "primary" | "danger";
   readonly disabled?: boolean;
+  readonly className?: string;
+  /**
+   * Render the circle as an interactive LiquidGlassView on iOS 26+ so a menu
+   * anchored to it presents as glass morphing out of glass. Icon-only circles
+   * only; falls back to the standard styling when unsupported.
+   */
+  readonly glass?: boolean;
 }) {
   const variant = props.variant ?? "circle";
+  const isDarkMode = useColorScheme() === "dark";
+  const activatedOnPressInRef = useRef(false);
+
+  const handlePressIn = () => {
+    activatedOnPressInRef.current = true;
+    props.onPress?.();
+  };
+  const handlePressOut = () => {
+    // Pressability invokes onPressOut immediately before onPress on release.
+    // Defer the reset so onPress can identify the same physical gesture.
+    setTimeout(() => {
+      activatedOnPressInRef.current = false;
+    }, 0);
+  };
+  const handlePress = () => {
+    if (activatedOnPressInRef.current) {
+      return;
+    }
+    props.onPress?.();
+  };
 
   const iconColor = useThemeColor("--color-icon");
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const primaryFg = useThemeColor("--color-primary-foreground");
   const dangerFg = useThemeColor("--color-danger-foreground");
+  const primaryBg = useThemeColor("--color-primary");
+  const dangerBg = useThemeColor("--color-danger");
   const iconTintColor =
     variant === "primary"
       ? props.disabled
@@ -54,6 +90,7 @@ export function ControlPill(props: {
       : variant === "danger"
         ? "bg-danger"
         : "bg-subtle",
+    props.className,
   );
   const labelClassName = cn(
     "text-center text-xs font-t3-bold",
@@ -64,18 +101,79 @@ export function ControlPill(props: {
       : "",
   );
 
+  if (props.glass && NATIVE_LIQUID_GLASS_SUPPORTED && isCircle) {
+    return (
+      <LiquidGlassView
+        effect="regular"
+        interactive
+        colorScheme={isDarkMode ? "dark" : "light"}
+        tintColor={
+          variant === "primary" && !props.disabled
+            ? primaryBg
+            : variant === "danger"
+              ? dangerBg
+              : undefined
+        }
+        style={{
+          alignItems: "center",
+          borderRadius: 22,
+          height: 44,
+          justifyContent: "center",
+          opacity: props.disabled ? 0.55 : 1,
+          width: 44,
+        }}
+      >
+        <Pressable
+          accessibilityLabel={props.accessibilityLabel ?? props.label}
+          accessibilityRole="button"
+          onPress={props.onPress}
+          onLongPress={props.onLongPress}
+          disabled={props.disabled}
+          className="h-11 w-11 items-center justify-center"
+        >
+          {props.iconNode ? (
+            <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
+          ) : props.icon ? (
+            props.animateIconChanges ? (
+              <AnimatedSymbolSwap
+                name={props.icon}
+                size={16}
+                tintColor={iconTintColor}
+                type="monochrome"
+              />
+            ) : (
+              <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+            )
+          ) : null}
+        </Pressable>
+      </LiquidGlassView>
+    );
+  }
+
   return (
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
-      onPress={props.onPress}
+      onPress={props.activateOnPressIn ? handlePress : props.onPress}
+      onPressIn={props.activateOnPressIn ? handlePressIn : undefined}
+      onPressOut={props.activateOnPressIn ? handlePressOut : undefined}
+      onLongPress={props.onLongPress}
       disabled={props.disabled}
       className={containerClassName}
     >
       {props.iconNode ? (
         <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
       ) : props.icon ? (
-        <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        props.animateIconChanges ? (
+          <AnimatedSymbolSwap
+            name={props.icon}
+            size={16}
+            tintColor={iconTintColor}
+            type="monochrome"
+          />
+        ) : (
+          <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        )
       ) : null}
       {props.label ? <Text className={labelClassName}>{props.label}</Text> : null}
     </Pressable>
@@ -133,9 +231,25 @@ export function ControlPillMenu(
   }
 
   const { className: _className, ...menuProps } = props;
+  let children = menuProps.children;
+  // In long-press mode the wrapped pressable still receives the touch (the
+  // patched MenuView button is touch-transparent) and RN's Fabric touch
+  // handler is never cancelled by the in-tree UIContextMenuInteraction, so a
+  // bare onPress would fire on finger-up even after the menu opened — and
+  // also on a long press released just under the menu threshold. A dispatched
+  // onLongPress makes Pressability swallow the release, so holds past 350ms
+  // (below the ~500ms context-menu threshold) can only open the menu, never
+  // tap through.
+  if (props.shouldOpenOnLongPress && isValidElement(children)) {
+    const child = children as ReactElement<{ onLongPress?: () => void; delayLongPress?: number }>;
+    children = cloneElement(child, {
+      onLongPress: child.props.onLongPress ?? (() => undefined),
+      delayLongPress: child.props.delayLongPress ?? 350,
+    });
+  }
   return (
     <MenuView {...menuProps} themeVariant={isDarkMode ? "dark" : "light"}>
-      {menuProps.children}
+      {children}
     </MenuView>
   );
 }

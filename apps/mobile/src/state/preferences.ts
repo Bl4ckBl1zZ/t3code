@@ -1,7 +1,10 @@
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useCallback } from "react";
 
 import { MobilePreferencesStore, type Preferences } from "../persistence/mobile-preferences";
+import type { MobileWorkspace } from "../lib/mobileWorkspace";
 import * as Runtime from "../lib/runtime";
 
 export {
@@ -122,3 +125,46 @@ export const mobilePreferencesState = createMobilePreferencesState(mobilePrefere
 
 export const mobilePreferencesAtom = mobilePreferencesState.preferencesAtom;
 export const updateMobilePreferencesAtom = mobilePreferencesState.updatePreferencesAtom;
+
+/**
+ * Scoped project key of the project the user last started a task in, plus the
+ * writer the new-task flow calls when they pick a different one. `null` until a
+ * project has been chosen (or while preferences are still loading), which every
+ * caller reads as "fall back to my own default".
+ */
+export function useLastNewTaskProjectKey(): readonly [string | null, (projectKey: string) => void] {
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const lastNewTaskProjectKey = AsyncResult.isSuccess(preferences)
+    ? (preferences.value.lastNewTaskProjectKey ?? null)
+    : null;
+  const setLastNewTaskProjectKey = useCallback(
+    (projectKey: string) => {
+      // Reselecting the same project happens on every re-entry into the flow;
+      // skip it so the preference blob is not rewritten for nothing.
+      if (projectKey.length === 0 || projectKey === lastNewTaskProjectKey) {
+        return;
+      }
+      updatePreferences({ lastNewTaskProjectKey: projectKey });
+    },
+    [lastNewTaskProjectKey, updatePreferences],
+  );
+  return [lastNewTaskProjectKey, setLastNewTaskProjectKey] as const;
+}
+
+export function useMobileWorkspace(): readonly [
+  MobileWorkspace,
+  (workspace: MobileWorkspace) => void,
+] {
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const workspace =
+    AsyncResult.isSuccess(preferences) && preferences.value.workspace === "work" ? "work" : "code";
+  const setWorkspace = useCallback(
+    (nextWorkspace: MobileWorkspace) => {
+      updatePreferences({ workspace: nextWorkspace });
+    },
+    [updatePreferences],
+  );
+  return [workspace, setWorkspace] as const;
+}

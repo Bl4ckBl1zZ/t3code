@@ -1,6 +1,11 @@
 "use client";
 
-import type { PreviewViewportSetting, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  DesktopPreviewDeviceEmulation,
+  PreviewViewportSetting,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
+import { resolvePreviewDeviceEmulation } from "@t3tools/shared/previewViewport";
 import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -228,6 +233,32 @@ export function HostedBrowserWebview(props: {
     if (!wrapper) return;
     wrapper.scrollTo({ left: 0, top: 0 });
   }, [runtimeTabId, viewport._tag, viewportHeight, viewportWidth]);
+
+  // Serialized so the effect only fires when the emulated identity actually
+  // changes, not on every viewport object identity change.
+  const deviceEmulationJson = JSON.stringify(resolvePreviewDeviceEmulation(viewport));
+  useEffect(() => {
+    const bridge = previewBridge;
+    if (!bridge?.setDeviceEmulation) return;
+    let disposed = false;
+    const lease = tabLeaseRef.current;
+    void (async () => {
+      try {
+        // Wait for the main-process tab so this cannot race tab creation.
+        await lease?.ready;
+        if (disposed) return;
+        await bridge.setDeviceEmulation(
+          runtimeTabId,
+          JSON.parse(deviceEmulationJson) as DesktopPreviewDeviceEmulation | null,
+        );
+      } catch {
+        // Tab teardown races are benign; the next viewport change retries.
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [deviceEmulationJson, runtimeTabId]);
 
   if (!config) return null;
 

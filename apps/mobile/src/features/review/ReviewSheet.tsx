@@ -39,6 +39,7 @@ import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useThreadDraftForThread } from "../../state/use-thread-composer-state";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
 import {
@@ -54,7 +55,7 @@ import { useThreadSelection } from "../../state/use-thread-selection";
 import { vcsEnvironment } from "../../state/vcs";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { ThreadGitMenu } from "../threads/ThreadGitControls";
-import { useReviewCacheForThread } from "./reviewState";
+import { setReviewSelectedFilePath, useReviewCacheForThread } from "./reviewState";
 import {
   isNativeReviewDiffDrawEvent,
   type NativeReviewDiffViewHandle,
@@ -277,9 +278,11 @@ function ReviewFileNavigator({
         // The nested native header is translucent; start the list below it so
         // the scroll-edge effect can sample the content (same treatment as
         // FileTreeBrowser in the Files pane).
-        paddingTop: Platform.OS === "ios" ? insets.top + 44 + 8 : 8,
+        paddingTop: Platform.OS === "ios" ? insets.top + IOS_NAV_BAR_HEIGHT + 8 : 8,
       }}
-      scrollIndicatorInsets={Platform.OS === "ios" ? { top: insets.top + 44 } : undefined}
+      scrollIndicatorInsets={
+        Platform.OS === "ios" ? { top: insets.top + IOS_NAV_BAR_HEIGHT } : undefined
+      }
       renderItem={renderFile}
     />
   );
@@ -481,6 +484,26 @@ export function ReviewSheet(props: ReviewSheetProps) {
     },
     [],
   );
+
+  // Consume a file preselected from outside the review (e.g. a changed-files
+  // row in the thread feed): once the section's diff is parsed, scroll to it.
+  // The path is cleared unconditionally so a stale entry can't re-trigger.
+  const preselectedFilePath = reviewCache.selectedFilePath;
+  useEffect(() => {
+    if (preselectedFilePath === null || reviewCache.threadKey === null) {
+      return;
+    }
+    if (parsedDiff.kind !== "files" || reviewFiles.length === 0) {
+      return;
+    }
+    setReviewSelectedFilePath(reviewCache.threadKey, null);
+    const target = reviewFiles.find(
+      (file) => file.path === preselectedFilePath || file.previousPath === preselectedFilePath,
+    );
+    if (target) {
+      handleSelectFile(target.id);
+    }
+  }, [handleSelectFile, parsedDiff.kind, preselectedFilePath, reviewCache.threadKey, reviewFiles]);
   const renderInspector = useCallback(
     () => (
       <ReviewFileNavigator

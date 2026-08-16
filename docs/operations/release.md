@@ -13,11 +13,12 @@ This document covers the unified release workflow for stable and nightly desktop
   - manual `workflow_dispatch` for either channel
 - Runs quality gates first: lint, typecheck, test.
 - Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging clients.
-- Builds four artifacts in parallel for both channels:
+- Builds five artifacts in parallel for both channels:
   - macOS `arm64` DMG
   - macOS `x64` DMG
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
+  - Windows `arm64` NSIS installer
 - Publishes one GitHub Release with all produced files.
   - Stable tags with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - Only plain stable `X.Y.Z` releases are marked as the repository's latest release.
@@ -34,14 +35,15 @@ This document covers the unified release workflow for stable and nightly desktop
 
 ## Required release credentials
 
-The release workflow requires these GitHub Actions secrets in addition to the platform and deployment
+Stable releases require these GitHub Actions secrets in addition to the platform and deployment
 credentials documented below:
 
 - `RELEASE_APP_ID`
 - `RELEASE_APP_PRIVATE_KEY`
 
-The GitHub Release job uses them to mint the token that publishes release assets. Stable releases use
-them again in the finalize job, which can commit and push aligned package versions to `main`.
+The finalize job uses them to commit and push aligned package versions to `main` as the Release App.
+GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
+independent from the shared Release App installation.
 
 ## T3 Connect relay deployment
 
@@ -102,6 +104,14 @@ database migrations. Cloudflare Worker logs provide initial operational diagnost
 external tracing account. Production adopts the configured relay API and tunnel DNS zones as retained
 Cloudflare resources. Personal stages reference the production-owned zones.
 
+The relay also serves the `t3.json` JSON Schema at `/schema/t3.json`,
+unauthenticated, generated from the contracts it was built with. That is what
+`$schema` in a project's `t3.json` points at (for production,
+`https://relay.8u9yhy8fewf.org/schema/t3.json`), so editors validate project
+files against the same build the relay is running. A stage serves its own copy
+and stamps its own address as the schema's `$id`; no extra domain or deploy is
+involved.
+
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
@@ -127,6 +137,13 @@ Optional GitHub Actions variables:
 - `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
 - `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
 - `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
+- `T3CODE_PROJECT_FILE_SCHEMA_URL`: overrides where `t3.json` files are told to
+  find their JSON Schema. Unset, the server derives it from the relay it talks
+  to (`<relay>/schema/t3.json`), which is where the relay publishes it — see
+  [T3 Connect relay deployment](#t3-connect-relay-deployment). Only override it
+  for a host serving _this_ build's document: the schema forbids additional
+  properties, so a copy from a different build makes editors reject every field
+  the two do not share. A `$schema` already written in a file is always kept.
 
 Required Vercel domains:
 
@@ -194,8 +211,10 @@ the **Update server** action targeting a package version that does not exist yet
 
 For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
 connect the new client to a server on the previous version and verify that the update action
-reconnects to the matching server. Test one automatic path and the manual or desktop-managed
-guidance when those environments are available.
+reconnects to the matching server. Use releases with identical migration manifests for the
+automatic path. When the manifest changed, verify that the remote action stops before restart and
+shows the exact local `npx t3@<version> service update` command. Also test the manual or
+desktop-managed guidance when those environments are available.
 
 ## Desktop auto-update notes
 
@@ -217,6 +236,40 @@ guidance when those environments are available.
 - macOS metadata note:
   - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
   - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
+- Windows metadata note:
+  - `electron-updater` reads `latest.yml` on stable and `nightly.yml` on nightly, for both x64 and arm64.
+  - Each Windows build uploads its manifest suffixed as `*-win-<arch>.yml`; the workflow merges the matching pair back into the canonical channel manifest before publishing.
+
+### Windows payload topology and update validation
+
+Windows packages the bundled server and only its runtime-external/native
+dependency closure in `resources/server.asar`. Native modules and helper
+executables declared as unpacked by that archive must be present at the matching
+paths below `resources/server.asar.unpacked`. The Windows-native backend reads
+the archive in place through Electron. WSL cannot read ASAR files, so enabling
+the WSL backend extracts the server tree once into the desktop state directory
+under `wsl-server-tree/<version>` and reuses the completed version until the app
+is updated.
+
+The artifact builder rejects a Windows package when any of these invariants
+break:
+
+- `resources/server.asar` is absent or does not contain the server entry.
+- Any file marked unpacked in the ASAR header is absent from
+  `resources/server.asar.unpacked`.
+- On same-architecture Windows builds, the packaged primary cannot load the fff
+  native library from inside `server.asar` through its `.unpacked` sibling.
+- The isolated, extracted sidecar cannot load the server entry with plain Node.
+- The external Windows resource monitor is absent.
+- The unpacked Windows application contains more than 80 files.
+
+Cross-architecture Windows builds retain every structural and extracted-sidecar
+check, but skip executing the target Electron binary. A same-architecture build
+for each release target must exercise the primary native-load probe.
+
+NSIS differential packaging remains enabled. A sidecar layout transition can
+produce a larger one-time download; subsequent small releases retain their
+blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 
 ## 0) npm OIDC trusted publishing setup (CLI)
 

@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@t3tools/contracts";
+import { AssetPreviewTypeValidationError, ThreadId } from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -69,6 +69,96 @@ describe("AssetAccess", () => {
       expect(yield* resolveAsset(token, "../secret.txt")).toBeNull();
       expect(yield* resolveAsset(token, ".env")).toBeNull();
       expect(yield* resolveAsset(`${token}tampered`, "report.html")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("issues exact-file workspace URLs for video files", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-asset-video-" });
+      const videoPath = path.join(root, "recordings", "demo.webm");
+      yield* fileSystem.makeDirectory(path.join(root, "recordings"), { recursive: true });
+      yield* fileSystem.writeFileString(videoPath, "webm-bytes");
+      const canonicalVideoPath = yield* fileSystem.realPath(videoPath);
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: "recordings/demo.webm",
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+
+      expect(yield* resolveAsset(token, "demo.webm")).toEqual({
+        kind: "file",
+        path: canonicalVideoPath,
+      });
+      expect(yield* resolveAsset(token, "other.webm")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("issues browser artifact URLs by safe media file name only", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const artifactPath = path.join(config.browserArtifactsDir, "browser-recording-demo.webm");
+      yield* fileSystem.writeFileString(artifactPath, "webm-bytes");
+      yield* fileSystem.writeFileString(
+        path.join(config.browserArtifactsDir, "notes.txt"),
+        "not media",
+      );
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "browser-artifact", fileName: "browser-recording-demo.webm" },
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      const resolved = yield* resolveAsset(token, "browser-recording-demo.webm");
+      expect(resolved?.kind).toBe("open-file");
+      if (resolved?.kind !== "open-file") throw new Error("expected an opened browser artifact");
+      expect(resolved.file.name).toBe("browser-recording-demo.webm");
+      expect(yield* Effect.promise(() => new Response(resolved.file.stream()).text())).toBe(
+        "webm-bytes",
+      );
+
+      expect(
+        (yield* issueAssetUrl({
+          resource: { _tag: "browser-artifact", fileName: "notes.txt" },
+        }).pipe(Effect.flip))._tag,
+      ).toBe("AssetBrowserArtifactNotFoundError");
+      expect(
+        (yield* issueAssetUrl({
+          resource: { _tag: "browser-artifact", fileName: "../state.sqlite" },
+        }).pipe(Effect.flip))._tag,
+      ).toBe("AssetBrowserArtifactNotFoundError");
+
+      const outside = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-browser-artifact-outside-",
+      });
+      const outsideVideo = path.join(outside, "outside.webm");
+      const artifactSymlink = path.join(
+        config.browserArtifactsDir,
+        "browser-recording-escape.webm",
+      );
+      yield* fileSystem.writeFileString(outsideVideo, "outside-webm");
+      yield* fileSystem.symlink(outsideVideo, artifactSymlink);
+      expect(
+        (yield* issueAssetUrl({
+          resource: {
+            _tag: "browser-artifact",
+            fileName: "browser-recording-escape.webm",
+          },
+        }).pipe(Effect.flip))._tag,
+      ).toBe("AssetBrowserArtifactNotFoundError");
+
+      yield* fileSystem.remove(artifactPath);
+      yield* fileSystem.symlink(outsideVideo, artifactPath);
+      expect(yield* resolveAsset(token, "browser-recording-demo.webm")).toBeNull();
     }).pipe(Effect.provide(testLayer)),
   );
 
@@ -225,6 +315,7 @@ describe("AssetAccess", () => {
       const faviconResult = yield* issueAssetUrl({
         resource: { _tag: "project-favicon", cwd: root },
       });
+      expect(faviconResult.sourcePath).toBe("favicon.svg");
       expect(faviconResult.relativeUrl).toMatch(/\/v[0-9a-f]{64}-favicon\.svg$/);
       expect(
         yield* issueAssetUrl({
@@ -253,6 +344,7 @@ describe("AssetAccess", () => {
         resource: { _tag: "project-favicon", cwd: root },
       });
       expect(fallbackResult.relativeUrl.endsWith(`/${PROJECT_FAVICON_FALLBACK_MARKER}`)).toBe(true);
+      expect(fallbackResult.sourcePath).toBeUndefined();
       const fallbackSuffix = fallbackResult.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const fallbackSeparatorIndex = fallbackSuffix.indexOf("/");
       expect(
@@ -261,6 +353,86 @@ describe("AssetAccess", () => {
           fallbackSuffix.slice(fallbackSeparatorIndex + 1),
         ),
       ).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("issues project favicon capabilities for a saved override", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-favicon-override-",
+      });
+      yield* fileSystem.makeDirectory(path.join(root, "brand"));
+      yield* fileSystem.writeFileString(path.join(root, "brand", "custom.svg"), "<svg />");
+      yield* fileSystem.writeFileString(path.join(root, "favicon.svg"), "<svg>auto</svg>");
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "project-favicon", cwd: root },
+        projectFaviconPath: "brand/custom.svg",
+      });
+
+      expect(result.sourcePath).toBe("brand/custom.svg");
+      expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-custom\.svg$/);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("ignores a client favicon path hint", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-favicon-hint-",
+      });
+      yield* fileSystem.makeDirectory(path.join(root, "brand"));
+      yield* fileSystem.writeFileString(path.join(root, "brand", "hint.svg"), "<svg>hint</svg>");
+      yield* fileSystem.writeFileString(path.join(root, "brand", "saved.svg"), "<svg>saved</svg>");
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "project-favicon", cwd: root, path: "brand/hint.svg" },
+        projectFaviconPath: "brand/saved.svg",
+      });
+
+      expect(result.sourcePath).toBe("brand/saved.svg");
+      expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-saved\.svg$/);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps automatic favicon resolution separate from a saved override", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-favicon-automatic-",
+      });
+      yield* fileSystem.makeDirectory(path.join(root, "brand"));
+      yield* fileSystem.writeFileString(path.join(root, "brand", "saved.svg"), "<svg>saved</svg>");
+      yield* fileSystem.writeFileString(path.join(root, "favicon.svg"), "<svg>automatic</svg>");
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "project-favicon", cwd: root },
+      });
+
+      expect(result.sourcePath).toBe("favicon.svg");
+      expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-favicon\.svg$/);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("rejects a resolved project favicon with a non-image extension", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-favicon-type-",
+      });
+      yield* fileSystem.writeFileString(path.join(root, "secret.txt"), "not an image");
+
+      const error = yield* issueAssetUrl({
+        resource: { _tag: "project-favicon", cwd: root },
+        projectFaviconPath: "secret.txt",
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(AssetPreviewTypeValidationError);
     }).pipe(Effect.provide(testLayer)),
   );
 

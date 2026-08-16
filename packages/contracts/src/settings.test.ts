@@ -6,6 +6,9 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   DEFAULT_SERVER_SETTINGS,
+  HermesAcpSettings,
+  HermesSettings,
+  OpenClawSettings,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -15,6 +18,9 @@ const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
+const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
+const decodeHermesAcpSettings = Schema.decodeUnknownSync(HermesAcpSettings);
+const decodeOpenClawSettings = Schema.decodeUnknownSync(OpenClawSettings);
 
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
@@ -67,42 +73,44 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
-describe("ClientSettings sidebar v2", () => {
-  it("defaults the beta off with a three-day auto-settle threshold", () => {
+describe("ClientSettings sidebar", () => {
+  it("defaults to the current sidebar with automatic merge and inactivity settling", () => {
     const settings = decodeClientSettings({});
-    expect(settings.sidebarV2Enabled).toBe(false);
+    expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
+    expect(settings.sidebarAutoSettleOnMerge).toBe(true);
   });
 
-  it("treats settings written before the beta had a per-channel default as unconfigured", () => {
-    // The stored blob always carries `sidebarV2Enabled`, so only the companion
-    // flag can distinguish "user opted out" from "never touched it".
-    expect(decodeClientSettings({ sidebarV2Enabled: false }).sidebarV2ConfiguredByUser).toBe(false);
-    expect(decodeClientSettings({ sidebarV2Enabled: true }).sidebarV2ConfiguredByUser).toBe(false);
-  });
-
-  it("preserves an explicit beta choice", () => {
-    const settings = decodeClientSettings({
+  it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
+    const decoded = decodeClientSettings({
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(settings.sidebarV2Enabled).toBe(false);
-    expect(settings.sidebarV2ConfiguredByUser).toBe(true);
+    expect(decoded.legacySidebarEnabled).toBe(false);
+    expect(decoded).not.toHaveProperty("sidebarV2Enabled");
+    expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
-  it("carries an explicit beta opt-out through the patch the beta toggle writes", () => {
-    const patch = decodeClientSettingsPatch({
-      sidebarV2Enabled: false,
-      sidebarV2ConfiguredByUser: true,
-    });
-    expect(patch.sidebarV2Enabled).toBe(false);
-    expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+  it("preserves an explicit legacy sidebar opt-in", () => {
+    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
+    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
+      true,
+    );
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {
     expect(
       decodeClientSettings({ sidebarAutoSettleAfterDays: null }).sidebarAutoSettleAfterDays,
     ).toBeNull();
+  });
+
+  it("allows auto-settle on merge to be disabled", () => {
+    expect(decodeClientSettings({ sidebarAutoSettleOnMerge: false }).sidebarAutoSettleOnMerge).toBe(
+      false,
+    );
+    expect(
+      decodeClientSettingsPatch({ sidebarAutoSettleOnMerge: false }).sidebarAutoSettleOnMerge,
+    ).toBe(false);
   });
 
   it.each([-1, 0, 91])("rejects an auto-settle threshold outside 1..90: %s", (value) => {
@@ -112,6 +120,14 @@ describe("ClientSettings sidebar v2", () => {
 });
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
+  it("defaults text generation to Luna at low reasoning effort", () => {
+    expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-luna",
+      options: [{ id: "reasoningEffort", value: "low" }],
+    });
+  });
+
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });
@@ -167,6 +183,156 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("ServerSettings Hermes rollout", () => {
+  it("defaults the global feature off and accepts an explicit instance envelope", () => {
+    expect(decodeServerSettings({}).enableHermes).toBe(false);
+    expect(decodeServerSettings({}).enableRemoteHermes).toBe(false);
+    expect(decodeServerSettingsPatch({ enableHermes: true }).enableHermes).toBe(true);
+    expect(decodeServerSettingsPatch({ enableRemoteHermes: true }).enableRemoteHermes).toBe(true);
+    expect(
+      decodeServerSettingsPatch({
+        providers: { hermes: { managedServerEnabled: false } },
+      }).providers?.hermes?.managedServerEnabled,
+    ).toBe(false);
+
+    const decoded = decodeServerSettings({
+      enableHermes: true,
+      providerInstances: {
+        hermes_local: {
+          driver: "hermes",
+          enabled: true,
+          environment: [
+            {
+              name: "HERMES_GATEWAY_TOKEN",
+              value: "",
+              sensitive: true,
+              valueRedacted: true,
+            },
+          ],
+          config: {
+            endpoint: "ws://127.0.0.1:9119/api/ws",
+            profileKey: "real-profile",
+          },
+        },
+      },
+    });
+
+    expect(decoded.providerInstances[ProviderInstanceId.make("hermes_local")]).toMatchObject({
+      driver: "hermes",
+      enabled: true,
+      config: {
+        endpoint: "ws://127.0.0.1:9119/api/ws",
+        profileKey: "real-profile",
+      },
+    });
+    expect(decoded.providers.hermes).toEqual({
+      enabled: false,
+      endpoint: "",
+      remoteAccessEnabled: false,
+      profileKey: "default",
+      managedServerEnabled: true,
+      customModels: [],
+      importEnabled: false,
+      mcpEnabled: true,
+      attachmentsEnabled: true,
+      proactiveEnabled: true,
+      voiceEnabled: false,
+    });
+  });
+
+  it("accepts dormant encrypted remote configuration but rejects plaintext or credentials", () => {
+    expect(
+      decodeHermesSettings({
+        endpoint: "wss://gateway.example.com/api/ws",
+        profileKey: "profile",
+      }),
+    ).toMatchObject({
+      endpoint: "wss://gateway.example.com/api/ws",
+      remoteAccessEnabled: false,
+    });
+    expect(() =>
+      decodeHermesSettings({
+        endpoint: "ws://gateway.example.com/api/ws",
+        profileKey: "profile",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeHermesSettings({
+        endpoint: "ws://127.0.0.1:9119/api/ws?token=plain-text-secret",
+        profileKey: "profile",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("Hermes in Code ACP settings", () => {
+  it("defaults to the real Hermes ACP executable boundary", () => {
+    expect(decodeHermesAcpSettings({})).toEqual({
+      enabled: true,
+      binaryPath: "hermes",
+      customModels: [],
+    });
+  });
+
+  it("preserves an explicit executable and custom model list", () => {
+    expect(
+      decodeHermesAcpSettings({
+        binaryPath: "/opt/hermes/bin/hermes",
+        customModels: ["openrouter/model"],
+      }),
+    ).toMatchObject({
+      binaryPath: "/opt/hermes/bin/hermes",
+      customModels: ["openrouter/model"],
+    });
+  });
+});
+
+describe("OpenClaw ACP settings", () => {
+  it("defaults to OpenClaw's normal config and environment boundary", () => {
+    expect(decodeOpenClawSettings({})).toEqual({
+      enabled: true,
+      binaryPath: "openclaw",
+      url: "",
+      tokenFile: "",
+      passwordFile: "",
+      session: "",
+      resetSession: false,
+      customModels: [],
+    });
+  });
+
+  it("accepts file-based authentication and gateway session overrides", () => {
+    expect(
+      decodeOpenClawSettings({
+        url: "wss://gateway.example.com",
+        tokenFile: "/run/secrets/openclaw-token",
+        passwordFile: "/run/secrets/openclaw-password",
+        session: "agent:main:main",
+        resetSession: true,
+      }),
+    ).toMatchObject({
+      url: "wss://gateway.example.com",
+      tokenFile: "/run/secrets/openclaw-token",
+      passwordFile: "/run/secrets/openclaw-password",
+      session: "agent:main:main",
+      resetSession: true,
+    });
+  });
+
+  it("rejects credentials embedded in the Gateway URL", () => {
+    expect(() =>
+      decodeOpenClawSettings({
+        url: "wss://gateway.example.com?token=plain-text-secret",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeOpenClawSettings({
+        url: "wss://user:password@gateway.example.com",
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin on for legacy configs", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(true);
@@ -176,6 +342,40 @@ describe("ServerSettings worktree defaults", () => {
     expect(
       decodeServerSettingsPatch({ newWorktreesStartFromOrigin: false }).newWorktreesStartFromOrigin,
     ).toBe(false);
+  });
+});
+
+describe("ServerSettings Cursor legacy settings", () => {
+  it("ignores obsolete Cursor CLI settings when reading server settings", () => {
+    const decoded = decodeServerSettings({
+      providers: {
+        cursor: {
+          enabled: true,
+          binaryPath: "cursor-agent",
+          apiEndpoint: "http://127.0.0.1:3774",
+        },
+      },
+    });
+
+    expect(decoded.providers.cursor.enabled).toBe(true);
+    expect(decoded.providers.cursor).not.toHaveProperty("binaryPath");
+    expect(decoded.providers.cursor).not.toHaveProperty("apiEndpoint");
+  });
+
+  it("ignores obsolete Cursor CLI settings in patches", () => {
+    const patch = decodeServerSettingsPatch({
+      providers: {
+        cursor: {
+          enabled: true,
+          binaryPath: "cursor-agent",
+          apiEndpoint: "http://127.0.0.1:3774",
+        },
+      },
+    });
+
+    expect(patch.providers?.cursor?.enabled).toBe(true);
+    expect(patch.providers?.cursor).not.toHaveProperty("binaryPath");
+    expect(patch.providers?.cursor).not.toHaveProperty("apiEndpoint");
   });
 });
 

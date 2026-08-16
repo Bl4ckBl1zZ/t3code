@@ -199,6 +199,83 @@ const VcsStatusChangeRequest = Schema.Struct({
   state: VcsStatusChangeRequestState,
 });
 
+/**
+ * What happened to a file, as git's `status --porcelain=v2` XY codes report it.
+ *
+ * `M` and `T` both land on `modified`: a type change (a file becoming a symlink)
+ * is still a content change to every consumer, and nothing downstream renders
+ * the two differently.
+ */
+export const VcsWorkingTreeFileChangeKind = Schema.Literals([
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+  "copied",
+  "untracked",
+  "conflicted",
+]);
+export type VcsWorkingTreeFileChangeKind = typeof VcsWorkingTreeFileChangeKind.Type;
+
+/**
+ * One changed path in the working tree.
+ *
+ * `insertions`/`deletions` come from `git diff HEAD --numstat`, which folds the
+ * index and the working tree into a single entry per path — so they cannot say
+ * what kind of change it was or which side of the index it is on. The three
+ * `*ChangeKind` fields carry that, read from the porcelain XY codes.
+ *
+ * Every field below `deletions` is optional: a server older than this field set
+ * omits them, and clients must keep working when they are absent rather than
+ * reading their absence as "unchanged".
+ */
+export const VcsWorkingTreeFile = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  /**
+   * Lines added by the combined index + working-tree change, versus HEAD. Zero
+   * is meaningful: an untracked or binary file numstat cannot score reports 0.
+   */
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  /**
+   * The file's overall change versus HEAD. A working-tree deletion wins over
+   * whatever the index holds (the file is gone from disk either way); otherwise
+   * the index side wins, because it describes what a commit would record.
+   */
+  changeKind: Schema.optional(VcsWorkingTreeFileChangeKind),
+  /**
+   * What the index records against HEAD, when it differs. Absent means nothing
+   * is staged for this path — that is the staged-ness flag.
+   */
+  stagedChangeKind: Schema.optional(VcsWorkingTreeFileChangeKind),
+  /**
+   * What the working tree records against the index, when it differs. Present
+   * alongside `stagedChangeKind` for a file that was staged and then edited
+   * again.
+   */
+  unstagedChangeKind: Schema.optional(VcsWorkingTreeFileChangeKind),
+  /** Where a renamed or copied file came from. */
+  originalPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type VcsWorkingTreeFile = typeof VcsWorkingTreeFile.Type;
+
+/**
+ * What this ref has committed on top of its base, from
+ * `git diff <baseRef>...HEAD --numstat`.
+ *
+ * The working-tree stat goes to zero the moment an agent commits, so it cannot
+ * answer "what did this thread change" on its own. This is the other half, and
+ * it is what the diff panel shows once the working tree is clean.
+ */
+export const VcsBranchDiffStat = Schema.Struct({
+  /** The ref the range was measured against, e.g. `origin/main`. */
+  baseRef: TrimmedNonEmptyStringSchema,
+  filesChanged: NonNegativeInt,
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type VcsBranchDiffStat = typeof VcsBranchDiffStat.Type;
+
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
@@ -207,16 +284,17 @@ const VcsStatusLocalShape = {
   refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
   hasWorkingTreeChanges: Schema.Boolean,
   workingTree: Schema.Struct({
-    files: Schema.Array(
-      Schema.Struct({
-        path: TrimmedNonEmptyStringSchema,
-        insertions: NonNegativeInt,
-        deletions: NonNegativeInt,
-      }),
-    ),
+    files: Schema.Array(VcsWorkingTreeFile),
     insertions: NonNegativeInt,
     deletions: NonNegativeInt,
   }),
+  /**
+   * Null when no base ref resolves (a default branch, a detached HEAD, a repo
+   * with no remote) or when the ref has no commits of its own. Optional because
+   * a server older than this field omits it entirely; clients must not read its
+   * absence as "nothing changed".
+   */
+  branchDiff: Schema.optional(Schema.NullOr(VcsBranchDiffStat)),
 };
 
 const VcsStatusRemoteShape = {
@@ -276,6 +354,12 @@ export const GitPreparePullRequestThreadResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
   branch: TrimmedNonEmptyStringSchema,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  /**
+   * False when the checkout could not be brought to the pull request head — a reused worktree
+   * holding local commits or uncommitted changes keeps its own state, so the code being handed
+   * over is older than the pull request.
+   */
+  isOnPullRequestHead: Schema.Boolean,
 });
 export type GitPreparePullRequestThreadResult = typeof GitPreparePullRequestThreadResult.Type;
 

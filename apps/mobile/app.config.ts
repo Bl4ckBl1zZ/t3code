@@ -19,6 +19,13 @@ const managedIosBuildNumber = repoEnv.T3CODE_IOS_BUILD_NUMBER?.trim();
 const managedIosProvisioningProfile = repoEnv.T3CODE_IOS_PROVISIONING_PROFILE?.trim();
 const managedIosWidgetsProvisioningProfile =
   repoEnv.T3CODE_IOS_WIDGETS_PROVISIONING_PROFILE?.trim();
+const managedIosSharingProvisioningProfile =
+  repoEnv.T3CODE_IOS_SHARING_PROVISIONING_PROFILE?.trim();
+// "Apple Development" for a local archive, "Apple Distribution" for App Store
+// releases. Signing an App Store archive with the development identity fails at
+// export with an opaque profile mismatch, so the release pipeline sets this.
+const managedIosSigningIdentity =
+  repoEnv.T3CODE_IOS_SIGNING_IDENTITY?.trim() || "Apple Development";
 const expoProjectId = repoEnv.T3CODE_EXPO_PROJECT_ID?.trim();
 const expoOwner = repoEnv.T3CODE_EXPO_OWNER?.trim();
 const isIosManualSigningEnabled =
@@ -193,16 +200,20 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       enabled: isIosSharingExtensionEnabled,
       extensionBundleIdentifier: `${iosBundleIdentifier}.sharing`,
       appGroupId: iosAppGroupIdentifier,
+      // Uploads are written into the project for the agent to read, so any
+      // file type is useful now — not just images.
       activationRule: {
         supportsText: true,
         supportsWebUrlWithMaxCount: 1,
         supportsImageWithMaxCount: 8,
+        supportsMovieWithMaxCount: 8,
+        supportsFileWithMaxCount: 8,
       },
     },
     android: {
       enabled: true,
-      singleShareMimeTypes: ["text/plain", "image/*"],
-      multipleShareMimeTypes: ["image/*"],
+      singleShareMimeTypes: ["text/plain", "*/*"],
+      multipleShareMimeTypes: ["*/*"],
     },
   },
 ];
@@ -222,6 +233,10 @@ const manualSigningPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
     appleTeamId: managedIosAppleTeamId!,
     appProfileSpecifier: managedIosProvisioningProfile!,
     widgetProfileSpecifier: managedIosWidgetsProvisioningProfile!,
+    identity: managedIosSigningIdentity,
+    ...(managedIosSharingProvisioningProfile
+      ? { sharingProfileSpecifier: managedIosSharingProvisioningProfile }
+      : {}),
   },
 ];
 
@@ -239,7 +254,7 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "1.0.1",
+  version: "1.0.4",
   runtimeVersion: {
     // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
     // project — native deps, config plugins, AND patches/ — matches the update.
@@ -325,6 +340,12 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    // First in the list on purpose: same-type mods run last-registered-first,
+    // so registering earliest makes this run LAST, once expo-sharing and
+    // expo-widgets have created the targets it has to sign. Registered next to
+    // the other iOS plugins instead, it ran before the sharing extension
+    // existed and prebuild failed looking for it.
+    ...(isIosManualSigningEnabled ? [manualSigningPlugin] : []),
     "expo-asset",
     [
       "expo-audio",
@@ -382,7 +403,8 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
+        cameraPermission:
+          "Allow T3 Code to access your camera so you can scan pairing QR codes and take photos to attach to messages.",
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
@@ -416,6 +438,7 @@ const config: ExpoConfig = {
       },
     ],
     "./plugins/withIosCocoaPodsUuidCache.cjs",
+    "./plugins/withIosCcache.cjs",
     [
       "./plugins/withIosExpoConfigEnvironment.cjs",
       {
@@ -429,10 +452,14 @@ const config: ExpoConfig = {
             iosNotificationsMode === "development" ? "sandbox" : "production",
           T3CODE_IOS_ASSOCIATED_DOMAINS: isIosAssociatedDomainsEnabled ? "1" : "0",
           T3CODE_IOS_SHARING_EXTENSION: isIosSharingExtensionEnabled ? "1" : "0",
+          // The widget and sharing extensions bake CFBundleVersion from this
+          // at prebuild; without it in the sandbox snapshot they archive as
+          // '1' and Xcode rejects the mismatch with the parent app's injected
+          // build number.
+          ...(managedIosBuildNumber ? { T3CODE_IOS_BUILD_NUMBER: managedIosBuildNumber } : {}),
         },
       },
     ],
-    ...(isIosManualSigningEnabled ? [manualSigningPlugin] : []),
     // Must be listed BEFORE expo-widgets: same-type mods run last-registered-
     // first, so registering earlier makes this plugin's mods run AFTER
     // expo-widgets' — its dangerous mod wipes ios/ExpoWidgetsTarget/ (which
@@ -445,6 +472,7 @@ const config: ExpoConfig = {
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",
+    "./plugins/withAndroidTabletOrientation.cjs",
     ...(isIosPersonalTeamBuild ? ["./plugins/withoutIosPersonalTeamCapabilities.cjs"] : []),
   ],
   extra: {

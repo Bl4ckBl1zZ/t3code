@@ -16,6 +16,7 @@ export type ModelOption = {
   readonly providerLabel: string;
   readonly providerDriver: string;
   readonly isDefault: boolean;
+  readonly isLegacy: boolean;
   readonly capabilities: ModelCapabilities | null;
   readonly selection: ModelSelection;
 };
@@ -83,9 +84,75 @@ export function resolveSelectableModelSelection(
     : null;
 }
 
+/**
+ * Like resolveSelectableModelSelection, but additionally rejects legacy
+ * models. Used for implicit defaults (stored draft, project last-used): a
+ * new thread should never quietly start on a legacy model, so those fall
+ * through to the provider's default instead. Explicit picks in the settings
+ * sheet are unaffected.
+ */
+export function resolveDefaultableModelSelection(
+  config: T3ServerConfig | null | undefined,
+  selection: ModelSelection | null,
+): ModelSelection | null {
+  const usable = resolveSelectableModelSelection(config, selection);
+  if (!usable || !config) {
+    return usable;
+  }
+  const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
+  const model = provider?.models.find((candidate) => candidate.slug === usable.model);
+  return model?.isLegacy === true ? null : usable;
+}
+
+/**
+ * Which providers a picker may offer. Hermes is the T3 Work assistant and the
+ * only thing T3 Work runs on, and it is not a coding provider — so a T3 Work
+ * picker lists Hermes and nothing else, and a Code picker lists everything
+ * else. "all" is for surfaces that are neither, such as automations.
+ */
+export type ModelOptionProviderScope = "all" | "hermes-only" | "exclude-hermes";
+
+function matchesProviderScope(driver: string, scope: ModelOptionProviderScope): boolean {
+  if (scope === "all") return true;
+  return scope === "hermes-only" ? driver === "hermes" : driver !== "hermes";
+}
+
+/**
+ * Applies the user's model visibility and ordering for one provider instance,
+ * mirroring `applyInstanceModelPreferences` in `apps/web/src/modelSelection.ts`.
+ *
+ * Custom models are never hidden — the web settings editor omits the hide
+ * toggle for them, so a hand-typed slug can only be removed by deleting it.
+ */
+function applyModelPreferences<T extends { readonly slug: string; readonly isCustom?: boolean }>(
+  models: ReadonlyArray<T>,
+  preferences:
+    | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
+    | undefined,
+): ReadonlyArray<T> {
+  if (!preferences) return models;
+
+  const hidden = new Set(preferences.hiddenModels);
+  const visible = models.filter((model) => model.isCustom === true || !hidden.has(model.slug));
+  if (preferences.modelOrder.length === 0) return visible;
+
+  // Ordered slugs first, everything else keeping its catalog position behind
+  // them. `Array.prototype.sort` is stable, so equal ranks preserve order.
+  const rankBySlug = new Map(preferences.modelOrder.map((slug, index) => [slug, index] as const));
+  return [...visible].sort((left, right) => {
+    // Subtracting the ranks would yield NaN for two unordered models, which
+    // silently scrambles the comparator.
+    const leftRank = rankBySlug.get(left.slug) ?? Number.POSITIVE_INFINITY;
+    const rightRank = rankBySlug.get(right.slug) ?? Number.POSITIVE_INFINITY;
+    if (leftRank === rightRank) return 0;
+    return leftRank < rightRank ? -1 : 1;
+  });
+}
+
 export function buildModelOptions(
   config: T3ServerConfig | null | undefined,
   fallbackModelSelection: ModelSelection | null,
+  providerScope: ModelOptionProviderScope = "all",
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();
 
@@ -93,9 +160,18 @@ export function buildModelOptions(
     if (!provider.enabled || !provider.installed || provider.auth.status === "unauthenticated") {
       continue;
     }
+    if (!matchesProviderScope(provider.driver, providerScope)) {
+      continue;
+    }
 
     const providerLabel = providerDisplayLabel(provider);
-    for (const model of provider.models) {
+    const visibleModels = applyModelPreferences(
+      provider.models,
+      // Optional all the way down: a server that predates the setting sends no
+      // `providerModelPreferences`, and callers hand us partial configs.
+      config?.settings?.providerModelPreferences?.[provider.instanceId],
+    );
+    for (const model of visibleModels) {
       const key = `${provider.instanceId}:${model.slug}`;
       options.set(key, {
         key,
@@ -105,6 +181,7 @@ export function buildModelOptions(
         providerLabel,
         providerDriver: provider.driver,
         isDefault: model.isDefault === true,
+        isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
         selection: normalizeSelectionOptions(
           {
@@ -135,6 +212,7 @@ export function buildModelOptions(
         providerLabel,
         providerDriver: fallbackModelSelection.instanceId,
         isDefault: false,
+        isLegacy: false,
         capabilities: null,
         selection: fallbackModelSelection,
       });

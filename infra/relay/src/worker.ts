@@ -16,6 +16,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 import { RelayApi } from "@t3tools/contracts/relay";
+import { t3ProjectFileSchemaUrl } from "@t3tools/shared/t3ProjectFile";
 
 import {
   clientApi,
@@ -26,9 +27,11 @@ import {
   relayClientAuthLayer,
   relayDpopClientAuthLayer,
   relayCors,
+  RELAY_MAX_PATH_PARAM_LENGTH,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
+  relayProjectFileSchemaRoute,
   serverApi,
   traceRelayHttpRequestWith,
   tokenApi,
@@ -74,6 +77,11 @@ const webcryptoLayer = Layer.succeed(
 );
 
 const httpPlatformNotSupportedLayer = Layer.succeed(HttpPlatform.HttpPlatform, {
+  platform: "web",
+  compression: {
+    algorithms: new Set<HttpPlatform.CompressionAlgorithm>(),
+    compressResponse: (response) => Effect.succeed(response),
+  },
   fileResponse: () => Effect.die("Relay API does not serve filesystem responses"),
   fileWebResponse: () => Effect.die("Relay API does not serve file responses"),
 });
@@ -315,10 +323,17 @@ export const ApiLive = Api.make(
         ),
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         relayDocsRedirectRoute,
+        relayProjectFileSchemaRoute(t3ProjectFileSchemaUrl(relayPublicOrigin)),
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
+      // Delegated-task thread ids exceed find-my-way's default 100-character
+      // path-parameter limit, which makes the router treat the route as
+      // unmatched and surfaces as a 500 instead of handling the publish.
+      Effect.provideService(HttpRouter.RouterConfig, {
+        maxParamLength: RELAY_MAX_PATH_PARAM_LENGTH,
+      }),
       withoutCapturedParentSpan,
       Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, Layer.empty)),
     );

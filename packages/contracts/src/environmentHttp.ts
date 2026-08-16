@@ -27,12 +27,16 @@ import {
 import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
-  ClientOrchestrationCommand,
-  DispatchResult,
-  OrchestrationReadModel,
-  OrchestrationShellSnapshot,
-  OrchestrationThreadDetailSnapshot,
-} from "./orchestration.ts";
+  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ThreadDetailSnapshot,
+} from "./orchestrationV2.ts";
+import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
+import {
+  PullRequestDiffInput,
+  PullRequestDiffResult,
+  PullRequestOperationError,
+  PullRequestUnavailableError,
+} from "./pullRequest.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -81,9 +85,10 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "pairing_link_revoke_failed",
   "client_sessions_load_failed",
   "client_session_revoke_failed",
+  "project_snapshot_failed",
+  "project_mutation_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
-  "orchestration_dispatch_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -100,6 +105,10 @@ export class EnvironmentRequestInvalidError extends Schema.TaggedErrorClass<Envi
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentRequestInvalidError)(this, { status: 400 });
   }
+
+  override get message(): string {
+    return `The environment rejected the request (${this.reason}).`;
+  }
 }
 
 export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<EnvironmentAuthInvalidError>()(
@@ -113,6 +122,10 @@ export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<Environ
 ) {
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentAuthInvalidError)(this, { status: 401 });
+  }
+
+  override get message(): string {
+    return `The environment rejected this client's credentials (${this.reason}).`;
   }
 }
 
@@ -128,6 +141,10 @@ export class EnvironmentScopeRequiredError extends Schema.TaggedErrorClass<Envir
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentScopeRequiredError)(this, { status: 403 });
   }
+
+  override get message(): string {
+    return `This request needs the ${this.requiredScope} scope, which this client does not have.`;
+  }
 }
 
 export class EnvironmentOperationForbiddenError extends Schema.TaggedErrorClass<EnvironmentOperationForbiddenError>()(
@@ -142,6 +159,10 @@ export class EnvironmentOperationForbiddenError extends Schema.TaggedErrorClass<
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentOperationForbiddenError)(this, { status: 403 });
   }
+
+  override get message(): string {
+    return `The environment refused this operation (${this.reason}).`;
+  }
 }
 
 export class EnvironmentInternalError extends Schema.TaggedErrorClass<EnvironmentInternalError>()(
@@ -155,6 +176,10 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
 ) {
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentInternalError)(this, { status: 500 });
+  }
+
+  override get message(): string {
+    return `The environment failed to answer this request (${this.reason}).`;
   }
 }
 
@@ -172,6 +197,10 @@ export class EnvironmentResourceNotFoundError extends Schema.TaggedErrorClass<En
 ) {
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentResourceNotFoundError)(this, { status: 404 });
+  }
+
+  override get message(): string {
+    return `The environment could not find what this request named (${this.reason}).`;
   }
 }
 
@@ -286,6 +315,10 @@ const EnvironmentSessionRevokeErrors = [
   EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentProjectSnapshotErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentOrchestrationSnapshotErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -295,7 +328,7 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
 ] as const;
-const EnvironmentOrchestrationDispatchErrors = [
+const EnvironmentProjectMutationErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -371,11 +404,43 @@ export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
 });
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 
-export class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
-  HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
-    success: ExecutionEnvironmentDescriptor,
-  }),
-) {}
+// Lightweight agent-activity probe for the desktop auto-update idle gate.
+// Intentionally coarse (a count, no thread ids or titles) so it can sit on the
+// same unauthenticated well-known surface as the environment descriptor.
+export const EnvironmentActivitySnapshot = Schema.Struct({
+  // Threads whose latest run is in a non-terminal status (preparing, queued,
+  // starting, running, waiting) — i.e. agent work would be lost on restart.
+  activeRunCount: Schema.Number,
+  // Commands that outlived the turn that launched them and are still running.
+  // A separate count because it is exactly the case `activeRunCount` misses:
+  // the turn is settled, so the thread looks idle, while a `run_in_background`
+  // command keeps going and would die with the provider CLI process on restart.
+  //
+  // Optional so a response from a backend that predates the field still decodes.
+  // Absent reads as zero rather than as busy: the alternative strands a desktop
+  // on an old backend with auto-update permanently deferred and nothing on
+  // screen to explain why, and `activeRunCount` still guards the common case.
+  backgroundProcessCount: Schema.optional(Schema.Number),
+  // Whether any live provider session is holding work outside an active turn.
+  // Same tolerance and default as the count above, and deliberately a separate
+  // yes/no: it comes from the adapters rather than the projection, so it covers
+  // what no turn item records — a Codex subagent the CLI will resume later, an
+  // ACP wake buffer that has not drained.
+  pendingBackgroundWork: Schema.optional(Schema.Boolean),
+});
+export type EnvironmentActivitySnapshot = typeof EnvironmentActivitySnapshot.Type;
+
+export class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
+  .add(
+    HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
+      success: ExecutionEnvironmentDescriptor,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("activity", "/.well-known/t3/activity", {
+      success: EnvironmentActivitySnapshot,
+    }),
+  ) {}
 
 export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
   .add(
@@ -457,18 +522,22 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
+const EnvironmentOrchestrationThreadSnapshotQuery = Schema.Struct({
+  /**
+   * Windows the snapshot to roughly the last N visible turn items; the
+   * projection reports what was omitted via `truncatedVisibleItemCount`.
+   * Omit for the complete history.
+   */
+  maxVisibleItems: Schema.optional(
+    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+});
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
-  .add(
-    HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
-      headers: OptionalBearerHeaders,
-      success: OrchestrationReadModel,
-      error: EnvironmentOrchestrationSnapshotErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
   .add(
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
       headers: OptionalBearerHeaders,
-      success: OrchestrationShellSnapshot,
+      success: OrchestrationV2ShellSnapshot,
       error: EnvironmentOrchestrationSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
@@ -476,18 +545,44 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
-      success: OrchestrationThreadDetailSnapshot,
+      query: EnvironmentOrchestrationThreadSnapshotQuery,
+      success: OrchestrationV2ThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
+  .add(
+    HttpApiEndpoint.get("snapshot", "/api/projects", {
+      headers: OptionalBearerHeaders,
+      success: ProjectSnapshot,
+      error: EnvironmentProjectSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {
+    HttpApiEndpoint.post("mutate", "/api/projects/mutate", {
       headers: OptionalBearerHeaders,
-      payload: ClientOrchestrationCommand,
-      success: DispatchResult,
-      error: EnvironmentOrchestrationDispatchErrors,
+      payload: ProjectMutation,
+      success: Project,
+      error: EnvironmentProjectMutationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
+
+/** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
+export class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
+  HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
+    headers: OptionalBearerHeaders,
+    payload: PullRequestDiffInput,
+    success: PullRequestDiffResult,
+    error: [
+      PullRequestUnavailableError,
+      PullRequestOperationError,
+      EnvironmentAuthInvalidError,
+      EnvironmentScopeRequiredError,
+      EnvironmentInternalError,
+    ],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
 
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
@@ -554,4 +649,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentProjectsHttpApi)
+  .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

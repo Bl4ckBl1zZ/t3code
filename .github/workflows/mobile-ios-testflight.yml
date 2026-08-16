@@ -1,0 +1,141 @@
+name: iOS TestFlight
+
+# Builds and ships iOS releases: xcodebuild archive -> export -> upload.
+#
+# The client is the native SwiftUI app in apps/swift-ios. Its Xcode project is
+# checked in, so there is no `expo prebuild` step and no CocoaPods — the whole
+# JS toolchain is only here to run scripts/ios-release.ts, which resolves
+# identity and the build number.
+
+# Every merge to main ships: main is the TestFlight branch, and the build always
+# tracks the newest commit on it. Tags are matched too, under both conventions
+# used here, so a deliberate release can also be cut by hand:
+#
+#   git tag fork-v0.2.0 && git push origin fork-v0.2.0
+#
+# A tag has to be pushed by a human or a PAT to take effect. The fork-v* tags
+# fork-macos-release.yml publishes on every merge are created with the default
+# GITHUB_TOKEN, and GitHub does not start workflow runs from events that token
+# creates, so they never double-trigger the push-to-main build below.
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+      - "fork-v*"
+  workflow_dispatch:
+    inputs:
+      build-number:
+        description: "Override the build number instead of asking App Store Connect"
+        required: false
+        type: string
+      skip-upload:
+        description: "Archive and export without uploading to TestFlight"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  # Newest merge wins: a merge landing mid-archive cancels the run in flight and
+  # restarts from the newer commit, so TestFlight only ever receives head of main
+  # rather than a build that was already stale when it finished.
+  #
+  # The cost is real and was hit before: an archive takes ~40 minutes, so on a day
+  # with merges closer together than that, every run is cancelled and nothing
+  # reaches TestFlight. If that recurs, ship from a tag or a manual dispatch —
+  # both still work, and the concurrency group is shared so they cancel too.
+  #
+  # The build number is re-resolved from App Store Connect at the start of every
+  # run (scripts/ios-release.ts identity), so a cancelled run does not strand one.
+  cancel-in-progress: true
+
+jobs:
+  build-and-submit:
+    name: Build iOS app and submit to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 120
+    environment:
+      name: production
+    env:
+      # Compiled into the binary as Xcode build settings rather than resolved at
+      # runtime, so a missing value ships a build that cannot sign in. The
+      # script asserts both are present before archiving.
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      # Deliberately not `https://${{ vars.RELAY_DOMAIN }}`: with the variable
+      # unset that yields a truthy "https://", which passes the config check and
+      # ships a build that cannot reach the relay.
+      T3CODE_RELAY_URL: ${{ vars.RELAY_DOMAIN && format('https://{0}', vars.RELAY_DOMAIN) || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Expose pnpm
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Materialize signing credentials
+        id: credentials
+        env:
+          APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          APPLE_MAIN_PROFILE_BASE64: ${{ secrets.APPLE_MAIN_APPSTORE_PROFILE_BASE64 }}
+          APPLE_WIDGETS_PROFILE_BASE64: ${{ secrets.APPLE_WIDGETS_APPSTORE_PROFILE_BASE64 }}
+          APPLE_SHARING_PROFILE_BASE64: ${{ secrets.APPLE_SHARING_APPSTORE_PROFILE_BASE64 }}
+          APPLE_API_KEY_VALUE: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          # Outside the workspace so no key can be committed by accident.
+          credentials="${RUNNER_TEMP}/ios-credentials"
+          mkdir -p "$credentials"
+          chmod 700 "$credentials"
+          printf '%s' "$APPLE_DISTRIBUTION_P12_BASE64" | base64 -d > "$credentials/distribution.p12"
+          printf '%s' "$APPLE_MAIN_PROFILE_BASE64" | base64 -d > "$credentials/main.mobileprovision"
+          printf '%s' "$APPLE_WIDGETS_PROFILE_BASE64" | base64 -d > "$credentials/widgets.mobileprovision"
+          printf '%s' "$APPLE_SHARING_PROFILE_BASE64" | base64 -d > "$credentials/sharing.mobileprovision"
+          printf '%s' "$APPLE_API_KEY_VALUE" > "$credentials/asc-api-key.p8"
+          echo "dir=$credentials" >> "$GITHUB_OUTPUT"
+
+      - name: Build and upload to TestFlight
+        env:
+          APPLE_DISTRIBUTION_P12: ${{ steps.credentials.outputs.dir }}/distribution.p12
+          APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          APPLE_MAIN_PROFILE: ${{ steps.credentials.outputs.dir }}/main.mobileprovision
+          APPLE_WIDGETS_PROFILE: ${{ steps.credentials.outputs.dir }}/widgets.mobileprovision
+          APPLE_SHARING_PROFILE: ${{ steps.credentials.outputs.dir }}/sharing.mobileprovision
+          ASC_API_KEY_PATH: ${{ steps.credentials.outputs.dir }}/asc-api-key.p8
+          ASC_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER }}
+          # The fork's App Store Connect record; overridable so another fork can
+          # point at its own.
+          ASC_APP_ID: ${{ vars.ASC_APP_ID || '6796384276' }}
+          T3CODE_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
+          # Only main and release tags reach TestFlight. Dispatching this against
+          # a branch archives and exports but stops short of uploading, which is
+          # what makes it safe to prove the pipeline out on a branch.
+          SKIP_UPLOAD: >-
+            ${{ (inputs.skip-upload || (github.ref != 'refs/heads/main'
+            && !startsWith(github.ref, 'refs/tags/'))) && '1' || '' }}
+        run: ./apps/swift-ios/Scripts/testflight.sh
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-production-ipa
+          path: apps/swift-ios/build/export/*.ipa
+          if-no-files-found: warn

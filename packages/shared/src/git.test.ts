@@ -7,6 +7,7 @@ import {
   isTemporaryWorktreeBranch,
   normalizeGitRemoteUrl,
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
+  resolveThreadChangeStat,
   WORKTREE_BRANCH_PREFIX,
 } from "./git.ts";
 
@@ -38,6 +39,15 @@ describe("normalizeGitRemoteUrl", () => {
     );
     expect(normalizeGitRemoteUrl("ssh://git@gitlab.company.com:2222/team/project.git")).toBe(
       "gitlab.company.com/team/project",
+    );
+  });
+
+  it("normalizes SCP-like remotes with non-git SSH users", () => {
+    expect(normalizeGitRemoteUrl("gitlab@gitlab.example.com:group/project.git")).toBe(
+      "gitlab.example.com/group/project",
+    );
+    expect(normalizeGitRemoteUrl("deploy@bitbucket.org:workspace/repo.git")).toBe(
+      "bitbucket.org/workspace/repo",
     );
   });
 });
@@ -141,6 +151,12 @@ describe("applyGitStatusStreamEvent", () => {
         insertions: 1,
         deletions: 0,
       },
+      branchDiff: {
+        baseRef: "origin/main",
+        filesChanged: 5,
+        insertions: 68,
+        deletions: 43,
+      },
       hasUpstream: false,
       aheadCount: 0,
       behindCount: 0,
@@ -161,5 +177,52 @@ describe("applyGitStatusStreamEvent", () => {
       behindCount: 1,
       pr: null,
     });
+  });
+});
+
+describe("resolveThreadChangeStat", () => {
+  const workingTree = {
+    files: [{ path: "src/demo.ts", insertions: 1, deletions: 0 }],
+    insertions: 1,
+    deletions: 0,
+  };
+  const branchDiff = {
+    baseRef: "origin/main",
+    filesChanged: 5,
+    insertions: 68,
+    deletions: 43,
+  };
+
+  it("counts the branch range once the agent has committed its work", () => {
+    expect(
+      resolveThreadChangeStat({
+        hasWorkingTreeChanges: false,
+        workingTree: { files: [], insertions: 0, deletions: 0 },
+        branchDiff,
+      }),
+    ).toEqual({ scope: "branch", filesChanged: 5, insertions: 68, deletions: 43 });
+  });
+
+  it("counts the working tree while edits are uncommitted", () => {
+    expect(
+      resolveThreadChangeStat({ hasWorkingTreeChanges: true, workingTree, branchDiff }),
+    ).toEqual({ scope: "working-tree", filesChanged: 1, insertions: 1, deletions: 0 });
+  });
+
+  it("falls back to the working tree when the server reports no branch range", () => {
+    expect(
+      resolveThreadChangeStat({ hasWorkingTreeChanges: false, workingTree, branchDiff: null }),
+    ).toEqual({ scope: "working-tree", filesChanged: 1, insertions: 1, deletions: 0 });
+    // A server too old to send the field at all.
+    expect(resolveThreadChangeStat({ hasWorkingTreeChanges: false, workingTree })).toEqual({
+      scope: "working-tree",
+      filesChanged: 1,
+      insertions: 1,
+      deletions: 0,
+    });
+  });
+
+  it("has nothing to report without a status", () => {
+    expect(resolveThreadChangeStat(null)).toBeNull();
   });
 });

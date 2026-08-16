@@ -17,7 +17,7 @@ import {
   KeybindingWhen,
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
-import { EditorId } from "./editor.ts";
+import { EditorId, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerSettings } from "./settings.ts";
@@ -68,6 +68,7 @@ export const ServerProviderModel = Schema.Struct({
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
+  isLegacy: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -196,7 +197,11 @@ export const ServerProvider = Schema.Struct({
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
-export const ServerProviders = Schema.Array(ServerProvider);
+// Provider status kinds grow over time (ServerProviderState,
+// ServerProviderAuthStatus, ServerProviderVersionAdvisoryStatus,
+// ServerProviderUpdateStatus); an older client must not fail the whole config
+// decode over one provider it cannot render.
+export const ServerProviders = ForwardCompatibleArray(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
 
 /**
@@ -416,6 +421,8 @@ export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
   cwd: TrimmedNonEmptyString,
+  /** Dedicated non-project workspace used by projectless T3 Work conversations. */
+  t3WorkDirectory: Schema.optionalKey(TrimmedNonEmptyString),
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
   issues: ServerConfigIssues,
@@ -423,12 +430,20 @@ export const ServerConfig = Schema.Struct({
   // Editor ids grow over time; drop ones this build does not know rather than
   // failing the whole config decode.
   availableEditors: ForwardCompatibleArray(EditorId),
+  /**
+   * SSH hosts this environment advertises for remote open-in-editor links.
+   * Absent on servers that predate the feature; empty when the machine has no
+   * sshd or no advertisable name.
+   */
+  remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
   observability: ServerObservability,
   settings: ServerSettings,
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions honor `snapshotMaxVisibleItems` windowing. */
+  threadSnapshotWindow: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -521,9 +536,21 @@ export const ServerConfigStreamEvent = Schema.Union([
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 
+/** Terminal selection recorded by the service launcher for one update. */
+export const ServerSelfUpdateOutcome = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  fromVersion: TrimmedNonEmptyString,
+  targetVersion: TrimmedNonEmptyString,
+  status: Schema.Literals(["committed", "rolled-back", "failed"]),
+  reason: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ServerSelfUpdateOutcome = typeof ServerSelfUpdateOutcome.Type;
+
 export const ServerLifecycleReadyPayload = Schema.Struct({
   at: IsoDateTime,
   environment: ExecutionEnvironmentDescriptor,
+  /** Present when this process resumed a launcher-managed update. */
+  updateOutcome: Schema.optionalKey(ServerSelfUpdateOutcome),
 });
 export type ServerLifecycleReadyPayload = typeof ServerLifecycleReadyPayload.Type;
 
@@ -535,6 +562,13 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   bootstrapThreadId: Schema.optional(ThreadId),
 });
 export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
+
+export const ServerLifecycleLegacyThreadMigrationPayload = Schema.Struct({
+  status: Schema.Union([Schema.Literal("running"), Schema.Literal("complete")]),
+  totalThreadCount: NonNegativeInt,
+});
+export type ServerLifecycleLegacyThreadMigrationPayload =
+  typeof ServerLifecycleLegacyThreadMigrationPayload.Type;
 
 export const ServerLifecycleStreamWelcomeEvent = Schema.Struct({
   version: Schema.Literal(1),
@@ -552,9 +586,19 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
+export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  sequence: NonNegativeInt,
+  type: Schema.Literal("legacyThreadMigration"),
+  payload: ServerLifecycleLegacyThreadMigrationPayload,
+});
+export type ServerLifecycleStreamLegacyThreadMigrationEvent =
+  typeof ServerLifecycleStreamLegacyThreadMigrationEvent.Type;
+
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
+  ServerLifecycleStreamLegacyThreadMigrationEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 
@@ -594,6 +638,8 @@ export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
 export const ServerSelfUpdateResult = Schema.Struct({
   targetVersion: TrimmedNonEmptyString,
   method: ServerSelfUpdateMethod,
+  /** Launcher-generated correlation ID. Absent when talking to older servers. */
+  updateId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ServerSelfUpdateResult = typeof ServerSelfUpdateResult.Type;
 

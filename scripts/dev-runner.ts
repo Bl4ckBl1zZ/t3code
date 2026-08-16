@@ -211,11 +211,6 @@ const optionalBooleanConfig = (name: string): Config.Config<boolean | undefined>
     Config.option,
     Config.map((value) => Option.getOrUndefined(value)),
   );
-const optionalPortConfig = (name: string): Config.Config<number | undefined> =>
-  Config.port(name).pipe(
-    Config.option,
-    Config.map((value) => Option.getOrUndefined(value)),
-  );
 const optionalIntegerConfig = (name: string): Config.Config<number | undefined> =>
   Config.int(name).pipe(
     Config.option,
@@ -339,6 +334,14 @@ export function createDevRunnerEnv({
     } else {
       delete output.T3CODE_HOME;
     }
+
+    // A dev-runner server is never launcher-managed. When the shell that runs
+    // this script was itself spawned by the machine's managed t3 service (an
+    // agent working inside T3 Code), these leak through and the child server
+    // fails startup with "The service launcher started a different t3 version"
+    // (serviceLauncherClient.ts resolveStartup).
+    delete output.T3_SERVICE_LAUNCHER_CONTEXT;
+    delete output.T3_BOOT_SERVICE_UNIT;
 
     if (!isDesktopMode) {
       output.T3CODE_PORT = String(serverPort);
@@ -780,6 +783,14 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
           if (input.devUrl === undefined) {
             env.VITE_DEV_SERVER_URL = shared.url;
           }
+          // A shared origin serves a remote browser, where unbundled dev's
+          // per-module requests each pay a tailnet round trip — a cold module
+          // graph takes minutes to first paint. Bundled dev collapses that to
+          // a few chunk requests. Only defaulted, so T3CODE_BUNDLED_DEV=0
+          // still opts a --share run back out.
+          if (env.T3CODE_BUNDLED_DEV === undefined) {
+            env.T3CODE_BUNDLED_DEV = "1";
+          }
           yield* Effect.logInfo(`[dev-runner] shared on tailnet: ${shared.url}`);
         }
       }
@@ -869,8 +880,11 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   port: Flag.integer("port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
-    Flag.withDescription("Server port override (forwards to T3CODE_PORT)."),
-    Flag.withFallbackConfig(optionalPortConfig("T3CODE_PORT")),
+    Flag.withDescription(
+      "Explicit server port override (forwards to T3CODE_PORT). Ambient T3CODE_PORT values are ignored so a parent dev app cannot pin the child runner to its occupied port.",
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
   ),
   devUrl: Flag.string("dev-url").pipe(
     Flag.withSchema(Schema.URLFromString),

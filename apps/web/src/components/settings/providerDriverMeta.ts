@@ -1,13 +1,28 @@
 import {
+  AcpRegistrySettings,
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
   GrokSettings,
+  HermesAcpSettings,
+  HermesSettings,
+  OpenClawSettings,
   OpenCodeSettings,
   ProviderDriverKind,
+  type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
-import { ClaudeAI, CursorIcon, GrokIcon, type Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import {
+  ACPRegistryIcon,
+  ClaudeAI,
+  CursorIcon,
+  GrokIcon,
+  HermesIcon,
+  type Icon,
+  OpenAI,
+  OpenClawIcon,
+  OpenCodeIcon,
+} from "../Icons";
 
 type ProviderSettingsSchema = {
   readonly fields: Readonly<Record<string, Schema.Top>>;
@@ -24,6 +39,16 @@ export interface ProviderClientDefinition {
   readonly label: string;
   readonly icon: Icon;
   readonly settingsSchema: ProviderSettingsSchema;
+  readonly environmentFields?: readonly ProviderEnvironmentFieldDefinition[];
+  /** Whether this driver has a built-in default instance backed by legacy settings. */
+  readonly hasDefaultInstance?: boolean;
+  /**
+   * Optional browser-safe default instance for built-in drivers that do not
+   * have a legacy `settings.providers.<kind>` mirror. The settings page shows
+   * this disabled template until the user edits it, at which point it is
+   * promoted into `providerInstances`.
+   */
+  readonly defaultInstance?: ProviderInstanceConfig;
   /**
    * Optional short label rendered as a `variant="warning"` badge next to
    * the instance title. Used to flag drivers that still ship under an
@@ -32,6 +57,14 @@ export interface ProviderClientDefinition {
    * built-in default or custom — advertises the same marker.
    */
   readonly badgeLabel?: string;
+}
+
+export interface ProviderEnvironmentFieldDefinition {
+  readonly name: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly placeholder?: string;
+  readonly sensitive?: boolean;
 }
 
 export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
@@ -51,15 +84,91 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
     value: ProviderDriverKind.make("cursor"),
     label: "Cursor",
     icon: CursorIcon,
-    badgeLabel: "Early Access",
     settingsSchema: CursorSettings,
+    environmentFields: [
+      {
+        name: "CURSOR_API_KEY",
+        label: "Cursor API key",
+        description: "Required by the Cursor Agent SDK.",
+        placeholder: "Paste API key",
+        sensitive: true,
+      },
+    ],
   },
   {
     value: ProviderDriverKind.make("grok"),
     label: "Grok",
     icon: GrokIcon,
-    badgeLabel: "Early Access",
     settingsSchema: GrokSettings,
+  },
+  {
+    value: ProviderDriverKind.make("hermes"),
+    label: "Hermes",
+    icon: HermesIcon,
+    badgeLabel: "Preview",
+    settingsSchema: HermesSettings,
+    defaultInstance: {
+      driver: ProviderDriverKind.make("hermes"),
+      enabled: false,
+      config: {
+        endpoint: "",
+        remoteAccessEnabled: false,
+        profileKey: "default",
+        managedServerEnabled: true,
+        customModels: [],
+        importEnabled: false,
+        mcpEnabled: true,
+        attachmentsEnabled: true,
+        proactiveEnabled: true,
+        voiceEnabled: false,
+      },
+    },
+    environmentFields: [
+      {
+        name: "HERMES_GATEWAY_TOKEN",
+        label: "Hermes gateway token",
+        description:
+          "Shared only with the attached gateway or a Hermes Serve process launched by T3.",
+        placeholder: "Paste gateway token",
+        sensitive: true,
+      },
+    ],
+  },
+  {
+    value: ProviderDriverKind.make("openclaw"),
+    label: "OpenClaw",
+    icon: OpenClawIcon,
+    badgeLabel: "ACP",
+    settingsSchema: OpenClawSettings,
+    defaultInstance: {
+      driver: ProviderDriverKind.make("openclaw"),
+      enabled: false,
+      config: {
+        binaryPath: "openclaw",
+        url: "",
+        tokenFile: "",
+        passwordFile: "",
+        session: "",
+        resetSession: false,
+        customModels: [],
+      },
+    },
+  },
+  {
+    value: ProviderDriverKind.make("hermesAcp"),
+    label: "Hermes in Code",
+    icon: HermesIcon,
+    badgeLabel: "ACP",
+    settingsSchema: HermesAcpSettings,
+    hasDefaultInstance: false,
+  },
+  {
+    value: ProviderDriverKind.make("acpRegistry"),
+    label: "ACP Registry",
+    icon: ACPRegistryIcon,
+    badgeLabel: "V2 Preview",
+    settingsSchema: AcpRegistrySettings,
+    hasDefaultInstance: false,
   },
   {
     value: ProviderDriverKind.make("opencode"),

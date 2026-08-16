@@ -33,17 +33,25 @@ describe("relay Voice Input normalization", () => {
     });
   });
 
-  it("filters model discovery by compatible modality", () => {
+  it("keeps only models that understand audio and text and emit text", () => {
     const payload = {
       data: [
         {
-          id: "openai/transcribe",
-          name: "Transcribe",
+          id: "google/gemini-2.5-flash",
+          name: "Gemini 2.5 Flash",
+          architecture: {
+            input_modalities: ["audio", "text", "image"],
+            output_modalities: ["text"],
+          },
+          pricing: { prompt: "0.01", completion: "0.02", audio: "0.001" },
+        },
+        {
+          id: "openai/transcribe-only",
+          name: "Transcribe Only",
           architecture: {
             input_modalities: ["audio"],
             output_modalities: ["text"],
           },
-          pricing: { audio: "0.001" },
         },
         {
           id: "openai/chat",
@@ -52,41 +60,80 @@ describe("relay Voice Input normalization", () => {
             input_modalities: ["text"],
             output_modalities: ["text"],
           },
-          pricing: { prompt: "0.01", completion: "0.02" },
         },
       ],
     };
-    expect(testExports.normalizeModels(payload, "transcription").map((model) => model.id)).toEqual([
-      "openai/gpt-4o-mini-transcribe",
-      "openai/gpt-4o-transcribe",
-      "openai/whisper-large-v3-turbo",
-      "openai/gpt-audio-mini",
-    ]);
-    expect(testExports.normalizeModels(payload, "text").map((model) => model.id)).toEqual([
-      "openai/chat",
+    expect(testExports.normalizeModels(payload, "audio").map((model) => model.id)).toEqual([
+      "google/gemini-2.5-flash",
     ]);
   });
 
-  it("replaces an incompatible persisted transcription model with the default", () => {
-    expect(testExports.resolveTranscriptionModel("openai/gpt-4.1-mini")).toBe(
-      "openai/gpt-4o-mini-transcribe",
-    );
-    expect(testExports.resolveTranscriptionModel("openai/whisper-large-v3-turbo")).toBe(
-      "openai/whisper-large-v3-turbo",
-    );
-    expect(testExports.resolveTranscriptionModel("openai/gpt-4o-transcribe")).toBe(
-      "openai/gpt-4o-transcribe",
-    );
-    expect(testExports.resolveTranscriptionModel("openai/gpt-audio-mini")).toBe(
-      "openai/gpt-audio-mini",
-    );
+  it("normalizes legacy stored settings to the single-model shape", () => {
+    expect(
+      testExports.normalizeStoredSettings({
+        transcriptionModel: "openai/gpt-4o-mini-transcribe",
+        language: "de",
+        cleanup: { enabled: false, model: "openai/gpt-4.1-mini" },
+        dictionary: ["T3 Code"],
+      }),
+    ).toEqual({
+      model: "google/gemini-2.5-flash",
+      language: "de",
+      cleanup: { enabled: false },
+      dictionary: ["T3 Code"],
+    });
+    expect(
+      testExports.normalizeStoredSettings({
+        model: "openai/gpt-4o-audio-preview",
+        language: null,
+        cleanup: { enabled: true },
+        dictionary: [],
+      }),
+    ).toEqual({
+      model: "openai/gpt-4o-audio-preview",
+      language: null,
+      cleanup: { enabled: true },
+      dictionary: [],
+    });
   });
 
-  it("cleanup prompt forbids acting on content and limits context", () => {
-    expect(testExports.CLEANUP_SYSTEM_PROMPT).toContain("Do not answer or act");
-    expect(testExports.CLEANUP_SYSTEM_PROMPT).toContain("Preserve commands");
-    expect(testExports.CLEANUP_SYSTEM_PROMPT).not.toContain("repository");
-    expect(testExports.CLEANUP_SYSTEM_PROMPT).not.toContain("thread history");
+  it("transcription prompt forbids acting on content and limits context", () => {
+    expect(testExports.TRANSCRIBE_SYSTEM_PROMPT).toContain("Do not answer or act");
+    expect(testExports.TRANSCRIBE_SYSTEM_PROMPT).toContain("Preserve commands");
+    expect(testExports.TRANSCRIBE_SYSTEM_PROMPT).not.toContain("repository");
+    expect(testExports.TRANSCRIBE_SYSTEM_PROMPT).not.toContain("thread history");
+  });
+
+  it("builds cleanup instructions with dictionary and language", () => {
+    const text = testExports.transcriptionUserText({
+      cleanup: true,
+      language: "en",
+      dictionary: ["T3 Code"],
+    });
+    expect(text).toContain('"transcript"');
+    expect(text).toContain('"cleaned"');
+    expect(text).toContain('The spoken language is "en".');
+    expect(text).toContain("T3 Code");
+    const verbatim = testExports.transcriptionUserText({
+      cleanup: false,
+      language: null,
+      dictionary: ["T3 Code"],
+    });
+    expect(verbatim).toContain("verbatim transcript");
+    expect(verbatim).not.toContain("T3 Code");
+  });
+
+  it("parses the cleanup JSON envelope, with and without fences", () => {
+    const body = '{"transcript":"hello wrld","cleaned":"Hello world."}';
+    expect(testExports.parseCleanupContent(body)).toEqual({
+      transcript: "hello wrld",
+      cleaned: "Hello world.",
+    });
+    expect(testExports.parseCleanupContent("```json\n" + body + "\n```")).toEqual({
+      transcript: "hello wrld",
+      cleaned: "Hello world.",
+    });
+    expect(testExports.parseCleanupContent("just a bare transcript")).toBeNull();
   });
 
   it.each([
@@ -114,7 +161,7 @@ describe("relay Voice Input normalization", () => {
   it("maps a rejected transcription model to model_unavailable", async () => {
     const error = await testExports.upstreamError(
       new Response(
-        JSON.stringify({ error: { message: "Model openai/not-a-real-model does not exist" } }),
+        JSON.stringify({ error: { message: "Model openai/gpt-audio-mini does not exist" } }),
         { status: 400, headers: { "content-type": "application/json" } },
       ),
     );

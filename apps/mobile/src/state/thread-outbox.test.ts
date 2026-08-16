@@ -5,6 +5,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
   ThreadId,
 } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
@@ -464,7 +465,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("wait");
     expect(
@@ -473,7 +473,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("remove");
     expect(
@@ -482,9 +481,35 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("send");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: false,
+      }),
+    ).toBe("wait");
+  });
+
+  it("sends existing-thread messages whenever connected so queued messages can steer", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+      }),
+    ).toBe("send");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: false,
+      }),
+    ).toBe("wait");
   });
 
   it("sends queued creations once connected and live, removing already-created ones", () => {
@@ -494,7 +519,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "cached",
         environmentConnected: false,
-        threadBusy: false,
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
@@ -505,7 +529,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("wait");
     expect(
@@ -514,7 +537,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("send");
     expect(
@@ -523,7 +545,6 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: true,
       }),
     ).toBe("remove");
   });
@@ -595,6 +616,44 @@ describe("thread outbox", () => {
       resolveThreadOutboxFailureAction({
         stage: "start-turn",
         error: deterministicFailure,
+        interrupted: false,
+      }),
+    ).toBe("discard");
+  });
+
+  it("retries queued-turns-unsupported dispatch rejections instead of discarding", () => {
+    // The thread can go active between the drain's shell snapshot and the
+    // server-side dispatch, so classification must come from the dispatch
+    // error itself: a queue policy rejection retries until the thread idles.
+    const policyRejection = {
+      _tag: "OrchestrationV2DispatchCommandError",
+      message: "Failed to dispatch orchestration V2 command",
+      detail: QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
+    };
+    expect(
+      resolveThreadOutboxFailureAction({
+        stage: "start-turn",
+        error: policyRejection,
+        interrupted: false,
+      }),
+    ).toBe("retry");
+    expect(
+      resolveThreadOutboxFailureAction({
+        stage: "start-turn",
+        error: {
+          _tag: "OrchestrationV2DispatchCommandError",
+          message: QUEUED_TURNS_UNSUPPORTED_DISPATCH_DETAIL,
+        },
+        interrupted: false,
+      }),
+    ).toBe("retry");
+    expect(
+      resolveThreadOutboxFailureAction({
+        stage: "start-turn",
+        error: {
+          _tag: "OrchestrationV2DispatchCommandError",
+          message: "Thread no longer exists",
+        },
         interrupted: false,
       }),
     ).toBe("discard");

@@ -111,6 +111,50 @@ node ../../scripts/mobile-native-static-check.ts
 
 The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin. Missing native tools are reported as warnings and skipped locally. CI installs the default toolset from `apps/mobile/Brewfile` before running the native checks.
 
+## Releasing to TestFlight
+
+Production iOS releases do not go through EAS. `.github/workflows/mobile-ios-testflight.yml`
+runs `expo prebuild` → `xcodebuild archive` → `exportArchive` → upload, on every push to `main`.
+Expo the framework is still doing the work — every config plugin runs during prebuild — but Expo's
+servers are not in the loop. (`mobile-eas-production.yml` remains as a manual-only fallback.)
+
+EAS Update is unaffected: it is a separate service from EAS Build, so OTA updates still publish to
+the same channel as long as `EXPO_PROJECT_ID` stays set.
+
+Run the same pipeline from a Mac with Xcode installed:
+
+```bash
+export APPLE_DISTRIBUTION_P12=~/.t3/signing/t3code/dist.p12
+export APPLE_DISTRIBUTION_P12_PASSWORD=...
+export APPLE_MAIN_PROFILE=~/.t3/signing/t3code/T3_Code_App_Store.mobileprovision
+export APPLE_WIDGETS_PROFILE=~/.t3/signing/t3code/T3_Code_Widgets_App_Store.mobileprovision
+export APPLE_SHARING_PROFILE=~/.t3/signing/t3code/T3_Code_Sharing_App_Store.mobileprovision
+export ASC_API_KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8
+export ASC_API_KEY_ID=XXXXXXXXXX ASC_API_ISSUER_ID=... ASC_APP_ID=6796384276
+
+vp run ios:testflight            # add SKIP_UPLOAD=1 to stop after the export
+```
+
+Team, bundle identifier, App Group and profile names are **read out of the provisioning profiles**
+rather than configured — the App Group (`group.com.bl4ckbl1zz.t3code.dev`) is not derivable from the
+bundle identifier (`com.t3code.dev`), so anything that reconstructs it by convention is wrong. The
+build number comes from App Store Connect (highest existing, plus one); pass
+`T3CODE_IOS_BUILD_NUMBER` to override.
+
+Before archiving, the script asserts that the resolved Expo config carries a Clerk publishable key
+and a relay URL. Those used to arrive from the EAS hosted environment; missing, they do not fail the
+build, they ship a TestFlight binary that cannot sign in. CI supplies them from the `production`
+environment's `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_TEMPLATE`, and `RELAY_DOMAIN` variables, alongside
+these secrets:
+
+| Secret                                                              | Purpose                        |
+| ------------------------------------------------------------------- | ------------------------------ |
+| `APPLE_DISTRIBUTION_P12_BASE64` / `APPLE_DISTRIBUTION_P12_PASSWORD` | Apple Distribution certificate |
+| `APPLE_MAIN_APPSTORE_PROFILE_BASE64`                                | App Store profile for the app  |
+| `APPLE_WIDGETS_APPSTORE_PROFILE_BASE64`                             | ... for the widgets extension  |
+| `APPLE_SHARING_APPSTORE_PROFILE_BASE64`                             | ... for the sharing extension  |
+| `APPLE_API_KEY` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER`           | App Store Connect API key      |
+
 ## EAS Builds
 
 CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.

@@ -188,4 +188,25 @@ describe("VoiceInputController", () => {
     expect(capture.cancel).toHaveBeenCalled();
     expect(controller.state).toMatchObject({ type: "failed", stage: "recording" });
   });
+
+  it("retries a permission failure with a fresh start", async () => {
+    const { capture, controller } = fixture();
+    vi.mocked(capture.requestPermission).mockResolvedValueOnce("denied");
+    expect(await controller.start(true)).toBe(false);
+    expect(controller.state).toMatchObject({
+      type: "failed",
+      stage: "permission",
+      canRetry: true,
+    });
+    expect(await controller.retry()).toBe(true);
+    expect(controller.state.type).toBe("recording");
+  });
+
+  it("does not retry a blocked permission failure", async () => {
+    const { capture, controller } = fixture();
+    vi.mocked(capture.requestPermission).mockResolvedValueOnce("blocked");
+    expect(await controller.start(true)).toBe(false);
+    expect(controller.state).toMatchObject({ type: "failed", canRetry: false });
+    expect(await controller.retry()).toBe(false);
+  });
 });

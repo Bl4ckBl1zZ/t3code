@@ -1,10 +1,9 @@
+import type { ProjectId } from "@t3tools/contracts";
 import type {
   OrchestrationEvent,
   OrchestrationReadModel,
-  ProjectId,
-  ThreadId,
-} from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+  ProjectOrchestrationCommand,
+} from "@t3tools/contracts/legacy-orchestration";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -32,6 +31,7 @@ import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
+  OrchestrationCommandIdConflictError,
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
   type OrchestrationDispatchError,
@@ -48,32 +48,20 @@ import {
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
+const isOrchestrationCommandIdConflictError = Schema.is(OrchestrationCommandIdConflictError);
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
 interface CommandEnvelope {
-  command: OrchestrationCommand;
+  command: ProjectOrchestrationCommand;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
 }
 
-function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+function commandToAggregateRef(command: ProjectOrchestrationCommand): {
+  readonly aggregateKind: "project";
+  readonly aggregateId: ProjectId;
 } {
-  switch (command.type) {
-    case "project.create":
-    case "project.meta.update":
-    case "project.delete":
-      return {
-        aggregateKind: "project",
-        aggregateId: command.projectId,
-      };
-    default:
-      return {
-        aggregateKind: "thread",
-        aggregateId: command.threadId,
-      };
-  }
+  return { aggregateKind: "project", aggregateId: command.projectId };
 }
 
 const makeOrchestrationEngine = Effect.gen(function* () {
@@ -120,6 +108,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       commandReadModel = yield* projectEventsOntoReadModel(commandReadModel, persistedEvents);
 
+      yield* eventStore.publishCommitted(
+        persistedEvents.filter(
+          (event) =>
+            event.type === "project.created" ||
+            event.type === "project.meta-updated" ||
+            event.type === "project.deleted",
+        ),
+      );
+
       for (const persistedEvent of persistedEvents) {
         yield* PubSub.publish(eventPubSub, persistedEvent);
       }
@@ -139,6 +136,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           commandId: envelope.command.commandId,
         });
         if (Option.isSome(existingReceipt)) {
+          // A receipt only proves this exact command was handled. Replaying it
+          // for a command aimed at another aggregate would report success for
+          // work that never happened.
+          if (
+            existingReceipt.value.aggregateKind !== aggregateRef.aggregateKind ||
+            existingReceipt.value.aggregateId !== aggregateRef.aggregateId
+          ) {
+            return yield* new OrchestrationCommandIdConflictError({
+              commandId: envelope.command.commandId,
+              receiptAggregateKind: existingReceipt.value.aggregateKind,
+              receiptAggregateId: existingReceipt.value.aggregateId,
+              commandAggregateKind: aggregateRef.aggregateKind,
+              commandAggregateId: aggregateRef.aggregateId,
+            });
+          }
           if (existingReceipt.value.status === "accepted") {
             return {
               sequence: existingReceipt.value.resultSequence,
@@ -191,6 +203,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 commandId: envelope.command.commandId,
                 aggregateKind: lastSavedEvent.aggregateKind,
                 aggregateId: lastSavedEvent.aggregateId,
+                commandType: envelope.command.type,
                 acceptedAt: lastSavedEvent.occurredAt,
                 resultSequence: lastSavedEvent.sequence,
                 status: "accepted",
@@ -213,6 +226,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        yield* eventStore.publishCommitted(
+          committedCommand.committedEvents.filter(
+            (event) =>
+              event.type === "project.created" ||
+              event.type === "project.meta-updated" ||
+              event.type === "project.deleted",
+          ),
+        );
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
           if (index === 0) {
@@ -262,7 +283,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           const error = Cause.squash(exit.cause) as OrchestrationDispatchError;
-          if (!isOrchestrationCommandPreviouslyRejectedError(error)) {
+          if (
+            !isOrchestrationCommandPreviouslyRejectedError(error) &&
+            !isOrchestrationCommandIdConflictError(error)
+          ) {
             yield* reconcileReadModelAfterDispatchFailure.pipe(
               Effect.catch(() =>
                 Effect.logWarning(
@@ -282,6 +306,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   commandId: envelope.command.commandId,
                   aggregateKind: aggregateRef.aggregateKind,
                   aggregateId: aggregateRef.aggregateId,
+                  commandType: envelope.command.type,
                   acceptedAt: yield* nowIso,
                   resultSequence: commandReadModel.snapshotSequence,
                   status: "rejected",

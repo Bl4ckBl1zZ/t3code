@@ -20,6 +20,8 @@ import {
 
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { runtime } from "../../lib/runtime";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentServerConfigsAtom } from "../../state/server";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import {
   clearAgentAwarenessRegistrationRecord,
@@ -50,6 +52,7 @@ const AgentAwarenessOperation = Schema.Literals([
   "list-active-live-activities",
   "load-live-activity-prime-preferences",
   "prime-live-activity",
+  "repaint-live-activity",
 ]);
 
 export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentAwarenessOperationError>()(
@@ -65,7 +68,19 @@ export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentA
 }
 
 const environmentConnections = new Map<EnvironmentId, SavedRemoteConnection>();
-const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>();
+// The relay tracks exactly one card per device, so a single managed
+// subscription suffices. getInstances() returns fresh wrapper objects on every
+// call, which makes per-object dedupe (e.g. a WeakSet) useless: it would both
+// re-attach a native listener on every poll and never recognize an already
+// listened activity. Replacing the previous subscription instead keeps exactly
+// one listener alive regardless of how often the activity is re-fetched.
+let activityPushTokenSubscription: { remove: () => void } | null = null;
+// When the card was last armed/primed locally. A just-armed card may see an
+// empty relay aggregate before the environment's first publish lands; ending
+// it in that window would kill the card the user just created. Mirrors the
+// relay's freshly-armed grace.
+const LOCAL_ARM_GRACE_MS = 2 * 60_000;
+let lastLocalLiveActivityArmAtMs = 0;
 // Activity tokens the relay recently accepted, by acceptance time. The refresh
 // runs on sign-in, every app foreground, and every environment-connection
 // update, which arrive in bursts and spammed identical registrations. But the
@@ -188,6 +203,8 @@ export function setAgentAwarenessRelayTokenProvider(
     pushTokenSubscription = null;
     appStateSubscription?.remove();
     appStateSubscription = null;
+    activityPushTokenSubscription?.remove();
+    activityPushTokenSubscription = null;
     if (activeLiveActivityRegistrationRetry) {
       clearTimeout(activeLiveActivityRegistrationRetry);
       activeLiveActivityRegistrationRetry = null;
@@ -233,6 +250,8 @@ export function releaseAgentAwarenessRelayTokenProvider(): void {
   pushTokenSubscription = null;
   appStateSubscription?.remove();
   appStateSubscription = null;
+  activityPushTokenSubscription?.remove();
+  activityPushTokenSubscription = null;
   if (activeLiveActivityRegistrationRetry) {
     clearTimeout(activeLiveActivityRegistrationRetry);
     activeLiveActivityRegistrationRetry = null;
@@ -448,16 +467,36 @@ function unregisterDeviceWithRelay(input: {
   });
 }
 
+// The environment descriptor advertises whether agent-activity publishes
+// currently leave that server (`capabilities.agentActivityPublishing`). Only
+// an explicit false skips the seed card: older servers omit the capability
+// but may still publish.
+function environmentPublishesAgentActivity(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .agentActivityPublishing !== false
+  );
+}
+
 // Arms the lock-screen card the moment the user starts agent work from this
 // phone, while the app is still foregrounded and the fresh activity's token
 // can be registered immediately. The seeded row is a best-effort placeholder;
 // the relay's registration replay repaints it with the authoritative
-// aggregate within seconds. No-ops when a card is already armed.
+// aggregate within seconds. No-ops when a card is already armed, and skips
+// environments that report publishing disabled — the seed would sit on
+// "Connecting" forever with no update ever arriving to repaint or end it.
 export function armAgentAwarenessLiveActivityForLocalWork(input: {
+  readonly environmentId: EnvironmentId;
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
   if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+    return;
+  }
+  if (!environmentPublishesAgentActivity(input.environmentId)) {
+    logRegistrationDebug("live activity arming skipped; environment does not publish", {
+      environmentId: input.environmentId,
+    });
     return;
   }
   void loadPreferences()
@@ -498,6 +537,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
         },
       ],
     });
+    lastLocalLiveActivityArmAtMs = Date.now();
     logRegistrationDebug("live activity card armed for local work", {
       threadTitle: input.threadTitle,
     });
@@ -812,6 +852,8 @@ export function unregisterAllAgentAwarenessConnections(): void {
   pushTokenSubscription = null;
   appStateSubscription?.remove();
   appStateSubscription = null;
+  activityPushTokenSubscription?.remove();
+  activityPushTokenSubscription = null;
   if (activeLiveActivityRegistrationRetry) {
     clearTimeout(activeLiveActivityRegistrationRetry);
     activeLiveActivityRegistrationRetry = null;
@@ -858,6 +900,9 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   pushTokenSubscription = null;
   appStateSubscription?.remove();
   appStateSubscription = null;
+  activityPushTokenSubscription?.remove();
+  activityPushTokenSubscription = null;
+  lastLocalLiveActivityArmAtMs = 0;
   if (activeLiveActivityRegistrationRetry) {
     clearTimeout(activeLiveActivityRegistrationRetry);
     activeLiveActivityRegistrationRetry = null;
@@ -914,24 +959,14 @@ export function registerLiveActivityPushToken(input: {
         }),
     });
     if (!activityPushToken) {
-      if (activityPushTokenListeners.has(input.activity)) {
-        logRegistrationDebug(
-          "live activity push token not available yet; token listener already registered",
-          {
-            connectionCount: environmentConnections.size,
-          },
-        );
-        return false;
-      }
-
       logRegistrationDebug(
         "live activity push token not available yet; listening for token event",
         {
           connectionCount: environmentConnections.size,
         },
       );
-      activityPushTokenListeners.add(input.activity);
-      input.activity.addPushTokenListener((event) => {
+      activityPushTokenSubscription?.remove();
+      activityPushTokenSubscription = input.activity.addPushTokenListener((event) => {
         if (event.pushToken) {
           logRegistrationDebug("live activity push token event received", {
             tokenSuffix: event.pushToken.slice(-8),
@@ -977,6 +1012,11 @@ function registerLiveActivityPushTokenValue(input: {
       activityPushToken: input.activityPushToken,
     });
     if (registered) {
+      for (const [token, tokenAcceptedAt] of registeredActivityPushTokens) {
+        if (Date.now() - tokenAcceptedAt >= ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS) {
+          registeredActivityPushTokens.delete(token);
+        }
+      }
       registeredActivityPushTokens.set(input.activityPushToken, Date.now());
       logRegistrationDebug("live activity push token registered", {
         tokenSuffix: input.activityPushToken.slice(-8),
@@ -1040,62 +1080,109 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
     // Activities are only ever created here, in the foreground, where the
     // update token can be observed and registered immediately — the relay
     // never remote-starts one (background push-to-start wakes proved too
-    // unreliable to hand the token over). Arming is conditional: the relay is
-    // asked what the card would show first, so an idle open never creates an
-    // empty lock-screen card, and an armed card is born with the real
-    // aggregate instead of a placeholder.
+    // unreliable to hand the token over). Every pass here is also a full
+    // local reconciliation: the relay is asked what the card should show and
+    // the card is primed, repainted, or ended locally — so drifted content
+    // heals even when the APNs replay push never reaches this device.
+    const preferences = yield* Effect.tryPromise({
+      try: () => loadPreferences(),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "load-live-activity-prime-preferences",
+          cause,
+        }),
+    }).pipe(Effect.orElseSucceed(() => null));
+    // The toggle defaults to on: an unset preference (fresh install) must
+    // prime, so only an explicit false blocks it. An explicit false also ends
+    // an armed card locally — waiting for the relay's end push would strand
+    // the card whenever its token has drifted.
+    if (preferences?.liveActivitiesEnabled === false) {
+      if (activities.length > 0) {
+        endLocalLiveActivities("live activity cleanup after preference opt-out failed");
+      }
+      return;
+    }
+    const snapshot = yield* readAgentActivitySnapshot();
     if (activities.length === 0) {
-      const preferences = yield* Effect.tryPromise({
-        try: () => loadPreferences(),
-        catch: (cause) =>
-          new AgentAwarenessOperationError({
-            operation: "load-live-activity-prime-preferences",
-            cause,
-          }),
-      }).pipe(Effect.orElseSucceed(() => null));
-      // The toggle defaults to on: an unset preference (fresh install) must
-      // prime, so only an explicit false blocks it.
-      if (preferences?.liveActivitiesEnabled !== false) {
-        const snapshot = yield* readAgentActivitySnapshot();
-        // The snapshot request yields; an arm-on-send may have created the
-        // card in the meantime. Re-check so two cards are never started.
-        const armedMeanwhile = yield* Effect.try({
-          try: () => AgentActivity.getInstances(),
-          catch: () => [] as ReadonlyArray<LiveActivity<AgentActivityProps>>,
-        }).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<LiveActivity<AgentActivityProps>>));
-        if (armedMeanwhile.length > 0) {
-          activities = [...armedMeanwhile];
-        } else if (snapshot?.aggregate && snapshot.aggregate.activeCount > 0) {
-          const aggregate = snapshot.aggregate;
-          const primed = yield* Effect.try({
-            try: () =>
-              AgentActivity.start({
-                title: aggregate.title,
-                subtitle: aggregate.subtitle,
-                activeCount: aggregate.activeCount,
-                updatedAt: aggregate.updatedAt,
-                activities: aggregate.activities,
-              }),
-            catch: (cause) =>
-              new AgentAwarenessOperationError({
-                operation: "prime-live-activity",
-                cause,
-              }),
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                logRegistrationError("live activity priming failed", error);
-                return null;
-              }),
-            ),
-          );
-          if (primed) {
-            logRegistrationDebug("live activity card primed", {
+      // The snapshot request yields; an arm-on-send may have created the
+      // card in the meantime. Re-check so two cards are never started.
+      const armedMeanwhile = yield* Effect.try({
+        try: () => AgentActivity.getInstances(),
+        catch: () => [] as ReadonlyArray<LiveActivity<AgentActivityProps>>,
+      }).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<LiveActivity<AgentActivityProps>>));
+      if (armedMeanwhile.length > 0) {
+        activities = [...armedMeanwhile];
+      } else if (snapshot?.aggregate && snapshot.aggregate.activeCount > 0) {
+        const aggregate = snapshot.aggregate;
+        const primed = yield* Effect.try({
+          try: () =>
+            AgentActivity.start({
+              title: aggregate.title,
+              subtitle: aggregate.subtitle,
               activeCount: aggregate.activeCount,
-            });
-            activities = [primed];
-          }
+              updatedAt: aggregate.updatedAt,
+              activities: aggregate.activities,
+            }),
+          catch: (cause) =>
+            new AgentAwarenessOperationError({
+              operation: "prime-live-activity",
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              logRegistrationError("live activity priming failed", error);
+              return null;
+            }),
+          ),
+        );
+        if (primed) {
+          lastLocalLiveActivityArmAtMs = Date.now();
+          logRegistrationDebug("live activity card primed", {
+            activeCount: aggregate.activeCount,
+          });
+          activities = [primed];
         }
+      }
+    } else if (snapshot) {
+      const card = activities[0];
+      if (card && snapshot.aggregate) {
+        // Local repaint: content normally arrives via APNs, but the
+        // foregrounded app already holds the authoritative aggregate, so the
+        // card must not depend on a push round-trip (nor on its push token
+        // being healthy) to stop showing stale state.
+        const aggregate = snapshot.aggregate;
+        yield* Effect.tryPromise({
+          try: () =>
+            card.update({
+              title: aggregate.title,
+              subtitle: aggregate.subtitle,
+              activeCount: aggregate.activeCount,
+              updatedAt: aggregate.updatedAt,
+              activities: aggregate.activities,
+            }),
+          catch: (cause) =>
+            new AgentAwarenessOperationError({
+              operation: "repaint-live-activity",
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              logRegistrationError("live activity local repaint failed", error);
+            }),
+          ),
+        );
+      } else if (
+        card &&
+        snapshot.aggregate === null &&
+        Date.now() - lastLocalLiveActivityArmAtMs >= LOCAL_ARM_GRACE_MS
+      ) {
+        // The relay has nothing left to show and the card is past the arming
+        // grace: end it locally rather than leaving an orphan the relay may
+        // no longer be able to end (its token could be dead or invalidated).
+        endLocalLiveActivities("orphaned live activity cleanup failed");
+        activities = [];
       }
     }
 

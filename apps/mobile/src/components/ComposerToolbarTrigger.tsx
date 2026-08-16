@@ -1,3 +1,4 @@
+import { LiquidGlassView } from "@callstack/liquid-glass";
 import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -12,10 +13,11 @@ import {
   type ViewStyle,
 } from "react-native";
 
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 import { useThemeColor } from "../lib/useThemeColor";
 import { cn } from "../lib/cn";
 import { AppText as Text } from "./AppText";
-import { SymbolView } from "./AppSymbol";
+import { AnimatedSymbolSwap, SymbolView } from "./AppSymbol";
 
 export const COMPOSER_TOOLBAR_CONTROL_HEIGHT = 44;
 export const COMPOSER_TOOLBAR_GAP = 8;
@@ -138,6 +140,8 @@ export function ComposerToolbarScroller(props: {
 export function ComposerToolbarButton(props: {
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly iconNode?: ReactNode;
+  /** Morph (zoom-crossfade) between icons when `icon` changes instead of snapping. */
+  readonly animateIconChanges?: boolean;
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly active?: boolean;
@@ -145,9 +149,16 @@ export function ComposerToolbarButton(props: {
   readonly maxWidth?: number;
   readonly minWidth?: number;
   readonly onPress?: () => void;
+  readonly onLongPress?: () => void;
   readonly showChevron?: boolean;
   readonly textTransform?: "none" | "uppercase";
   readonly variant?: "default" | "primary" | "danger";
+  /**
+   * Render the circle as an interactive LiquidGlassView on iOS 26+ so a menu
+   * anchored to it presents as glass morphing out of glass. Icon-only circles
+   * only; falls back to the standard styling when unsupported.
+   */
+  readonly glass?: boolean;
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
 }) {
@@ -156,6 +167,8 @@ export function ComposerToolbarButton(props: {
   const iconSubtle = useThemeColor("--color-icon-subtle");
   const primaryFg = useThemeColor("--color-primary-foreground");
   const dangerFg = useThemeColor("--color-danger-foreground");
+  const primaryBg = useThemeColor("--color-primary");
+  const dangerBg = useThemeColor("--color-danger");
   const variant = props.variant ?? "default";
   const isCircle = !props.label && props.showChevron === false;
   const defaultBorderColor = isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
@@ -175,12 +188,65 @@ export function ComposerToolbarButton(props: {
         ? dangerFg
         : iconColor;
 
+  if (props.glass && NATIVE_LIQUID_GLASS_SUPPORTED && isCircle) {
+    return (
+      <LiquidGlassView
+        effect="regular"
+        interactive
+        colorScheme={isDarkMode ? "dark" : "light"}
+        tintColor={
+          variant === "primary" && !props.disabled
+            ? primaryBg
+            : variant === "danger"
+              ? dangerBg
+              : undefined
+        }
+        style={[
+          {
+            alignItems: "center",
+            borderRadius: COMPOSER_TOOLBAR_CONTROL_HEIGHT / 2,
+            height: COMPOSER_TOOLBAR_CONTROL_HEIGHT,
+            justifyContent: "center",
+            opacity: props.disabled ? 0.55 : 1,
+            width: COMPOSER_TOOLBAR_CONTROL_HEIGHT,
+          },
+          props.style,
+        ]}
+      >
+        <Pressable
+          accessibilityLabel={props.accessibilityLabel ?? props.label}
+          accessibilityRole="button"
+          disabled={props.disabled}
+          onPress={props.onPress}
+          onLongPress={props.onLongPress}
+          className="h-11 w-11 items-center justify-center"
+        >
+          {props.iconNode ? (
+            <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
+          ) : props.icon ? (
+            props.animateIconChanges ? (
+              <AnimatedSymbolSwap
+                name={props.icon}
+                size={16}
+                tintColor={iconTintColor}
+                type="monochrome"
+              />
+            ) : (
+              <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+            )
+          ) : null}
+        </Pressable>
+      </LiquidGlassView>
+    );
+  }
+
   return (
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
       disabled={props.disabled}
       onPress={props.onPress}
+      onLongPress={props.onLongPress}
       className={cn(
         // Default width cap lives in the class chain (not the inline style)
         // so callers can lift it with max-w-full — flex-filling pills in the
@@ -222,7 +288,16 @@ export function ComposerToolbarButton(props: {
       {props.iconNode ? (
         <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
       ) : props.icon ? (
-        <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        props.animateIconChanges ? (
+          <AnimatedSymbolSwap
+            name={props.icon}
+            size={16}
+            tintColor={iconTintColor}
+            type="monochrome"
+          />
+        ) : (
+          <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        )
       ) : null}
       {props.label ? (
         <Text

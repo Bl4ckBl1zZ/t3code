@@ -84,6 +84,11 @@ jobs:
           cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check
           cargo test --locked --manifest-path native/resource-monitor/Cargo.toml
 
+      - name: Check the generated Swift contract fixture is current
+        # The SwiftUI client mirrors packages/contracts by hand, so nothing else
+        # makes a contract change fail its build. This is that signal.
+        run: node scripts/generate-swift-contract-fixtures.ts --check
+
       - name: Build desktop pipeline
         run: vp run build:desktop
 
@@ -94,3 +99,24 @@ jobs:
           test -f apps/server/dist/client/index.html
           grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
           grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
+
+  swift-ios:
+    name: Native iOS
+    # The only macOS job in CI. It exists because the SwiftUI client's contracts
+    # are hand-written mirrors: a schema change compiles fine and fails at
+    # runtime, so the native suite is the check that catches it.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run the native test suite
+        # Picks an available iPhone from the newest installed runtime, so the
+        # job is not pinned to a device model the image may drop.
+        run: ./apps/swift-ios/Scripts/ci-test.sh
+
+      # SwiftLint is deliberately not wired up yet: apps/swift-ios has no
+      # config, and running --strict over the vendored upstream sources would
+      # fail on style this fork has not adopted. Add it with a config once the
+      # tree has settled.

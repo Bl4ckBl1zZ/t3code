@@ -12,11 +12,33 @@ import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
+  getChangedTypographySettingLabels,
   hasChangedBackgroundActivitySettings,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
   resolveBackgroundActivityProfileOption,
 } from "./SettingsPanels.logic";
+import { SETTINGS_NAV_ITEMS } from "./SettingsSidebarNav";
+
+describe("settings navigation", () => {
+  it("gives Hermes configuration one distinct T3 Work section", () => {
+    expect(SETTINGS_NAV_ITEMS.filter((item) => item.label === "T3 Work")).toHaveLength(1);
+    expect(SETTINGS_NAV_ITEMS.some((item) => item.label === "Hermes Cron")).toBe(false);
+  });
+});
+
+describe("typography settings restore", () => {
+  it("detects family and size changes by font row", () => {
+    expect(getChangedTypographySettingLabels(DEFAULT_UNIFIED_SETTINGS)).toEqual([]);
+    expect(
+      getChangedTypographySettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        fontSizeInterface: 18,
+        fontFamilyCode: "Fira Code",
+      }),
+    ).toEqual(["Interface font", "Code font"]);
+  });
+});
 
 describe("background activity settings restore", () => {
   it("detects legacy interval values even when the structured setting is at its default", () => {
@@ -226,5 +248,67 @@ describe("buildProviderInstanceUpdatePatch", () => {
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
     expect(patch.providers).toBeUndefined();
+  });
+
+  it("updates the Hermes rollout gate together with the instance enabled state", () => {
+    const instanceId = ProviderInstanceId.make("hermes");
+    const enabledInstance = {
+      driver: ProviderDriverKind.make("hermes"),
+      enabled: true,
+      config: {
+        endpoint: "ws://127.0.0.1:9119/api/ws",
+        profileKey: "default",
+      },
+    } satisfies ProviderInstanceConfig;
+
+    const enabledPatch = buildProviderInstanceUpdatePatch({
+      settings: DEFAULT_SERVER_SETTINGS,
+      instanceId,
+      instance: enabledInstance,
+      driver: ProviderDriverKind.make("hermes"),
+      isDefault: true,
+    });
+    expect(enabledPatch.enableHermes).toBe(true);
+    expect(enabledPatch.providerInstances?.[instanceId]?.enabled).toBe(true);
+
+    const disabledPatch = buildProviderInstanceUpdatePatch({
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        enableHermes: true,
+        providerInstances: enabledPatch.providerInstances!,
+      },
+      instanceId,
+      instance: { ...enabledInstance, enabled: false },
+      driver: ProviderDriverKind.make("hermes"),
+      isDefault: true,
+    });
+    expect(disabledPatch.enableHermes).toBe(false);
+    expect(disabledPatch.providerInstances?.[instanceId]?.enabled).toBe(false);
+  });
+
+  it("keeps the Hermes rollout gate on while another Hermes instance remains enabled", () => {
+    const instanceId = ProviderInstanceId.make("hermes");
+    const otherId = ProviderInstanceId.make("hermes_work");
+    const disabledPatch = buildProviderInstanceUpdatePatch({
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        enableHermes: true,
+        providerInstances: {
+          [otherId]: {
+            driver: ProviderDriverKind.make("hermes"),
+            enabled: true,
+          },
+        },
+      },
+      instanceId,
+      instance: {
+        driver: ProviderDriverKind.make("hermes"),
+        enabled: false,
+      },
+      driver: ProviderDriverKind.make("hermes"),
+      isDefault: true,
+    });
+
+    expect(disabledPatch.enableHermes).toBe(true);
   });
 });

@@ -18,11 +18,13 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { RelayEnvironmentAuth } from "@t3tools/contracts/relay";
 
 import {
+  RELAY_MAX_PATH_PARAM_LENGTH,
   RELAY_REQUEST_DEADLINE_MS,
   relayCors,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
+  relayProjectFileSchemaRoute,
   revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
@@ -476,6 +478,52 @@ describe("relay request tracing", () => {
   );
 });
 
+describe("project file schema", () => {
+  const fetchSchema = (options?: { readonly requestHost?: string }) =>
+    Effect.gen(function* () {
+      const request = HttpServerRequest.fromWeb(
+        new Request(`https://${options?.requestHost ?? "relay.example.test"}/schema/t3.json`),
+      );
+      const httpEffect = yield* HttpRouter.toHttpEffect(
+        Layer.mergeAll(
+          relayProjectFileSchemaRoute("https://relay.example.test/schema/t3.json"),
+          relayNotFoundRoute,
+          relayCors,
+        ),
+      );
+      const response = yield* httpEffect.pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      );
+      const body = yield* Effect.promise(() => HttpServerResponse.toWeb(response).json());
+      return { response, body: body as Record<string, unknown> };
+    }).pipe(Effect.scoped);
+
+  it.effect("serves the t3.json schema without authentication", () =>
+    Effect.gen(function* () {
+      // An editor resolving `$schema` sends no credentials, so a 401 here
+      // would silently cost every user completion in their project file.
+      const { response, body } = yield* fetchSchema();
+
+      expect(response.status).toBe(200);
+      expect(body.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+      expect(Object.keys(body.properties as Record<string, unknown>)).toContain("previewUrl");
+      expect(response.headers["access-control-allow-origin"]).toBe("*");
+    }),
+  );
+
+  it.effect("stamps this relay's configured origin as $id, whatever host was asked for", () =>
+    Effect.gen(function* () {
+      // Each deployment publishes its own build's document, and says so from
+      // configuration — never from the caller-controlled request host.
+      const direct = yield* fetchSchema();
+      const spoofed = yield* fetchSchema({ requestHost: "attacker.test" });
+
+      expect(direct.body.$id).toBe("https://relay.example.test/schema/t3.json");
+      expect(spoofed.body.$id).toBe("https://relay.example.test/schema/t3.json");
+    }),
+  );
+});
+
 describe("relay routing fallback", () => {
   it.effect("redirects the relay root to the API docs", () =>
     Effect.gen(function* () {
@@ -505,6 +553,43 @@ describe("relay routing fallback", () => {
 
       expect(response.status).toBe(404);
       expect(response.headers["access-control-allow-origin"]).toBe("*");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("matches routes whose path parameters exceed the router's default length limit", () =>
+    Effect.gen(function* () {
+      // Shaped like a real delegated-task thread id: it embeds the
+      // percent-encoded parent command id and a task slug, far past
+      // find-my-way's default 100-character parameter cutoff. Past the cutoff
+      // the router bails without backtracking to the `/*` fallback, so the
+      // request surfaced as RouteNotFound instead of a handled response.
+      const threadId = `thread:delegated-task:command%3Amcp%3A${"a".repeat(36)}%3Adelegate-task%3A${"b".repeat(60)}`;
+      expect(threadId.length).toBeGreaterThan(100);
+      expect(threadId.length).toBeLessThanOrEqual(RELAY_MAX_PATH_PARAM_LENGTH);
+
+      const agentActivityRoute = HttpRouter.add(
+        "POST",
+        "/v1/environments/:environmentId/threads/:threadId/agent-activity",
+        HttpServerResponse.empty({ status: 200 }),
+      );
+      const request = HttpServerRequest.fromWeb(
+        new Request(
+          `https://relay.test/v1/environments/env-1/threads/${encodeURIComponent(threadId)}/agent-activity`,
+          { method: "POST" },
+        ),
+      );
+      const httpEffect = yield* HttpRouter.toHttpEffect(
+        Layer.merge(agentActivityRoute, relayNotFoundRoute),
+      ).pipe(
+        Effect.provideService(HttpRouter.RouterConfig, {
+          maxParamLength: RELAY_MAX_PATH_PARAM_LENGTH,
+        }),
+      );
+      const response = yield* httpEffect.pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      );
+
+      expect(response.status).toBe(200);
     }).pipe(Effect.scoped),
   );
 });

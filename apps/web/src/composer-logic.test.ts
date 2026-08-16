@@ -13,16 +13,20 @@ import {
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 describe("shouldSubmitComposerOnEnter", () => {
-  it("submits plain Enter on desktop", () => {
+  it("submits on plain Enter on desktop", () => {
     expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: false })).toBe(true);
   });
 
-  it("inserts a newline for plain Enter on mobile", () => {
+  it("inserts a newline for plain Enter on mobile, where the send button is the only submit path", () => {
     expect(shouldSubmitComposerOnEnter({ isMobileViewport: true, shiftKey: false })).toBe(false);
   });
 
-  it("inserts a newline for Shift+Enter", () => {
+  it("inserts a newline for Shift+Enter on desktop", () => {
     expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: true })).toBe(false);
+  });
+
+  it("keeps Enter inert on mobile even with Shift held", () => {
+    expect(shouldSubmitComposerOnEnter({ isMobileViewport: true, shiftKey: true })).toBe(false);
   });
 });
 

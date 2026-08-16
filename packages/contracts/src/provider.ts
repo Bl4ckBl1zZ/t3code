@@ -9,10 +9,12 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
-  ChatAttachment,
-  ModelSelection,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ChatAttachment,
+} from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
@@ -20,7 +22,7 @@ import {
   ProviderSandboxMode,
   ProviderUserInputAnswers,
   RuntimeMode,
-} from "./orchestration.ts";
+} from "./providerPolicy.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 
 const ProviderSessionStatus = Schema.Literals([
@@ -56,6 +58,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   // See ProviderSession for the migration story.
   providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),

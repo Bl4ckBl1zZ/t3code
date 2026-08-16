@@ -11,6 +11,7 @@ import {
   buildHomeThreadGroups,
   sortHomeProjectScopes,
 } from "./homeThreadList";
+import { makeThreadShellFixture } from "../../test-fixtures";
 
 function makeProject(
   input: Partial<EnvironmentProject> & Pick<EnvironmentProject, "environmentId" | "id" | "title">,
@@ -30,25 +31,21 @@ function makeThread(
   input: Partial<EnvironmentThreadShell> &
     Pick<EnvironmentThreadShell, "environmentId" | "id" | "projectId" | "title">,
 ): EnvironmentThreadShell {
-  return {
+  return makeThreadShellFixture({
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,
     worktreePath: null,
-    latestTurn: null,
     createdAt: "2026-06-01T00:00:00.000Z",
     updatedAt: "2026-06-01T00:00:00.000Z",
     archivedAt: null,
-    session: null,
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     ...input,
-    settledOverride: input.settledOverride ?? null,
-    settledAt: input.settledAt ?? null,
-  };
+  });
 }
 
 const NOW = Date.parse("2026-06-29T00:00:00.000Z");
@@ -375,7 +372,7 @@ describe("buildHomeThreadGroups", () => {
     ).toHaveLength(2);
   });
 
-  it("uses the repository label for a singleton repository scope", () => {
+  it("uses the physical project title for a singleton scope", () => {
     const project = makeProject({
       environmentId: EnvironmentId.make("environment-1"),
       id: ProjectId.make("project-1"),
@@ -408,8 +405,8 @@ describe("buildHomeThreadGroups", () => {
       ],
     );
 
-    expect(scopes[0]?.title).toBe("codething-mvp");
-    expect(groups[0]?.title).toBe("codething-mvp");
+    expect(scopes[0]?.title).toBe("local-worktree-name");
+    expect(groups[0]?.title).toBe("local-worktree-name");
   });
 
   it("sorts the newest thread first regardless of snapshot order", () => {
@@ -565,10 +562,16 @@ describe("buildHomeThreadGroups", () => {
     );
 
     expect(buildGroups(projects, threads, { projectGroupingMode: "repository" })).toHaveLength(1);
-    expect(buildGroups(projects, threads, { projectGroupingMode: "repository_path" })).toHaveLength(
-      2,
-    );
-    expect(buildGroups(projects, threads, { projectGroupingMode: "separate" })).toHaveLength(2);
+    expect(
+      buildGroups(projects, threads, { projectGroupingMode: "repository_path" }).map(
+        (group) => group.title,
+      ),
+    ).toEqual(["Mobile", "Web"]);
+    expect(
+      buildGroups(projects, threads, { projectGroupingMode: "separate" }).map(
+        (group) => group.title,
+      ),
+    ).toEqual(["Mobile", "Web"]);
   });
 
   it("default view shows only threads from the last 5 days", () => {

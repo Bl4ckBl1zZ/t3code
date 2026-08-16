@@ -1,7 +1,12 @@
 import * as Schema from "effect/Schema";
+import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import {
+  CommandId,
+  IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
@@ -10,6 +15,112 @@ const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
 const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
 const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 512;
+
+export const ProjectScriptIcon = Schema.Literals([
+  "play",
+  "test",
+  "lint",
+  "configure",
+  "build",
+  "debug",
+]);
+export type ProjectScriptIcon = typeof ProjectScriptIcon.Type;
+
+export const ProjectScript = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  command: TrimmedNonEmptyString,
+  icon: ProjectScriptIcon,
+  runOnWorktreeCreate: Schema.Boolean,
+  /**
+   * When true, the script runs in the worktree right before it is removed.
+   * Optional so peers that predate teardown scripts can still decode.
+   */
+  runOnWorktreeDelete: Schema.optional(Schema.Boolean),
+  previewUrl: Schema.optional(TrimmedNonEmptyString),
+  autoOpenPreview: Schema.optional(Schema.Boolean),
+  /**
+   * When true, at most one run of this script can be active per thread:
+   * launching it again while running stops the active run instead.
+   */
+  singleRun: Schema.optional(Schema.Boolean),
+});
+export type ProjectScript = typeof ProjectScript.Type;
+
+export const Project = Schema.Struct({
+  id: ProjectId,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultModelSelection: Schema.NullOr(ModelSelection),
+  // Per-project override for where new threads start. Null/absent means
+  // "no override": clients fall back to t3.json, then the global setting.
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  scripts: Schema.Array(ProjectScript),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type Project = typeof Project.Type;
+
+export const ProjectSnapshot = Schema.Struct({
+  projects: Schema.Array(Project),
+  updatedAt: IsoDateTime,
+});
+export type ProjectSnapshot = typeof ProjectSnapshot.Type;
+
+export const ProjectChange = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("project.upserted"), project: Project }),
+  Schema.Struct({
+    type: Schema.Literal("project.deleted"),
+    projectId: ProjectId,
+    deletedAt: IsoDateTime,
+  }),
+]);
+export type ProjectChange = typeof ProjectChange.Type;
+
+export const ProjectMutation = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("project.create"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    title: TrimmedNonEmptyString,
+    workspaceRoot: TrimmedNonEmptyString,
+    createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+    defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+    scripts: Schema.optional(Schema.Array(ProjectScript)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.update"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    title: Schema.optional(TrimmedNonEmptyString),
+    workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+    // Absent = leave unchanged; null = clear the override.
+    defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+    // Absent = leave unchanged; null = clear the manual icon.
+    faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    scripts: Schema.optional(Schema.Array(ProjectScript)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.delete"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    force: Schema.optional(Schema.Boolean),
+  }),
+]);
+export type ProjectMutation = typeof ProjectMutation.Type;
+
+export class ProjectMutationError extends Schema.TaggedErrorClass<ProjectMutationError>()(
+  "ProjectMutationError",
+  {
+    commandId: CommandId,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 export const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 export type ProjectEntryKind = typeof ProjectEntryKind.Type;
@@ -21,6 +132,7 @@ export const ProjectSearchEntriesInput = Schema.Struct({
   query: TrimmedString.check(Schema.isMaxLength(256)),
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_ENTRIES_MAX_LIMIT)),
   kind: Schema.optional(ProjectEntryKind),
+  imageOnly: Schema.optional(Schema.Boolean),
 });
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
 

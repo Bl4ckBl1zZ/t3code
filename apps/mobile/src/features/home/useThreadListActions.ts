@@ -6,12 +6,20 @@ import { useCallback, useRef } from "react";
 import { Alert } from "react-native";
 
 import { showConfirmDialog } from "../../components/ConfirmDialogHost";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
+import {
+  pinOrderKeyBetween,
+  planPinnedMove,
+  sortPinnedThreadsByOrderKey,
+} from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
-import { threadEnvironment } from "../../state/threads";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { threadCanArchive } from "./threadArchive";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -26,6 +34,29 @@ function environmentSupportsSnooze(environmentId: EnvironmentThreadShell["enviro
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadSnooze === true
+  );
+}
+
+function environmentSupportsTitleRegeneration(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadTitleRegeneration === true
+  );
+}
+
+function environmentSupportsPinning(environmentId: EnvironmentThreadShell["environmentId"]) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadPinning === true
+  );
+}
+
+function environmentSupportsPinReorder(environmentId: EnvironmentThreadShell["environmentId"]) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadPinReorder === true
   );
 }
 
@@ -100,13 +131,9 @@ function useThreadActionExecutor(
           );
           return false;
         }
-        // Archive keeps its original, narrower guard: never interrupt a
-        // thread mid-turn.
-        if (
-          action === "archive" &&
-          thread.session?.status === "running" &&
-          thread.session.activeTurnId != null
-        ) {
+        // The server cancels queued runs on archive. Only an actual provider
+        // turn still needs the user to interrupt it first.
+        if (action === "archive" && !threadCanArchive(thread.runtime)) {
           Alert.alert(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
@@ -161,6 +188,110 @@ function useThreadActionExecutor(
   return executeAction;
 }
 
+/**
+ * Generates a prompt-ready handoff document for the thread on the server and
+ * puts it on the clipboard. Generation can take a while (AI summary); repeat
+ * requests for the same thread are ignored while one is in flight.
+ */
+export function useCopyThreadHandoffScript(): (thread: EnvironmentThreadShell) => void {
+  const generateMutation = useAtomCommand(orchestrationEnvironment.v2.generateHandoffScript, {
+    reportFailure: false,
+  });
+  const inFlightThreadKeys = useRef(new Set<string>());
+
+  return useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void (async () => {
+        const key = scopedThreadKey(thread.environmentId, thread.id);
+        if (inFlightThreadKeys.current.has(key)) {
+          return;
+        }
+        inFlightThreadKeys.current.add(key);
+        selectionHaptic();
+        try {
+          const result = await generateMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id },
+          });
+          if (result._tag === "Failure") {
+            const error = Cause.squash(result.cause);
+            Alert.alert(
+              "Could not create handoff script",
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The handoff script could not be generated.",
+            );
+            return;
+          }
+          copyTextWithHaptic(result.value.script, { target: "handoff script" });
+          Alert.alert(
+            "Handoff script copied",
+            "Paste it into a new agent session to continue this thread.",
+          );
+        } finally {
+          inFlightThreadKeys.current.delete(key);
+        }
+      })();
+    },
+    [generateMutation],
+  );
+}
+
+/**
+ * Asks the server to rewrite the thread's title from its transcript. The
+ * server arms a `titleRegeneration` marker on the shell and streams the new
+ * title in, so there is nothing to await beyond the command ack; rows disable
+ * the action while that marker is set. Repeat requests for the same thread are
+ * ignored while one is in flight.
+ */
+export function useRegenerateThreadTitle(): (thread: EnvironmentThreadShell) => void {
+  const updateMetadataMutation = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const inFlightThreadKeys = useRef(new Set<string>());
+
+  return useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void (async () => {
+        const key = scopedThreadKey(thread.environmentId, thread.id);
+        if (inFlightThreadKeys.current.has(key)) {
+          return;
+        }
+        // Version skew: older servers reject regenerateTitle outright, so the
+        // rows hide the action. Guard anyway for a capability that flipped
+        // between render and press.
+        if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
+          Alert.alert(
+            "Could not regenerate title",
+            "This environment's server does not support title regeneration yet. Update the server to use it.",
+          );
+          return;
+        }
+        inFlightThreadKeys.current.add(key);
+        selectionHaptic();
+        try {
+          const result = await updateMetadataMutation({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, regenerateTitle: true },
+          });
+          if (result._tag === "Failure") {
+            const error = Cause.squash(result.cause);
+            Alert.alert(
+              "Could not regenerate title",
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The thread title could not be regenerated.",
+            );
+          }
+        } finally {
+          inFlightThreadKeys.current.delete(key);
+        }
+      })();
+    },
+    [updateMetadataMutation],
+  );
+}
+
 function useConfirmDeleteThread(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
 ) {
@@ -202,11 +333,24 @@ export function useThreadListActions(): {
   readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly movePinnedThread: (
+    thread: EnvironmentThreadShell,
+    direction: "up" | "down",
+  ) => Promise<boolean>;
+  readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
+  const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
+  const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
+  const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -310,6 +454,194 @@ export function useThreadListActions(): {
     async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)) === true,
     [executeAction],
   );
+  const pinThread = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      if (!environmentSupportsPinning(thread.environmentId)) {
+        Alert.alert(
+          "Could not pin thread",
+          "This environment's server does not support pinning yet. Update the server to use Pin.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      // Same placement as web: a fresh pin takes the top of the arranged
+      // run. Servers that predate reordering get the bare pin (keyless).
+      let orderKey: string | undefined;
+      if (environmentSupportsPinReorder(thread.environmentId)) {
+        const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+        let firstKey: string | null = null;
+        for (const shell of shells) {
+          if (shell.pinnedAt == null || shell.pinOrderKey == null) continue;
+          if (firstKey === null || shell.pinOrderKey < firstKey) firstKey = shell.pinOrderKey;
+        }
+        orderKey = pinOrderKeyBetween(null, firstKey) ?? undefined;
+      }
+      const result = await pinMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, ...(orderKey !== undefined ? { orderKey } : {}) },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not pin thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be pinned.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [pinMutation],
+  );
+  const unpinThread = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      if (!environmentSupportsPinning(thread.environmentId)) {
+        Alert.alert(
+          "Could not unpin thread",
+          "This environment's server does not support pinning yet. Update the server to use Pin.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      const result = await unpinMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not unpin thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be unpinned.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [unpinMutation],
+  );
+  const regenerateThreadTitle = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      const key = scopedThreadKey(thread.environmentId, thread.id);
+      if (
+        thread.titleRegeneration != null ||
+        titleRegenerationInFlightThreadKeys.current.has(key)
+      ) {
+        return false;
+      }
+      if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
+        Alert.alert(
+          "Could not regenerate title",
+          "This environment's server does not support title regeneration yet. Update the server to regenerate thread titles.",
+        );
+        return false;
+      }
+
+      titleRegenerationInFlightThreadKeys.current.add(key);
+      selectionHaptic();
+      try {
+        const result = await updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, regenerateTitle: true },
+        });
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not regenerate title",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread title could not be regenerated.",
+          );
+          return false;
+        }
+        return true;
+      } finally {
+        titleRegenerationInFlightThreadKeys.current.delete(key);
+      }
+    },
+    [updateThreadMetadata],
+  );
+
+  // Move up / Move down for the pinned block. Computed against the CANONICAL
+  // keyed pinned order (not the rendered list), so the move is valid even
+  // while search or a project scope filters rows: the same fractional-key
+  // scheme web dragging uses, one write to one thread per move (plus a
+  // one-time section materialization when legacy keyless pins are involved).
+  const reorderPinnedMutation = useAtomCommand(threadEnvironment.reorderPin, {
+    reportFailure: false,
+  });
+  // One move at a time: a second tap before the first write's event lands
+  // would plan from the same stale snapshot and silently collapse two moves
+  // into one — same double-dispatch guard as snoozeThread.
+  const movePinnedInFlightRef = useRef(false);
+  const movePinnedThread = useCallback(
+    async (thread: EnvironmentThreadShell, direction: "up" | "down") => {
+      if (movePinnedInFlightRef.current) return false;
+      if (!environmentSupportsPinReorder(thread.environmentId)) {
+        Alert.alert(
+          "Could not move thread",
+          "This environment's server does not support pinned reordering yet. Update the server to reorder pins.",
+        );
+        return false;
+      }
+      const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+      const pinned = sortPinnedThreadsByOrderKey(
+        shells.filter(
+          (shell) =>
+            shell.pinnedAt != null &&
+            shell.archivedAt === null &&
+            environmentSupportsPinReorder(shell.environmentId),
+        ),
+      );
+      const orderedIds = pinned.map((shell) => scopedThreadKey(shell.environmentId, shell.id));
+      const assignments = planPinnedMove({
+        orderedIds,
+        keysById: new Map(
+          pinned.map((shell) => [
+            scopedThreadKey(shell.environmentId, shell.id),
+            shell.pinOrderKey ?? null,
+          ]),
+        ),
+        movedId: scopedThreadKey(thread.environmentId, thread.id),
+        direction,
+      });
+      if (assignments === null || assignments.length === 0) return false;
+      const shellByKey = new Map(
+        pinned.map((shell) => [scopedThreadKey(shell.environmentId, shell.id), shell]),
+      );
+      selectionHaptic();
+      movePinnedInFlightRef.current = true;
+      try {
+        for (const assignment of assignments) {
+          const target = shellByKey.get(assignment.id);
+          if (target === undefined) continue;
+          const result = await reorderPinnedMutation({
+            environmentId: target.environmentId,
+            input: { threadId: target.id, orderKey: assignment.orderKey },
+          });
+          if (result._tag === "Failure") {
+            const error = Cause.squash(result.cause);
+            Alert.alert(
+              "Could not move thread",
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The pinned thread could not be moved.",
+            );
+            // No rollback: keys already written are valid orderings on their
+            // own (each write is a complete, consistent placement), so a
+            // partial materialization leaves the list sensible, not corrupt.
+            return false;
+          }
+        }
+        return true;
+      } finally {
+        movePinnedInFlightRef.current = false;
+      }
+    },
+    [reorderPinnedMutation],
+  );
 
   const confirmDeleteThread = useConfirmDeleteThread(executeAction);
 
@@ -320,6 +652,10 @@ export function useThreadListActions(): {
     snoozeThread,
     unsnoozeThread,
     unsettleThread,
+    pinThread,
+    unpinThread,
+    movePinnedThread,
+    regenerateThreadTitle,
   };
 }
 

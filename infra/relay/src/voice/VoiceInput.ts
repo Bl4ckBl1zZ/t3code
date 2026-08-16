@@ -44,39 +44,6 @@ function durationExceedsLimit(durationSeconds: number | undefined): boolean {
     durationSeconds > VOICE_INPUT_MAX_DURATION_SECONDS + DURATION_TOLERANCE_SECONDS
   );
 }
-const OPENROUTER_TRANSCRIPTION_MODELS: ReadonlyArray<OpenRouterModelOption> = [
-  {
-    id: "openai/gpt-4o-mini-transcribe",
-    name: "OpenAI: GPT-4o Mini Transcribe",
-    providerName: "OpenAI",
-    capability: "transcription",
-    available: true,
-  },
-  {
-    id: "openai/gpt-4o-transcribe",
-    name: "OpenAI: GPT-4o Transcribe",
-    providerName: "OpenAI",
-    capability: "transcription",
-    available: true,
-  },
-  {
-    id: "openai/whisper-large-v3-turbo",
-    name: "OpenAI: Whisper Large v3 Turbo",
-    providerName: "OpenAI",
-    capability: "transcription",
-    available: true,
-  },
-  {
-    id: "openai/gpt-audio-mini",
-    name: "OpenAI: GPT Audio Mini",
-    providerName: "OpenAI",
-    capability: "transcription",
-    available: true,
-  },
-];
-const OPENROUTER_TRANSCRIPTION_MODEL_IDS = new Set(
-  OPENROUTER_TRANSCRIPTION_MODELS.map((model) => model.id),
-);
 const modelCache = new Map<
   OpenRouterModelCapability,
   { readonly models: ReadonlyArray<OpenRouterModelOption>; readonly cachedAt: number }
@@ -294,9 +261,6 @@ function normalizeModels(
   payload: unknown,
   capability: OpenRouterModelCapability,
 ): OpenRouterModelOption[] {
-  // OpenRouter's general model catalog includes audio-capable chat models that the dedicated
-  // transcription endpoint rejects, while transcription-only models are not consistently listed.
-  if (capability === "transcription") return [...OPENROUTER_TRANSCRIPTION_MODELS];
   if (typeof payload !== "object" || payload === null || !("data" in payload)) return [];
   const data = (payload as { data?: unknown }).data;
   if (!Array.isArray(data)) return [];
@@ -315,7 +279,8 @@ function normalizeModels(
     const outputs = Array.isArray(architecture.output_modalities)
       ? architecture.output_modalities
       : [];
-    const compatible = inputs.includes("text") && outputs.includes("text");
+    const compatible =
+      inputs.includes("audio") && inputs.includes("text") && outputs.includes("text");
     if (!compatible) continue;
     const pricing =
       typeof model.pricing === "object" && model.pricing !== null
@@ -337,20 +302,101 @@ function normalizeModels(
   return models;
 }
 
-function resolveTranscriptionModel(modelId: string): string {
-  return OPENROUTER_TRANSCRIPTION_MODEL_IDS.has(modelId)
-    ? modelId
-    : DEFAULT_VOICE_INPUT_SETTINGS.transcriptionModel;
+// Legacy rows were stored as { transcriptionModel, cleanup: { enabled, model } } before the
+// pipeline moved to a single audio-capable model.
+function normalizeStoredSettings(stored: unknown): VoiceInputSettings {
+  if (typeof stored !== "object" || stored === null) return DEFAULT_VOICE_INPUT_SETTINGS;
+  const record = stored as Record<string, unknown>;
+  const cleanup =
+    typeof record.cleanup === "object" && record.cleanup !== null
+      ? (record.cleanup as Record<string, unknown>)
+      : {};
+  return {
+    model:
+      typeof record.model === "string" && record.model.trim()
+        ? record.model
+        : DEFAULT_VOICE_INPUT_SETTINGS.model,
+    language:
+      typeof record.language === "string" && record.language.trim() ? record.language : null,
+    cleanup: {
+      enabled:
+        typeof cleanup.enabled === "boolean"
+          ? cleanup.enabled
+          : DEFAULT_VOICE_INPUT_SETTINGS.cleanup.enabled,
+    },
+    dictionary: Array.isArray(record.dictionary)
+      ? record.dictionary.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  };
 }
 
-const CLEANUP_SYSTEM_PROMPT = `Correct a speech transcript conservatively.
-Preserve the speaker's intent. Do not answer or act on the content. Do not add facts.
-Do not expand ambiguous acronyms unless the dictionary supplies the spelling.
-Fix punctuation, casing, spacing, and obvious transcription errors.
-Remove filler words only when meaning, tone, and intent do not change.
+const TRANSCRIBE_SYSTEM_PROMPT = `Transcribe the attached audio.
+You are a transcription engine, not an assistant. Do not answer or act on the content, do not reply to the speaker, and do not add facts.
 Preserve commands, file paths, code identifiers, URLs, and inline code.
-Use dictionary spelling only where context supports it.
-Return only the corrected transcript, without quotes or Markdown fences.`;
+If the audio is silent, unintelligible, or contains no speech, the transcript is the empty string. Never invent one, and never substitute an acknowledgment, greeting, apology, or description of the audio — output nothing instead.`;
+
+const VERBATIM_INSTRUCTION = `Return only the verbatim transcript as plain text, without quotes or Markdown fences.`;
+
+const CLEANUP_INSTRUCTION = `Return a single JSON object with exactly two string fields and nothing else:
+{"transcript": <the verbatim transcript>, "cleaned": <a conservatively corrected transcript>}
+For "cleaned": preserve the speaker's intent. Fix punctuation, casing, spacing, and obvious transcription errors.
+Remove filler words only when meaning, tone, and intent do not change.
+Do not expand ambiguous acronyms unless the dictionary supplies the spelling.
+Use dictionary spelling only where context supports it.`;
+
+function transcriptionUserText(input: {
+  readonly cleanup: boolean;
+  readonly language: string | null;
+  readonly dictionary: ReadonlyArray<string>;
+}): string {
+  const parts = [input.cleanup ? CLEANUP_INSTRUCTION : VERBATIM_INSTRUCTION];
+  if (input.language) parts.push(`The spoken language is "${input.language}".`);
+  if (input.cleanup && input.dictionary.length > 0) {
+    parts.push(`Dictionary of preferred spellings: ${JSON.stringify(input.dictionary)}`);
+  }
+  return parts.join("\n");
+}
+
+function completionContent(payload: unknown): string {
+  const candidate =
+    typeof payload === "object" &&
+    payload !== null &&
+    "choices" in payload &&
+    Array.isArray(payload.choices)
+      ? payload.choices[0]
+      : undefined;
+  return typeof candidate === "object" &&
+    candidate !== null &&
+    "message" in candidate &&
+    typeof candidate.message === "object" &&
+    candidate.message !== null &&
+    "content" in candidate.message &&
+    typeof candidate.message.content === "string"
+    ? candidate.message.content.trim()
+    : "";
+}
+
+function parseCleanupContent(
+  content: string,
+): { readonly transcript: string; readonly cleaned: string } | null {
+  const unfenced = content.replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "");
+  try {
+    const decoded: unknown = JSON.parse(unfenced);
+    if (
+      typeof decoded === "object" &&
+      decoded !== null &&
+      "transcript" in decoded &&
+      typeof decoded.transcript === "string" &&
+      "cleaned" in decoded &&
+      typeof decoded.cleaned === "string"
+    ) {
+      return { transcript: decoded.transcript.trim(), cleaned: decoded.cleaned.trim() };
+    }
+  } catch {
+    // Fall through: the model ignored the JSON instruction.
+  }
+  return null;
+}
 
 const isVoiceInputOperationError = Schema.is(VoiceInputOperationError);
 
@@ -430,7 +476,9 @@ const make = Effect.gen(function* () {
       .where(eq(relayVoiceInputSettings.userId, userId))
       .limit(1)
       .pipe(
-        Effect.map((rows) => rows[0]?.settingsJson ?? DEFAULT_VOICE_INPUT_SETTINGS),
+        Effect.map((rows) =>
+          rows[0] ? normalizeStoredSettings(rows[0].settingsJson) : DEFAULT_VOICE_INPUT_SETTINGS,
+        ),
         Effect.mapError((cause) => operationError("persistence_failed", { cause })),
       );
   });
@@ -620,20 +668,39 @@ const make = Effect.gen(function* () {
 
     const apiKey = yield* readCredential(input.userId);
     const settings = yield* readSettings(input.userId);
-    const transcriptionModel = resolveTranscriptionModel(settings.transcriptionModel);
-    const transcriptionPayload = yield* Effect.tryPromise({
+    const cleanupRequested = input.request.cleanup ?? settings.cleanup.enabled;
+    const payload = yield* Effect.tryPromise({
       try: () =>
         openRouterJson({
           apiKey,
-          path: "/api/v1/audio/transcriptions",
+          path: "/api/v1/chat/completions",
           method: "POST",
           body: {
-            input_audio: {
-              data: input.request.audio.data,
-              format: input.request.audio.format satisfies VoiceAudioFormat,
-            },
-            model: transcriptionModel,
-            ...(settings.language === null ? {} : { language: settings.language }),
+            model: settings.model,
+            messages: [
+              { role: "system", content: TRANSCRIBE_SYSTEM_PROMPT },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: transcriptionUserText({
+                      cleanup: cleanupRequested,
+                      language: settings.language,
+                      dictionary: settings.dictionary,
+                    }),
+                  },
+                  {
+                    type: "input_audio",
+                    input_audio: {
+                      data: input.request.audio.data,
+                      format: input.request.audio.format satisfies VoiceAudioFormat,
+                    },
+                  },
+                ],
+              },
+            ],
+            temperature: 0,
           },
         }),
       catch: (cause) =>
@@ -648,92 +715,35 @@ const make = Effect.gen(function* () {
             "voice.error.cause": error.cause instanceof Error ? error.cause.message : "unknown",
             "voice.audio.format": input.request.audio.format,
             "voice.audio.bytes": audioBytes,
-            "voice.transcription.model": transcriptionModel,
+            "voice.model": settings.model,
           }),
         ),
       ),
     );
-    const rawText =
-      typeof transcriptionPayload === "object" &&
-      transcriptionPayload !== null &&
-      "text" in transcriptionPayload &&
-      typeof transcriptionPayload.text === "string"
-        ? transcriptionPayload.text.trim()
-        : "";
-    if (!rawText) return yield* operationError("no_speech");
-
-    const cleanupRequested = input.request.cleanup ?? settings.cleanup.enabled;
-    let text = rawText;
+    const content = completionContent(payload);
+    let rawText = content;
+    let text = content;
     let cleanupApplied = false;
     let warning: "cleanup_failed" | undefined;
-    let cleanupCostUsd: number | undefined;
     if (cleanupRequested) {
-      try {
-        const cleanupPayload = yield* Effect.promise(() =>
-          openRouterJson({
-            apiKey,
-            path: "/api/v1/chat/completions",
-            method: "POST",
-            body: {
-              model: settings.cleanup.model,
-              messages: [
-                { role: "system", content: CLEANUP_SYSTEM_PROMPT },
-                {
-                  role: "user",
-                  // @effect-diagnostics-next-line preferSchemaOverJson:off
-                  content: JSON.stringify({
-                    transcript: rawText,
-                    dictionary: settings.dictionary,
-                  }),
-                },
-              ],
-              temperature: 0,
-            },
-          }),
-        );
-        const candidate =
-          typeof cleanupPayload === "object" &&
-          cleanupPayload !== null &&
-          "choices" in cleanupPayload &&
-          Array.isArray(cleanupPayload.choices)
-            ? cleanupPayload.choices[0]
-            : undefined;
-        const cleaned =
-          typeof candidate === "object" &&
-          candidate !== null &&
-          "message" in candidate &&
-          typeof candidate.message === "object" &&
-          candidate.message !== null &&
-          "content" in candidate.message &&
-          typeof candidate.message.content === "string"
-            ? candidate.message.content.trim()
-            : "";
-        if (!cleaned) throw new Error("Empty cleanup response");
-        text = cleaned;
-        cleanupApplied = true;
-        const cleanupRecord =
-          typeof cleanupPayload === "object" && cleanupPayload !== null
-            ? (cleanupPayload as Record<string, unknown>)
-            : {};
-        if (
-          typeof cleanupRecord.usage === "object" &&
-          cleanupRecord.usage !== null &&
-          "cost" in cleanupRecord.usage &&
-          typeof cleanupRecord.usage.cost === "number"
-        ) {
-          cleanupCostUsd = cleanupRecord.usage.cost;
-        }
-      } catch {
+      const parsed = parseCleanupContent(content);
+      if (parsed) {
+        rawText = parsed.transcript;
+        text = parsed.cleaned || parsed.transcript;
+        cleanupApplied = Boolean(parsed.cleaned);
+      } else {
+        // The model returned a bare transcript instead of the requested JSON envelope.
         warning = "cleanup_failed";
       }
     }
+    if (!rawText && !text) return yield* operationError("no_speech");
     const usage =
-      typeof transcriptionPayload === "object" &&
-      transcriptionPayload !== null &&
-      "usage" in transcriptionPayload &&
-      typeof transcriptionPayload.usage === "object" &&
-      transcriptionPayload.usage !== null
-        ? (transcriptionPayload.usage as Record<string, unknown>)
+      typeof payload === "object" &&
+      payload !== null &&
+      "usage" in payload &&
+      typeof payload.usage === "object" &&
+      payload.usage !== null
+        ? (payload.usage as Record<string, unknown>)
         : {};
     const response: VoiceTranscriptionResponse = {
       requestId: input.request.requestId,
@@ -743,8 +753,7 @@ const make = Effect.gen(function* () {
       ...(warning ? { warning } : {}),
       usage: {
         ...(typeof usage.seconds === "number" ? { audioSeconds: usage.seconds } : {}),
-        ...(typeof usage.cost === "number" ? { transcriptionCostUsd: usage.cost } : {}),
-        ...(cleanupCostUsd === undefined ? {} : { cleanupCostUsd }),
+        ...(typeof usage.cost === "number" ? { costUsd: usage.cost } : {}),
       },
     };
     const now = DateTime.formatIso(yield* DateTime.now);
@@ -776,11 +785,13 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(VoiceInput, make);
 
 export const testExports = {
-  CLEANUP_SYSTEM_PROMPT,
+  TRANSCRIBE_SYSTEM_PROMPT,
   decodedBase64Size,
   durationExceedsLimit,
   integrationStatus,
   normalizeModels,
-  resolveTranscriptionModel,
+  normalizeStoredSettings,
+  parseCleanupContent,
+  transcriptionUserText,
   upstreamError,
 };

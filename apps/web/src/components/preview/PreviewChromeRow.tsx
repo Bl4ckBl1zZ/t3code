@@ -6,6 +6,7 @@ import {
   MousePointerClick,
   PictureInPicture2,
   RotateCw,
+  TabletSmartphone,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -23,7 +24,6 @@ import { cn } from "~/lib/utils";
 
 interface Props {
   url: string;
-  displayUrl?: string | undefined;
   loading: boolean;
   loadProgress: number;
   canGoBack: boolean;
@@ -55,6 +55,14 @@ interface Props {
   /** Optional reason string surfaced in the disabled tooltip. */
   pickDisabledReason?: string | undefined;
   /**
+   * When provided, renders a device-toolbar toggle button in the trailing
+   * action cluster. Pressed while the viewport is constrained to a device
+   * size or freeform dimensions.
+   */
+  onToggleDeviceToolbar?: (() => void) | undefined;
+  deviceToolbarActive?: boolean | undefined;
+  deviceToolbarDisabled?: boolean | undefined;
+  /**
    * Trailing slot rendered after the URL input. Used by the preview view
    * to mount the three-dot menu (hard reload, devtools, zoom, clear data).
    */
@@ -65,7 +73,6 @@ const NOOP = () => {};
 
 export function PreviewChromeRow({
   url,
-  displayUrl,
   loading,
   loadProgress,
   canGoBack,
@@ -88,6 +95,9 @@ export function PreviewChromeRow({
   pickActive,
   pickDisabled,
   pickDisabledReason,
+  onToggleDeviceToolbar,
+  deviceToolbarActive,
+  deviceToolbarDisabled,
   trailingActions,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -111,7 +121,11 @@ export function PreviewChromeRow({
 
   return (
     <div className="relative">
-      <form onSubmit={submit} className="surface-subheader gap-1 px-2" data-surface-subheader>
+      <form
+        onSubmit={submit}
+        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
+        data-surface-subheader
+      >
         <div className="flex items-center gap-0.5" role="group" aria-label="Navigation">
           <Tooltip>
             <TooltipTrigger
@@ -166,13 +180,13 @@ export function PreviewChromeRow({
           </Tooltip>
         </div>
 
-        <InputGroup variant="ghost" className="group/address h-7 flex-1 rounded-md">
+        <InputGroup variant="ghost" className="group/address h-7 flex-1">
           <Tooltip>
             <TooltipTrigger
               render={
                 <InputGroupInput
                   ref={inputRef}
-                  value={inputFocused ? draft : (displayUrl ?? url)}
+                  value={inputFocused ? draft : url}
                   className={cn(
                     onOpenInBrowser &&
                       !inputFocused &&
@@ -203,7 +217,6 @@ export function PreviewChromeRow({
                 />
               }
             />
-            {!inputFocused && displayUrl ? <TooltipPopup>{url}</TooltipPopup> : null}
           </Tooltip>
           {onOpenInBrowser && !inputFocused ? (
             <InputGroupAddon
@@ -302,6 +315,28 @@ export function PreviewChromeRow({
             </TooltipTrigger>
             <TooltipPopup>
               {pictureInPicture ? "Close floating preview" : "Float preview over chat"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {onToggleDeviceToolbar ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={deviceToolbarActive ? "secondary" : "ghost"}
+                  size="icon-xs"
+                  onClick={onToggleDeviceToolbar}
+                  aria-label={deviceToolbarActive ? "Hide device toolbar" : "Show device toolbar"}
+                  aria-pressed={deviceToolbarActive ? "true" : "false"}
+                  type="button"
+                  disabled={deviceToolbarDisabled}
+                />
+              }
+            >
+              <TabletSmartphone className={cn(deviceToolbarActive && "text-primary")} />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {deviceToolbarActive ? "Hide device toolbar" : "Show device toolbar"}
             </TooltipPopup>
           </Tooltip>
         ) : null}

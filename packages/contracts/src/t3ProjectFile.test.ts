@@ -1,14 +1,16 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { T3ProjectFile } from "./t3ProjectFile.ts";
+import { T3ProjectFile, type T3ProjectFile as T3ProjectFileType } from "./t3ProjectFile.ts";
 
-const decode = Schema.decodeUnknownSync(T3ProjectFile);
+const decode = Schema.decodeUnknownSync(T3ProjectFile as never) as (
+  input: unknown,
+) => T3ProjectFileType;
 
 describe("T3ProjectFile", () => {
   it("decodes a full project file", () => {
     const decoded = decode({
-      $schema: "https://t3.codes/schema/t3.json",
+      $schema: "https://example.com/schema/t3.json",
       iconPath: "assets/logo.svg",
       scripts: [
         {
@@ -51,5 +53,11 @@ describe("T3ProjectFile", () => {
     expect(() =>
       decode({ scripts: [{ name: "Dev", command: "pnpm dev", icon: "rocket" }] }),
     ).toThrow();
+  });
+
+  it("decodes defaultThreadEnvMode and rejects unknown modes", () => {
+    expect(decode({ defaultThreadEnvMode: "worktree" }).defaultThreadEnvMode).toBe("worktree");
+    expect(decode({ defaultThreadEnvMode: "local" }).defaultThreadEnvMode).toBe("local");
+    expect(() => decode({ defaultThreadEnvMode: "remote" })).toThrow();
   });
 });

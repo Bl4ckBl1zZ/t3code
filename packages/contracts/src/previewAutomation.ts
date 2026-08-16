@@ -12,13 +12,10 @@ import {
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
-  .check(
-    Schema.isNonEmpty({
-      description:
-        "Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.",
-    }),
-  )
+  .check(Schema.isNonEmpty())
   .check(Schema.isMaxLength(2048));
+const URL_GUIDANCE =
+  "Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.";
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0))
     .check(Schema.isLessThanOrEqualTo(60_000))
@@ -66,6 +63,31 @@ const PreviewAutomationTabTargetFields = {
 export const PreviewAutomationTabTargetInput = Schema.Struct(PreviewAutomationTabTargetFields);
 export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetInput.Type;
 
+const SNAPSHOT_SAVE_DESCRIPTION =
+  "When true, the screenshot is persisted as a browser evidence artifact outside the workspace and the result includes savedScreenshotPath. Embed that exact path in your final reply with markdown image syntax (e.g. ![after](<savedScreenshotPath>)) so the human sees the screenshot in chat. Preferred for before/after evidence of UI work. Cannot be combined with savePath.";
+
+const SNAPSHOT_SAVE_PATH_DESCRIPTION =
+  "Optional workspace-relative file path ending in .png. Use only when the screenshot should live inside the repo (e.g. committed docs or fixtures); prefer save:true for chat evidence. The file is written into the thread workspace and can be embedded with markdown image syntax, e.g. ![login page](screenshots/login.png).";
+
+export const PreviewAutomationSnapshotInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  save: Schema.optional(
+    Schema.Boolean.annotate({ description: SNAPSHOT_SAVE_DESCRIPTION }),
+  ).annotate({ description: SNAPSHOT_SAVE_DESCRIPTION }),
+  savePath: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(512)).annotate({
+      description: SNAPSHOT_SAVE_PATH_DESCRIPTION,
+    }),
+  ).annotate({ description: SNAPSHOT_SAVE_PATH_DESCRIPTION }),
+}).check(
+  Schema.makeFilter(
+    (input) =>
+      !(input.save === true && input.savePath !== undefined) ||
+      "save cannot be combined with savePath; choose one destination.",
+  ),
+);
+export type PreviewAutomationSnapshotInput = typeof PreviewAutomationSnapshotInput.Type;
+
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   visible: Schema.Boolean,
@@ -83,8 +105,7 @@ export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
 export const PreviewAutomationOpenInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
   url: Schema.optional(BoundedUrl).annotate({
-    description:
-      "Optional initial page URL, for example https://t3.chat or localhost:5173. Omit to open a blank tab.",
+    description: `Optional initial page URL. ${URL_GUIDANCE} Omit to open a blank tab.`,
   }),
   open: Schema.optional(
     Schema.Boolean.annotate({
@@ -124,7 +145,7 @@ export const BrowserNavigationTarget = Schema.Union([
       description: "Selects direct URL navigation.",
     }),
     url: BoundedUrl.annotate({
-      description: "Direct website URL.",
+      description: `Direct website URL. ${URL_GUIDANCE}`,
     }),
   }),
   Schema.Struct({
@@ -151,8 +172,7 @@ export type BrowserNavigationTarget = typeof BrowserNavigationTarget.Type;
 export const PreviewAutomationNavigateInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
   url: Schema.optional(BoundedUrl).annotate({
-    description:
-      "Website URL, for example https://t3.chat. Use this for public pages and directly reachable URLs.",
+    description: `Website URL. ${URL_GUIDANCE} Use this for public pages and directly reachable URLs.`,
   }),
   target: Schema.optional(
     BrowserNavigationTarget.annotate({
@@ -548,6 +568,8 @@ export const PreviewAutomationSnapshot = Schema.Struct({
     width: Schema.Int,
     height: Schema.Int,
   }),
+  /** Path the screenshot was also written to when save or savePath was requested. */
+  savedScreenshotPath: Schema.optional(Schema.String),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
 
@@ -861,6 +883,20 @@ export class PreviewAutomationMalformedResponseError extends Schema.TaggedErrorC
   }
 }
 
+export class PreviewAutomationScreenshotSaveError extends Schema.TaggedErrorClass<PreviewAutomationScreenshotSaveError>()(
+  "PreviewAutomationScreenshotSaveError",
+  {
+    ...PreviewAutomationScopeErrorFields,
+    savePath: TrimmedNonEmptyString,
+    reason: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to save the preview screenshot to ${this.savePath}: ${this.reason}`;
+  }
+}
+
 export const PreviewAutomationError = Schema.Union([
   PreviewAutomationUnavailableError,
   PreviewAutomationNoAvailableHostError,
@@ -876,6 +912,7 @@ export const PreviewAutomationError = Schema.Union([
   PreviewAutomationRequestQueueClosedError,
   PreviewAutomationRemoteUnavailableError,
   PreviewAutomationMalformedResponseError,
+  PreviewAutomationScreenshotSaveError,
 ]);
 export type PreviewAutomationError = typeof PreviewAutomationError.Type;
 

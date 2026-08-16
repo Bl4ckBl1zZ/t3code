@@ -1,4 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
+import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
+import {
+  deriveThreadActivityRun,
+  deriveThreadRuntime,
+} from "@t3tools/client-runtime/state/thread-execution";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
@@ -19,10 +24,16 @@ import {
   pasteComposerClipboard,
   pickComposerImages,
 } from "../lib/composerImages";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import type { DraftComposerAttachment } from "../lib/composerImages";
+import { pickComposerDocuments } from "../lib/composerDocuments";
+import { resolveHermesChatCommand } from "../lib/hermesChatCommands";
+import { buildProviderDriverMap, isHermesThread } from "../lib/mobileWorkspace";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed } from "../lib/threadActivity";
 import { appAtomRegistry } from "../state/atom-registry";
+import { useAtomCommand } from "./use-atom-command";
+import { environmentServerConfigsAtom } from "../state/server";
+import { threadEnvironment } from "../state/threads";
 import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
@@ -33,20 +44,32 @@ import {
   mergeComposerDraftContent,
   removeComposerDraftAttachment,
   setComposerDraftText,
-  updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
-import { useSelectedThreadDetail } from "../state/use-thread-detail";
+import {
+  useSelectedThreadProjection,
+  useSelectedThreadVisibleTurnItems,
+} from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
-import { useThreadOutboxMessages } from "./use-thread-outbox";
+import {
+  enqueueThreadOutboxMessage,
+  removeThreadOutboxMessage,
+  updateThreadOutboxMessage,
+} from "./thread-outbox";
+import type { QueuedThreadMessage } from "./thread-outbox";
+import {
+  holdEditingQueuedMessage,
+  releaseEditingQueuedMessage,
+  useThreadOutboxMessages,
+} from "./use-thread-outbox";
+import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox-drain";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly text: string;
-  readonly attachments?: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments?: ReadonlyArray<DraftComposerAttachment>;
 }): void {
   const threadKey = scopedThreadKey(input.environmentId, input.threadId);
   const existing = appAtomRegistry.get(composerDraftsAtom)[threadKey]?.text ?? "";
@@ -73,11 +96,19 @@ export function useThreadDraftForThread(input: {
   };
 }
 
-export function useThreadComposerState() {
+export function useThreadComposerState(options?: {
+  /**
+   * Invoked when the composer intercepts /new or /reset. The route screen
+   * wires this to its new-conversation flow, which owns navigation.
+   */
+  readonly onRequestFreshHermesChat?: () => void;
+}) {
   const { selectedThread: selectedThreadShell } = useThreadSelection();
-  const selectedThreadDetail = useSelectedThreadDetail();
+  const selectedThreadProjection = useSelectedThreadProjection();
+  const selectedThreadVisibleTurnItems = useSelectedThreadVisibleTurnItems();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -91,47 +122,78 @@ export function useThreadComposerState() {
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
   const selectedThreadFeed = useMemo(
-    () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
-    [selectedThreadDetail],
+    () =>
+      buildThreadFeed(selectedThreadVisibleTurnItems, {
+        // Attempt identity is what lets the feed fold a superseded attempt
+        // behind one boundary row instead of replaying its abandoned output.
+        attempts: selectedThreadProjection?.projection.attempts,
+        nodes: selectedThreadProjection?.projection.nodes,
+      }),
+    [selectedThreadVisibleTurnItems, selectedThreadProjection],
   );
-
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
-  const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-  const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
-  const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
+  const selectedThread = selectedThreadShell;
+  // Model, effort and the two modes belong to the thread, not to this device:
+  // every client renders the server's value so a pick on the phone shows up on
+  // the desktop. The composer draft still carries these for the new-task flow,
+  // where no thread exists yet to hold them.
+  const modelSelection = selectedThread?.modelSelection ?? null;
+  const runtimeMode = selectedThread?.runtimeMode ?? null;
+  const interactionMode = selectedThread?.interactionMode ?? null;
+  const selectedThreadRuntime = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveThreadRuntime(selectedThreadProjection.projection)
+        : (selectedThreadShell?.runtime ?? null),
+    [selectedThreadProjection, selectedThreadShell?.runtime],
+  );
+  const selectedThreadActivityRun = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveThreadActivityRun(selectedThreadProjection.projection)
+        : (selectedThreadShell?.latestRun ?? null),
+    [selectedThreadProjection, selectedThreadShell?.latestRun],
+  );
 
   const selectedThreadSessionActivity = useMemo(() => {
-    const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-    if (!selectedThread?.session) {
+    if (!selectedThreadRuntime) {
       return null;
     }
 
     return {
-      orchestrationStatus: selectedThread.session.status,
-      activeTurnId: selectedThread.session.activeTurnId ?? undefined,
+      orchestrationStatus: selectedThreadRuntime.status,
+      activeRunId: selectedThreadRuntime.activeRunId ?? undefined,
     };
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [selectedThreadRuntime]);
 
   const activeWorkStartedAt = useMemo(() => {
-    const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-    if (!selectedThread) {
+    if (!selectedThreadShell) {
       return null;
     }
-
     return deriveActiveWorkStartedAt(
-      selectedThread.latestTurn,
+      selectedThreadActivityRun,
       selectedThreadSessionActivity,
       null,
     );
-  }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
+  }, [selectedThreadActivityRun, selectedThreadSessionActivity, selectedThreadShell]);
 
-  const activeThreadBusy =
-    !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
+  const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
+  const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
+
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
+  const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
+    reportFailure: false,
+  });
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
 
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
@@ -140,11 +202,39 @@ export function useThreadComposerState() {
 
     const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
     const draft = getComposerDraftSnapshot(threadKey);
-    const thread = selectedThreadDetail ?? selectedThreadShell;
+    const thread = selectedThreadShell;
     const text = draft.text.trim();
     const attachments = draft.attachments;
     if (text.length === 0 && attachments.length === 0) {
       return null;
+    }
+
+    // T3 Work handles a few slash commands locally rather than sending them to
+    // Hermes: /new and /reset start a fresh-context conversation, /clear wipes
+    // the visible timeline. Attachments make it a real message, not a command.
+    if (attachments.length === 0) {
+      const command = resolveHermesChatCommand({
+        text,
+        isHermesConversation: isHermesThread(thread, providerDrivers),
+      });
+      if (command === "clear-timeline") {
+        clearComposerDraftContent(threadKey);
+        const cleared = await updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, clearTimeline: true },
+        });
+        if (cleared._tag === "Failure") {
+          // Put the command back so the user can retry rather than losing it.
+          void mergeComposerDraftContent(threadKey, { text, attachments: [] });
+          setPendingConnectionError("Failed to clear the conversation.");
+        }
+        return null;
+      }
+      if (command === "fresh-chat") {
+        clearComposerDraftContent(threadKey);
+        options?.onRequestFreshHermesChat?.();
+        return null;
+      }
     }
 
     const metadata = makeQueuedMessageMetadata();
@@ -161,9 +251,9 @@ export function useThreadComposerState() {
       commandId: CommandId.make(metadata.commandId),
       text,
       attachments,
-      modelSelection: draft.modelSelection ?? thread.modelSelection,
-      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-      interactionMode: draft.interactionMode ?? thread.interactionMode,
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
       createdAt: metadata.createdAt,
     });
     clearComposerDraftContent(threadKey);
@@ -179,7 +269,67 @@ export function useThreadComposerState() {
       );
     });
     return messageId;
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [options, providerDrivers, selectedThreadShell, updateThreadMetadata]);
+
+  const onDeleteQueuedMessage = useCallback((message: QueuedThreadMessage) => {
+    removeThreadOutboxMessage(message).catch((error: unknown) => {
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to delete the queued message.",
+      );
+    });
+  }, []);
+
+  // The outbox orders by createdAt, so moving a message swaps timestamps with
+  // its neighbor — the order change persists through restart for free.
+  const onMoveQueuedMessage = useCallback(
+    (message: QueuedThreadMessage, direction: "up" | "down") => {
+      const index = selectedThreadQueuedMessages.findIndex(
+        (candidate) => candidate.messageId === message.messageId,
+      );
+      const neighborIndex = direction === "up" ? index - 1 : index + 1;
+      const neighbor = selectedThreadQueuedMessages[neighborIndex];
+      if (index === -1 || !neighbor) {
+        return;
+      }
+      // The two writes are not atomic: if the second fails after the first
+      // succeeded, both messages would share a createdAt and their order after
+      // reload would depend on storage enumeration. Sequence them and restore
+      // the first message on a second-write failure.
+      void (async () => {
+        await updateThreadOutboxMessage({ ...message, createdAt: neighbor.createdAt });
+        try {
+          await updateThreadOutboxMessage({ ...neighbor, createdAt: message.createdAt });
+        } catch (error) {
+          await updateThreadOutboxMessage(message).catch(() => undefined);
+          throw error;
+        }
+      })().catch((error: unknown) => {
+        setPendingConnectionError(
+          error instanceof Error ? error.message : "Failed to reorder the queued messages.",
+        );
+      });
+    },
+    [selectedThreadQueuedMessages],
+  );
+
+  const onUpdateQueuedMessageText = useCallback((message: QueuedThreadMessage, text: string) => {
+    updateThreadOutboxMessage({ ...message, text }).catch((error: unknown) => {
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to update the queued message.",
+      );
+    });
+  }, []);
+
+  const onQueuedMessageEditingChange = useCallback(
+    (message: QueuedThreadMessage, editing: boolean) => {
+      if (editing) {
+        holdEditingQueuedMessage(message.messageId);
+      } else {
+        releaseEditingQueuedMessage(message.messageId);
+      }
+    },
+    [],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -209,6 +359,37 @@ export function useThreadComposerState() {
       setPendingConnectionError(result.error);
     }
   }, [composerDrafts, selectedThreadShell]);
+
+  const onPickDraftDocuments = useCallback(async () => {
+    if (!selectedThreadShell) {
+      return;
+    }
+
+    const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+    const result = await pickComposerDocuments({
+      existingCount: composerDrafts[threadKey]?.attachments.length ?? 0,
+    });
+    if (result.documents.length > 0) {
+      appendComposerDraftAttachments(threadKey, result.documents);
+    }
+    if (result.error) {
+      setPendingConnectionError(result.error);
+    }
+  }, [composerDrafts, selectedThreadShell]);
+
+  // Attachments produced in-app (camera captures) rather than through a
+  // system picker: already validated, so they append directly.
+  const onAddDraftAttachments = useCallback(
+    (attachments: ReadonlyArray<DraftComposerAttachment>) => {
+      if (!selectedThreadShell || attachments.length === 0) {
+        return;
+      }
+
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      appendComposerDraftAttachments(threadKey, attachments);
+    },
+    [selectedThreadShell],
+  );
 
   const onPasteIntoDraft = useCallback(async () => {
     if (!selectedThreadShell) {
@@ -269,39 +450,70 @@ export function useThreadComposerState() {
     [selectedThreadShell],
   );
 
+  // These three write straight through to the thread rather than to the local
+  // draft. The server echoes the change back over the shell subscription, which
+  // is what makes a pick on one device land on all the others.
   const onUpdateModelSelection = useCallback(
     (value: ModelSelection) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadShell) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { modelSelection: value });
+      void updateThreadMetadata({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, modelSelection: value },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          setPendingConnectionError("Failed to change the model.");
+        }
+      });
     },
-    [selectedThreadKey],
+    [selectedThreadShell, updateThreadMetadata],
   );
 
   const onUpdateRuntimeMode = useCallback(
     (value: RuntimeMode) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadShell) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
+      void setThreadRuntimeMode({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, runtimeMode: value },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          setPendingConnectionError("Failed to change the runtime mode.");
+        }
+      });
     },
-    [selectedThreadKey],
+    [selectedThreadShell, setThreadRuntimeMode],
   );
 
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey) {
+      if (!selectedThreadShell) {
         return;
       }
-      updateComposerDraftSettings(selectedThreadKey, { interactionMode: value });
+      void setThreadInteractionMode({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, interactionMode: value },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          setPendingConnectionError("Failed to change the interaction mode.");
+        }
+      });
     },
-    [selectedThreadKey],
+    [selectedThreadShell, setThreadInteractionMode],
   );
 
   return {
     selectedThreadFeed,
+    selectedThreadActivityRun,
     selectedThreadQueueCount,
+    selectedThreadQueuedMessages,
+    dispatchingQueuedMessageId,
+    onDeleteQueuedMessage,
+    onMoveQueuedMessage,
+    onUpdateQueuedMessageText,
+    onQueuedMessageEditingChange,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
@@ -309,8 +521,11 @@ export function useThreadComposerState() {
     runtimeMode,
     interactionMode,
     activeThreadBusy,
+    interruptibleRunId,
     onChangeDraftMessage,
     onPickDraftImages,
+    onPickDraftDocuments,
+    onAddDraftAttachments,
     onPasteIntoDraft,
     onNativePasteImages,
     onRemoveDraftImage,

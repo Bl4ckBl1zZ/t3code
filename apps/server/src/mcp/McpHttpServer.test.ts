@@ -1,13 +1,31 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PreviewTabId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  type OrchestrationV2ThreadProjection,
+  type Project,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
+import * as ServerConfig from "../config.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -16,26 +34,58 @@ const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
 const tabId = PreviewTabId.make("tab-mcp-test");
 const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
+const testWorkspaceRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "mcp-snapshot-test-"));
 const invocation = {
+  credentialId: "credential-mcp-test",
   environmentId,
   threadId,
   providerSessionId: "provider-session-mcp-test",
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["preview"] as const),
+  audience: "urn:t3-code:mcp:environment-mcp-test",
   issuedAt: 1,
 };
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
+  protocolVersion: "2025-06-18",
   initializePayload: {
-    protocolVersion: "2025-03-26",
+    protocolVersion: "2025-06-18",
     capabilities: {},
     clientInfo: { name: "mcp-test", version: "1.0.0" },
   },
   getClient: Effect.die("unused"),
 });
+const projectId = ProjectId.make("project-mcp-test");
+const stubThreadManagementLayer = Layer.mock(ThreadManagementService)({
+  getThreadProjection: (projectionThreadId) =>
+    projectionThreadId === threadId
+      ? Effect.succeed({
+          thread: {
+            id: threadId,
+            projectId,
+            worktreePath: null,
+            archivedAt: null,
+            deletedAt: null,
+          },
+        } as OrchestrationV2ThreadProjection)
+      : Effect.die("unused"),
+} satisfies Partial<ThreadManagementService["Service"]>);
+const stubProjectServiceLayer = Layer.mock(ProjectService.ProjectService)({
+  getById: (lookupProjectId) =>
+    Effect.succeed(
+      lookupProjectId === projectId
+        ? Option.some({ id: projectId, workspaceRoot: testWorkspaceRoot } as Project)
+        : Option.none(),
+    ),
+} satisfies Partial<ProjectService.ProjectService["Service"]>);
 const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.provideMerge(stubThreadManagementLayer),
+  Layer.provideMerge(stubProjectServiceLayer),
+  Layer.provideMerge(WorkspacePaths.layer),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-test-" })),
+  Layer.provideMerge(NodeServices.layer),
 );
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -103,6 +153,7 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         name: "MCP termination test",
         version: "1.0.0",
         path: "/mcp",
+        protocols: [McpProtocol.v2025_06_18],
       });
       yield* HttpRouter.serve(serverLayer, {
         disableListenLog: true,
@@ -217,6 +268,11 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
       expect(clickTool?.tool.annotations?.destructiveHint).toBe(true);
       expect(clickTool?.tool.annotations?.openWorldHint).toBe(true);
+      expect(clickTool?.tool.outputSchema).toEqual({
+        type: "object",
+        additionalProperties: false,
+        description: "The preview action completed successfully.",
+      });
 
       const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
@@ -239,8 +295,9 @@ it.effect("registers annotated tools and preserves authenticated request context
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.flip,
         );
-      expect(malformed.isError).toBe(true);
+      expect(malformed._tag).toBe("InvalidParams");
 
       const snapshot = yield* server
         .callTool({ name: "preview_snapshot", arguments: { tabId: alternateTabId } })
@@ -257,15 +314,119 @@ it.effect("registers annotated tools and preserves authenticated request context
         alternateTabId,
       );
 
-      const press = yield* server
-        .callTool({ name: "preview_press", arguments: { key: "Enter" } })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-      expect(press.isError).toBe(false);
-      expect(press.structuredContent).toBeNull();
-      expect(press.content).toEqual([{ type: "text", text: "null" }]);
+      const actionRequests = [
+        { name: "preview_click", arguments: { x: 10, y: 10 } },
+        { name: "preview_type", arguments: { text: "Hello" } },
+        { name: "preview_press", arguments: { key: "Enter" } },
+        { name: "preview_scroll", arguments: { deltaY: 100 } },
+        { name: "preview_wait_for", arguments: { text: "Example" } },
+      ];
+      for (const request of actionRequests) {
+        const result = yield* server
+          .callTool(request)
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(result.isError).toBe(false);
+        expect(result.structuredContent).toEqual({});
+        expect(result.content).toEqual([{ type: "text", text: "{}" }]);
+      }
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("saves snapshot screenshots without returning raw base64 metadata", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const events = yield* broker.connect({
+        clientId: "mcp-save-client",
+        environmentId,
+      });
+      yield* Stream.runForEach(events, (event) =>
+        event.type === "connected"
+          ? Effect.void
+          : broker.respond({
+              clientId: "mcp-save-client",
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: true,
+              result: {
+                url: "http://example.test/",
+                title: "Example",
+                loading: false,
+                visibleText: "Example",
+                interactiveElements: [],
+                accessibilityTree: {},
+                consoleEntries: [],
+                networkEntries: [],
+                actionTimeline: [],
+                screenshot: {
+                  mimeType: "image/png",
+                  data: Buffer.from("png-bytes").toString("base64"),
+                  width: 10,
+                  height: 5,
+                },
+              },
+            }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const callSnapshot = (arguments_: Record<string, unknown>) =>
+        server
+          .callTool({ name: "preview_snapshot", arguments: arguments_ })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+      const saved = yield* callSnapshot({ savePath: "evidence/login.png" });
+      expect(saved.isError).toBe(false);
+      expect(saved.structuredContent).toMatchObject({
+        savedScreenshotPath: "evidence/login.png",
+        screenshot: { mimeType: "image/png", width: 10, height: 5 },
+      });
+      expect(
+        (saved.structuredContent as { screenshot?: { data?: unknown } }).screenshot?.data,
+      ).toBeUndefined();
+      expect(
+        NodeFS.readFileSync(NodePath.join(testWorkspaceRoot, "evidence/login.png"), "utf8"),
+      ).toBe("png-bytes");
+
+      expect((yield* callSnapshot({ savePath: "../outside.png" })).isError).toBe(true);
+      const outsideDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "mcp-outside-"));
+      NodeFS.symlinkSync(outsideDir, NodePath.join(testWorkspaceRoot, "escape-dir"));
+      expect((yield* callSnapshot({ savePath: "escape-dir/sub/leak.png" })).isError).toBe(true);
+      expect(NodeFS.existsSync(NodePath.join(outsideDir, "sub"))).toBe(false);
+
+      const victimPath = NodePath.join(outsideDir, "victim.png");
+      NodeFS.writeFileSync(victimPath, "original");
+      NodeFS.symlinkSync(victimPath, NodePath.join(testWorkspaceRoot, "evidence", "escape.png"));
+      expect((yield* callSnapshot({ savePath: "evidence/escape.png" })).isError).toBe(true);
+      expect(NodeFS.readFileSync(victimPath, "utf8")).toBe("original");
+
+      const danglingTarget = NodePath.join(outsideDir, "not-created.png");
+      NodeFS.symlinkSync(
+        danglingTarget,
+        NodePath.join(testWorkspaceRoot, "evidence", "dangling.png"),
+      );
+      expect((yield* callSnapshot({ savePath: "evidence/dangling.png" })).isError).toBe(true);
+      expect(NodeFS.existsSync(danglingTarget)).toBe(false);
+
+      expect((yield* callSnapshot({ save: true, savePath: "evidence/login.png" })).isError).toBe(
+        true,
+      );
+
+      const artifact = yield* callSnapshot({ save: true });
+      expect(artifact.isError).toBe(false);
+      const artifactPath = (artifact.structuredContent as { savedScreenshotPath?: string })
+        .savedScreenshotPath;
+      const config = yield* ServerConfig.ServerConfig;
+      expect(artifactPath).toBeDefined();
+      expect(NodePath.dirname(artifactPath!)).toBe(config.browserArtifactsDir);
+      expect(NodeFS.readFileSync(artifactPath!, "utf8")).toBe("png-bytes");
     }),
   ).pipe(Effect.provide(TestLayer)),
 );

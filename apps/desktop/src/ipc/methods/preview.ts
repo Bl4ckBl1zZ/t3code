@@ -14,9 +14,10 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetColorSchemeInputSchema,
+  DesktopPreviewSetDeviceEmulationInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
-  PreviewAnnotationPayloadSchema,
+  PreviewAnnotationSubmissionResultSchema,
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
 } from "@t3tools/contracts";
@@ -148,6 +149,15 @@ export const setColorScheme = DesktopIpc.makeIpcMethod({
     yield* manager.setColorScheme(tabId, colorScheme);
   }),
 });
+export const setDeviceEmulation = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_DEVICE_EMULATION_CHANNEL,
+  payload: DesktopPreviewSetDeviceEmulationInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setDeviceEmulation")(function* ({ tabId, emulation }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setDeviceEmulation(tabId, emulation);
+  }),
+});
 export const openDevTools = tabMethod(
   IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL,
   "desktop.ipc.preview.openDevTools",
@@ -227,7 +237,7 @@ export const setAnnotationTheme = DesktopIpc.makeIpcMethod({
 export const pickElement = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL,
   payload: DesktopPreviewTabInputSchema,
-  result: Schema.NullOr(PreviewAnnotationPayloadSchema),
+  result: Schema.NullOr(PreviewAnnotationSubmissionResultSchema),
   handler: Effect.fn("desktop.ipc.preview.pickElement")(function* ({ tabId }) {
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.pickElement(tabId);
@@ -367,6 +377,7 @@ export const methods = [
   resetZoom,
   hardReload,
   setColorScheme,
+  setDeviceEmulation,
   openDevTools,
   clearCookies,
   clearCache,

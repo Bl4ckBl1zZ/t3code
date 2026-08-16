@@ -3,6 +3,13 @@ import { CloudIcon, MonitorIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
 import type { EnvironmentOption } from "./BranchToolbar.logic";
+import { cn } from "../lib/utils";
+import {
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
+  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+  THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
+} from "./chat/threadDetailsPanelStyles";
 import {
   Select,
   SelectGroup,
@@ -17,9 +24,8 @@ interface BranchToolbarEnvironmentSelectorProps {
   envLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
-  // Absent when there is only one environment to show: the indicator still
-  // renders (as a static label) so remote projects are always identifiable.
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  displayMode?: "toolbar" | "panel";
 }
 
 export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvironmentSelector({
@@ -27,6 +33,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   environmentId,
   availableEnvironments,
   onEnvironmentChange,
+  displayMode = "toolbar",
 }: BranchToolbarEnvironmentSelectorProps) {
   const activeEnvironment = useMemo(() => {
     return availableEnvironments.find((env) => env.environmentId === environmentId) ?? null;
@@ -41,15 +48,44 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
     [availableEnvironments],
   );
 
+  // The static label carries the xs control's height (h-7 sm:h-6) as well as
+  // its padding: the composer context strip has no min-height of its own, and
+  // the glass seam joining it to the composer assumes a fixed strip height, so
+  // a shorter label would drag the seam out of line whenever this label is the
+  // only thing in the strip.
   if (envLocked || onEnvironmentChange === undefined) {
     return (
-      <span className="inline-flex min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
-        {activeEnvironment?.isPrimary ? (
-          <MonitorIcon className="size-3 shrink-0" />
-        ) : (
-          <CloudIcon className="size-3 shrink-0" />
+      <span
+        className={cn(
+          "inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs",
+          displayMode === "panel" && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
         )}
-        <span className="truncate">{activeEnvironment?.label ?? "Run on"}</span>
+        data-composer-context-control
+      >
+        {activeEnvironment?.isPrimary ? (
+          <MonitorIcon
+            className={
+              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
+            }
+          />
+        ) : (
+          <CloudIcon
+            className={
+              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
+            }
+          />
+        )}
+        <span
+          data-composer-label
+          className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+        >
+          <span
+            data-composer-label-motion
+            className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+          >
+            {activeEnvironment?.label ?? "Run on"}
+          </span>
+        </span>
       </span>
     );
   }
@@ -63,18 +99,47 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
     >
       <SelectTrigger
         variant="ghost"
-        size="xs"
-        className="min-w-0 max-w-full font-medium"
+        size={displayMode === "panel" ? "default" : "xs"}
+        className={cn(
+          "min-w-0 max-w-full font-medium",
+          displayMode === "panel" && THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
+        )}
         aria-label="Run on"
+        data-composer-context-control
       >
         {activeEnvironment?.isPrimary ? (
-          <MonitorIcon className="size-3 shrink-0" />
+          <MonitorIcon
+            className={
+              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
+            }
+          />
         ) : (
-          <CloudIcon className="size-3 shrink-0" />
+          <CloudIcon
+            className={
+              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
+            }
+          />
         )}
-        <SelectValue />
+        <span
+          data-composer-label
+          className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+        >
+          <span
+            data-composer-label-motion
+            className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+          >
+            <SelectValue />
+          </span>
+        </span>
       </SelectTrigger>
-      <SelectPopup>
+      <SelectPopup
+        {...(displayMode === "panel"
+          ? {
+              alignItemWithTrigger: false,
+              popupClassName: THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+            }
+          : {})}
+      >
         <SelectGroup>
           <SelectGroupLabel>Run on</SelectGroupLabel>
           {availableEnvironments.map((env) => (

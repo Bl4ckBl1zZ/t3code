@@ -14,7 +14,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { threadEnvironment } from "../../state/threads";
-import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import type { DraftComposerAttachment } from "../../lib/composerImages";
 import { makeTurnCommandMetadata, type TurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
 import { randomHex } from "../../lib/uuid";
@@ -33,10 +33,11 @@ export function useCreateProjectThread() {
       readonly branch: string | null;
       readonly worktreePath: string | null;
       readonly startFromOrigin?: boolean;
+      readonly prepareWorkspace?: boolean;
       readonly runtimeMode: RuntimeMode;
       readonly interactionMode: ProviderInteractionMode;
       readonly initialMessageText: string;
-      readonly initialAttachments: ReadonlyArray<DraftComposerImageAttachment>;
+      readonly initialAttachments: ReadonlyArray<DraftComposerAttachment>;
       /** Reuse identifiers from a queued pending task instead of minting new ones. */
       readonly turnMetadata?: TurnCommandMetadata;
     }) => {
@@ -74,6 +75,7 @@ export function useCreateProjectThread() {
           branch: input.branch,
           worktreePath: input.worktreePath,
           startFromOrigin: input.startFromOrigin ?? false,
+          prepareWorkspace: input.prepareWorkspace,
           worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
         }),
       });

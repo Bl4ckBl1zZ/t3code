@@ -20,6 +20,15 @@ import {
 } from "./filesystem.ts";
 import { AssetAccessError, AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
 import {
+  PersistChatAttachmentsError,
+  PersistChatAttachmentsInput,
+  PersistChatAttachmentsResult,
+} from "./chatAttachment.ts";
+import {
+  OrchestrationGetFullThreadDiffError,
+  OrchestrationGetTurnDiffError,
+} from "./checkpointDiff.ts";
+import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
@@ -41,29 +50,67 @@ import {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   VcsStatusInput,
+  VcsStatusLocalResult,
   VcsStatusResult,
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
+  ReviewDiffFileContentsInput,
+  ReviewDiffFileContentsResult,
   ReviewDiffPreviewError,
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
 } from "./review.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
-  ClientOrchestrationCommand,
-  ORCHESTRATION_WS_METHODS,
-  OrchestrationDispatchCommandError,
-  OrchestrationGetFullThreadDiffError,
-  OrchestrationGetFullThreadDiffInput,
-  OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
-  OrchestrationGetTurnDiffError,
-  OrchestrationGetTurnDiffInput,
-  OrchestrationRpcSchemas,
-} from "./orchestration.ts";
+  OrchestrationSearchThreadsResult,
+} from "./threadSearch.ts";
+import {
+  HermesHistoryResetInput,
+  HermesHistoryResetResult,
+  HermesSessionDiscoveryInput,
+  HermesSessionDiscoveryResult,
+  HermesSessionImportInput,
+  HermesSessionImportResult,
+  HermesSessionsError,
+} from "./hermesSessions.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import {
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2DispatchCommandError,
+  OrchestrationV2GenerateHandoffScriptError,
+  OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2GetThreadProjectionError,
+  OrchestrationV2GetWorkflowScriptError,
+  OrchestrationV2RpcSchemas,
+  OrchestrationV2ThreadLaunchError,
+} from "./orchestrationV2.ts";
+import {
+  PullRequestActionInput,
+  PullRequestActivity,
+  PullRequestCommentInput,
+  PullRequestCommentUpdateInput,
+  PullRequestDetail,
+  PullRequestDiffFileContentsInput,
+  PullRequestDiffFileContentsResult,
+  PullRequestInvalidateInput,
+  PullRequestListInput,
+  PullRequestListResult,
+  PullRequestListStatsInput,
+  PullRequestListStatsResult,
+  PullRequestOperationError,
+  PullRequestReactionInput,
+  PullRequestRef,
+  PullRequestReviewerCandidateList,
+  PullRequestReviewerRequestInput,
+  PullRequestSubmitReviewInput,
+  PullRequestThreadReplyInput,
+  PullRequestThreadResolutionInput,
+  PullRequestUnavailableError,
+  PullRequestUpdateInput,
+} from "./pullRequest.ts";
 import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
@@ -102,6 +149,7 @@ import {
 } from "./terminal.ts";
 import {
   DiscoveredLocalServerList,
+  ConfiguredLocalServerUrls,
   PreviewCloseInput,
   PreviewError,
   PreviewEvent,
@@ -149,7 +197,47 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
+import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
+import {
+  ScheduledTaskDeleteInput,
+  ScheduledTaskDeleteResult,
+  ScheduledTaskError,
+  ScheduledTaskListInput,
+  ScheduledTaskListResult,
+  ScheduledTaskRunNowInput,
+  ScheduledTaskRunNowResult,
+  ScheduledTaskSetEnabledInput,
+  ScheduledTaskUpsertInput,
+  ScheduledTaskMutationResult,
+} from "./scheduledTask.ts";
+import {
+  HermesCronError,
+  HermesCronListInput,
+  HermesCronListResult,
+  HermesCronMutationInput,
+  HermesCronMutationResponse,
+} from "./hermesGateway.ts";
+import {
+  HermesProactiveInboxError,
+  HermesProactiveInboxInput,
+  HermesProactiveInboxSnapshot,
+  HermesProactiveMarkNotificationsInput,
+  HermesProactiveMarkNotificationsResult,
+  HermesProactiveStatusInput,
+  HermesProactiveStatusResult,
+} from "./hermesProactive.ts";
+import {
+  HermesSkillsError,
+  HermesSkillsInspectInput,
+  HermesSkillsInspectResult,
+  HermesSkillsListInput,
+  HermesSkillsListResult,
+  HermesSkillsReloadInput,
+  HermesSkillsReloadResponse,
+  HermesSkillsSearchInput,
+  HermesSkillsSearchResult,
+} from "./hermesSkills.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -161,6 +249,7 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -172,6 +261,7 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsMutate: "projects.mutate",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -179,10 +269,12 @@ export const WS_METHODS = {
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
   assetsCreateUrl: "assets.createUrl",
+  assetsPersistChatAttachments: "assets.persistChatAttachments",
 
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
+  vcsRefreshLocalStatus: "vcs.refreshLocalStatus",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -197,6 +289,7 @@ export const WS_METHODS = {
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
+  reviewGetDiffFileContents: "review.getDiffFileContents",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -240,10 +333,51 @@ export const WS_METHODS = {
   serverReportClientActivity: "server.reportClientActivity",
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
+  serverGetUsageSummary: "server.getUsageSummary",
+
+  // Hermes durable session discovery/import
+  hermesSessionsDiscover: "hermes.sessions.discover",
+  hermesSessionsImport: "hermes.sessions.import",
+  hermesHistoryReset: "hermes.history.reset",
+
+  // Scheduled tasks
+  scheduledTasksList: "scheduledTasks.list",
+  scheduledTasksSubscribe: "scheduledTasks.subscribe",
+  scheduledTasksUpsert: "scheduledTasks.upsert",
+  scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
+  scheduledTasksDelete: "scheduledTasks.delete",
+  scheduledTasksRunNow: "scheduledTasks.runNow",
+  hermesCronList: "hermesCron.list",
+  hermesCronMutate: "hermesCron.mutate",
+  hermesProactiveStatus: "hermesProactive.status",
+  hermesProactiveMarkNotifications: "hermesProactive.markNotifications",
+  subscribeHermesProactiveInbox: "hermesProactive.subscribeInbox",
+  hermesSkillsList: "hermesSkills.list",
+  hermesSkillsSearch: "hermesSkills.search",
+  hermesSkillsInspect: "hermesSkills.inspect",
+  hermesSkillsReload: "hermesSkills.reload",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+
+  // Pull request methods
+  pullRequestsList: "pullRequests.list",
+  pullRequestsListStats: "pullRequests.listStats",
+  pullRequestsDetail: "pullRequests.detail",
+  pullRequestsActivity: "pullRequests.activity",
+  pullRequestsDiffFileContents: "pullRequests.diffFileContents",
+  pullRequestsRunAction: "pullRequests.runAction",
+  pullRequestsUpdate: "pullRequests.update",
+  pullRequestsComment: "pullRequests.comment",
+  pullRequestsUpdateComment: "pullRequests.updateComment",
+  pullRequestsSubmitReview: "pullRequests.submitReview",
+  pullRequestsReplyToThread: "pullRequests.replyToThread",
+  pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
+  pullRequestsSetReaction: "pullRequests.setReaction",
+  pullRequestsInvalidate: "pullRequests.invalidate",
+  pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
+  pullRequestsRequestReviewers: "pullRequests.requestReviewers",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -377,10 +511,34 @@ export const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetry
   error: EnvironmentAuthorizationError,
 });
 
+export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
+  payload: UsageSummaryInput,
+  success: UsageSummary,
+  error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsHermesSessionsDiscoverRpc = Rpc.make(WS_METHODS.hermesSessionsDiscover, {
+  payload: HermesSessionDiscoveryInput,
+  success: HermesSessionDiscoveryResult,
+  error: Schema.Union([HermesSessionsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSessionsImportRpc = Rpc.make(WS_METHODS.hermesSessionsImport, {
+  payload: HermesSessionImportInput,
+  success: HermesSessionImportResult,
+  error: Schema.Union([HermesSessionsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesHistoryResetRpc = Rpc.make(WS_METHODS.hermesHistoryReset, {
+  payload: HermesHistoryResetInput,
+  success: HermesHistoryResetResult,
+  error: Schema.Union([HermesSessionsError, EnvironmentAuthorizationError]),
 });
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
@@ -410,6 +568,124 @@ export const WsServerGetBackgroundPolicyRpc = Rpc.make(WS_METHODS.serverGetBackg
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
   error: EnvironmentAuthorizationError,
+});
+
+const PullRequestRpcError = Schema.Union([
+  PullRequestUnavailableError,
+  PullRequestOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
+  payload: PullRequestListInput,
+  success: PullRequestListResult,
+  error: PullRequestRpcError,
+});
+
+/**
+ * The line counts for rows already on the page. Its own call because on GitHub the pair costs
+ * 40-60% of the listing read that answers everything else on the row, so the rows arrive first
+ * and their stats a moment later.
+ */
+export const WsPullRequestsListStatsRpc = Rpc.make(WS_METHODS.pullRequestsListStats, {
+  payload: PullRequestListStatsInput,
+  success: PullRequestListStatsResult,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
+  payload: PullRequestRef,
+  success: PullRequestDetail,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsActivityRpc = Rpc.make(WS_METHODS.pullRequestsActivity, {
+  payload: PullRequestRef,
+  success: PullRequestActivity,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsDiffFileContentsRpc = Rpc.make(WS_METHODS.pullRequestsDiffFileContents, {
+  payload: PullRequestDiffFileContentsInput,
+  success: PullRequestDiffFileContentsResult,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
+  payload: PullRequestActionInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsUpdateRpc = Rpc.make(WS_METHODS.pullRequestsUpdate, {
+  payload: PullRequestUpdateInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
+  payload: PullRequestCommentInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsUpdateCommentRpc = Rpc.make(WS_METHODS.pullRequestsUpdateComment, {
+  payload: PullRequestCommentUpdateInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsSubmitReviewRpc = Rpc.make(WS_METHODS.pullRequestsSubmitReview, {
+  payload: PullRequestSubmitReviewInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsReplyToThreadRpc = Rpc.make(WS_METHODS.pullRequestsReplyToThread, {
+  payload: PullRequestThreadReplyInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsSetThreadResolutionRpc = Rpc.make(
+  WS_METHODS.pullRequestsSetThreadResolution,
+  {
+    payload: PullRequestThreadResolutionInput,
+    success: Schema.Void,
+    error: PullRequestRpcError,
+  },
+);
+
+export const WsPullRequestsSetReactionRpc = Rpc.make(WS_METHODS.pullRequestsSetReaction, {
+  payload: PullRequestReactionInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsInvalidateRpc = Rpc.make(WS_METHODS.pullRequestsInvalidate, {
+  payload: PullRequestInvalidateInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+/**
+ * Read on its own rather than as part of the detail: the people who may be asked are only wanted
+ * once somebody opens the menu, and reading them with every change request would spend a request
+ * per host on a list nobody looked at.
+ */
+export const WsPullRequestsReviewerCandidatesRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewerCandidates,
+  {
+    payload: PullRequestRef,
+    success: PullRequestReviewerCandidateList,
+    error: PullRequestRpcError,
+  },
+);
+
+export const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequestsRequestReviewers, {
+  payload: PullRequestReviewerRequestInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -466,6 +742,12 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
 });
 
+export const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
+  payload: ProjectMutation,
+  success: Project,
+  error: Schema.Union([ProjectMutationError, EnvironmentAuthorizationError]),
+});
+
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
@@ -481,6 +763,12 @@ export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   payload: AssetCreateUrlInput,
   success: AssetCreateUrlResult,
   error: Schema.Union([AssetAccessError, EnvironmentAuthorizationError]),
+});
+
+export const WsAssetsPersistChatAttachmentsRpc = Rpc.make(WS_METHODS.assetsPersistChatAttachments, {
+  payload: PersistChatAttachmentsInput,
+  success: PersistChatAttachmentsResult,
+  error: Schema.Union([PersistChatAttachmentsError, EnvironmentAuthorizationError]),
 });
 
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
@@ -499,6 +787,17 @@ export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
 export const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   payload: VcsStatusInput,
   success: VcsStatusResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Recomputes only the working-tree half of the status. Callers that poll while
+ * an agent edits use this instead of `vcs.refreshStatus`, which also
+ * invalidates the remote/PR caches and pays for a network lookup.
+ */
+export const WsVcsRefreshLocalStatusRpc = Rpc.make(WS_METHODS.vcsRefreshLocalStatus, {
+  payload: VcsStatusInput,
+  success: VcsStatusLocalResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
@@ -563,6 +862,12 @@ export const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
 export const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPreview, {
   payload: ReviewDiffPreviewInput,
   success: ReviewDiffPreviewResult,
+  error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsReviewGetDiffFileContentsRpc = Rpc.make(WS_METHODS.reviewGetDiffFileContents, {
+  payload: ReviewDiffFileContentsInput,
+  success: ReviewDiffFileContentsResult,
   error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
 });
 
@@ -671,65 +976,116 @@ export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewE
 export const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(
   WS_METHODS.subscribeDiscoveredLocalServers,
   {
-    payload: Schema.Struct({}),
+    payload: Schema.Struct({
+      configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
+    }),
     success: DiscoveredLocalServerList,
     error: EnvironmentAuthorizationError,
     stream: true,
   },
 );
 
-export const WsOrchestrationDispatchCommandRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.dispatchCommand,
+export const WsOrchestrationV2DispatchCommandRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
   {
-    payload: ClientOrchestrationCommand,
-    success: OrchestrationRpcSchemas.dispatchCommand.output,
-    error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+    payload: OrchestrationV2RpcSchemas.dispatchCommand.input,
+    success: OrchestrationV2RpcSchemas.dispatchCommand.output,
+    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
   },
 );
 
-export const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getTurnDiff, {
-  payload: OrchestrationGetTurnDiffInput,
-  success: OrchestrationRpcSchemas.getTurnDiff.output,
+export const WsOrchestrationV2GetTurnDiffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTurnDiff, {
+  payload: OrchestrationV2RpcSchemas.getTurnDiff.input,
+  success: OrchestrationV2RpcSchemas.getTurnDiff.output,
   error: Schema.Union([OrchestrationGetTurnDiffError, EnvironmentAuthorizationError]),
 });
 
-export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.getFullThreadDiff,
+export const WsOrchestrationV2GetFullThreadDiffRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
   {
-    payload: OrchestrationGetFullThreadDiffInput,
-    success: OrchestrationRpcSchemas.getFullThreadDiff.output,
+    payload: OrchestrationV2RpcSchemas.getFullThreadDiff.input,
+    success: OrchestrationV2RpcSchemas.getFullThreadDiff.output,
     error: Schema.Union([OrchestrationGetFullThreadDiffError, EnvironmentAuthorizationError]),
   },
 );
 
-export const WsOrchestrationSearchThreadsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.searchThreads, {
-  payload: OrchestrationSearchThreadsInput,
-  success: OrchestrationRpcSchemas.searchThreads.output,
-  error: Schema.Union([OrchestrationSearchThreadsError, EnvironmentAuthorizationError]),
-});
-
-export const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
+export const WsOrchestrationV2SearchThreadsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.searchThreads,
   {
-    payload: OrchestrationRpcSchemas.getArchivedShellSnapshot.input,
-    success: OrchestrationRpcSchemas.getArchivedShellSnapshot.output,
-    error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
+    payload: OrchestrationSearchThreadsInput,
+    success: OrchestrationSearchThreadsResult,
+    error: Schema.Union([OrchestrationSearchThreadsError, EnvironmentAuthorizationError]),
   },
 );
 
-export const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
-  payload: OrchestrationRpcSchemas.subscribeShell.input,
-  success: OrchestrationRpcSchemas.subscribeShell.output,
-  error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
-  stream: true,
+export const WsOrchestrationV2GetArchivedShellSnapshotRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+  {
+    payload: OrchestrationV2RpcSchemas.getArchivedShellSnapshot.input,
+    success: OrchestrationV2RpcSchemas.getArchivedShellSnapshot.output,
+    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
+  {
+    payload: OrchestrationV2RpcSchemas.getThreadProjection.input,
+    success: OrchestrationV2RpcSchemas.getThreadProjection.output,
+    error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+  payload: OrchestrationV2RpcSchemas.launchThread.input,
+  success: OrchestrationV2RpcSchemas.launchThread.output,
+  error: Schema.Union([OrchestrationV2ThreadLaunchError, EnvironmentAuthorizationError]),
 });
 
-export const WsOrchestrationSubscribeThreadRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.subscribeThread,
+export const WsOrchestrationV2GenerateHandoffScriptRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.generateHandoffScript,
   {
-    payload: OrchestrationRpcSchemas.subscribeThread.input,
-    success: OrchestrationRpcSchemas.subscribeThread.output,
-    error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
+    payload: OrchestrationV2RpcSchemas.generateHandoffScript.input,
+    success: OrchestrationV2RpcSchemas.generateHandoffScript.output,
+    error: Schema.Union([OrchestrationV2GenerateHandoffScriptError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationV2GetWorkflowScriptRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
+  {
+    payload: OrchestrationV2RpcSchemas.getWorkflowScript.input,
+    success: OrchestrationV2RpcSchemas.getWorkflowScript.output,
+    error: Schema.Union([OrchestrationV2GetWorkflowScriptError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationV2SubscribeArchivedShellRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell,
+  {
+    payload: OrchestrationV2RpcSchemas.subscribeArchivedShell.input,
+    success: OrchestrationV2RpcSchemas.subscribeArchivedShell.output,
+    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
+export const WsOrchestrationV2SubscribeShellRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+  {
+    payload: OrchestrationV2RpcSchemas.subscribeShell.input,
+    success: OrchestrationV2RpcSchemas.subscribeShell.output,
+    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
+export const WsOrchestrationV2SubscribeThreadRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+  {
+    payload: OrchestrationV2RpcSchemas.subscribeThread.input,
+    success: OrchestrationV2RpcSchemas.subscribeThread.output,
+    error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
     stream: true,
   },
 );
@@ -760,6 +1116,109 @@ export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServer
   success: ServerLifecycleStreamEvent,
   error: EnvironmentAuthorizationError,
   stream: true,
+});
+
+export const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
+  payload: ScheduledTaskListInput,
+  success: ScheduledTaskListResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+/** Streams the full scheduled-task list: one snapshot on subscribe, then a fresh list after every change. */
+export const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
+  payload: ScheduledTaskListInput,
+  success: ScheduledTaskListResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsScheduledTasksUpsertRpc = Rpc.make(WS_METHODS.scheduledTasksUpsert, {
+  payload: ScheduledTaskUpsertInput,
+  success: ScheduledTaskMutationResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduledTasksSetEnabledRpc = Rpc.make(WS_METHODS.scheduledTasksSetEnabled, {
+  payload: ScheduledTaskSetEnabledInput,
+  success: ScheduledTaskMutationResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduledTasksDeleteRpc = Rpc.make(WS_METHODS.scheduledTasksDelete, {
+  payload: ScheduledTaskDeleteInput,
+  success: ScheduledTaskDeleteResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNow, {
+  payload: ScheduledTaskRunNowInput,
+  success: ScheduledTaskRunNowResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesCronListRpc = Rpc.make(WS_METHODS.hermesCronList, {
+  payload: HermesCronListInput,
+  success: HermesCronListResult,
+  error: Schema.Union([HermesCronError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesCronMutateRpc = Rpc.make(WS_METHODS.hermesCronMutate, {
+  payload: HermesCronMutationInput,
+  success: HermesCronMutationResponse,
+  error: Schema.Union([HermesCronError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesProactiveStatusRpc = Rpc.make(WS_METHODS.hermesProactiveStatus, {
+  payload: HermesProactiveStatusInput,
+  success: HermesProactiveStatusResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsHermesProactiveMarkNotificationsRpc = Rpc.make(
+  WS_METHODS.hermesProactiveMarkNotifications,
+  {
+    payload: HermesProactiveMarkNotificationsInput,
+    success: HermesProactiveMarkNotificationsResult,
+    error: Schema.Union([HermesProactiveInboxError, EnvironmentAuthorizationError]),
+  },
+);
+
+/**
+ * Pushed rather than polled: a cron run can land at any hour, and the badge it
+ * feeds sits in the sidebar of every connected client.
+ */
+export const WsSubscribeHermesProactiveInboxRpc = Rpc.make(
+  WS_METHODS.subscribeHermesProactiveInbox,
+  {
+    payload: HermesProactiveInboxInput,
+    success: HermesProactiveInboxSnapshot,
+    error: Schema.Union([HermesProactiveInboxError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
+export const WsHermesSkillsListRpc = Rpc.make(WS_METHODS.hermesSkillsList, {
+  payload: HermesSkillsListInput,
+  success: HermesSkillsListResult,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSkillsSearchRpc = Rpc.make(WS_METHODS.hermesSkillsSearch, {
+  payload: HermesSkillsSearchInput,
+  success: HermesSkillsSearchResult,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSkillsInspectRpc = Rpc.make(WS_METHODS.hermesSkillsInspect, {
+  payload: HermesSkillsInspectInput,
+  success: HermesSkillsInspectResult,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+});
+
+export const WsHermesSkillsReloadRpc = Rpc.make(WS_METHODS.hermesSkillsReload, {
+  payload: HermesSkillsReloadInput,
+  success: HermesSkillsReloadResponse,
+  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
 });
 
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
@@ -800,12 +1259,47 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
+  WsServerGetUsageSummaryRpc,
   WsServerSignalProcessRpc,
+  WsHermesSessionsDiscoverRpc,
+  WsHermesSessionsImportRpc,
+  WsHermesHistoryResetRpc,
+  WsScheduledTasksListRpc,
+  WsScheduledTasksSubscribeRpc,
+  WsScheduledTasksUpsertRpc,
+  WsScheduledTasksSetEnabledRpc,
+  WsScheduledTasksDeleteRpc,
+  WsScheduledTasksRunNowRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
+  WsHermesCronListRpc,
+  WsHermesCronMutateRpc,
+  WsHermesProactiveStatusRpc,
+  WsHermesProactiveMarkNotificationsRpc,
+  WsSubscribeHermesProactiveInboxRpc,
+  WsHermesSkillsListRpc,
+  WsHermesSkillsSearchRpc,
+  WsHermesSkillsInspectRpc,
+  WsHermesSkillsReloadRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsPullRequestsListRpc,
+  WsPullRequestsListStatsRpc,
+  WsPullRequestsDetailRpc,
+  WsPullRequestsActivityRpc,
+  WsPullRequestsDiffFileContentsRpc,
+  WsPullRequestsRunActionRpc,
+  WsPullRequestsUpdateRpc,
+  WsPullRequestsCommentRpc,
+  WsPullRequestsUpdateCommentRpc,
+  WsPullRequestsSubmitReviewRpc,
+  WsPullRequestsReplyToThreadRpc,
+  WsPullRequestsSetThreadResolutionRpc,
+  WsPullRequestsSetReactionRpc,
+  WsPullRequestsInvalidateRpc,
+  WsPullRequestsReviewerCandidatesRpc,
+  WsPullRequestsRequestReviewersRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
@@ -814,12 +1308,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
+  WsAssetsPersistChatAttachmentsRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
+  WsVcsRefreshLocalStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
@@ -830,6 +1327,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
+  WsReviewGetDiffFileContentsRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,
@@ -856,11 +1354,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
-  WsOrchestrationDispatchCommandRpc,
-  WsOrchestrationGetTurnDiffRpc,
-  WsOrchestrationGetFullThreadDiffRpc,
-  WsOrchestrationSearchThreadsRpc,
-  WsOrchestrationGetArchivedShellSnapshotRpc,
-  WsOrchestrationSubscribeShellRpc,
-  WsOrchestrationSubscribeThreadRpc,
+  WsOrchestrationV2DispatchCommandRpc,
+  WsOrchestrationV2GetTurnDiffRpc,
+  WsOrchestrationV2GetFullThreadDiffRpc,
+  WsOrchestrationV2SearchThreadsRpc,
+  WsOrchestrationV2GetArchivedShellSnapshotRpc,
+  WsOrchestrationV2GetThreadProjectionRpc,
+  WsOrchestrationV2LaunchThreadRpc,
+  WsOrchestrationV2GenerateHandoffScriptRpc,
+  WsOrchestrationV2GetWorkflowScriptRpc,
+  WsOrchestrationV2SubscribeArchivedShellRpc,
+  WsOrchestrationV2SubscribeShellRpc,
+  WsOrchestrationV2SubscribeThreadRpc,
 );

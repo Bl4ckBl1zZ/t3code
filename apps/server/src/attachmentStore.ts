@@ -10,7 +10,20 @@ import {
 } from "./attachmentPaths.ts";
 import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 
-const ATTACHMENT_FILENAME_EXTENSIONS = [...SAFE_IMAGE_FILE_EXTENSIONS, ".bin"];
+const ATTACHMENT_FILENAME_EXTENSIONS = [
+  ...SAFE_IMAGE_FILE_EXTENSIONS,
+  ".pdf",
+  ".mp4",
+  ".webm",
+  ".mov",
+  ".mkv",
+  ".txt",
+  ".json",
+  ".csv",
+  ".md",
+  ".zip",
+  ".bin",
+];
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -42,6 +55,20 @@ export function createAttachmentId(threadId: string): string | null {
   return `${threadSegment}-${NodeCrypto.randomUUID()}`;
 }
 
+export function createDeterministicAttachmentId(
+  threadId: string,
+  stableKey: string,
+): string | null {
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  if (!threadSegment) return null;
+  const hash = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([threadId, stableKey]))
+    .digest("hex")
+    .slice(0, 32);
+  const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+  return `${threadSegment}-${uuid}`;
+}
+
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {
   const normalizedId = normalizeAttachmentRelativePath(attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
@@ -63,6 +90,20 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
       });
       return `${attachment.id}${extension}`;
     }
+    case "pdf":
+      return `${attachment.id}.pdf`;
+    case "video":
+      return `${attachment.id}${
+        attachment.mimeType === "video/mp4"
+          ? ".mp4"
+          : attachment.mimeType === "video/webm"
+            ? ".webm"
+            : attachment.mimeType === "video/quicktime"
+              ? ".mov"
+              : ".bin"
+      }`;
+    case "file":
+      return `${attachment.id}.bin`;
   }
 }
 

@@ -1,5 +1,8 @@
 import { DEFAULT_TERMINAL_ID, EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { type KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
+import {
+  clearProjectScriptRunPending,
+  type KnownTerminalSession,
+} from "@t3tools/client-runtime/state/terminal";
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
@@ -40,7 +43,7 @@ import {
   useKnownTerminalSessions,
 } from "../../state/use-terminal-session";
 import { useThreadSelection } from "../../state/use-thread-selection";
-import { useSelectedThreadDetail } from "../../state/use-thread-detail";
+import { useSelectedThreadProjection } from "../../state/use-thread-detail";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { TerminalSurface } from "./NativeTerminalSurface";
@@ -172,7 +175,9 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const params = props.route.params;
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =
     useThreadSelection();
-  const selectedThreadDetail = useSelectedThreadDetail();
+  const selectedThreadDetail = useSelectedThreadProjection();
+  const selectedThreadDetailWorktreePath =
+    selectedThreadDetail?.projection.thread.worktreePath ?? null;
   const routeEnvironmentIdRaw = firstRouteParam(params.environmentId);
   const routeThreadIdRaw = firstRouteParam(params.threadId);
   const routeEnvironmentId = routeEnvironmentIdRaw
@@ -283,13 +288,13 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       activeSessionLocation: activeKnownSession?.state.summary ?? null,
       workspaceRoot: selectedThreadProject.workspaceRoot,
       threadShellWorktreePath: selectedThread.worktreePath ?? null,
-      threadDetailWorktreePath: selectedThreadDetail?.worktreePath ?? null,
+      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
     });
   }, [
     activeKnownSession?.state.summary,
     pendingLaunch,
     selectedThread,
-    selectedThreadDetail?.worktreePath,
+    selectedThreadDetailWorktreePath,
     selectedThreadProject?.workspaceRoot,
   ]);
   const [initialLaunchLocationEntry, setInitialLaunchLocationEntry] = useState(() => ({
@@ -615,17 +620,28 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       return;
     }
     sentInitialInputKeyRef.current = launchTargetKey;
+    const launchScriptId = pendingLaunch?.scriptId;
     void writeTerminal({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
         terminalId,
         data: initialInput,
+        ...(launchScriptId ? { scriptId: launchScriptId } : {}),
       },
+    }).then((result) => {
+      if (result._tag === "Failure" && launchScriptId) {
+        clearProjectScriptRunPending({
+          environmentId: selectedThread.environmentId,
+          threadId: selectedThread.id,
+          scriptId: launchScriptId,
+        });
+      }
     });
   }, [
     launchTargetKey,
     pendingLaunch?.initialInput,
+    pendingLaunch?.scriptId,
     selectedThread,
     terminal.version,
     terminalId,

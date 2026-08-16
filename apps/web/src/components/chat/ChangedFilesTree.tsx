@@ -1,4 +1,4 @@
-import { type TurnId } from "@t3tools/contracts";
+import { type RunId } from "@t3tools/contracts";
 import { memo, useCallback, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
 import {
@@ -28,7 +28,7 @@ import {
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 
 export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
-  turnId: TurnId;
+  runId: RunId;
   files: ReadonlyArray<TurnDiffFileChange>;
   expanded: boolean;
   showCompactPreview: boolean;
@@ -36,10 +36,10 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   resolvedTheme: "light" | "dark";
   onExpandedChange: (expanded: boolean) => void;
   onToggleAllDirectories: () => void;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
 }) {
   const {
-    turnId,
+    runId,
     files,
     expanded,
     showCompactPreview,
@@ -56,14 +56,15 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
   return (
     <div
-      className="mt-4 rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32"
+      className="@container/changed-files mt-4 rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32"
       data-changed-files-state={
         expanded ? "expanded" : compactPreviewVisible ? "preview" : "collapsed"
       }
     >
       <div
+        data-changed-files-header=""
         className={cn(
-          "flex items-center justify-between gap-2 rounded-xl px-1",
+          "flex items-center justify-between gap-2 rounded-xl",
           expanded &&
             "sticky top-2 z-10 mb-2 bg-secondary dark:bg-[color-mix(in_srgb,var(--foreground)_2.5%,var(--background))]",
         )}
@@ -72,34 +73,36 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
           type="button"
           aria-expanded={expanded}
           data-scroll-anchor-ignore
-          className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group flex min-w-0 flex-1 items-center rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onExpandedChange(!expanded)}
         >
-          <ChevronRightIcon
-            aria-hidden="true"
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform",
-              expanded && "rotate-90",
-            )}
-          />
-          <span className="flex min-w-0 items-center gap-1 whitespace-nowrap font-medium text-foreground text-xs leading-4">
-            <span>
-              {files.length} changed file{files.length === 1 ? "" : "s"}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+            <ChevronRightIcon
+              aria-hidden="true"
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                expanded && "rotate-90",
+              )}
+            />
+            <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-medium text-foreground text-xs leading-4">
+              <span>
+                {files.length} changed file{files.length === 1 ? "" : "s"}
+              </span>
+              {hasNonZeroStat(summaryStat) && (
+                <DiffStatLabel
+                  additions={summaryStat.additions}
+                  className="text-xs leading-4"
+                  deletions={summaryStat.deletions}
+                  layout="inline"
+                />
+              )}
             </span>
-            {hasNonZeroStat(summaryStat) && (
-              <DiffStatLabel
-                additions={summaryStat.additions}
-                className="text-xs leading-4"
-                deletions={summaryStat.deletions}
-                layout="inline"
-              />
-            )}
-          </span>
-          <span className="ml-1 hidden truncate text-[11px] text-muted-foreground group-hover:text-foreground/80 sm:inline">
-            {expanded ? "Hide files" : "Show files"}
+            <span className="ml-1 hidden min-w-0 flex-1 truncate text-[11px] text-muted-foreground group-hover:text-foreground/80 @[24rem]/changed-files:inline">
+              {expanded ? "Hide files" : "Show files"}
+            </span>
           </span>
         </button>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5 pr-1">
           {expanded ? (
             <Tooltip>
               <TooltipTrigger
@@ -136,12 +139,12 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                   size="xs"
                   variant="outline"
                   aria-label="Open diff"
-                  onClick={() => onOpenTurnDiff(turnId, files[0]?.path)}
+                  onClick={() => onOpenTurnDiff(runId, files[0]?.path)}
                 />
               }
             >
               <FileDiffIcon className="size-3" />
-              <span className="hidden sm:inline">Open diff</span>
+              <span className="hidden @[24rem]/changed-files:inline">Open diff</span>
             </TooltipTrigger>
             <TooltipPopup side="top">Open the full diff</TooltipPopup>
           </Tooltip>
@@ -149,8 +152,8 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
       </div>
       {expanded ? (
         <ChangedFilesTree
-          key={`changed-files-tree:${turnId}`}
-          turnId={turnId}
+          key={`changed-files-tree:${runId}`}
+          runId={runId}
           files={files}
           allDirectoriesExpanded={allDirectoriesExpanded}
           resolvedTheme={resolvedTheme}
@@ -176,7 +179,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                 type="button"
                 title={file.path}
                 className="inline-flex max-w-48 items-center gap-1 rounded-md border border-border/70 bg-background/45 px-1.5 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => onOpenTurnDiff(turnId, file.path)}
+                onClick={() => onOpenTurnDiff(runId, file.path)}
               >
                 <PierreEntryIcon
                   pathValue={file.path}
@@ -202,13 +205,13 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 });
 
 export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
-  turnId: TurnId;
+  runId: RunId;
   files: ReadonlyArray<TurnDiffFileChange>;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
 }) {
-  const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, turnId } = props;
+  const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, runId } = props;
   const treeNodes = useMemo(() => buildTurnDiffTree(files), [files]);
   const directoryPathsKey = useMemo(
     () => collectDirectoryPaths(treeNodes).join("\u0000"),
@@ -293,7 +296,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
         type="button"
         className="group flex w-full items-center gap-1.5 rounded-xl py-1 pr-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         style={{ paddingLeft: `${leftPadding}px` }}
-        onClick={() => onOpenTurnDiff(turnId, node.path)}
+        onClick={() => onOpenTurnDiff(runId, node.path)}
       >
         {hasDirectoryNodes || depth > 0 ? (
           <span aria-hidden="true" className="size-3.5 shrink-0" />

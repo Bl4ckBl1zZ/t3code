@@ -46,3 +46,17 @@ change.
 
 Mobile offers the same four modes. It labels the first one **Approve actions** rather than
 **Supervised**.
+
+## T3 Work
+
+T3 Work threads run on Hermes, which gates the commands it considers dangerous itself and offers no
+setting to relax that per conversation. Three of the four modes would behave identically there, so
+those threads get a two-option picker instead:
+
+**Approve risky commands**: Hermes asks before running anything it flags as dangerous, and the
+approval appears inline like any other.
+
+**Full access**: T3 answers those prompts for you, so the conversation runs without stopping.
+
+A T3 Work thread that carries in one of the other modes reads as **Approve risky commands**, which
+is what it does there.

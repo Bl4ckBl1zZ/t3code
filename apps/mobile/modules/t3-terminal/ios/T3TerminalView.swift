@@ -4,6 +4,43 @@ import GhosttyKit
 import QuartzCore
 import UIKit
 
+enum TerminalText {
+  static func plainText(from value: String) -> String {
+    let withoutEscapes = value
+      .replacingOccurrences(
+        of: "\u{1B}\\][^\u{7}\u{1B}]*(?:\u{7}|\u{1B}\\\\)",
+        with: "",
+        options: .regularExpression
+      )
+      .replacingOccurrences(
+        of: "\u{1B}\\[[0-?]*[ -/]*[@-~]",
+        with: "",
+        options: .regularExpression
+      )
+      .replacingOccurrences(
+        of: "\u{1B}[@-_]",
+        with: "",
+        options: .regularExpression
+      )
+
+    return withoutEscapes.reduce(into: "") { output, character in
+      if character == "\u{8}" || character == "\u{7F}" {
+        if !output.isEmpty { output.removeLast() }
+        return
+      }
+      if character == "\r" { return }
+      if character.unicodeScalars.count == 1,
+         let scalar = character.unicodeScalars.first,
+         scalar.value < 32,
+         character != "\n",
+         character != "\t" {
+        return
+      }
+      output.append(character)
+    }
+  }
+}
+
 private enum GhosttyRuntime {
   private static let lock = NSLock()
   private static var initialized = false
@@ -58,6 +95,8 @@ private enum TerminalHardwareKeyEncoder {
       )
     }
 
+    commands.append(makeCommand(input: "c", modifierFlags: .command, action: action))
+    commands.append(makeCommand(input: "v", modifierFlags: .command, action: action))
     return commands
   }
 
@@ -72,6 +111,10 @@ private enum TerminalHardwareKeyEncoder {
   }
 
   static func sequence(input: String, modifiers: UIKeyModifierFlags) -> String? {
+    if modifiers == .command {
+      return input.lowercased() == "c" ? "copy" : input.lowercased() == "v" ? "paste" : nil
+    }
+
     switch input {
     case UIKeyCommand.inputEscape:
       return "\u{1B}"
@@ -137,6 +180,8 @@ private enum TerminalInputSequence {
 private final class TerminalInputField: UITextField {
   var onDeleteBackward: (() -> Void)?
   var onInsert: ((String) -> Void)?
+  var onCopyOutput: (() -> Void)?
+  var onPasteText: (() -> Void)?
 
   private static let hardwareKeyCommands = TerminalHardwareKeyEncoder.makeKeyCommands(
     action: #selector(handleHardwareKeyCommand(_:))
@@ -158,7 +203,14 @@ private final class TerminalInputField: UITextField {
       input: input,
       modifiers: command.modifierFlags
     ) else { return }
-    onInsert?(sequence)
+
+    if sequence == "copy" {
+      onCopyOutput?()
+    } else if sequence == "paste" {
+      onPasteText?()
+    } else {
+      onInsert?(sequence)
+    }
   }
 }
 
@@ -320,6 +372,12 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     }
     inputField.onInsert = { [weak self] data in
       self?.emitInput(data)
+    }
+    inputField.onCopyOutput = { [weak self] in
+      self?.copyOutput()
+    }
+    inputField.onPasteText = { [weak self] in
+      self?.pasteText()
     }
 
     focusTapGesture.addTarget(self, action: #selector(handleViewportTap))
@@ -535,6 +593,12 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
       return
     }
 
+    if buffer.isEmpty {
+      feedData(Data("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8))
+      lastAppliedBuffer = ""
+      return
+    }
+
     if buffer.hasPrefix(lastAppliedBuffer) {
       let suffix = String(buffer.dropFirst(lastAppliedBuffer.count))
       feedData(Data(suffix.utf8))
@@ -659,6 +723,15 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private func emitInput(_ data: String) {
     guard !data.isEmpty else { return }
     onInput(["data": data])
+  }
+
+  private func copyOutput() {
+    UIPasteboard.general.string = TerminalText.plainText(from: lastAppliedBuffer)
+  }
+
+  private func pasteText() {
+    guard let value = UIPasteboard.general.string, !value.isEmpty else { return }
+    emitInput(value)
   }
 
   private func textInputModeDidChange() {

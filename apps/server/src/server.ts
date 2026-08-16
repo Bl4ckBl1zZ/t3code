@@ -1,15 +1,18 @@
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
-import * as HttpResponseCompression from "./httpCompression/HttpResponseCompression.ts";
 import {
   otlpTracesProxyRouteLayer,
   assetRouteLayer,
@@ -18,18 +21,27 @@ import {
   browserApiCorsLayer,
   httpCompressionLayer,
 } from "./http.ts";
+import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
+import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
+import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import {
+  HermesSessionBindingRepository,
+  layer as HermesSessionBindingRepositoryLayer,
+} from "./hermes/HermesSessionBindingRepository.ts";
+import {
+  HermesProactiveEventRepository,
+  layer as HermesProactiveEventRepositoryLayer,
+} from "./hermes/HermesProactiveEventRepository.ts";
+import { layer as HermesProactiveInboxLayer } from "./hermes/HermesProactiveInbox.ts";
+import * as HermesCron from "./hermes/HermesCron.ts";
+import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
-import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
-import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
-import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
-import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
-import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
@@ -39,6 +51,7 @@ import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { layer as ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -49,18 +62,15 @@ import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
-import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
-import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
-import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
-import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
-import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
-import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as T3ProjectFileSync from "./project/T3ProjectFileSync.ts";
+import * as ProjectTeardownScriptRunner from "./project/ProjectTeardownScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -75,14 +85,15 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
+  pendingServiceUpdateExists,
   reconcileDesiredCloudLink,
   releaseManagedTunnelOnShutdown,
 } from "./cloud/http.ts";
@@ -91,24 +102,34 @@ import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts"
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import {
+  OrchestrationV2ProductionLayerLive,
+  ProjectServiceLayerLive,
+  ProjectSetupScriptRunnerLayerLive,
+} from "./orchestration-v2/runtimeLayer.ts";
+import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
+import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import * as UsageService from "./usage/UsageService.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
-import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { orchestrationHttpApiLayer } from "./orchestration-v2/http.ts";
+import { projectHttpApiLayer } from "./project/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
+import { forkParked, ServerActivation } from "./serverActivation.ts";
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
 // T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
@@ -155,6 +176,8 @@ const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
   Layer.provideMerge(ServerSettingsLayerLive),
 );
 
+const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
+
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   ResourceTelemetryLayerLive,
   ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
@@ -179,23 +202,41 @@ const HttpServerLive = Layer.unwrap(
         port: config.port,
         hostname: config.host ?? "127.0.0.1",
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
+        websocket: {
+          // Negotiate permessage-deflate with clients that offer it; clients
+          // that don't still get uncompressed frames on their connection. A
+          // dedicated compressor keeps a per-connection sliding window
+          // (context takeover) so the compression dictionary is shared across
+          // server-to-client frames. Decompression uses the shared
+          // decompressor: uWebSockets' dedicated decompressor path can abort
+          // connections (close 1006) on valid DEFLATE input — see
+          // https://github.com/uNetworking/uWebSockets.js/issues/633.
+          perMessageDeflate: {
+            compress: "dedicated",
+            decompress: "shared",
+          },
+        },
       });
     } else {
       const [NodeHttpServer, NodeHttp] = yield* Effect.all([
         Effect.promise(() => import("@effect/platform-node/NodeHttpServer")),
         Effect.promise(() => import("node:http")),
       ]);
-      return NodeHttpServer.layer(NodeHttp.createServer, {
+      return NodeHttpServer.layer(() => guardHttpResponseWriteErrors(NodeHttp.createServer()), {
         host: config.host ?? "127.0.0.1",
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
+        // Negotiate permessage-deflate with clients that offer it; clients
+        // that don't still get uncompressed frames on their connection.
+        // Context takeover stays enabled (ws default) so the compression
+        // window is shared across frames — that also makes small frames cheap
+        // to compress, so no size threshold is set (ws only honors
+        // `threshold` when context takeover is disabled).
+        websocket: { perMessageDeflate: true },
       });
     }
   }),
 );
-
-const HttpResponseCompressionLive =
-  typeof Bun !== "undefined" ? HttpResponseCompression.layerBun : HttpResponseCompression.layerNode;
 
 const PlatformServicesLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -209,32 +250,24 @@ const PlatformServicesLive = Layer.unwrap(
   }),
 );
 
-const ReactorLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(OrchestrationReactorLive),
-  Layer.provideMerge(ProviderRuntimeIngestionLive),
-  Layer.provideMerge(ProviderCommandReactorLive),
-  Layer.provideMerge(CheckpointReactorLive),
-  Layer.provideMerge(ThreadDeletionReactorLive),
-  Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-  Layer.provideMerge(RuntimeReceiptBusLive),
-);
-
-const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
-  Layer.provide(ProviderSessionRuntime.layer),
-);
-
-// `ProviderAdapterRegistryLive` is now a facade that resolves kind → adapter
-// by looking up the default `ProviderInstance` per driver in the instance
-// registry. Adapter construction itself moved inside each driver's
-// `create()`; `ProviderEventLoggers.layer` owns the shared native/canonical
-// NDJSON writers and is provided at the outer runtime layer so both
-// `ProviderService` and the per-instance drivers read the same logger pair.
-const ProviderLayerLive = ProviderServiceLive.pipe(
-  Layer.provide(ProviderAdapterRegistryLive),
-  Layer.provideMerge(ProviderSessionDirectoryLayerLive),
-);
-
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
+const HermesPersistenceLayerLive = Layer.mergeAll(
+  HermesSessionBindingRepositoryLayer,
+  // Shared rather than per-connection: the Hermes adapter writes witnessed runs
+  // into it while the ws layer reads and streams them, and both have to be
+  // looking at the same outbox for a notification to arrive exactly once.
+  HermesProactiveInboxLayer.pipe(Layer.provideMerge(HermesProactiveEventRepositoryLayer)),
+).pipe(Layer.provideMerge(PersistenceLayerLive)) satisfies Layer.Layer<
+  // HermesProactiveInbox is a Context.Reference with a drop-everything default,
+  // so it never shows up as a requirement — providing it here is what upgrades
+  // every consumer from that default to the shared, database-backed one.
+  HermesSessionBindingRepository | HermesProactiveEventRepository | SqlClient.SqlClient,
+  unknown,
+  ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path
+>;
+const ProviderInstanceRegistryHydrationWithHermesLive = ProviderInstanceRegistryHydrationLive.pipe(
+  Layer.provide(HermesPersistenceLayerLive),
+);
 
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
@@ -249,7 +282,7 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
-  Layer.provideMerge(ProjectSetupScriptRunner.layer),
+  Layer.provideMerge(ProjectSetupScriptRunnerLayerLive),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(TextGeneration.layer),
@@ -260,7 +293,13 @@ const GitLayerLive = Layer.empty.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
 );
 
+const ProjectTeardownScriptRunnerLayerLive = ProjectTeardownScriptRunner.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+  Layer.provide(ProcessRunner.layer),
+);
+
 const GitWorkflowLayerLive = GitWorkflowService.layer.pipe(
+  Layer.provide(ProjectTeardownScriptRunnerLayerLive),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
 );
@@ -285,9 +324,8 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(VcsStatusBroadcaster.layer.pipe(Layer.provide(GitWorkflowLayerLive))),
 );
 
-const CheckpointingLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(CheckpointDiffQuery.layer),
-  Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
+const CheckpointStoreLayerLive = CheckpointStore.layer.pipe(
+  Layer.provide(VcsDriverRegistryLayerLive),
 );
 
 const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
@@ -333,21 +371,36 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
-  Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
+const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
+  Layer.provide(CheckpointStoreLayerLive),
+  Layer.provide(ResourceCleanupService.live),
+  Layer.provide(RunFinalizationService.observerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
+  Layer.provideMerge(CheckpointStoreLayerLive),
+  Layer.provideMerge(OrchestrationV2RuntimeLayerLive),
+);
+
+// Background reconciler that keeps each project's actions and its checked-in
+// t3.json in sync (writes on in-app edits, imports on file edits).
+const T3ProjectFileSyncLayerLive = T3ProjectFileSync.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+);
+
+const RuntimeCoreDependenciesBaseLive = Layer.merge(
+  AgentAwarenessRelay.layer,
+  T3ProjectFileSyncLayerLive,
+).pipe(
   // Core Services
+  Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
-  Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
-  Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
-  Layer.provideMerge(PersistenceLayerLive),
+  // The repository and every other persistence consumer share one SqlClient.
+  Layer.provideMerge(HermesPersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
@@ -355,20 +408,34 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  Layer.provideMerge(ProviderInstanceRegistryHydrationWithHermesLive),
+);
+
+const HermesCronWithServerSettingsLayerLive = HermesCron.layer.pipe(
+  Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+);
+
+const HermesSkillsWithServerSettingsLayerLive = HermesSkills.layer.pipe(
+  Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   // Shared native/canonical NDJSON writers used by both the per-instance
-  // drivers (native stream, written from inside each `<X>Adapter`) and
-  // `ProviderService` (canonical stream, written after event normalization).
+  // V2 drivers and the orchestration runtime. Provide resource attribution so
+  // the rewritten telemetry pipeline can account for logical NDJSON writes.
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
-  Layer.provideMerge(ProviderEventLoggers.layer),
+  Layer.provideMerge(ProviderEventLoggersLive),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and
   // no longer transitively provides it. Exposing it at the runtime level
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+  Layer.provideMerge(HermesCronWithServerSettingsLayerLive),
+  Layer.provideMerge(HermesSkillsWithServerSettingsLayerLive),
   Layer.provideMerge(WorkspaceLayerLive),
+  Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
@@ -389,15 +456,28 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
+  Layer.provideMerge(UsageLayerLive),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
+  Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
 
-const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
-  Layer.provideMerge(RuntimeDependenciesLive),
+const commandReadinessLayer = HttpRouter.middleware(
+  (httpEffect) =>
+    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
+      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
+    ),
+  { global: true },
+);
+
+const PullRequestServiceLive = PullRequestService.layer.pipe(
+  // One registry entry per supported host; the service only knows the registry.
+  Layer.provide(PullRequestProviderRegistry.layer),
+  Layer.provide(SourceControlProviderRegistryLayerLive),
+  Layer.provide(VcsProcess.layer),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
@@ -406,6 +486,8 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(projectHttpApiLayer),
+      Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
@@ -416,8 +498,12 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(
+  // Both transports consume the same service instance, so caches single-flight across clients
+  // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
+  Layer.provide(PullRequestServiceLive),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
+  Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
 );
@@ -425,6 +511,14 @@ export const makeRoutesLayer = Layer.mergeAll(
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const activation = yield* Deferred.make<void>();
+    const awaitActivation = Deferred.await(activation);
+    const activationLayer = Layer.succeed(ServerActivation, awaitActivation);
+    const runtimeStateParked = yield* Deferred.make<void>();
+    const tailscaleParked = yield* Deferred.make<void>();
+    const cloudLinkParked = yield* Deferred.make<void>();
+    const routesReady = yield* Deferred.make<void>();
+    const launcherLayer = ServiceLauncherClient.layer;
 
     yield* fixPath();
 
@@ -438,6 +532,8 @@ export const makeServerLayer = Layer.unwrap(
     const runtimeStateLayer = Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.gen(function* () {
+          yield* Deferred.succeed(runtimeStateParked, undefined).pipe(Effect.orDie);
+          yield* awaitActivation;
           const server = yield* HttpServer.HttpServer;
           const address = server.address;
           if (typeof address === "string" || !("port" in address)) {
@@ -451,15 +547,26 @@ export const makeServerLayer = Layer.unwrap(
           yield* persistServerRuntimeState({
             path: config.serverRuntimeStatePath,
             state,
-          });
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to persist server runtime state", { cause }),
+            ),
+          );
         }),
-        () => clearPersistedServerRuntimeState(config.serverRuntimeStatePath),
+        () =>
+          clearPersistedServerRuntimeState(config.serverRuntimeStatePath).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to clear server runtime state", { cause }),
+            ),
+          ),
       ),
     );
     const tailscaleServeLayer = config.tailscaleServeEnabled
       ? Layer.effectDiscard(
           Effect.acquireRelease(
             Effect.gen(function* () {
+              yield* Deferred.succeed(tailscaleParked, undefined).pipe(Effect.orDie);
+              yield* awaitActivation;
               const server = yield* HttpServer.HttpServer;
               const address = server.address;
               if (typeof address === "string" || !("port" in address)) {
@@ -509,68 +616,93 @@ export const makeServerLayer = Layer.unwrap(
       : Layer.empty;
     const cloudDesiredLinkReconcileLayer = Layer.effectDiscard(
       Effect.gen(function* () {
-        if (!hasCloudPublicConfig) return;
-        // Idle Cloudflare tunnels are billed, so a stopping server releases its
-        // tunnel; the persisted desired link brings one back — same hostname,
-        // fresh tunnel — when the environment starts again. Registered even
-        // when no link is desired yet: a client can link a running server, and
-        // that tunnel needs the same disposal on shutdown.
-        yield* Effect.addFinalizer(() =>
-          releaseManagedTunnelOnShutdown().pipe(
-            Effect.timeout("10 seconds"),
-            Effect.tap((released) =>
-              released ? Effect.logInfo("Released the managed tunnel on shutdown") : Effect.void,
-            ),
-            Effect.catchCause((cause) =>
-              Effect.logWarning(
-                "Failed to release the managed tunnel on shutdown; the next link reuses it",
-                { cause },
-              ),
-            ),
-            Effect.asVoid,
+        if (!hasCloudPublicConfig) {
+          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
+          return;
+        }
+        const releaseManagedTunnel = releaseManagedTunnelOnShutdown().pipe(
+          Effect.timeout("10 seconds"),
+          Effect.tap((released) =>
+            released ? Effect.logInfo("Released the managed tunnel on shutdown") : Effect.void,
           ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "Failed to release the managed tunnel on shutdown; the next link reuses it",
+              { cause },
+            ),
+          ),
+          Effect.asVoid,
         );
-        if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
-        const server = yield* HttpServer.HttpServer;
-        const address = server.address;
-        if (typeof address === "string" || !("port" in address)) return;
-        yield* Effect.forkScoped(
-          Effect.sleep("250 millis").pipe(
-            Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
-            // On reboot this races NIC/DNS bring-up, so back off exponentially
-            // (capped at 30s) instead of burning all retries in a second.
-            // Bounded overall so a permanently broken setup still surfaces the
-            // warning below. Bad-request/unauthorized/conflict are
-            // deterministic failures (malformed origin, not linked yet, linked
-            // to a different cloud account) that no amount of retrying
-            // converges.
-            Effect.retry({
-              while: (error) =>
-                error._tag !== "EnvironmentHttpBadRequestError" &&
-                error._tag !== "EnvironmentHttpUnauthorizedError" &&
-                error._tag !== "EnvironmentHttpConflictError",
-              schedule: Schedule.exponential("1 second").pipe(
-                Schedule.modifyDelay(({ duration }) =>
-                  Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+        // A launcher trial can be stopped before activation. The previous
+        // server is already gone, so the trial owns cleanup immediately; the
+        // pending-state check keeps the tunnel for normal commit or rollback,
+        // while the launcher's explicit-stop marker allows it to be released.
+        // Other runtimes wait for activation so a failed standby cannot tear
+        // down the active runtime's tunnel.
+        const cleanupBeforeActivation = yield* pendingServiceUpdateExists;
+        if (cleanupBeforeActivation) {
+          yield* Effect.addFinalizer(() => releaseManagedTunnel);
+        }
+        yield* forkParked(
+          Effect.gen(function* () {
+            if (!cleanupBeforeActivation) {
+              yield* Effect.addFinalizer(() => releaseManagedTunnel);
+            }
+            if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
+            const server = yield* HttpServer.HttpServer;
+            const address = server.address;
+            if (typeof address === "string" || !("port" in address)) return;
+            // No settling delay before the first attempt: routes are already
+            // serving by the time activation opens this gate (the startup
+            // sequence awaits routesReady), and the retry schedule below
+            // covers anything this sleep used to hedge against. Every
+            // millisecond here is dead time on the path to remote
+            // reachability after a restart.
+            yield* reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`).pipe(
+              Effect.retry({
+                while: (error) =>
+                  error._tag !== "EnvironmentHttpBadRequestError" &&
+                  error._tag !== "EnvironmentHttpUnauthorizedError" &&
+                  error._tag !== "EnvironmentHttpConflictError",
+                schedule: Schedule.exponential("1 second").pipe(
+                  Schedule.modifyDelay(({ duration }) =>
+                    Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+                  ),
+                  Schedule.upTo({ duration: "10 minutes" }),
                 ),
-                Schedule.upTo({ duration: "10 minutes" }),
-              ),
-            }),
-            Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
-            Effect.catch((cause) =>
-              Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
-                cause,
               }),
-            ),
-          ),
+              Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
+                  cause,
+                }),
+              ),
+            );
+          }),
         );
+        yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
       }),
     );
 
+    const runtimeServicesLive = ServerRuntimeStartup.layerWithOptions({
+      activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
+      abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
+      awaitAuxiliaryParked: Effect.all(
+        [
+          Deferred.await(runtimeStateParked),
+          Deferred.await(cloudLinkParked),
+          Deferred.await(routesReady),
+          ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.asVoid),
+    }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+
+    const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
+      disableLogger: !config.logWebSocketEvents,
+    }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
-        disableLogger: !config.logWebSocketEvents,
-      }),
+      routesLayer,
       httpListeningLayer,
       runtimeStateLayer,
       tailscaleServeLayer,
@@ -578,9 +710,16 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
-      Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(runtimeServicesLive),
+      Layer.provideMerge(
+        McpSessionRegistry.layer.pipe(
+          // ServerEnvironment reads the publish opt-in through the secret
+          // store, so it has to travel with one here.
+          Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+        ),
+      ),
+      Layer.provide(activationLayer),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
-      Layer.provideMerge(HttpResponseCompressionLive),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ApplicationObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
@@ -590,5 +729,5 @@ export const makeServerLayer = Layer.unwrap(
   }),
 );
 
-// Important: Only `ServerConfig` should be provided by the CLI layer!!! Don't let other requirements leak into the launch layer.
+// The CLI supplies configuration.
 export const runServer = Layer.launch(makeServerLayer);

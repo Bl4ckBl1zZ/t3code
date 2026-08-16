@@ -11,6 +11,11 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
+/**
+ * Whether Enter submits. Mobile keeps Enter as a newline (its send button is the
+ * only submit path) and Shift+Enter is the way to type one on desktop. What the
+ * submit then *does* — send, queue, or steer — is `resolveComposerDispatchMode`.
+ */
 export function shouldSubmitComposerOnEnter(input: {
   isMobileViewport: boolean;
   shiftKey: boolean;

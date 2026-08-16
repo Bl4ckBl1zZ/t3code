@@ -21,9 +21,12 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
   type VcsRef,
+  type VcsWorkingTreeFile,
+  type VcsWorkingTreeFileChangeKind,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
@@ -46,9 +49,19 @@ const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
+const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
+// `git worktree remove` unlinks the whole tree, so the budget scales with the
+// worktree's file count, not with repository size. A monorepo worktree with
+// installed dependencies is routinely ~270k files and takes ~15s warm; a cold
+// cache or build output (target/, Pods/, dist/) pushes it far past that.
+// Timing out here is worse than waiting: the spawned git is killed mid-unlink
+// and leaves a half-deleted directory behind.
+const WORKTREE_REMOVE_TIMEOUT_MS = 5 * 60_000;
+const WORKTREE_LIST_TIMEOUT_MS = 30_000;
+const WORKTREE_PRUNE_TIMEOUT_MS = 30_000;
 
 const STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN = Duration.seconds(30);
 const STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN = Duration.minutes(15);
@@ -80,6 +93,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetail
   upstreamRef: null,
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
+  branchDiff: null,
   hasUpstream: false,
   aheadCount: 0,
   behindCount: 0,
@@ -137,7 +151,7 @@ interface GitRefsSnapshot {
 
 interface ExecuteGitOptions {
   stdin?: string | undefined;
-  timeoutMs?: number | undefined;
+  timeoutMs?: number | null | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorDetail?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
@@ -155,10 +169,50 @@ function parseBranchAb(value: string): { ahead: number; behind: number } {
   };
 }
 
-function parseNumstatEntries(
-  stdout: string,
-): Array<{ path: string; insertions: number; deletions: number }> {
-  const entries: Array<{ path: string; insertions: number; deletions: number }> = [];
+export interface NumstatEntry {
+  readonly path: string;
+  /** The pre-rename path, when `git diff` scored this entry as a rename. */
+  readonly originalPath: string | null;
+  readonly insertions: number;
+  readonly deletions: number;
+}
+
+/**
+ * Splits the two paths out of a `--numstat` rename entry.
+ *
+ * `git diff --numstat` writes a rename as one path with the differing segment
+ * bracketed against the shared prefix and suffix — `src/{old.ts => new.ts}`, or
+ * `src/{ => sub}/file.ts` for a move down a directory — and falls back to a bare
+ * `old => new` when the two share nothing. Reading only the text after the arrow
+ * yields `new.ts}`, which matches no real path, so the rename's line counts fail
+ * to join to its porcelain entry and a phantom file appears in the list.
+ */
+function parseNumstatRenamePaths(rawPath: string): { from: string; to: string } | null {
+  const braceStart = rawPath.indexOf("{");
+  const arrowIndex = rawPath.indexOf(" => ");
+  if (arrowIndex < 0) return null;
+
+  if (braceStart >= 0 && braceStart < arrowIndex) {
+    const braceEnd = rawPath.indexOf("}", arrowIndex);
+    if (braceEnd < 0) return null;
+    const prefix = rawPath.slice(0, braceStart);
+    const suffix = rawPath.slice(braceEnd + 1);
+    const from = rawPath.slice(braceStart + 1, arrowIndex);
+    const to = rawPath.slice(arrowIndex + " => ".length, braceEnd);
+    // `src/{ => sub}/file.ts` leaves an empty segment on one side, so the
+    // rejoined path would carry a doubled separator git never emits.
+    const join = (middle: string) => `${prefix}${middle}${suffix}`.replace(/\/{2,}/g, "/");
+    return { from: join(from), to: join(to) };
+  }
+
+  return {
+    from: rawPath.slice(0, arrowIndex),
+    to: rawPath.slice(arrowIndex + " => ".length),
+  };
+}
+
+function parseNumstatEntries(stdout: string): Array<NumstatEntry> {
+  const entries: Array<NumstatEntry> = [];
   for (const line of stdout.split(/\r?\n/g)) {
     if (line.trim().length === 0) continue;
     const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
@@ -167,11 +221,12 @@ function parseNumstatEntries(
     if (rawPath.length === 0) continue;
     const added = Number.parseInt(addedRaw ?? "0", 10);
     const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const renameArrowIndex = rawPath.indexOf(" => ");
-    const normalizedPath =
-      renameArrowIndex >= 0 ? rawPath.slice(renameArrowIndex + " => ".length).trim() : rawPath;
+    const rename = parseNumstatRenamePaths(rawPath);
+    const resolvedPath = rename?.to.trim() ?? rawPath;
+    const originalPath = rename?.from.trim() ?? "";
     entries.push({
-      path: normalizedPath.length > 0 ? normalizedPath : rawPath,
+      path: resolvedPath.length > 0 ? resolvedPath : rawPath,
+      originalPath: originalPath.length > 0 ? originalPath : null,
       insertions: Number.isFinite(added) ? added : 0,
       deletions: Number.isFinite(deleted) ? deleted : 0,
     });
@@ -179,26 +234,154 @@ function parseNumstatEntries(
   return entries;
 }
 
-function parsePorcelainPath(line: string): string | null {
+export interface PorcelainStatusEntry {
+  readonly path: string;
+  /** Set only for the rename/copy (`2 `) records that carry a source path. */
+  readonly originalPath: string | null;
+  /** The file's change versus HEAD, folding both porcelain columns into one. */
+  readonly changeKind: VcsWorkingTreeFileChangeKind;
+  /** The index column, or null when the index matches HEAD (porcelain `.`). */
+  readonly stagedChangeKind: VcsWorkingTreeFileChangeKind | null;
+  /** The worktree column, or null when the worktree matches the index. */
+  readonly unstagedChangeKind: VcsWorkingTreeFileChangeKind | null;
+}
+
+/**
+ * One porcelain v2 XY column. `.` means "this side matches", which is not a
+ * change kind, so it — like any letter a future git adds — reads as null.
+ */
+function porcelainColumnChangeKind(
+  column: string | undefined,
+): VcsWorkingTreeFileChangeKind | null {
+  switch (column) {
+    case "M":
+      return "modified";
+    // A type change (regular file <-> symlink <-> submodule) is a content change
+    // as far as anything downstream is concerned.
+    case "T":
+      return "modified";
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+      return "renamed";
+    case "C":
+      return "copied";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Folds the two porcelain columns into the single kind a file list renders.
+ *
+ * A worktree deletion wins outright: whatever the index holds, the file is gone
+ * from disk. Otherwise the index side wins, because it is what a commit would
+ * record — a staged add that was since edited is still an add.
+ */
+function summarizePorcelainChangeKind(
+  stagedChangeKind: VcsWorkingTreeFileChangeKind | null,
+  unstagedChangeKind: VcsWorkingTreeFileChangeKind | null,
+): VcsWorkingTreeFileChangeKind {
+  if (unstagedChangeKind === "deleted") return "deleted";
+  return stagedChangeKind ?? unstagedChangeKind ?? "modified";
+}
+
+// Fields ahead of the path in each porcelain v2 record kind. Paths may contain
+// spaces, so the path is everything from this offset on rather than the last
+// whitespace-delimited token. Git C-quotes anything gnarlier (tabs, newlines,
+// non-ASCII under the default core.quotePath), which keeps these records
+// single-line and keeps the rename separator below unambiguous.
+const PORCELAIN_ORDINARY_PATH_FIELD_INDEX = 8;
+const PORCELAIN_RENAME_PATH_FIELD_INDEX = 9;
+const PORCELAIN_UNMERGED_PATH_FIELD_INDEX = 10;
+
+function porcelainRecordPath(line: string, fieldIndex: number): string | null {
+  const fields = line.split(" ");
+  if (fields.length <= fieldIndex) {
+    // Defensive: an unrecognised record shape still has to yield a path, or the
+    // file silently vanishes from the changed list.
+    const fallback = fields.at(-1)?.trim() ?? "";
+    return fallback.length > 0 ? fallback : null;
+  }
+  const rest = fields.slice(fieldIndex).join(" ").trim();
+  return rest.length > 0 ? rest : null;
+}
+
+/**
+ * Reads one `git status --porcelain=v2` record.
+ *
+ * The XY codes are the only place the change kind and staged-ness exist:
+ * `git diff HEAD --numstat` reports one entry per path with index and worktree
+ * summed together, so `n/0` is an added file *or* an addition-only edit, and
+ * `0/0` is an untracked file *or* a binary one.
+ */
+export function parsePorcelainStatusEntry(line: string): PorcelainStatusEntry | null {
+  // `? ` untracked, `! ` ignored (only emitted under --ignored, which status
+  // reads do not pass, but a record that appears must still name its path).
   if (line.startsWith("? ") || line.startsWith("! ")) {
     const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
+    if (simple.length === 0) return null;
+    return {
+      path: simple,
+      originalPath: null,
+      changeKind: "untracked",
+      stagedChangeKind: null,
+      // Nothing is staged for an untracked path; the file exists only on disk.
+      unstagedChangeKind: "untracked",
+    };
   }
 
   if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
     return null;
   }
 
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
+  const columns = line.slice(2, 4);
+  const stagedChangeKind = porcelainColumnChangeKind(columns[0]);
+  const unstagedChangeKind = porcelainColumnChangeKind(columns[1]);
+
+  if (line.startsWith("u ")) {
+    const filePath = porcelainRecordPath(line, PORCELAIN_UNMERGED_PATH_FIELD_INDEX);
+    if (filePath === null) return null;
+    return {
+      path: filePath,
+      originalPath: null,
+      changeKind: "conflicted",
+      // An unmerged path holds several index stages rather than one staged
+      // change, so it is reported as neither staged nor cleanly unstaged; the
+      // kind above is what consumers act on.
+      stagedChangeKind: null,
+      unstagedChangeKind: null,
+    };
   }
 
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
-  return filePath.length > 0 ? filePath : null;
+  if (line.startsWith("2 ")) {
+    const rest = porcelainRecordPath(line, PORCELAIN_RENAME_PATH_FIELD_INDEX);
+    if (rest === null) return null;
+    // `2 ` records end with `<path>\t<originalPath>`.
+    const separatorIndex = rest.indexOf("\t");
+    const filePath = (separatorIndex >= 0 ? rest.slice(0, separatorIndex) : rest).trim();
+    const originalPath = separatorIndex >= 0 ? rest.slice(separatorIndex + 1).trim() : "";
+    if (filePath.length === 0) return null;
+    return {
+      path: filePath,
+      originalPath: originalPath.length > 0 ? originalPath : null,
+      changeKind: summarizePorcelainChangeKind(stagedChangeKind, unstagedChangeKind),
+      stagedChangeKind,
+      unstagedChangeKind,
+    };
+  }
+
+  const filePath = porcelainRecordPath(line, PORCELAIN_ORDINARY_PATH_FIELD_INDEX);
+  if (filePath === null) return null;
+  return {
+    path: filePath,
+    originalPath: null,
+    changeKind: summarizePorcelainChangeKind(stagedChangeKind, unstagedChangeKind),
+    stagedChangeKind,
+    unstagedChangeKind,
+  };
 }
 
 function filterBranchesForListQuery(
@@ -233,6 +416,13 @@ function paginateBranches(input: {
     nextCursor,
     totalCount,
   };
+}
+
+// Marks a branch as one we created to back a worktree, so removing that
+// worktree may also drop the branch. A worktree opened on a branch the user
+// already had carries no marker and keeps its branch.
+function worktreeOwnedBranchConfigKey(refName: string): string {
+  return `branch.${refName}.t3-worktree-owned`;
 }
 
 function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
@@ -384,6 +574,61 @@ function gitCommandContext(
   } as const;
 }
 
+/**
+ * Recognised git failure shapes, each mapped to a constant description.
+ *
+ * `detail` reaches the user, and it deliberately carries neither stderr nor the
+ * argument list: git echoes its arguments back in most messages, and those can
+ * hold remote URLs with embedded credentials (guarded by the "does not retain
+ * git arguments or stderr in command failures" test). Matching stderr against
+ * fixed patterns and emitting one of these constants names the failure without
+ * ever copying process output into the error — otherwise every non-zero exit
+ * surfaces as an unactionable "git <verb> failed".
+ */
+const GIT_FAILURE_SIGNATURES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/is already checked out at/i, "that ref is already checked out in another worktree"],
+  [/already exists/i, "the branch or destination path already exists"],
+  [
+    /not a valid object name|unknown revision or path|bad revision|couldn't find remote ref/i,
+    "the requested revision does not exist",
+  ],
+  [
+    /could not resolve host|network is unreachable|connection timed out|connection refused/i,
+    "the remote could not be reached",
+  ],
+  [
+    /authentication failed|could not read username|invalid username or password/i,
+    "authentication with the remote failed",
+  ],
+  // Distinct from an auth failure: git reports a local filesystem denial the
+  // same way, so the description stays neutral about which one it was.
+  [/permission denied|access denied|operation not permitted/i, "permission was denied"],
+  [
+    /would be overwritten|local changes|unmerged files|you have unstaged changes/i,
+    "local changes block the operation",
+  ],
+  [/no space left on device/i, "the disk is full"],
+  [
+    /index\.lock|unable to create.*\.lock|another git process/i,
+    "another git process holds the repository lock",
+  ],
+  [/refusing to merge unrelated histories/i, "the histories are unrelated"],
+  [/conflict/i, "the operation stopped on a conflict"],
+];
+
+/**
+ * Names a git failure from its stderr, returning one of a fixed set of
+ * constants. Never returns any part of its input.
+ */
+function classifyGitFailure(stderr: string): string | null {
+  for (const [pattern, description] of GIT_FAILURE_SIGNATURES) {
+    if (pattern.test(stderr)) {
+      return description;
+    }
+  }
+  return null;
+}
+
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
@@ -418,9 +663,10 @@ function isNonRepositoryGitStderr(stderr: string): boolean {
   return stderr.toLowerCase().includes("not a git repository");
 }
 function isUnbornHeadStderr(stderr: string): boolean {
+  const normalized = stderr.toLowerCase();
   return (
-    stderr.toLowerCase().includes("unknown revision") &&
-    stderr.toLowerCase().includes("path not in the working tree")
+    normalized.includes("bad revision 'head'") ||
+    (normalized.includes("unknown revision") && normalized.includes("path not in the working tree"))
   );
 }
 
@@ -709,7 +955,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...input,
         args: [...input.args],
       } as const;
-      const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const timeoutMs = input.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : input.timeoutMs;
       const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const appendTruncationMarker = input.appendTruncationMarker ?? false;
 
@@ -810,8 +1056,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         } satisfies GitVcsDriver.ExecuteGitResult;
       });
 
-      return yield* runGitCommand().pipe(
-        Effect.scoped,
+      const execution = runGitCommand().pipe(Effect.scoped);
+      if (timeoutMs === null) {
+        return yield* execution;
+      }
+
+      return yield* execution.pipe(
         Effect.timeoutOption(timeoutMs),
         Effect.flatMap((result) =>
           Option.match(result, {
@@ -872,10 +1122,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (options.allowNonZeroExit || result.exitCode === 0) {
           return Effect.succeed(result);
         }
+        const fallbackDetail =
+          options.fallbackErrorDetail ?? "Git command exited with a non-zero status.";
+        const classified = classifyGitFailure(result.stderr);
         return Effect.fail(
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
-            detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
+            detail: classified === null ? fallbackDetail : `${fallbackDetail}: ${classified}`,
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
@@ -902,9 +1155,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     operation: string,
     cwd: string,
     args: readonly string[],
-    allowNonZeroExit = false,
+    options: ExecuteGitOptions = {},
   ): Effect.Effect<void, GitCommandError> =>
-    executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(Effect.asVoid);
+    executeGit(operation, cwd, args, options).pipe(Effect.asVoid);
 
   const runGitStdout = (
     operation: string,
@@ -942,6 +1195,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const resolveAvailableBranchName = Effect.fn("resolveAvailableBranchName")(function* (
     cwd: string,
     desiredBranch: string,
+    operation = "GitVcsDriver.renameBranch",
   ) {
     const isDesiredTaken = yield* branchExists(cwd, desiredBranch);
     if (!isDesiredTaken) {
@@ -958,11 +1212,51 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     return yield* new GitCommandError({
       ...gitCommandContext({
-        operation: "GitVcsDriver.renameBranch",
+        operation,
         cwd,
         args: ["branch", "-m", "--", desiredBranch],
       }),
       detail: `Could not find an available branch name for '${desiredBranch}'.`,
+    });
+  });
+
+  /**
+   * Picks a worktree directory that does not exist yet.
+   *
+   * The derived path is a function of the branch name alone, so a repeated
+   * launch — a scheduled task re-running the same prompt, or any flow that
+   * proposes a name a previous worktree already claimed — lands on a directory
+   * that is still on disk, and `git worktree add` aborts. Suffixing mirrors
+   * `resolveAvailableBranchName` so branch and directory stay legible together.
+   */
+  const resolveAvailableWorktreePath = Effect.fn("resolveAvailableWorktreePath")(function* (
+    cwd: string,
+    branch: string,
+  ) {
+    const basePath = path.join(worktreesDir, path.basename(cwd), branch.replaceAll("/", "-"));
+    // An unreadable path is treated as free: git remains the final arbiter and
+    // fails the add itself rather than this helper spinning through suffixes.
+    const isTaken = (candidate: string) =>
+      fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
+
+    if (!(yield* isTaken(basePath))) {
+      return basePath;
+    }
+
+    for (let suffix = 1; suffix <= 100; suffix += 1) {
+      const candidate = `${basePath}-${suffix}`;
+      if (!(yield* isTaken(candidate))) {
+        return candidate;
+      }
+    }
+
+    return yield* new GitCommandError({
+      ...gitCommandContext({
+        operation: "GitVcsDriver.createWorktree",
+        cwd,
+        args: ["worktree", "add", basePath],
+      }),
+      detail: `Could not find an available worktree directory for '${branch}'.`,
     });
   });
 
@@ -1282,10 +1576,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       },
     ).pipe(Effect.map((result) => result.exitCode === 0));
 
-  const originRemoteExists = (cwd: string): Effect.Effect<boolean, GitCommandError> =>
-    executeGit("GitVcsDriver.originRemoteExists", cwd, ["remote", "get-url", "origin"], {
+  const remoteExists: GitVcsDriver.GitVcsDriver["Service"]["remoteExists"] = (input) =>
+    executeGit("GitVcsDriver.remoteExists", input.cwd, ["remote", "get-url", input.remoteName], {
       allowNonZeroExit: true,
     }).pipe(Effect.map((result) => result.exitCode === 0));
+
+  const originRemoteExists = (cwd: string): Effect.Effect<boolean, GitCommandError> =>
+    remoteExists({ cwd, remoteName: "origin" });
 
   const listRemoteNames = (cwd: string): Effect.Effect<ReadonlyArray<string>, GitCommandError> =>
     runGitStdout("GitVcsDriver.listRemoteNames", cwd, ["remote"]).pipe(
@@ -1433,15 +1730,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return null;
   });
 
-  const computeAheadCountAgainstBase = Effect.fn("computeAheadCountAgainstBase")(function* (
+  const countCommitsAgainstBase = Effect.fn("countCommitsAgainstBase")(function* (
     cwd: string,
-    refName: string,
+    baseRef: string,
   ) {
-    const baseRef = yield* resolveBaseBranchForNoUpstream(cwd, refName);
-    if (!baseRef) {
-      return 0;
-    }
-
     const result = yield* executeGit(
       "GitVcsDriver.computeAheadCountAgainstBase",
       cwd,
@@ -1454,6 +1746,51 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     const parsed = Number.parseInt(result.stdout.trim(), 10);
     return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  });
+
+  /**
+   * Totals for `git diff <baseRef>...HEAD` — the same range the review diff
+   * panel renders as "Branch changes", so the two always agree.
+   */
+  const readBranchDiffStat = Effect.fn("readBranchDiffStat")(function* (
+    cwd: string,
+    baseRef: string,
+  ) {
+    const result = yield* executeGit(
+      "GitVcsDriver.statusDetails.branchNumstat",
+      cwd,
+      ["diff", "--numstat", `${baseRef}...HEAD`],
+      { allowNonZeroExit: true },
+    );
+    if (result.exitCode !== 0) {
+      return null;
+    }
+
+    const entries = parseNumstatEntries(result.stdout);
+    let insertions = 0;
+    let deletions = 0;
+    for (const entry of entries) {
+      insertions += entry.insertions;
+      deletions += entry.deletions;
+    }
+    return {
+      baseRef,
+      filesChanged: entries.length,
+      insertions,
+      deletions,
+    };
+  });
+
+  const computeAheadCountAgainstBase = Effect.fn("computeAheadCountAgainstBase")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const baseRef = yield* resolveBaseBranchForNoUpstream(cwd, refName);
+    if (!baseRef) {
+      return 0;
+    }
+
+    return yield* countCommitsAgainstBase(cwd, baseRef);
   });
 
   const readStatusDetailsRemote = Effect.fn("readStatusDetailsRemote")(function* (cwd: string) {
@@ -1472,25 +1809,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (branchResult === null) {
       return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
     }
+    let branch: string | null;
     if (branchResult.exitCode !== 0) {
       if (isNonRepositoryGitStderr(branchResult.stderr)) {
         return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
       }
-      return yield* new GitCommandError({
-        ...gitCommandContext({
-          operation: "GitVcsDriver.statusDetailsRemote.branch",
-          cwd,
-          args: ["rev-parse", "--abbrev-ref", "HEAD"],
-        }),
-        detail: "Git branch lookup failed.",
-        exitCode: branchResult.exitCode,
-        stdoutLength: branchResult.stdout.length,
-        stderrLength: branchResult.stderr.length,
-      });
-    }
+      if (!isUnbornHeadStderr(branchResult.stderr)) {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.statusDetailsRemote.branch",
+            cwd,
+            args: ["rev-parse", "--abbrev-ref", "HEAD"],
+          }),
+          detail: "Git branch lookup failed.",
+          exitCode: branchResult.exitCode,
+          stdoutLength: branchResult.stdout.length,
+          stderrLength: branchResult.stderr.length,
+        });
+      }
 
-    const branchValue = branchResult.stdout.trim();
-    const branch = branchValue.length > 0 && branchValue !== "HEAD" ? branchValue : null;
+      const branchValue = yield* runGitStdout(
+        "GitVcsDriver.statusDetailsRemote.unbornBranch",
+        cwd,
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+      );
+      branch = branchValue.trim() || null;
+    } else {
+      const branchValue = branchResult.stdout.trim();
+      branch = branchValue.length > 0 && branchValue !== "HEAD" ? branchValue : null;
+    }
     const upstream = yield* resolveCurrentUpstream(cwd);
     const upstreamRef = upstream?.upstreamRef ?? null;
     let aheadCount = 0;
@@ -1580,16 +1927,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
     );
     const statusCacheKey = repositoryPaths?.gitCommonDir;
-    const [numstatStdout, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
+    const [numstatEntries, defaultBranch, hasPrimaryRemote] = yield* Effect.all(
       [
         executeGitWithStableDiagnostics(
           "GitVcsDriver.statusDetails.numstat",
           cwd,
-          ["diff", "HEAD", "--numstat"],
+          ["diff", "HEAD", "--numstat", "--"],
           { allowNonZeroExit: true },
         ).pipe(
-          Effect.flatMap((result) => {
-            if (result.exitCode === 0) return Effect.succeed(result.stdout);
+          Effect.flatMap((result): Effect.Effect<ReadonlyArray<NumstatEntry>, GitCommandError> => {
+            if (result.exitCode === 0) return Effect.succeed(parseNumstatEntries(result.stdout));
             if (isUnbornHeadStderr(result.stderr)) {
               return Effect.map(
                 Effect.all([
@@ -1603,7 +1950,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                     "--numstat",
                   ]),
                 ]),
-                ([unstagedStdout, stagedStdout]) => {
+                ([unstagedStdout, stagedStdout]): ReadonlyArray<NumstatEntry> => {
                   const staged = parseNumstatEntries(stagedStdout);
                   const unstaged = parseNumstatEntries(unstagedStdout);
                   const map = new Map<string, { insertions: number; deletions: number }>();
@@ -1616,9 +1963,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                     existing.deletions += entry.deletions;
                     map.set(entry.path, existing);
                   }
-                  return Array.from(map.entries())
-                    .map(([p, s]) => `${s.insertions}\t${s.deletions}\t${p}`)
-                    .join("\n");
+                  return Array.from(map.entries()).map(([entryPath, stat]) => ({
+                    path: entryPath,
+                    // An unborn HEAD has nothing to rename away from.
+                    originalPath: null,
+                    insertions: stat.insertions,
+                    deletions: stat.deletions,
+                  }));
                 },
               );
             }
@@ -1627,7 +1978,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 ...gitCommandContext({
                   operation: "GitVcsDriver.statusDetails.numstat",
                   cwd,
-                  args: ["diff", "HEAD", "--numstat"],
+                  args: ["diff", "HEAD", "--numstat", "--"],
                 }),
                 detail: "git diff HEAD --numstat failed.",
                 exitCode: result.exitCode,
@@ -1654,7 +2005,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     let behindCount = 0;
     let aheadOfDefaultCount = 0;
     let hasWorkingTreeChanges = false;
-    const changedFilesWithoutNumstat = new Set<string>();
+    // Keyed by path, because that is the only key `git diff HEAD --numstat`
+    // shares with the porcelain records.
+    const porcelainEntriesByPath = new Map<string, PorcelainStatusEntry>();
 
     for (const line of statusStdout.split(/\r?\n/g)) {
       if (line.startsWith("# branch.head ")) {
@@ -1676,14 +2029,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       if (line.trim().length > 0 && !line.startsWith("#")) {
         hasWorkingTreeChanges = true;
-        const pathValue = parsePorcelainPath(line);
-        if (pathValue) changedFilesWithoutNumstat.add(pathValue);
+        const entry = parsePorcelainStatusEntry(line);
+        if (entry) porcelainEntriesByPath.set(entry.path, entry);
       }
     }
 
+    const isDefaultBranch =
+      refName !== null &&
+      (refName === defaultBranch ||
+        (defaultBranch === null && (refName === "main" || refName === "master")));
+
+    // Resolved once and shared by the ahead counts and the branch diff stat,
+    // under the same conditions that used to resolve it inside
+    // `computeAheadCountAgainstBase`: a ref with no upstream to count against,
+    // or any ref that is not the default one.
+    const baseRef =
+      refName !== null && (upstreamRef === null || !isDefaultBranch)
+        ? yield* resolveBaseBranchForNoUpstream(cwd, refName).pipe(Effect.orElseSucceed(() => null))
+        : null;
+
     const fallbackAheadCount =
       !upstreamRef && refName
-        ? yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0))
+        ? baseRef === null
+          ? 0
+          : yield* countCommitsAgainstBase(cwd, baseRef).pipe(Effect.orElseSucceed(() => 0))
         : null;
 
     if (fallbackAheadCount !== null) {
@@ -1691,38 +2060,59 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       behindCount = 0;
     }
 
-    const isDefaultBranch =
-      refName !== null &&
-      (refName === defaultBranch ||
-        (defaultBranch === null && (refName === "main" || refName === "master")));
     if (refName && !isDefaultBranch) {
       aheadOfDefaultCount =
         fallbackAheadCount !== null
           ? fallbackAheadCount
-          : yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0));
+          : baseRef === null
+            ? 0
+            : yield* countCommitsAgainstBase(cwd, baseRef).pipe(Effect.orElseSucceed(() => 0));
     }
 
-    const numstatEntries = parseNumstatEntries(numstatStdout);
-    const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
+    // Nothing committed on top of the base means an empty range diff, so the
+    // extra numstat is skipped rather than run for a guaranteed zero.
+    const branchDiff =
+      baseRef !== null && aheadOfDefaultCount > 0
+        ? yield* readBranchDiffStat(cwd, baseRef).pipe(Effect.orElseSucceed(() => null))
+        : null;
+
+    const fileStatMap = new Map<string, NumstatEntry>();
     for (const entry of numstatEntries) {
-      fileStatMap.set(entry.path, { insertions: entry.insertions, deletions: entry.deletions });
+      fileStatMap.set(entry.path, entry);
     }
 
+    // The two sources disagree about which paths they can see: numstat scores
+    // nothing for untracked or binary files, and it lists paths that porcelain
+    // omits when a change is already fully described by the index. Both halves
+    // stay, joined on path.
     let insertions = 0;
     let deletions = 0;
-    const files = Array.from(fileStatMap.entries())
-      .map(([filePath, stat]) => {
-        insertions += stat.insertions;
-        deletions += stat.deletions;
-        return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
-      })
-      .toSorted((a, b) => a.path.localeCompare(b.path));
-
-    for (const filePath of changedFilesWithoutNumstat) {
-      if (fileStatMap.has(filePath)) continue;
-      files.push({ path: filePath, insertions: 0, deletions: 0 });
+    for (const entry of fileStatMap.values()) {
+      insertions += entry.insertions;
+      deletions += entry.deletions;
     }
-    files.sort((a, b) => a.path.localeCompare(b.path));
+
+    const changedPaths = new Set<string>([...fileStatMap.keys(), ...porcelainEntriesByPath.keys()]);
+    const files: Array<VcsWorkingTreeFile> = Array.from(changedPaths, (filePath) => {
+      const stat = fileStatMap.get(filePath);
+      const porcelain = porcelainEntriesByPath.get(filePath);
+      // Prefer the porcelain source path: it is git's own rename record, where
+      // numstat's is reconstructed from an abbreviated display form.
+      const originalPath = porcelain?.originalPath ?? stat?.originalPath ?? null;
+      return {
+        path: filePath,
+        insertions: stat?.insertions ?? 0,
+        deletions: stat?.deletions ?? 0,
+        // Left absent, not defaulted: a path only numstat saw has no XY code,
+        // and guessing "modified" for it is the bug this replaces.
+        ...(porcelain ? { changeKind: porcelain.changeKind } : {}),
+        ...(porcelain?.stagedChangeKind ? { stagedChangeKind: porcelain.stagedChangeKind } : {}),
+        ...(porcelain?.unstagedChangeKind
+          ? { unstagedChangeKind: porcelain.unstagedChangeKind }
+          : {}),
+        ...(originalPath !== null ? { originalPath } : {}),
+      };
+    }).toSorted((a, b) => a.path.localeCompare(b.path));
 
     return {
       isRepo: true,
@@ -1736,6 +2126,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         insertions,
         deletions,
       },
+      branchDiff,
       hasUpstream: upstreamRef !== null,
       aheadCount,
       behindCount,
@@ -1889,12 +2280,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const requestedRemoteName = options?.remoteName?.trim() || null;
     if (requestedRemoteName) {
       const publishBranch = yield* resolvePublishBranchName(cwd, branch);
-      yield* runGit("GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote", cwd, [
-        "push",
-        "-u",
-        requestedRemoteName,
-        `HEAD:refs/heads/${publishBranch}`,
-      ]);
+      yield* runGit(
+        "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
+        cwd,
+        ["push", "-u", requestedRemoteName, `HEAD:refs/heads/${publishBranch}`],
+        { timeoutMs: null },
+      );
       return {
         status: "pushed" as const,
         branch,
@@ -1952,12 +2343,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         });
       }
       const publishBranch = yield* resolvePublishBranchName(cwd, branch);
-      yield* runGit("GitVcsDriver.pushCurrentBranch.pushWithUpstream", cwd, [
-        "push",
-        "-u",
-        publishRemoteName,
-        `HEAD:refs/heads/${publishBranch}`,
-      ]);
+      yield* runGit(
+        "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
+        cwd,
+        ["push", "-u", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
+        { timeoutMs: null },
+      );
       return {
         status: "pushed" as const,
         branch,
@@ -1970,11 +2361,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.orElseSucceed(() => null),
     );
     if (currentUpstream) {
-      yield* runGit("GitVcsDriver.pushCurrentBranch.pushUpstream", cwd, [
-        "push",
-        currentUpstream.remoteName,
-        `HEAD:refs/heads/${currentUpstream.branchName}`,
-      ]);
+      yield* runGit(
+        "GitVcsDriver.pushCurrentBranch.pushUpstream",
+        cwd,
+        ["push", currentUpstream.remoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
+        { timeoutMs: null },
+      );
       return {
         status: "pushed" as const,
         branch,
@@ -1983,7 +2375,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
-    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"]);
+    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], { timeoutMs: null });
     return {
       status: "pushed" as const,
       branch,
@@ -2268,6 +2660,163 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       generatedAt: yield* DateTime.now,
       sources,
     };
+  });
+
+  const reviewDiffFileError = (
+    input: ReviewDiffFileContentsInput,
+    detail: string,
+    cause?: unknown,
+  ) =>
+    new GitCommandError({
+      operation: "GitVcsDriver.getReviewDiffFileContents",
+      command: "git",
+      cwd: input.cwd,
+      detail,
+      ...(cause === undefined ? {} : { cause }),
+    });
+
+  const isPathWithinRoot = (root: string, candidate: string) => {
+    const relative = path.relative(root, candidate);
+    return (
+      relative === "" ||
+      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    );
+  };
+
+  const readReviewFileAtRevision = Effect.fn("readReviewFileAtRevision")(function* (
+    input: ReviewDiffFileContentsInput,
+    revision: string,
+    relativePath: string,
+  ) {
+    const result = yield* executeGit(
+      "GitVcsDriver.getReviewDiffFileContents.revision",
+      input.cwd,
+      ["show", `${revision}:${relativePath}`],
+      { maxOutputBytes: REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES },
+    );
+    if (result.stdout.includes("\0")) {
+      return yield* reviewDiffFileError(input, `Cannot expand binary file '${relativePath}'.`);
+    }
+    return result.stdout;
+  });
+
+  const readWorkingTreeReviewFile = Effect.fn("readWorkingTreeReviewFile")(function* (
+    input: ReviewDiffFileContentsInput,
+    repositoryRoot: string,
+  ) {
+    const fileError = (stage: string, detail: string, cause?: unknown) =>
+      new GitCommandError({
+        operation: `GitVcsDriver.getReviewDiffFileContents.workingTree.${stage}`,
+        command: stage,
+        cwd: input.cwd,
+        detail,
+        ...(cause === undefined ? {} : { cause }),
+      });
+    const requestedPath = path.resolve(repositoryRoot, input.newPath);
+    if (!isPathWithinRoot(repositoryRoot, requestedPath)) {
+      return yield* fileError(
+        "path.resolve",
+        `Diff file '${input.newPath}' resolves outside the review workspace.`,
+      );
+    }
+
+    const [realRepositoryRoot, realTarget] = yield* Effect.all([
+      fileSystem.realPath(repositoryRoot),
+      fileSystem.realPath(requestedPath),
+    ]).pipe(
+      Effect.mapError((cause) =>
+        fileError("fs.realPath", `Could not resolve diff file '${input.newPath}'.`, cause),
+      ),
+    );
+    if (!isPathWithinRoot(realRepositoryRoot, realTarget)) {
+      return yield* fileError(
+        "fs.realPath",
+        `Diff file '${input.newPath}' resolves outside the review workspace.`,
+      );
+    }
+
+    const info = yield* fileSystem
+      .stat(realTarget)
+      .pipe(
+        Effect.mapError((cause) =>
+          fileError("fs.stat", `Could not inspect diff file '${input.newPath}'.`, cause),
+        ),
+      );
+    if (info.type !== "File") {
+      return yield* fileError("fs.stat", `Diff path '${input.newPath}' is not a file.`);
+    }
+    if (info.size > BigInt(REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES)) {
+      return yield* fileError(
+        "fs.stat",
+        `Diff file '${input.newPath}' exceeds the 1 MB expansion limit.`,
+      );
+    }
+
+    const bytes = yield* fileSystem
+      .readFile(realTarget)
+      .pipe(
+        Effect.mapError((cause) =>
+          fileError("fs.readFile", `Could not read diff file '${input.newPath}'.`, cause),
+        ),
+      );
+    if (bytes.includes(0)) {
+      return yield* fileError("fs.readFile", `Cannot expand binary file '${input.newPath}'.`);
+    }
+    return new TextDecoder("utf-8").decode(bytes);
+  });
+
+  const getReviewDiffFileContents = Effect.fn("getReviewDiffFileContents")(function* (
+    input: ReviewDiffFileContentsInput,
+  ) {
+    if (input.sourceKind === "working-tree") {
+      const repositoryRoot = yield* runGitStdout(
+        "GitVcsDriver.getReviewDiffFileContents.repositoryRoot",
+        input.cwd,
+        ["rev-parse", "--show-toplevel"],
+      ).pipe(Effect.map((value) => value.trim()));
+      if (repositoryRoot.length === 0) {
+        return yield* reviewDiffFileError(input, "Could not resolve the Git repository root.");
+      }
+      const [oldContents, newContents] = yield* Effect.all(
+        [
+          input.changeType === "new"
+            ? Effect.succeed("")
+            : readReviewFileAtRevision(input, input.baseRef ?? "HEAD", input.oldPath),
+          input.changeType === "deleted"
+            ? Effect.succeed("")
+            : readWorkingTreeReviewFile(input, repositoryRoot),
+        ],
+        { concurrency: 2 },
+      );
+      return { oldContents, newContents };
+    }
+
+    if (!input.baseRef || !input.headRef) {
+      return yield* reviewDiffFileError(
+        input,
+        "Branch diff file expansion requires both base and head refs.",
+      );
+    }
+    const mergeBase = yield* runGitStdout(
+      "GitVcsDriver.getReviewDiffFileContents.mergeBase",
+      input.cwd,
+      ["merge-base", input.baseRef, input.headRef],
+    ).pipe(Effect.map((value) => value.trim()));
+    if (mergeBase.length === 0) {
+      return yield* reviewDiffFileError(input, "Could not resolve the branch comparison base.");
+    }
+    const [oldContents, newContents] = yield* Effect.all(
+      [
+        input.changeType === "new"
+          ? Effect.succeed("")
+          : readReviewFileAtRevision(input, mergeBase, input.oldPath),
+        input.changeType === "deleted"
+          ? Effect.succeed("")
+          : readReviewFileAtRevision(input, input.headRef, input.newPath),
+      ],
+      { concurrency: 2 },
+    );
+    return { oldContents, newContents };
   });
 
   const readConfigValue: GitVcsDriver.GitVcsDriver["Service"]["readConfigValue"] = (cwd, key) =>
@@ -2579,19 +3128,41 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input) {
-    const targetBranch = input.newRefName ?? input.refName;
-    const sanitizedBranch = targetBranch.replace(/\//g, "-");
-    const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+    // `git worktree add` refuses outright when the branch or the destination
+    // directory is already taken, which turns a repeated launch into a failed
+    // run rather than a second workspace. Callers that generate a name from the
+    // prompt (scheduled tasks re-fire the same prompt daily) collide constantly,
+    // so resolve both to free names before handing anything to git. An explicit
+    // `path` stays untouched: that caller picked the directory deliberately.
+    const newRefName =
+      input.newRefName == null
+        ? null
+        : yield* resolveAvailableBranchName(
+            input.cwd,
+            input.newRefName,
+            "GitVcsDriver.createWorktree",
+          );
+    const targetBranch = newRefName ?? input.refName;
+    const worktreePath =
+      input.path ?? (yield* resolveAvailableWorktreePath(input.cwd, targetBranch));
+    const args = newRefName
+      ? ["worktree", "add", "-b", newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
     });
 
-    if (input.newRefName && input.baseRefName) {
+    if (newRefName) {
+      yield* runGit(
+        "GitVcsDriver.createWorktree.markOwnedBranch",
+        input.cwd,
+        ["config", worktreeOwnedBranchConfigKey(newRefName), "true"],
+        { allowNonZeroExit: true },
+      );
+    }
+
+    if (newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
         input.baseRefName,
@@ -2600,7 +3171,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
       yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
         "config",
-        `branch.${input.newRefName}.gh-merge-base`,
+        `branch.${newRefName}.gh-merge-base`,
         baseBranch,
       ]);
     }
@@ -2630,6 +3201,95 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           fallbackErrorDetail: "git fetch pull request branch failed",
         },
       );
+    });
+
+  const resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"] = Effect.fn(
+    "resolveCommit",
+  )(function* (input) {
+    const commitSha = yield* runGitStdout("GitVcsDriver.resolveCommit", input.cwd, [
+      "rev-parse",
+      "--verify",
+      `${input.revision}^{commit}`,
+    ]).pipe(Effect.map((stdout) => stdout.trim()));
+
+    return { commitSha };
+  });
+
+  const fetchPullRequestHeadCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestHeadCommit"] =
+    Effect.fn("fetchPullRequestHeadCommit")(function* (input) {
+      const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+      // No refspec destination: the pull head lands in FETCH_HEAD (per worktree) instead of a
+      // branch, which is the only way to read it while that branch is checked out somewhere.
+      yield* executeGit(
+        "GitVcsDriver.fetchPullRequestHeadCommit",
+        input.cwd,
+        ["fetch", "--quiet", "--no-tags", remoteName, `refs/pull/${input.prNumber}/head`],
+        {
+          fallbackErrorDetail: "git fetch pull request head failed",
+        },
+      );
+
+      return yield* resolveCommit({ cwd: input.cwd, revision: "FETCH_HEAD" });
+    });
+
+  const refreshCheckedOutBranch: GitVcsDriver.GitVcsDriver["Service"]["refreshCheckedOutBranch"] =
+    Effect.fn("refreshCheckedOutBranch")(function* (input) {
+      const { commitSha: headCommit } = yield* resolveCommit({ cwd: input.cwd, revision: "HEAD" });
+      if (headCommit === input.targetCommit) {
+        return { headCommit, moved: false, onTarget: true };
+      }
+
+      const worktreeChanges = yield* runGitStdout(
+        "GitVcsDriver.refreshCheckedOutBranch.status",
+        input.cwd,
+        ["status", "--porcelain"],
+      );
+      if (worktreeChanges.trim().length > 0) {
+        return { headCommit, moved: false, onTarget: false };
+      }
+
+      const isAncestor = yield* executeGit(
+        "GitVcsDriver.refreshCheckedOutBranch.isAncestor",
+        input.cwd,
+        ["merge-base", "--is-ancestor", headCommit, input.targetCommit],
+        { allowNonZeroExit: true },
+      ).pipe(Effect.map((result) => result.exitCode === 0));
+      // A rewritten head (rebase, squash, amend) does not descend from the checkout, so it can
+      // only be taken by resetting. That is lossless exactly when the tree is clean and HEAD
+      // never left the commit the upstream held before the fetch.
+      if (!isAncestor && headCommit !== input.resetWhenHeadCommit) {
+        return { headCommit, moved: false, onTarget: false };
+      }
+
+      if (!isAncestor) {
+        // The commit being reset away is about to be reachable from nothing. It is only ever a
+        // commit the remote already held, but "the remote held it" stops being a way back once
+        // the head it belonged to has been rewritten, so a ref keeps it findable.
+        yield* executeGit(
+          "GitVcsDriver.refreshCheckedOutBranch.keepPrevious",
+          input.cwd,
+          ["update-ref", "refs/t3code/pre-refresh", headCommit],
+          { fallbackErrorDetail: "git failed to record the previous checkout commit" },
+        );
+      }
+
+      yield* executeGit(
+        "GitVcsDriver.refreshCheckedOutBranch.move",
+        input.cwd,
+        // `--merge` rather than `--hard`: the cleanliness check above is a snapshot, and another
+        // thread may edit a tracked file between it and this move. Git itself refuses a `--merge`
+        // reset that would overwrite such an edit — the same guarantee `--ff-only` gives the
+        // other branch — so a race loses nothing; the refresh fails and is reported instead.
+        isAncestor
+          ? ["merge", "--ff-only", input.targetCommit]
+          : ["reset", "--merge", input.targetCommit],
+        {
+          timeoutMs: 30_000,
+          fallbackErrorDetail: "git failed to move the checkout onto the pull request head",
+        },
+      );
+
+      return { headCommit: input.targetCommit, moved: true, onTarget: true };
     });
 
   const fetchRemote: GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"] = Effect.fn("fetchRemote")(
@@ -2705,18 +3365,119 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       input.branch,
     ]);
 
+  // Resolves the branch a worktree has checked out. Must run before removal:
+  // once the worktree is gone it no longer appears in `git worktree list` and
+  // the branch it held can no longer be recovered.
+  const resolveWorktreeBranch = Effect.fn("resolveWorktreeBranch")(function* (
+    cwd: string,
+    worktreePath: string,
+  ) {
+    const listed = yield* executeGit(
+      "GitVcsDriver.removeWorktree.resolveBranch",
+      cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      {
+        timeoutMs: WORKTREE_LIST_TIMEOUT_MS,
+        allowNonZeroExit: true,
+        maxOutputBytes: 16 * 1024 * 1024,
+      },
+    );
+    if (listed.exitCode !== 0) {
+      return null;
+    }
+    // Git reports worktrees by their real path, so a caller-supplied path that
+    // traverses a symlink (`/var` -> `/private/var` on macOS) never matches a
+    // plain string compare. Resolve both sides before comparing.
+    const canonicalize = (candidate: string) =>
+      fileSystem.realPath(candidate).pipe(
+        Effect.orElseSucceed(() => candidate),
+        Effect.map((resolved) => path.normalize(path.resolve(resolved))),
+      );
+    const target = yield* canonicalize(worktreePath);
+    for (const [branchName, listedPath] of parseWorktreeBranchPaths(listed.stdout)) {
+      if ((yield* canonicalize(listedPath)) === target) {
+        return branchName;
+      }
+    }
+    return null;
+  });
+
+  // A failed or killed `git worktree remove` leaves the .git/worktrees admin
+  // entry pointing at a directory that is now partially or fully gone. Prune
+  // so the registry does not keep reporting a worktree nobody can use.
+  const pruneWorktrees = (cwd: string) =>
+    executeGit("GitVcsDriver.removeWorktree.prune", cwd, ["worktree", "prune"], {
+      timeoutMs: WORKTREE_PRUNE_TIMEOUT_MS,
+      allowNonZeroExit: true,
+    }).pipe(Effect.asVoid, Effect.ignore);
+
+  // Drops the branch that backed a removed worktree, but only when we created
+  // it (see worktreeOwnedBranchConfigKey) and only with `-d`, never `-D`: Git's
+  // own merged-check is the safety policy, so unmerged work is never discarded.
+  // Best-effort — a kept branch must not fail the removal that already
+  // succeeded. Git clears `branch.<name>.*` config itself on a successful
+  // delete, so the marker needs no explicit cleanup.
+  const deleteOwnedWorktreeBranch = Effect.fn("deleteOwnedWorktreeBranch")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const marker = yield* executeGit(
+      "GitVcsDriver.removeWorktree.readOwnedBranch",
+      cwd,
+      ["config", "--get", worktreeOwnedBranchConfigKey(refName)],
+      { timeoutMs: 5_000, allowNonZeroExit: true },
+    );
+    if (marker.exitCode !== 0 || marker.stdout.trim() !== "true") {
+      return;
+    }
+
+    const deleted = yield* executeGit(
+      "GitVcsDriver.removeWorktree.deleteOwnedBranch",
+      cwd,
+      ["branch", "-d", "--", refName],
+      { timeoutMs: 10_000, allowNonZeroExit: true },
+    );
+    if (deleted.exitCode !== 0) {
+      yield* Effect.logInfo(
+        `GitVcsDriver.removeWorktree: kept branch ${refName} after removing its worktree; git declined to delete it (likely unmerged work).`,
+      );
+    }
+  });
+
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
+    const ownedBranch = yield* resolveWorktreeBranch(input.cwd, input.path).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+
     const args = ["worktree", "remove"];
     if (input.force) {
       args.push("--force");
     }
     args.push(input.path);
     yield* executeGit("GitVcsDriver.removeWorktree", input.cwd, args, {
-      timeoutMs: 15_000,
+      timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS,
       fallbackErrorDetail: "git worktree remove failed",
-    });
+    }).pipe(Effect.tapError(() => pruneWorktrees(input.cwd)));
+
+    if (ownedBranch !== null) {
+      yield* deleteOwnedWorktreeBranch(input.cwd, ownedBranch);
+    }
+  });
+
+  const deleteLocalBranch: GitVcsDriver.GitVcsDriver["Service"]["deleteLocalBranch"] = Effect.fn(
+    "deleteLocalBranch",
+  )(function* (input) {
+    yield* executeGit(
+      "GitVcsDriver.deleteLocalBranch",
+      input.cwd,
+      ["branch", input.force === true ? "-D" : "-d", "--", input.refName],
+      {
+        timeoutMs: 10_000,
+        fallbackErrorDetail: "git branch delete failed",
+      },
+    );
   });
 
   const renameBranch: GitVcsDriver.GitVcsDriver["Service"]["renameBranch"] = Effect.fn(
@@ -2903,20 +3664,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     pullCurrentBranch: (cwd) => withListRefsInvalidation(cwd, pullCurrentBranch(cwd)),
     readRangeContext,
     getReviewDiffPreview,
+    getReviewDiffFileContents,
     readConfigValue,
     listRefs,
     createWorktree: (input) => withListRefsInvalidation(input.cwd, createWorktree(input)),
     fetchPullRequestBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
+    fetchPullRequestHeadCommit,
+    resolveCommit,
+    refreshCheckedOutBranch: (input) =>
+      withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input)),
     ensureRemote: (input) => withListRefsInvalidation(input.cwd, ensureRemote(input)),
     resolvePrimaryRemoteName,
     fetchRemote: (input) => withListRefsInvalidation(input.cwd, fetchRemote(input)),
+    remoteExists,
     resolveRemoteTrackingCommit,
     fetchRemoteBranch: (input) => withListRefsInvalidation(input.cwd, fetchRemoteBranch(input)),
     fetchRemoteTrackingBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input)),
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
+    deleteLocalBranch: (input) => withListRefsInvalidation(input.cwd, deleteLocalBranch(input)),
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),

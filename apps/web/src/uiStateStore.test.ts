@@ -8,10 +8,13 @@ import {
   parsePersistedState,
   PERSISTED_STATE_KEY,
   type PersistedUiState,
+  mergeDisplayedIdsIntoOrder,
   persistState,
   reorderProjects,
+  reorderThreads,
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
+  setLastNewThreadProjectKey,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
   type UiState,
@@ -21,6 +24,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
+    lastNewThreadProjectKey: null,
+    threadOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -116,6 +121,49 @@ describe("uiStateStore pure functions", () => {
     );
   });
 
+  it("merges displayed thread keys into the stored order without disturbing hidden ones", () => {
+    // "hidden-x" belongs to another scope: it must keep its stored slot.
+    const merged = mergeDisplayedIdsIntoOrder(
+      ["thread-a", "hidden-x", "thread-b"],
+      ["thread-new", "thread-a", "thread-b"],
+    );
+
+    expect(merged).toEqual(["thread-new", "thread-a", "hidden-x", "thread-b"]);
+  });
+
+  it("appends displayed keys with no stored successor to the end of the order", () => {
+    expect(mergeDisplayedIdsIntoOrder([], ["thread-a", "thread-b"])).toEqual([
+      "thread-a",
+      "thread-b",
+    ]);
+    expect(mergeDisplayedIdsIntoOrder(["thread-a"], ["thread-a", "thread-b"])).toEqual([
+      "thread-a",
+      "thread-b",
+    ]);
+  });
+
+  it("reorders threads against the displayed order, seeding unknown keys", () => {
+    const state = makeUiState();
+
+    const next = reorderThreads(
+      state,
+      ["thread-a", "thread-b", "thread-c"],
+      ["thread-a"],
+      ["thread-c"],
+    );
+
+    expect(next.threadOrder).toEqual(["thread-b", "thread-c", "thread-a"]);
+    expect(reorderThreads(next, ["thread-a", "thread-b"], ["thread-a"], ["thread-a"])).toBe(next);
+  });
+
+  it("keeps hidden threads' stored positions across a scoped reorder", () => {
+    const state = makeUiState({ threadOrder: ["thread-a", "hidden-x", "thread-b"] });
+
+    const next = reorderThreads(state, ["thread-a", "thread-b"], ["thread-b"], ["thread-a"]);
+
+    expect(next.threadOrder).toEqual(["thread-b", "thread-a", "hidden-x"]);
+  });
+
   it("stores explicit changed-file expansion choices", () => {
     const threadId = ThreadId.make("thread-1");
     const collapsed = setThreadChangedFilesExpanded(makeUiState(), threadId, "turn-1", false);
@@ -144,6 +192,18 @@ describe("uiStateStore pure functions", () => {
       defaultAdvertisedEndpointKey: null,
     });
   });
+
+  it("remembers the project the last thread was started in", () => {
+    const next = setLastNewThreadProjectKey(makeUiState(), "environment:project-1");
+
+    expect(next.lastNewThreadProjectKey).toBe("environment:project-1");
+    expect(setLastNewThreadProjectKey(next, "environment:project-1")).toBe(next);
+    expect(setLastNewThreadProjectKey(next, "environment:project-2")).toMatchObject({
+      lastNewThreadProjectKey: "environment:project-2",
+    });
+    // An empty key is not a preference: keep whatever the user last chose.
+    expect(setLastNewThreadProjectKey(next, "")).toBe(next);
+  });
 });
 
 describe("parsePersistedState", () => {
@@ -154,6 +214,7 @@ describe("parsePersistedState", () => {
         invalid: "no" as unknown as boolean,
       },
       projectOrder: ["physical-b", "", "physical-a", "physical-b"],
+      lastNewThreadProjectKey: "environment:project-1",
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
@@ -173,6 +234,8 @@ describe("parsePersistedState", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      lastNewThreadProjectKey: "environment:project-1",
+      threadOrder: [],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -184,6 +247,11 @@ describe("parsePersistedState", () => {
         },
       },
     });
+  });
+
+  it("hydrates an absent last new-thread project as no preference", () => {
+    expect(parsePersistedState({}).lastNewThreadProjectKey).toBeNull();
+    expect(parsePersistedState({ lastNewThreadProjectKey: "" }).lastNewThreadProjectKey).toBeNull();
   });
 
   it("ignores changed-file expansion values saved with legacy folder semantics", () => {
@@ -280,6 +348,7 @@ describe("uiStateStore persistence", () => {
         },
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      lastNewThreadProjectKey: "environment:project-1",
     });
 
     persistState(state);
@@ -292,6 +361,8 @@ describe("uiStateStore persistence", () => {
         logical: false,
       },
       projectOrder: ["physical-b", "physical-a"],
+      lastNewThreadProjectKey: "environment:project-1",
+      threadOrder: [],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -320,5 +391,6 @@ describe("uiStateStore persistence", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(resolveProjectExpanded(persisted.projectExpandedById ?? {}, ["unknown"])).toBe(true);
+    expect(persisted).not.toHaveProperty("threadPanelOpen");
   });
 });

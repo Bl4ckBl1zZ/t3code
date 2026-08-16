@@ -1,18 +1,27 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { McpSchema, McpServer, Tool } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import * as ServerConfig from "../config.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
+import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -22,6 +31,9 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
+import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -73,7 +85,7 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
           authorization?.startsWith("Bearer ") === true
             ? authorization.slice("Bearer ".length).trim()
             : "";
-        const invocation = yield* registry.resolve(token);
+        const invocation = yield* registry.resolve(token, registry.audience);
         if (!invocation) {
           // Without this the only symptom of a dead credential is the agent
           // quietly losing the whole `t3-code` toolkit for the rest of its
@@ -130,6 +142,14 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  const snapshotHandlerContext = yield* Effect.context<
+    | ServerConfig.ServerConfig
+    | ThreadManagementService.ThreadManagementService
+    | ProjectService.ProjectService
+    | WorkspacePaths.WorkspacePaths
+    | FileSystem.FileSystem
+    | Path.Path
+  >();
   const built = yield* PreviewSnapshotToolkit;
   const tool = PreviewSnapshotTool;
   yield* server.addTool({
@@ -161,6 +181,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           Effect.flatMap(Effect.fromOption),
           Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideContext(snapshotHandlerContext),
           Effect.matchCauseEffect({
             onFailure: previewSnapshotFailure,
             onSuccess: ({ encodedResult }) => {
@@ -216,10 +237,25 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
+  Layer.provide(OrchestratorToolkitHandlersLive),
+  Layer.provide(OrchestratorMcpService.layer),
+);
+
+export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
+  Layer.provide(WorktreeToolkitHandlersLive),
+  Layer.provide(WorktreeMcpService.layer),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
   path: "/mcp",
+  protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  OrchestratorToolkitRegistrationLive,
+  WorktreeToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

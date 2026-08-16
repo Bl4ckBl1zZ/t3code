@@ -131,6 +131,9 @@ const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
+const ACP_REGISTRY_DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
+const HERMES_ACP_DRIVER_KIND = ProviderDriverKind.make("hermesAcp");
+const OPENCLAW_DRIVER_KIND = ProviderDriverKind.make("openclaw");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
 export const DEFAULT_MODEL = "gpt-5.6-sol";
@@ -145,13 +148,18 @@ export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [
   "gpt-5.6-terra",
 ];
 export const DEFAULT_TEXT_GENERATION_MODEL = "gpt-5.6-luna";
+export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-sonnet-5",
   [CURSOR_DRIVER_KIND]: "auto",
   [GROK_DRIVER_KIND]: "grok-build",
+  [ACP_REGISTRY_DRIVER_KIND]: "default",
+  [HERMES_ACP_DRIVER_KIND]: "default",
+  [OPENCLAW_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  [ProviderDriverKind.make("hermes")]: "default",
 };
 
 /** Per-provider text generation model defaults. */
@@ -220,5 +228,9 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [CLAUDE_DRIVER_KIND]: "Claude",
   [CURSOR_DRIVER_KIND]: "Cursor",
   [GROK_DRIVER_KIND]: "Grok",
+  [ACP_REGISTRY_DRIVER_KIND]: "ACP Registry",
+  [HERMES_ACP_DRIVER_KIND]: "Hermes in Code",
+  [OPENCLAW_DRIVER_KIND]: "OpenClaw",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
+  [ProviderDriverKind.make("hermes")]: "Hermes",
 };

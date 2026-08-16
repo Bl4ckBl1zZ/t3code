@@ -9,8 +9,9 @@ export function normalizeAttachmentRelativePath(rawRelativePath: string): string
   return normalized.replace(/\\/g, "/");
 }
 
-export function resolveAttachmentRelativePath(input: {
-  readonly attachmentsDir: string;
+/** Resolves `relativePath` under `root`, returning null on any escape attempt. */
+export function resolvePathWithinRoot(input: {
+  readonly root: string;
   readonly relativePath: string;
 }): string | null {
   const normalizedRelativePath = normalizeAttachmentRelativePath(input.relativePath);
@@ -18,10 +19,17 @@ export function resolveAttachmentRelativePath(input: {
     return null;
   }
 
-  const attachmentsRoot = NodePath.resolve(input.attachmentsDir);
-  const filePath = NodePath.resolve(NodePath.join(attachmentsRoot, normalizedRelativePath));
-  if (!filePath.startsWith(`${attachmentsRoot}${NodePath.sep}`)) {
+  const root = NodePath.resolve(input.root);
+  const filePath = NodePath.resolve(NodePath.join(root, normalizedRelativePath));
+  if (!filePath.startsWith(`${root}${NodePath.sep}`)) {
     return null;
   }
   return filePath;
+}
+
+export function resolveAttachmentRelativePath(input: {
+  readonly attachmentsDir: string;
+  readonly relativePath: string;
+}): string | null {
+  return resolvePathWithinRoot({ root: input.attachmentsDir, relativePath: input.relativePath });
 }

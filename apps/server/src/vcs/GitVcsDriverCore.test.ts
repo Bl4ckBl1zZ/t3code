@@ -14,9 +14,13 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { GitCommandError } from "@t3tools/contracts";
+import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  makeGitVcsDriverCore,
+  parsePorcelainStatusEntry,
+  splitNullSeparatedGitStdoutPaths,
+} from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -78,6 +82,20 @@ const writeTextFile = (
     yield* fileSystem.writeFileString(filePath, contents);
   });
 
+const makeReviewDiffFileContentsInput = (
+  cwd: string,
+  overrides: Partial<Omit<ReviewDiffFileContentsInput, "cwd">> = {},
+): ReviewDiffFileContentsInput => ({
+  cwd,
+  sourceKind: "working-tree",
+  changeType: "change",
+  baseRef: "HEAD",
+  headRef: null,
+  oldPath: "README.md",
+  newPath: "README.md",
+  ...overrides,
+});
+
 const git = (
   cwd: string,
   args: ReadonlyArray<string>,
@@ -93,6 +111,23 @@ const git = (
       timeoutMs: 10_000,
     });
     return result.stdout.trim();
+  });
+
+/** A conflicting merge exits non-zero by design; the conflict is the fixture. */
+const executeMergeExpectingConflict = (
+  cwd: string,
+  refName: string,
+): Effect.Effect<void, GitCommandError, GitVcsDriver.GitVcsDriver> =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const result = yield* driver.execute({
+      operation: "GitVcsDriver.test.merge",
+      cwd,
+      args: ["merge", "--no-edit", refName],
+      allowNonZeroExit: true,
+      timeoutMs: 10_000,
+    });
+    assert.notEqual(result.exitCode, 0, "expected the merge to conflict");
   });
 
 const initRepoWithCommit = (
@@ -195,6 +230,46 @@ it.effect("re-reads origin remote status after cache TTL expiry and bypassed inv
     // After expiry, the next call re-executes and picks up the remote
     const afterExpiry = yield* driver.statusDetailsLocal(cwd);
     assert.equal(afterExpiry.hasOriginRemote, true);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("reports branch diff totals for work already committed on the ref", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+
+    // The default branch is its own base, so there is no range to measure.
+    assert.equal((yield* driver.statusDetailsLocal(cwd)).branchDiff, null);
+
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    assert.equal((yield* driver.statusDetailsLocal(cwd)).branchDiff, null);
+
+    yield* writeTextFile(cwd, "feature.txt", "one\ntwo\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "feature work"]);
+
+    // The committing agent's working tree is clean; the changes are the range.
+    const committed = yield* driver.statusDetailsLocal(cwd);
+    assert.equal(committed.hasWorkingTreeChanges, false);
+    assert.equal(committed.workingTree.insertions, 0);
+    assert.deepStrictEqual(committed.branchDiff, {
+      baseRef: initialBranch,
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 0,
+    });
+
+    yield* writeTextFile(cwd, "feature.txt", "one\ntwo\nthree\n");
+    const dirty = yield* driver.statusDetailsLocal(cwd);
+    assert.equal(dirty.hasWorkingTreeChanges, true);
+    assert.equal(dirty.workingTree.insertions, 1);
+    assert.deepStrictEqual(dirty.branchDiff, {
+      baseRef: initialBranch,
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 0,
+    });
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -621,6 +696,162 @@ it.effect("backs off failed upstream refreshes across linked worktrees", () =>
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+// The XY codes are the only place a file's change kind and staged-ness exist:
+// the numstat these are merged with is `git diff HEAD`, which reports one entry
+// per path with the index and the working tree already summed. Every record
+// below is verbatim `git status --porcelain=2` output.
+describe("porcelain v2 status records", () => {
+  it("reads an unstaged edit from the worktree column", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry("1 .M N... 100644 100644 100644 6178079822 6178079822 src/mod.txt"),
+      {
+        path: "src/mod.txt",
+        originalPath: null,
+        changeKind: "modified",
+        stagedChangeKind: null,
+        unstagedChangeKind: "modified",
+      },
+    );
+  });
+
+  it("reads a staged addition, which numstat cannot tell from an addition-only edit", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry(
+        "1 A. N... 000000 100644 100644 0000000000 3e757656cf src/added.txt",
+      ),
+      {
+        path: "src/added.txt",
+        originalPath: null,
+        changeKind: "added",
+        stagedChangeKind: "added",
+        unstagedChangeKind: null,
+      },
+    );
+  });
+
+  it("reads an unstaged deletion", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry("1 .D N... 100644 100644 000000 f2ad6c76f0 f2ad6c76f0 src/del.txt"),
+      {
+        path: "src/del.txt",
+        originalPath: null,
+        changeKind: "deleted",
+        stagedChangeKind: null,
+        unstagedChangeKind: "deleted",
+      },
+    );
+  });
+
+  it("keeps both sides of a file that was staged and then edited again", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry(
+        "1 MM N... 100644 100644 100644 6a69f92020 ab713757f4 src/staged-then-modified.txt",
+      ),
+      {
+        path: "src/staged-then-modified.txt",
+        originalPath: null,
+        changeKind: "modified",
+        stagedChangeKind: "modified",
+        unstagedChangeKind: "modified",
+      },
+    );
+  });
+
+  it("reads a rename with the path it came from", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry(
+        "2 R. N... 100644 100644 100644 4bcfe98e64 4bcfe98e64 R100 src/renamed-to.txt\tsrc/renamed-from.txt",
+      ),
+      {
+        path: "src/renamed-to.txt",
+        originalPath: "src/renamed-from.txt",
+        changeKind: "renamed",
+        stagedChangeKind: "renamed",
+        unstagedChangeKind: null,
+      },
+    );
+  });
+
+  it("reads a copy, which git scores separately from a rename", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry(
+        "2 C. N... 100644 100644 100644 4bcfe98e64 4bcfe98e64 C100 src/copy.txt\tsrc/source.txt",
+      ),
+      {
+        path: "src/copy.txt",
+        originalPath: "src/source.txt",
+        changeKind: "copied",
+        stagedChangeKind: "copied",
+        unstagedChangeKind: null,
+      },
+    );
+  });
+
+  it("reads an untracked file, which numstat scores as 0/0 exactly like a binary one", () => {
+    assert.deepStrictEqual(parsePorcelainStatusEntry("? src/untracked.txt"), {
+      path: "src/untracked.txt",
+      originalPath: null,
+      changeKind: "untracked",
+      stagedChangeKind: null,
+      unstagedChangeKind: "untracked",
+    });
+  });
+
+  it("reads an unmerged path as conflicted rather than as staged or unstaged", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry(
+        "u UU N... 100644 100644 100644 100644 df967b96a5 ba2906d066 2299c37978 c.txt",
+      ),
+      {
+        path: "c.txt",
+        originalPath: null,
+        changeKind: "conflicted",
+        // An unmerged path holds several index stages, so neither column is a
+        // single staged or unstaged change.
+        stagedChangeKind: null,
+        unstagedChangeKind: null,
+      },
+    );
+  });
+
+  it("treats a type change as a modification", () => {
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry("1 .T N... 100644 100644 120000 7898192261 7898192261 f.txt"),
+      {
+        path: "f.txt",
+        originalPath: null,
+        changeKind: "modified",
+        stagedChangeKind: null,
+        unstagedChangeKind: "modified",
+      },
+    );
+  });
+
+  it("reports a staged addition the worktree has since deleted as gone", () => {
+    // The file is in neither HEAD nor on disk. Calling it "added" would put a
+    // file in the list that does not exist.
+    assert.deepStrictEqual(
+      parsePorcelainStatusEntry("1 AD N... 000000 100644 000000 0000000000 3e757656cf gone.txt")
+        ?.changeKind,
+      "deleted",
+    );
+  });
+
+  it("keeps a path containing spaces whole", () => {
+    assert.equal(
+      parsePorcelainStatusEntry(
+        "1 .M N... 100644 100644 100644 d905d9da82 d905d9da82 src/spaced name.txt",
+      )?.path,
+      "src/spaced name.txt",
+    );
+  });
+
+  it("ignores branch headers and blank lines", () => {
+    assert.equal(parsePorcelainStatusEntry("# branch.head main"), null);
+    assert.equal(parsePorcelainStatusEntry(""), null);
+  });
+});
+
 it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   describe("process environment", () => {
     it.effect("preserves the caller locale for general Git subprocesses", () =>
@@ -803,6 +1034,107 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         );
       }),
     );
+
+    it.effect("loads full file contents for working-tree diff expansion", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const pathService = yield* Path.Path;
+        yield* writeTextFile(cwd, "nested/.keep", "");
+        yield* writeTextFile(cwd, "README.md", "# changed\nunchanged context\n");
+
+        const contents = yield* driver.getReviewDiffFileContents(
+          makeReviewDiffFileContentsInput(pathService.join(cwd, "nested")),
+        );
+
+        assert.strictEqual(contents.oldContents, "# test\n");
+        assert.strictEqual(contents.newContents, "# changed\nunchanged context\n");
+      }),
+    );
+
+    it.effect("attributes working-tree filesystem failures to the failing operation", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver
+          .getReviewDiffFileContents(
+            makeReviewDiffFileContentsInput(cwd, {
+              changeType: "new",
+              oldPath: "missing.ts",
+              newPath: "missing.ts",
+            }),
+          )
+          .pipe(Effect.flip);
+
+        assert.deepInclude(error, {
+          _tag: "GitCommandError",
+          operation: "GitVcsDriver.getReviewDiffFileContents.workingTree.fs.realPath",
+          command: "fs.realPath",
+          cwd,
+          detail: "Could not resolve diff file 'missing.ts'.",
+        });
+      }),
+    );
+
+    it.effect("loads new and deleted files without reading their missing side", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        yield* writeTextFile(cwd, "added.ts", "export const added = true;\n");
+        yield* fileSystem.remove(pathService.join(cwd, "README.md"));
+
+        const [added, deleted] = yield* Effect.all([
+          driver.getReviewDiffFileContents(
+            makeReviewDiffFileContentsInput(cwd, {
+              changeType: "new",
+              oldPath: "added.ts",
+              newPath: "added.ts",
+            }),
+          ),
+          driver.getReviewDiffFileContents(
+            makeReviewDiffFileContentsInput(cwd, { changeType: "deleted" }),
+          ),
+        ]);
+
+        assert.deepStrictEqual(added, {
+          oldContents: "",
+          newContents: "export const added = true;\n",
+        });
+        assert.deepStrictEqual(deleted, {
+          oldContents: "# test\n",
+          newContents: "",
+        });
+      }),
+    );
+
+    it.effect("loads merge-base and head contents for branch diff expansion", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["checkout", "-b", "feature/context"]);
+        yield* writeTextFile(cwd, "README.md", "# branch change\nunchanged context\n");
+        yield* git(cwd, ["add", "README.md"]);
+        yield* git(cwd, ["commit", "-m", "change readme"]);
+
+        const contents = yield* driver.getReviewDiffFileContents(
+          makeReviewDiffFileContentsInput(cwd, {
+            sourceKind: "branch-range",
+            baseRef: initialBranch,
+            headRef: "feature/context",
+          }),
+        );
+
+        assert.strictEqual(contents.oldContents, "# test\n");
+        assert.strictEqual(contents.newContents, "# branch change\nunchanged context\n");
+      }),
+    );
   });
 
   describe("repository status", () => {
@@ -832,6 +1164,28 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           status.workingTree.files.map((file) => file.path),
           "feature.ts",
         );
+      }),
+    );
+
+    it.effect("reports changes to a file named HEAD", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "HEAD", "first line\n");
+        yield* git(cwd, ["add", "HEAD"]);
+        yield* git(cwd, ["commit", "-m", "add HEAD file"]);
+        yield* writeTextFile(cwd, "HEAD", "first line\nsecond line\n");
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+
+        assert.equal(status.isRepo, true);
+        assert.equal(status.hasWorkingTreeChanges, true);
+        // The fork's file entries also carry change kinds, so match the fields
+        // this fix is about rather than deep-equalling the whole entry.
+        const headFile = status.workingTree.files.find((file) => file.path === "HEAD");
+        assert.isDefined(headFile);
+        assert.equal(headFile?.insertions, 1);
+        assert.equal(headFile?.deletions, 0);
       }),
     );
 
@@ -883,6 +1237,23 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(status.aheadOfDefaultCount, 1);
         assert.notProperty(status, "workingTree");
         assert.notProperty(status, "hasWorkingTreeChanges");
+      }),
+    );
+
+    it.effect("reports remote status on unborn HEAD without failing", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+        const initialBranch = yield* git(cwd, ["symbolic-ref", "--short", "HEAD"]);
+
+        const status = yield* driver.statusDetailsRemote(cwd, { refreshUpstream: false });
+
+        assert.equal(status.isRepo, true);
+        assert.equal(status.branch, initialBranch);
+        assert.equal(status.hasUpstream, false);
+        assert.equal(status.aheadCount, 0);
+        assert.equal(status.behindCount, 0);
       }),
     );
 
@@ -1067,6 +1438,132 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("reports the change kind and staged-ness of every file git lists", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        // Distinct contents: identical files let git's rename detection pair the
+        // deletion with the rename target and the fixture stops describing what
+        // it means to.
+        yield* writeTextFile(cwd, "src/modified.ts", "modified one\n");
+        yield* writeTextFile(cwd, "src/deleted.ts", "deleted one\n");
+        yield* writeTextFile(cwd, "src/renamed-from.ts", "renamed one\ntwo\nthree\nfour\nfive\n");
+        yield* writeTextFile(cwd, "src/staged-then-edited.ts", "staged one\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "seed"]);
+
+        yield* writeTextFile(cwd, "src/modified.ts", "modified one\nmodified two\n");
+        yield* git(cwd, ["rm", "--quiet", "src/deleted.ts"]);
+        yield* git(cwd, ["mv", "src/renamed-from.ts", "src/renamed-to.ts"]);
+        yield* writeTextFile(
+          cwd,
+          "src/renamed-to.ts",
+          "renamed one\ntwo\nthree\nfour\nfive\nsix\n",
+        );
+        yield* git(cwd, ["add", "src/renamed-to.ts"]);
+        yield* writeTextFile(cwd, "src/added.ts", "new\n");
+        yield* git(cwd, ["add", "src/added.ts"]);
+        yield* writeTextFile(cwd, "src/staged-then-edited.ts", "staged one\nstaged two\n");
+        yield* git(cwd, ["add", "src/staged-then-edited.ts"]);
+        yield* writeTextFile(
+          cwd,
+          "src/staged-then-edited.ts",
+          "staged one\nstaged two\nstaged three\n",
+        );
+        yield* writeTextFile(cwd, "src/untracked.ts", "loose\n");
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+        const byPath = new Map(status.workingTree.files.map((file) => [file.path, file]));
+
+        assert.deepStrictEqual(
+          status.workingTree.files.map((file) => file.path),
+          [
+            "src/added.ts",
+            "src/deleted.ts",
+            "src/modified.ts",
+            "src/renamed-to.ts",
+            "src/staged-then-edited.ts",
+            "src/untracked.ts",
+          ],
+        );
+
+        // An addition and an addition-only edit are the same `n/0` to numstat.
+        assert.equal(byPath.get("src/added.ts")?.changeKind, "added");
+        assert.equal(byPath.get("src/added.ts")?.stagedChangeKind, "added");
+        assert.equal(byPath.get("src/added.ts")?.unstagedChangeKind, undefined);
+
+        assert.equal(byPath.get("src/modified.ts")?.changeKind, "modified");
+        assert.equal(byPath.get("src/modified.ts")?.stagedChangeKind, undefined);
+        assert.equal(byPath.get("src/modified.ts")?.unstagedChangeKind, "modified");
+
+        assert.equal(byPath.get("src/deleted.ts")?.changeKind, "deleted");
+        assert.equal(byPath.get("src/deleted.ts")?.stagedChangeKind, "deleted");
+
+        // The rename carries where it came from, and its line counts join to the
+        // porcelain record rather than being stranded under numstat's
+        // abbreviated `src/{renamed-from.ts => renamed-to.ts}` display path —
+        // which would leave the rename at 0/0 next to a phantom `renamed-to.ts}`
+        // entry in the list above.
+        const renamed = byPath.get("src/renamed-to.ts");
+        assert.equal(renamed?.changeKind, "renamed");
+        assert.equal(renamed?.stagedChangeKind, "renamed");
+        assert.equal(renamed?.originalPath, "src/renamed-from.ts");
+        assert.equal(renamed?.insertions, 1);
+        assert.equal(renamed?.deletions, 0);
+
+        // Both sides survive: the file has something to commit *and* something
+        // still outside the index.
+        const stagedThenEdited = byPath.get("src/staged-then-edited.ts");
+        assert.equal(stagedThenEdited?.stagedChangeKind, "modified");
+        assert.equal(stagedThenEdited?.unstagedChangeKind, "modified");
+
+        // 0/0 from numstat, but no longer indistinguishable from a binary file.
+        const untracked = byPath.get("src/untracked.ts");
+        assert.equal(untracked?.changeKind, "untracked");
+        assert.equal(untracked?.stagedChangeKind, undefined);
+        assert.equal(untracked?.insertions, 0);
+        assert.equal(untracked?.deletions, 0);
+      }),
+    );
+
+    it.effect("reports an unmerged path as conflicted", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "conflict.ts", "base\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "base"]);
+        yield* git(cwd, ["checkout", "-b", "side"]);
+        yield* writeTextFile(cwd, "conflict.ts", "side\n");
+        yield* git(cwd, ["commit", "-am", "side"]);
+        yield* git(cwd, ["checkout", "-"]);
+        yield* writeTextFile(cwd, "conflict.ts", "main\n");
+        yield* git(cwd, ["commit", "-am", "main"]);
+        yield* executeMergeExpectingConflict(cwd, "side");
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+        const file = status.workingTree.files.find((entry) => entry.path === "conflict.ts");
+
+        assert.ok(file);
+        assert.equal(file.changeKind, "conflicted");
+        // Not offered as staged: the index holds several stages, and the file
+        // cannot be committed until it is resolved.
+        assert.equal(file.stagedChangeKind, undefined);
+      }),
+    );
+
+    it.effect("leaves the new fields unset for a clean tree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+
+        assert.equal(status.hasWorkingTreeChanges, false);
+        assert.deepStrictEqual(status.workingTree.files, []);
+      }),
+    );
+
     it.effect("reports staged file counts on unborn HEAD without failing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1221,7 +1718,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("creates and removes a worktree for a new refName", () =>
+    it.effect("creates and removes a worktree and its new local branch", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
@@ -1243,9 +1740,187 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(created.worktree.refName, "feature/worktree");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
 
+        // Removing the worktree also drops the branch it created: the branch is
+        // fully merged (no commits on it), so git's own `-d` check permits it.
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+        assert.notInclude(yield* driver.listLocalBranchNames(cwd), "feature/worktree");
+      }),
+    );
+
+    it.effect("keeps a worktree branch that still holds unmerged commits", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "unmerged");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/unmerged",
+        });
+        yield* git(worktreePath, ["commit", "--allow-empty", "-m", "work in progress"]);
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath, force: true });
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        // Unmerged work is never discarded — cleanup uses `-d`, never `-D`.
+        assert.include(yield* driver.listLocalBranchNames(cwd), "feature/unmerged");
+      }),
+    );
+
+    it.effect("leaves a pre-existing branch alone when its worktree is removed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "adopted");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // A branch the user already had: created outside createWorktree, so it
+        // carries no ownership marker and must survive the worktree.
+        yield* git(cwd, ["branch", "existing/branch", initialBranch]);
+        yield* driver.createWorktree({ cwd, path: worktreePath, refName: "existing/branch" });
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath });
+
+        const fileSystem = yield* FileSystem.FileSystem;
+        assert.equal(yield* fileSystem.exists(worktreePath), false);
+        assert.include(yield* driver.listLocalBranchNames(cwd), "existing/branch");
+      }),
+    );
+
+    it.effect("gives a repeat launch its own branch and directory", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // A scheduled task re-running the same prompt proposes the same branch
+        // every fire. Both fires must get a workspace.
+        const first = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "sync/upstream",
+        });
+        const second = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "sync/upstream",
+          baseRefName: initialBranch,
+        });
+
+        assert.equal(first.worktree.refName, "sync/upstream");
+        assert.equal(second.worktree.refName, "sync/upstream-1");
+        assert.notEqual(first.worktree.path, second.worktree.path);
+        assert.equal(
+          yield* git(second.worktree.path, ["branch", "--show-current"]),
+          "sync/upstream-1",
+        );
+        // Per-branch config follows the resolved name, not the one that was
+        // asked for — otherwise it lands on the earlier run's branch.
+        assert.equal(
+          yield* git(cwd, ["config", "--get", "branch.sync/upstream-1.gh-merge-base"]),
+          initialBranch,
+        );
+      }),
+    );
+
+    it.effect("steps past a directory already sitting on the derived worktree path", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const first = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/derived",
+        });
+        // Leftover directory from a worktree that was deleted without git's
+        // help: the branch is gone, so only the path collides.
+        yield* driver.removeWorktree({ cwd, path: first.worktree.path });
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(first.worktree.path, { recursive: true });
+
+        const second = yield* driver.createWorktree({
+          cwd,
+          path: null,
+          refName: initialBranch,
+          newRefName: "feature/derived",
+        });
+
+        assert.equal(second.worktree.refName, "feature/derived");
+        assert.equal(second.worktree.path, `${first.worktree.path}-1`);
+      }),
+    );
+
+    it.effect("names a caller-supplied path collision without echoing git output", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "explicit");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // An explicit path is honoured verbatim, so the second add collides and
+        // git fails — the error has to say why without copying stderr, which
+        // repeats the arguments back.
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/explicit",
+        });
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/explicit",
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(
+          error.detail,
+          "git worktree add failed: the branch or destination path already exists",
+        );
+        assert.notInclude(error.detail, worktreePath);
+      }),
+    );
+
+    it.effect("prunes the worktree registry when removal fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "stale");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/stale",
+        });
+        // Stand in for a removal that died partway through: the tree is torn up
+        // enough that git refuses to remove it, but the .git/worktrees admin
+        // entry still points at it. (A fully deleted directory needs no prune —
+        // git removes that entry on its own.)
+        yield* fileSystem.remove(pathService.join(worktreePath, ".git"));
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath }).pipe(Effect.flip);
+
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
       }),
     );
   });
@@ -1454,6 +2129,43 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.deepInclude(skipped, {
           status: "skipped_up_to_date",
           branch: "feature/push",
+        });
+      }),
+    );
+
+    it.effect("allows pushes to run longer than the default command timeout", () =>
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const pushStarted = yield* Deferred.make<void>();
+        const delayedPushSpawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (ChildProcess.isStandardCommand(command) && command.args[0] === "push") {
+              yield* Deferred.succeed(pushStarted, undefined);
+              yield* Effect.sleep("31 seconds");
+            }
+            return yield* delegate.spawn(command);
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, delayedPushSpawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+
+        const pushing = yield* driver
+          .pushCurrentBranch(cwd, null)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(pushStarted);
+        yield* TestClock.adjust("31 seconds");
+        const pushed = yield* Fiber.join(pushing);
+
+        assert.deepInclude(pushed, {
+          status: "pushed",
+          setUpstream: true,
         });
       }),
     );

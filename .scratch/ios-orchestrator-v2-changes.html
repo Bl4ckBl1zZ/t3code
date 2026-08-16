@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>iOS app changes — orchestration v2 merge</title>
+    <style>
+      .viz-root {
+        color-scheme: light;
+        --surface-1: #fcfcfb;
+        --page: #f9f9f7;
+        --text-primary: #0b0b0b;
+        --text-secondary: #52514e;
+        --text-muted: #898781;
+        --gridline: #e1e0d9;
+        --baseline: #c3c2b7;
+        --border: rgba(11, 11, 11, 0.1);
+        --added: #2a78d6;
+        --deleted: #e34948;
+        --neutral-mid: #f0efec;
+        --good: #0ca30c;
+        --good-text: #006300;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:where(:not([data-theme="light"])) .viz-root {
+          color-scheme: dark;
+          --surface-1: #1a1a19;
+          --page: #0d0d0d;
+          --text-primary: #ffffff;
+          --text-secondary: #c3c2b7;
+          --text-muted: #898781;
+          --gridline: #2c2c2a;
+          --baseline: #383835;
+          --border: rgba(255, 255, 255, 0.1);
+          --added: #3987e5;
+          --deleted: #e66767;
+          --neutral-mid: #383835;
+          --good: #0ca30c;
+          --good-text: #0ca30c;
+        }
+      }
+      :root[data-theme="dark"] .viz-root {
+        color-scheme: dark;
+        --surface-1: #1a1a19;
+        --page: #0d0d0d;
+        --text-primary: #ffffff;
+        --text-secondary: #c3c2b7;
+        --text-muted: #898781;
+        --gridline: #2c2c2a;
+        --baseline: #383835;
+        --border: rgba(255, 255, 255, 0.1);
+        --added: #3987e5;
+        --deleted: #e66767;
+        --neutral-mid: #383835;
+        --good: #0ca30c;
+        --good-text: #0ca30c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        background: var(--page);
+        color: var(--text-primary);
+      }
+      .viz-root {
+        background: var(--page);
+        color: var(--text-primary);
+        min-height: 100vh;
+        padding: 40px 28px 72px;
+      }
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+      }
+
+      header.top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 24px;
+        margin-bottom: 8px;
+      }
+      h1 {
+        font-size: 21px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 0 0 6px;
+      }
+      .sub {
+        font-size: 13px;
+        color: var(--text-secondary);
+        line-height: 1.6;
+        margin: 0;
+      }
+      .sub code {
+        font-size: 12px;
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+
+      .controls {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      button.ctl {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 7px 12px;
+        cursor: pointer;
+      }
+      button.ctl:hover {
+        color: var(--text-primary);
+      }
+      button.ctl[aria-pressed="true"] {
+        color: var(--text-primary);
+        border-color: var(--baseline);
+      }
+
+      .hero-card {
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 26px 28px;
+        margin: 26px 0 16px;
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        flex-wrap: wrap;
+      }
+      .hero-fig {
+        font-size: 60px;
+        font-weight: 600;
+        line-height: 1;
+        letter-spacing: -0.03em;
+      }
+      .hero-copy {
+        flex: 1 1 340px;
+      }
+      .hero-label {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 6px;
+      }
+      .hero-note {
+        font-size: 13px;
+        color: var(--text-secondary);
+        line-height: 1.6;
+        margin: 0;
+      }
+      .good-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--good-text);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 10px;
+        background: var(--surface-1);
+        margin-bottom: 10px;
+      }
+      .good-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--good);
+        flex-shrink: 0;
+      }
+
+      .kpi-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+        gap: 12px;
+        margin-bottom: 30px;
+      }
+      .tile {
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 15px 16px 16px;
+      }
+      .tile-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin: 0 0 8px;
+      }
+      .tile-value {
+        font-size: 27px;
+        font-weight: 600;
+        line-height: 1;
+        letter-spacing: -0.02em;
+      }
+      .tile-sub {
+        font-size: 11.5px;
+        color: var(--text-muted);
+        margin: 7px 0 0;
+      }
+
+      section.card {
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 22px 24px 20px;
+        margin-bottom: 20px;
+      }
+      h2 {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .card-sub {
+        font-size: 12.5px;
+        color: var(--text-secondary);
+        margin: 0 0 20px;
+        line-height: 1.55;
+      }
+
+      .legend {
+        display: flex;
+        gap: 18px;
+        margin: 0 0 18px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .swatch {
+        width: 11px;
+        height: 11px;
+        border-radius: 3px;
+        flex-shrink: 0;
+      }
+
+      /* diverging bar */
+      .dv-row {
+        display: grid;
+        grid-template-columns: 210px 1fr;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 3px;
+      }
+      .dv-name {
+        font-size: 11.5px;
+        color: var(--text-secondary);
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        direction: rtl;
+      }
+      .dv-track {
+        position: relative;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        cursor: default;
+      }
+      .dv-track:focus-visible {
+        outline: 2px solid var(--baseline);
+        outline-offset: 2px;
+        border-radius: 3px;
+      }
+      .dv-half {
+        flex: 1;
+        display: flex;
+        height: 100%;
+        align-items: center;
+      }
+      .dv-half.left {
+        justify-content: flex-end;
+      }
+      .dv-bar {
+        height: 14px;
+      }
+      .dv-bar.del {
+        background: var(--deleted);
+        border-radius: 4px 0 0 4px;
+      }
+      .dv-bar.add {
+        background: var(--added);
+        border-radius: 0 4px 4px 0;
+      }
+      .dv-zero {
+        position: absolute;
+        left: 50%;
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        background: var(--baseline);
+      }
+      .dv-axis {
+        display: grid;
+        grid-template-columns: 210px 1fr;
+        gap: 14px;
+        margin-top: 10px;
+      }
+      .dv-ticks {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--text-muted);
+        font-variant-numeric: tabular-nums;
+        border-top: 1px solid var(--gridline);
+        padding-top: 6px;
+      }
+      .dv-caption {
+        font-size: 11.5px;
+        color: var(--text-muted);
+        margin: 12px 0 0;
+      }
+      .dv-tip-label {
+        font-size: 11px;
+        color: var(--text-secondary);
+        font-variant-numeric: tabular-nums;
+        padding: 0 7px;
+        white-space: nowrap;
+      }
+
+      /* area bar */
+      .ab-row {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 4px;
+      }
+      .ab-name {
+        font-size: 11.5px;
+        color: var(--text-secondary);
+        text-align: right;
+        white-space: nowrap;
+      }
+      .ab-track {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 22px;
+        cursor: default;
+      }
+      .ab-track:focus-visible {
+        outline: 2px solid var(--baseline);
+        outline-offset: 2px;
+        border-radius: 3px;
+      }
+      .ab-bar {
+        height: 14px;
+        background: var(--added);
+        border-radius: 0 4px 4px 0;
+      }
+      .ab-val {
+        font-size: 11px;
+        color: var(--text-secondary);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      /* feature lists */
+      .split {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 22px;
+      }
+      .flist {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .flist li {
+        padding: 11px 0;
+        border-bottom: 1px solid var(--gridline);
+      }
+      .flist li:last-child {
+        border-bottom: 0;
+      }
+      .fname {
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .fdesc {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 3px;
+        line-height: 1.5;
+      }
+      .fmeta {
+        font-size: 11px;
+        color: var(--text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .grouphead {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        margin: 0 0 10px;
+      }
+
+      /* table view */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--gridline);
+      }
+      th {
+        font-weight: 600;
+        color: var(--text-secondary);
+        font-size: 11.5px;
+      }
+      td.num,
+      th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      td.path {
+        color: var(--text-primary);
+      }
+      .st {
+        display: inline-block;
+        width: 15px;
+        text-align: center;
+        font-weight: 600;
+        font-size: 11px;
+        color: var(--text-secondary);
+      }
+      [hidden] {
+        display: none !important;
+      }
+
+      /* tooltip */
+      #tip {
+        position: fixed;
+        z-index: 50;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.1s;
+        background: var(--surface-1);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 9px 11px;
+        font-size: 11.5px;
+        line-height: 1.55;
+        color: var(--text-primary);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+        max-width: 300px;
+      }
+      #tip .tip-path {
+        font-weight: 600;
+        word-break: break-all;
+      }
+      #tip .tip-line {
+        color: var(--text-secondary);
+        font-variant-numeric: tabular-nums;
+        margin-top: 3px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      footer.note {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.65;
+        margin-top: 26px;
+        border-top: 1px solid var(--gridline);
+        padding-top: 16px;
+      }
+      footer.note strong {
+        color: var(--text-secondary);
+      }
+    </style>
+  </head>
+  <body data-palette="#2a78d6,#e34948">
+    <div class="viz-root">
+      <div class="wrap">
+        <header class="top">
+          <div>
+            <h1>iOS app changes — orchestration v2 merge</h1>
+            <p class="sub">
+              <code>fork/orchestrator-v2</code> (<code>b69c1c0c4</code>) vs pre-merge fork main
+              <code>7450f2d99</code> · scope: <code>apps/mobile</code>
+            </p>
+          </div>
+          <div class="controls">
+            <button class="ctl" id="themeBtn" type="button">Dark</button>
+            <button class="ctl" id="tableBtn" type="button" aria-pressed="false">Table view</button>
+          </div>
+        </header>
+
+        <div class="hero-card">
+          <div class="hero-fig" id="heroFig">0</div>
+          <div class="hero-copy">
+            <span class="good-chip"><span class="good-dot"></span>No native rebuild required</span>
+            <p class="hero-label">native iOS files changed</p>
+            <p class="hero-note">
+              Every one of the 61 changed files is TypeScript/React Native under
+              <code>apps/mobile/src</code>. No <code>app.config.ts</code>,
+              <code>package.json</code>, <code>eas.json</code>, config plugin, entitlement or plist
+              was touched, and the repo carries no committed <code>ios/</code> project (Expo
+              prebuild). An existing dev client with a Metro reload picks this up.
+            </p>
+          </div>
+        </div>
+
+        <div class="kpi-row" id="kpiRow"></div>
+
+        <section class="card">
+          <h2>Where the code moved, file by file</h2>
+          <p class="card-sub">
+            Top 14 files by total churn. Lines deleted run left of the baseline, lines added run
+            right, on one shared scale — so the width of a bar is comparable everywhere in the
+            chart.
+          </p>
+          <div class="legend">
+            <span class="legend-item"
+              ><span class="swatch" style="background: var(--deleted)"></span>Lines deleted</span
+            >
+            <span class="legend-item"
+              ><span class="swatch" style="background: var(--added)"></span>Lines added</span
+            >
+          </div>
+          <div id="divChart"></div>
+          <div class="dv-axis">
+            <div></div>
+            <div class="dv-ticks" id="divTicks"></div>
+          </div>
+          <p class="dv-caption">
+            The extreme is labelled; hover or tab any bar for its exact counts, or open the table
+            view for all 61 files.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>Churn by area</h2>
+          <p class="card-sub">Lines added plus lines deleted, per source directory.</p>
+          <div id="areaChart"></div>
+        </section>
+
+        <section class="card">
+          <h2>What this changes on the phone</h2>
+          <p class="card-sub">
+            Behavioural surfaces, not line counts. The left column is new to mobile; the right
+            column was removed during the merge.
+          </p>
+          <div class="split">
+            <div>
+              <p class="grouphead">Added — 18 files</p>
+              <ul class="flist" id="addedList"></ul>
+            </div>
+            <div>
+              <p class="grouphead">Removed — 3 files</p>
+              <ul class="flist" id="removedList"></ul>
+              <p class="grouphead" style="margin-top: 22px">Preserved from the fork</p>
+              <ul class="flist" id="keptList"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" id="tableCard" hidden>
+          <h2>All 61 changed files</h2>
+          <p class="card-sub">
+            A = added · M = modified · D = deleted. Paths are relative to
+            <code>apps/mobile/src</code>.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 26px">&nbsp;</th>
+                <th>Path</th>
+                <th class="num">Added</th>
+                <th class="num">Deleted</th>
+                <th class="num">Churn</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </section>
+
+        <footer class="note">
+          <strong>Caveats.</strong> Nothing here has been typechecked or tested — no build has run
+          against this branch. The merge also bumps
+          <code>ORCHESTRATION_CACHE_SCHEMA_VERSION</code> to 3, so on-device caches are invalidated
+          on first launch, and mobile now speaks orchestration v2 through
+          <code>client-runtime</code> — a phone on this branch needs a server on this branch.
+        </footer>
+      </div>
+    </div>
+
+    <div id="tip" role="tooltip" aria-hidden="true"></div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        var FILES = [
+          { p: "lib/threadActivity.ts", a: 410, d: 1110, s: "M" },
+          { p: "lib/threadActivity.test.ts", a: 255, d: 419, s: "M" },
+          { p: "features/threads/ThreadFeed.tsx", a: 200, d: 160, s: "M" },
+          { p: "lib/threadActivityInspector.ts", a: 308, d: 0, s: "A" },
+          { p: "features/threads/ThreadRelationshipsBanner.tsx", a: 303, d: 0, s: "A" },
+          { p: "lib/threadActivityInspector.test.ts", a: 257, d: 0, s: "A" },
+          { p: "features/threads/ThreadActivityInspector.tsx", a: 203, d: 0, s: "A" },
+          { p: "features/threads/thread-work-log.tsx", a: 176, d: 56, s: "M" },
+          { p: "features/threads/turnDiffTree.ts", a: 0, d: 198, s: "D" },
+          { p: "connection/environment-cache-store.test.ts", a: 158, d: 4, s: "M" },
+          { p: "features/threads/ChangedFilesCard.tsx", a: 0, d: 150, s: "D" },
+          { p: "features/threads/turnDiffTree.test.ts", a: 0, d: 125, s: "D" },
+          { p: "features/threads/ThreadQueueControl.tsx", a: 115, d: 0, s: "A" },
+          { p: "features/threads/threadListV2.test.ts", a: 80, d: 33, s: "M" },
+          { p: "test-fixtures.ts", a: 72, d: 0, s: "A" },
+          { p: "features/threads/ThreadDetailScreen.tsx", a: 62, d: 11, s: "M" },
+          { p: "state/v2-item-support.ts", a: 56, d: 0, s: "A" },
+          { p: "state/use-thread-detail.ts", a: 50, d: 5, s: "M" },
+          { p: "state/use-thread-selection.ts", a: 47, d: 15, s: "M" },
+          { p: "connection/environment-cache-store.ts", a: 17, d: 29, s: "M" },
+          { p: "features/home/threadArchive.test.ts", a: 40, d: 0, s: "A" },
+          { p: "features/threads/threadForkNavigation.test.ts", a: 38, d: 0, s: "A" },
+          { p: "state/use-thread-composer-state.ts", a: 41, d: 35, s: "M" },
+          { p: "features/threads/userMessageIntentBadge.ts", a: 35, d: 0, s: "A" },
+          { p: "features/threads/userMessageIntentBadge.test.ts", a: 34, d: 0, s: "A" },
+          { p: "state/use-selected-thread-requests.ts", a: 30, d: 27, s: "M" },
+          { p: "features/threads/threadListV2.ts", a: 28, d: 3, s: "M" },
+          { p: "features/home/homeListItems.test.ts", a: 28, d: 14, s: "M" },
+          { p: "features/threads/threadActivityFileNavigation.test.ts", a: 26, d: 0, s: "A" },
+          { p: "features/threads/threadForkNavigation.ts", a: 26, d: 0, s: "A" },
+          { p: "features/threads/threadActivityFileNavigation.ts", a: 22, d: 0, s: "A" },
+          { p: "state/queries.ts", a: 0, d: 21, s: "M" },
+          { p: "features/threads/PendingUserInputCard.tsx", a: 17, d: 9, s: "M" },
+          { p: "features/threads/threadPresentation.ts", a: 14, d: 14, s: "M" },
+          { p: "features/archive/archivedThreadList.test.ts", a: 15, d: 25, s: "M" },
+          { p: "features/threads/thread-work-log-labels.test.ts", a: 15, d: 0, s: "A" },
+          { p: "features/threads/PendingApprovalCard.tsx", a: 14, d: 6, s: "M" },
+          { p: "features/review/useReviewSections.ts", a: 13, d: 6, s: "M" },
+          { p: "features/review/reviewModel.ts", a: 11, d: 10, s: "M" },
+          { p: "features/threads/ThreadRouteScreen.tsx", a: 6, d: 11, s: "M" },
+          { p: "features/review/reviewModel.test.ts", a: 7, d: 11, s: "M" },
+          { p: "features/home/threadArchive.ts", a: 16, d: 0, s: "A" },
+          { p: "features/threads/thread-list-v2-items.tsx", a: 10, d: 3, s: "M" },
+          { p: "components/brandAssets.ts", a: 10, d: 0, s: "A" },
+          { p: "features/threads/thread-work-log-labels.ts", a: 9, d: 0, s: "A" },
+          { p: "state/use-thread-outbox-drain.ts", a: 7, d: 6, s: "M" },
+          { p: "features/home/useThreadListActions.ts", a: 4, d: 7, s: "M" },
+          { p: "features/terminal/ThreadTerminalRouteScreen.tsx", a: 6, d: 4, s: "M" },
+          { p: "components/BrandMark.tsx", a: 2, d: 7, s: "M" },
+          { p: "features/home/homeThreadList.test.ts", a: 3, d: 6, s: "M" },
+          { p: "features/threads/ThreadComposer.tsx", a: 4, d: 5, s: "M" },
+          { p: "lib/repositoryGroups.test.ts", a: 3, d: 6, s: "M" },
+          { p: "state/use-selected-thread-worktree.ts", a: 5, d: 4, s: "M" },
+          { p: "features/keyboard/hardwareKeyboardCommands.ts", a: 4, d: 1, s: "M" },
+          { p: "features/home/HomeScreen.tsx", a: 3, d: 3, s: "M" },
+          { p: "lib/scopedEntities.ts", a: 2, d: 2, s: "M" },
+          { p: "state/threads.ts", a: 2, d: 1, s: "M" },
+          { p: "features/threads/ThreadNavigationSidebar.tsx", a: 1, d: 1, s: "M" },
+          { p: "connection/storage.ts", a: 1, d: 0, s: "M" },
+          { p: "lib/projectThreadStartTurn.ts", a: 1, d: 0, s: "M" },
+          { p: "features/projects/AddProjectScreen.tsx", a: 0, d: 1, s: "M" },
+        ];
+
+        var AREAS = [
+          { area: "lib", churn: 2773, n: 7 },
+          { area: "features/threads", churn: 2223, n: 26 },
+          { area: "state", churn: 352, n: 9 },
+          { area: "connection", churn: 209, n: 3 },
+          { area: "features/home", churn: 124, n: 6 },
+          { area: "(root)", churn: 72, n: 1 },
+          { area: "features/review", churn: 58, n: 3 },
+          { area: "features/archive", churn: 40, n: 1 },
+          { area: "components", churn: 19, n: 2 },
+          { area: "features/terminal", churn: 10, n: 1 },
+          { area: "features/keyboard", churn: 5, n: 1 },
+          { area: "features/projects", churn: 1, n: 1 },
+        ];
+
+        var ADDED = [
+          {
+            n: "ThreadRelationshipsBanner.tsx",
+            m: "303 lines",
+            d: "Thread lineage on the phone — fork, merge-back and detach, previously web-only.",
+          },
+          {
+            n: "ThreadActivityInspector.tsx + lib",
+            m: "768 lines",
+            d: "Expandable activity inspection with checkpoint rollback, replacing the turn-based diff card.",
+          },
+          {
+            n: "ThreadQueueControl.tsx",
+            m: "115 lines",
+            d: "Queued-run reorder and promote-to-steer, backed by the server projection.",
+          },
+          {
+            n: "threadForkNavigation.ts",
+            m: "64 lines",
+            d: "Fork a new thread from a completed assistant response.",
+          },
+          {
+            n: "userMessageIntentBadge.ts",
+            m: "69 lines",
+            d: "Queued / steer badges on your own messages, so intent is visible after send.",
+          },
+          {
+            n: "threadActivityFileNavigation.ts",
+            m: "48 lines",
+            d: "Jump from an activity row to the file it touched.",
+          },
+          {
+            n: "v2-item-support.ts, threadArchive.ts",
+            m: "112 lines",
+            d: "Run-based archive gating and v2 item plumbing.",
+          },
+        ];
+
+        var REMOVED = [
+          {
+            n: "ChangedFilesCard.tsx",
+            m: "150 lines",
+            d: "The fork's changed-files card under each assistant turn.",
+          },
+          {
+            n: "turnDiffTree.ts + test",
+            m: "323 lines",
+            d: "Its turn-keyed diff tree. The v2 TurnId to RunId migration makes a turn-keyed diff UI uncompilable; the activity inspector replaces it.",
+          },
+        ];
+
+        var KEPT = [
+          {
+            n: "features/voice/*",
+            m: "0 lines changed",
+            d: "The fork's voice input layer is untouched and still wired into ThreadComposer.",
+          },
+          {
+            n: "PendingUserInputCard.tsx",
+            m: "17 added / 9 deleted",
+            d: "Paginated one-question-at-a-time flow kept, plus the PR's dead-provider gating.",
+          },
+        ];
+
+        var TOTAL_FILES = FILES.length;
+        var TOTAL_ADD = FILES.reduce(function (s, f) {
+          return s + f.a;
+        }, 0);
+        var TOTAL_DEL = FILES.reduce(function (s, f) {
+          return s + f.d;
+        }, 0);
+        var N_A = FILES.filter(function (f) {
+          return f.s === "A";
+        }).length;
+        var N_D = FILES.filter(function (f) {
+          return f.s === "D";
+        }).length;
+        var N_M = FILES.filter(function (f) {
+          return f.s === "M";
+        }).length;
+
+        function fmt(n) {
+          return n.toLocaleString("en-US");
+        }
+        function el(tag, cls, txt) {
+          var e = document.createElement(tag);
+          if (cls) e.className = cls;
+          if (txt !== undefined) e.textContent = txt;
+          return e;
+        }
+
+        /* ---------- KPI tiles ---------- */
+        function renderKpis() {
+          var tiles = [
+            { label: "Files changed", value: fmt(TOTAL_FILES), sub: "all under apps/mobile/src" },
+            { label: "Lines added", value: "+" + fmt(TOTAL_ADD), sub: "across 56 files" },
+            { label: "Lines deleted", value: "−" + fmt(TOTAL_DEL), sub: "across 41 files" },
+            { label: "New / removed", value: N_A + " / " + N_D, sub: N_M + " modified in place" },
+          ];
+          var row = document.getElementById("kpiRow");
+          tiles.forEach(function (t) {
+            var c = el("div", "tile");
+            c.appendChild(el("p", "tile-label", t.label));
+            c.appendChild(el("div", "tile-value", t.value));
+            c.appendChild(el("p", "tile-sub", t.sub));
+            row.appendChild(c);
+          });
+        }
+
+        /* ---------- diverging bar ---------- */
+        var DIV_MAX = 1200; // symmetric scale, one shared axis
+
+        function renderDiverging() {
+          var host = document.getElementById("divChart");
+          var top = FILES.slice()
+            .sort(function (x, y) {
+              return y.a + y.d - (x.a + x.d);
+            })
+            .slice(0, 14);
+
+          top.forEach(function (f, i) {
+            var row = el("div", "dv-row");
+            var name = el("div", "dv-name", f.p.split("/").pop());
+            name.title = f.p;
+            row.appendChild(name);
+
+            var track = el("div", "dv-track");
+            track.tabIndex = 0;
+            track.setAttribute("role", "img");
+            track.setAttribute(
+              "aria-label",
+              f.p + ": " + fmt(f.a) + " lines added, " + fmt(f.d) + " lines deleted",
+            );
+
+            var left = el("div", "dv-half left");
+            var right = el("div", "dv-half");
+
+            if (f.d > 0) {
+              var db = el("div", "dv-bar del");
+              db.style.width = (f.d / DIV_MAX) * 100 + "%";
+              left.appendChild(db);
+            }
+            if (f.a > 0) {
+              var ab = el("div", "dv-bar add");
+              ab.style.width = (f.a / DIV_MAX) * 100 + "%";
+              right.appendChild(ab);
+            }
+
+            // direct-label the extreme only; the axis + tooltip + table carry the rest
+            if (i === 0) {
+              var dl = el("div", "dv-tip-label", "−" + fmt(f.d));
+              left.insertBefore(dl, left.firstChild);
+              right.appendChild(el("div", "dv-tip-label", "+" + fmt(f.a)));
+            }
+
+            track.appendChild(left);
+            track.appendChild(el("div", "dv-zero"));
+            track.appendChild(right);
+            bindTip(track, f);
+            row.appendChild(track);
+            host.appendChild(row);
+          });
+
+          var ticks = document.getElementById("divTicks");
+          [1200, 800, 400, 0, 400, 800, 1200].forEach(function (t) {
+            ticks.appendChild(el("span", null, fmt(t)));
+          });
+        }
+
+        /* ---------- area bars ---------- */
+        function renderAreas() {
+          var host = document.getElementById("areaChart");
+          var max = AREAS[0].churn;
+          AREAS.forEach(function (a) {
+            var row = el("div", "ab-row");
+            row.appendChild(el("div", "ab-name", a.area));
+            var track = el("div", "ab-track");
+            track.tabIndex = 0;
+            track.setAttribute("role", "img");
+            track.setAttribute(
+              "aria-label",
+              a.area + ": " + fmt(a.churn) + " lines changed across " + a.n + " files",
+            );
+            var bar = el("div", "ab-bar");
+            bar.style.width = Math.max((a.churn / max) * 100, 0.35) + "%";
+            track.appendChild(bar);
+            track.appendChild(el("div", "ab-val", fmt(a.churn)));
+            bindTip(track, { p: a.area, area: true, churn: a.churn, n: a.n });
+            row.appendChild(track);
+            host.appendChild(row);
+          });
+        }
+
+        /* ---------- feature lists ---------- */
+        function renderList(id, items) {
+          var host = document.getElementById(id);
+          items.forEach(function (it) {
+            var li = document.createElement("li");
+            var head = el("div");
+            head.appendChild(el("span", "fname", it.n));
+            head.appendChild(document.createTextNode("  "));
+            head.appendChild(el("span", "fmeta", it.m));
+            li.appendChild(head);
+            li.appendChild(el("div", "fdesc", it.d));
+            host.appendChild(li);
+          });
+        }
+
+        /* ---------- table view ---------- */
+        function renderTable() {
+          var body = document.getElementById("tableBody");
+          FILES.slice()
+            .sort(function (x, y) {
+              return y.a + y.d - (x.a + x.d);
+            })
+            .forEach(function (f) {
+              var tr = document.createElement("tr");
+              var st = document.createElement("td");
+              st.appendChild(el("span", "st", f.s));
+              tr.appendChild(st);
+              var p = el("td", "path", f.p);
+              tr.appendChild(p);
+              tr.appendChild(el("td", "num", f.a ? "+" + fmt(f.a) : "—"));
+              tr.appendChild(el("td", "num", f.d ? "−" + fmt(f.d) : "—"));
+              tr.appendChild(el("td", "num", fmt(f.a + f.d)));
+              body.appendChild(tr);
+            });
+        }
+
+        /* ---------- tooltip ---------- */
+        var tip = document.getElementById("tip");
+        function showTip(evt, f) {
+          tip.innerHTML = "";
+          tip.appendChild(el("div", "tip-path", f.p));
+          if (f.area) {
+            var l0 = el("div", "tip-line");
+            l0.appendChild(
+              document.createTextNode(fmt(f.churn) + " lines changed · " + f.n + " files"),
+            );
+            tip.appendChild(l0);
+          } else {
+            var l1 = el("div", "tip-line");
+            var s1 = el("span", "swatch");
+            s1.style.background = "var(--added)";
+            l1.appendChild(s1);
+            l1.appendChild(document.createTextNode(fmt(f.a) + " added"));
+            tip.appendChild(l1);
+            var l2 = el("div", "tip-line");
+            var s2 = el("span", "swatch");
+            s2.style.background = "var(--deleted)";
+            l2.appendChild(s2);
+            l2.appendChild(document.createTextNode(fmt(f.d) + " deleted"));
+            tip.appendChild(l2);
+          }
+          tip.style.opacity = "1";
+          tip.setAttribute("aria-hidden", "false");
+          position(evt);
+        }
+        function position(evt) {
+          var r = tip.getBoundingClientRect();
+          var x, y;
+          if (evt && evt.clientX !== undefined && evt.clientX !== 0) {
+            x = evt.clientX + 14;
+            y = evt.clientY + 14;
+          } else if (evt && evt.target && evt.target.getBoundingClientRect) {
+            var tr = evt.target.getBoundingClientRect();
+            x = tr.left + 20;
+            y = tr.bottom + 8;
+          } else {
+            return;
+          }
+          if (x + r.width > window.innerWidth - 12) x = window.innerWidth - r.width - 12;
+          if (y + r.height > window.innerHeight - 12) y = y - r.height - 28;
+          tip.style.left = x + "px";
+          tip.style.top = y + "px";
+        }
+        function hideTip() {
+          tip.style.opacity = "0";
+          tip.setAttribute("aria-hidden", "true");
+        }
+        function bindTip(node, f) {
+          node.addEventListener("mouseenter", function (e) {
+            showTip(e, f);
+          });
+          node.addEventListener("mousemove", position);
+          node.addEventListener("mouseleave", hideTip);
+          node.addEventListener("focus", function (e) {
+            showTip(e, f);
+          });
+          node.addEventListener("blur", hideTip);
+        }
+
+        /* ---------- controls ---------- */
+        function initControls() {
+          var themeBtn = document.getElementById("themeBtn");
+          var root = document.documentElement;
+          function syncLabel() {
+            var dark = root.getAttribute("data-theme") === "dark";
+            themeBtn.textContent = dark ? "Light" : "Dark";
+          }
+          themeBtn.addEventListener("click", function () {
+            var dark = root.getAttribute("data-theme") === "dark";
+            root.setAttribute("data-theme", dark ? "light" : "dark");
+            syncLabel();
+          });
+          syncLabel();
+
+          var tableBtn = document.getElementById("tableBtn");
+          var card = document.getElementById("tableCard");
+          tableBtn.addEventListener("click", function () {
+            var open = card.hasAttribute("hidden");
+            if (open) card.removeAttribute("hidden");
+            else card.setAttribute("hidden", "");
+            tableBtn.setAttribute("aria-pressed", String(open));
+          });
+        }
+
+        renderKpis();
+        renderDiverging();
+        renderAreas();
+        renderList("addedList", ADDED);
+        renderList("removedList", REMOVED);
+        renderList("keptList", KEPT);
+        renderTable();
+        initControls();
+      })();
+    </script>
+  </body>
+</html>
