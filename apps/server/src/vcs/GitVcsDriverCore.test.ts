@@ -188,6 +188,65 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("treats a branch whose remote was deleted as having no upstream", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+    yield* git(remote, ["init", "--bare"]);
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    yield* driver.ensureRemote({ cwd, preferredName: "origin", url: remote });
+    yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+
+    yield* git(cwd, ["checkout", "-b", "feature/merged-then-deleted"]);
+    yield* git(cwd, ["push", "-u", "origin", "feature/merged-then-deleted"]);
+    yield* writeTextFile(cwd, "feature.md", "# feature\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "feature work"]);
+
+    // What merging a PR and clicking "Delete branch" leaves behind: the remote
+    // branch is gone and pruned, the tracking config is not.
+    yield* git(cwd, ["push", "origin", "--delete", "feature/merged-then-deleted"]);
+    yield* git(cwd, ["fetch", "--prune", "origin"]);
+
+    const status = yield* driver.statusDetailsLocal(cwd);
+    // Git still prints `# branch.upstream` from config here, and drops
+    // `# branch.ab` because there is nothing left to count against. Reporting
+    // that as an upstream with zero commits ahead is what made the push step
+    // skip and the change-request step ask for a head nobody had pushed.
+    assert.equal(status.hasUpstream, false);
+    assert.equal(status.upstreamRef, null);
+    assert.equal(status.aheadCount, 1);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("pushes a branch whose remote was deleted instead of calling it up to date", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+    yield* git(remote, ["init", "--bare"]);
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    yield* driver.ensureRemote({ cwd, preferredName: "origin", url: remote });
+    yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+
+    yield* git(cwd, ["checkout", "-b", "feature/recycled"]);
+    yield* git(cwd, ["push", "-u", "origin", "feature/recycled"]);
+    yield* writeTextFile(cwd, "feature.md", "# feature\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "feature work"]);
+    yield* git(cwd, ["push", "origin", "--delete", "feature/recycled"]);
+    yield* git(cwd, ["fetch", "--prune", "origin"]);
+
+    const result = yield* driver.pushCurrentBranch(cwd, "feature/recycled");
+
+    assert.equal(result.status, "pushed");
+    // The branch is back on the remote, so a change request can name it.
+    const remoteHeads = yield* git(cwd, ["ls-remote", "--heads", "origin", "feature/recycled"]);
+    assert.include(remoteHeads, "refs/heads/feature/recycled");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("invalidates origin remote cache when a driver mutation adds origin", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;
