@@ -60,6 +60,7 @@ describe("relay Voice Input normalization", () => {
       "openai/gpt-4o-mini-transcribe",
       "openai/gpt-4o-transcribe",
       "openai/whisper-large-v3-turbo",
+      "openai/gpt-audio-mini",
     ]);
     expect(testExports.normalizeModels(payload, "text").map((model) => model.id)).toEqual([
       "openai/chat",
@@ -67,7 +68,7 @@ describe("relay Voice Input normalization", () => {
   });
 
   it("replaces an incompatible persisted transcription model with the default", () => {
-    expect(testExports.resolveTranscriptionModel("openai/gpt-audio-mini")).toBe(
+    expect(testExports.resolveTranscriptionModel("openai/gpt-4.1-mini")).toBe(
       "openai/gpt-4o-mini-transcribe",
     );
     expect(testExports.resolveTranscriptionModel("openai/whisper-large-v3-turbo")).toBe(
@@ -75,6 +76,9 @@ describe("relay Voice Input normalization", () => {
     );
     expect(testExports.resolveTranscriptionModel("openai/gpt-4o-transcribe")).toBe(
       "openai/gpt-4o-transcribe",
+    );
+    expect(testExports.resolveTranscriptionModel("openai/gpt-audio-mini")).toBe(
+      "openai/gpt-audio-mini",
     );
   });
 
@@ -110,7 +114,7 @@ describe("relay Voice Input normalization", () => {
   it("maps a rejected transcription model to model_unavailable", async () => {
     const error = await testExports.upstreamError(
       new Response(
-        JSON.stringify({ error: { message: "Model openai/gpt-audio-mini does not exist" } }),
+        JSON.stringify({ error: { message: "Model openai/not-a-real-model does not exist" } }),
         { status: 400, headers: { "content-type": "application/json" } },
       ),
     );

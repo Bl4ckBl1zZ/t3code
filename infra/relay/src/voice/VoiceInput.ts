@@ -66,6 +66,13 @@ const OPENROUTER_TRANSCRIPTION_MODELS: ReadonlyArray<OpenRouterModelOption> = [
     capability: "transcription",
     available: true,
   },
+  {
+    id: "openai/gpt-audio-mini",
+    name: "OpenAI: GPT Audio Mini",
+    providerName: "OpenAI",
+    capability: "transcription",
+    available: true,
+  },
 ];
 const OPENROUTER_TRANSCRIPTION_MODEL_IDS = new Set(
   OPENROUTER_TRANSCRIPTION_MODELS.map((model) => model.id),
