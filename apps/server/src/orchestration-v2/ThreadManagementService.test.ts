@@ -1,4 +1,4 @@
-import { expect, it } from "@effect/vitest";
+import { expect, it, vi } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
@@ -12,8 +12,12 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { OrchestratorProjectionError, OrchestratorV2 } from "./Orchestrator.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as WorktreeRegistry from "../worktree/WorktreeRegistry.ts";
 import {
   existingThreadIdsForCommand,
   layer,
@@ -26,6 +30,7 @@ import {
   ThreadManagementThreadNotInterruptibleError,
   ThreadManagementThreadArchivedError,
   ThreadManagementNoSteerableRunError,
+  ThreadManagementWorktreeReprovisionError,
   withCreationProvenance,
 } from "./ThreadManagementService.ts";
 
@@ -316,5 +321,425 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
     expect(error).toBeInstanceOf(ThreadManagementThreadNotFoundError);
     expect(error).toMatchObject({ projectId, threadId });
     expect("cause" in error).toBe(false);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("reprovisions a purged worktree before a follow-up send", () => {
+  let worktreePath: string | null = null;
+  let worktreeStatus: "purged" | "present" = "purged";
+  const makeProjection = (): OrchestrationV2ThreadProjection =>
+    ({
+      thread: {
+        id: ThreadId.make("thread:reprovision"),
+        projectId: ProjectId.make("project:reprovision"),
+        branch: "feature/reprovision",
+        worktreePath,
+        worktreeStatus,
+        deletedAt: null,
+        archivedAt: null,
+      },
+    }) as unknown as OrchestrationV2ThreadProjection;
+  const dispatch = vi.fn((command: OrchestrationV2Command) => {
+    if (command.type === "thread.metadata.update") {
+      worktreePath = command.worktreePath ?? null;
+      worktreeStatus = command.worktreeStatus === "present" ? "present" : "purged";
+    }
+    return Effect.succeed({ sequence: 2, storedEvents: [] });
+  });
+  const createWorktree = vi.fn(() =>
+    Effect.succeed({
+      worktree: { path: "/server/worktrees/reprovision", refName: "feature/reprovision" },
+    }),
+  );
+  const registration = vi.fn((input: WorktreeRegistry.WorktreeRegistration) =>
+    Effect.succeed({
+      repositoryRoot: input.repositoryRoot,
+      worktreePath: input.worktreePath,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      branch: input.branch,
+      ownership: input.ownership,
+      createdAtMs: input.createdAtMs,
+      discoveredAtMs: input.discoveredAtMs,
+      lastActivityAtMs: input.lastActivityAtMs,
+      state: "present",
+      lastReason: null,
+      updatedAtMs: input.observedAtMs,
+      generation: 1,
+      removalClaimedAtMs: null,
+    } satisfies WorktreeRegistry.WorktreeRegistryEntry),
+  );
+  const reprovisionLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () => Effect.succeed(makeProjection()),
+          dispatch,
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({
+                id: ProjectId.make("project:reprovision"),
+                workspaceRoot: "/repo",
+              } as never),
+            ),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          listLocalBranchNames: () => Effect.succeed(["feature/reprovision"]),
+          createWorktree,
+          removeWorktree: () => Effect.void,
+        }),
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          listAll: () => Effect.succeed([]),
+          register: registration,
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const projection = yield* service.ensureWorktreeForThread({
+      projectId: ProjectId.make("project:reprovision"),
+      threadId: ThreadId.make("thread:reprovision"),
+    });
+
+    expect(createWorktree).toHaveBeenCalledWith({
+      cwd: "/repo",
+      refName: "feature/reprovision",
+      path: null,
+    });
+    expect(registration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: "/server/worktrees/reprovision",
+        ownership: "t3-created",
+      }),
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.metadata.update",
+        worktreePath: "/server/worktrees/reprovision",
+        worktreeStatus: "present",
+        expectedWorktreePath: null,
+      }),
+    );
+    expect(projection.thread.worktreePath).toBe("/server/worktrees/reprovision");
+  }).pipe(Effect.provide(reprovisionLayer));
+});
+
+it.effect("recovers when the registry records a removed path before its purge event lands", () => {
+  let worktreePath: string | null = "/server/worktrees/removed-before-event";
+  let worktreeStatus: "present" | "purged" = "present";
+  const makeProjection = (): OrchestrationV2ThreadProjection =>
+    ({
+      thread: {
+        id: ThreadId.make("thread:registry-recovery"),
+        projectId: ProjectId.make("project:registry-recovery"),
+        branch: "feature/registry-recovery",
+        worktreePath,
+        worktreeStatus,
+        deletedAt: null,
+        archivedAt: null,
+      },
+    }) as unknown as OrchestrationV2ThreadProjection;
+  const dispatch = vi.fn((command: OrchestrationV2Command) => {
+    if (command.type === "thread.metadata.update") {
+      worktreePath = command.worktreePath ?? null;
+      worktreeStatus = command.worktreeStatus === "present" ? "present" : "purged";
+    }
+    return Effect.succeed({ sequence: 3, storedEvents: [] });
+  });
+  const registration = vi.fn((input: WorktreeRegistry.WorktreeRegistration) =>
+    Effect.succeed({
+      repositoryRoot: input.repositoryRoot,
+      worktreePath: input.worktreePath,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      branch: input.branch,
+      ownership: input.ownership,
+      createdAtMs: input.createdAtMs,
+      discoveredAtMs: input.discoveredAtMs,
+      lastActivityAtMs: input.lastActivityAtMs,
+      state: "present",
+      lastReason: null,
+      updatedAtMs: input.observedAtMs,
+      generation: 1,
+      removalClaimedAtMs: null,
+    } satisfies WorktreeRegistry.WorktreeRegistryEntry),
+  );
+  const reprovisionLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () => Effect.succeed(makeProjection()),
+          dispatch,
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({
+                id: ProjectId.make("project:registry-recovery"),
+                workspaceRoot: "/repo",
+              } as never),
+            ),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          listLocalBranchNames: () => Effect.succeed(["feature/registry-recovery"]),
+          createWorktree: () =>
+            Effect.succeed({
+              worktree: {
+                path: "/server/worktrees/registry-recovery",
+                refName: "feature/registry-recovery",
+              },
+            }),
+          removeWorktree: () => Effect.void,
+        }),
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          getRemovedForThreadPath: () =>
+            Effect.succeed(
+              Option.some({
+                repositoryRoot: "/repo",
+                worktreePath: "/server/worktrees/removed-before-event",
+                projectId: "project:registry-recovery",
+                threadId: "thread:registry-recovery",
+                branch: "feature/registry-recovery",
+                ownership: "t3-created",
+                createdAtMs: 1_000,
+                discoveredAtMs: 1_000,
+                lastActivityAtMs: 1_000,
+                state: "removed",
+                lastReason: "retention",
+                updatedAtMs: 2_000,
+                generation: 1,
+                removalClaimedAtMs: null,
+              } satisfies WorktreeRegistry.WorktreeRegistryEntry),
+            ),
+          register: registration,
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const projection = yield* service.ensureWorktreeForThread({
+      projectId: ProjectId.make("project:registry-recovery"),
+      threadId: ThreadId.make("thread:registry-recovery"),
+    });
+
+    expect(dispatch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "thread.metadata.update",
+        worktreePath: null,
+        worktreeStatus: "purged",
+        expectedWorktreePath: "/server/worktrees/removed-before-event",
+      }),
+    );
+    expect(dispatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "thread.metadata.update",
+        worktreePath: "/server/worktrees/registry-recovery",
+        worktreeStatus: "present",
+        expectedWorktreePath: null,
+      }),
+    );
+    expect(projection.thread.worktreePath).toBe("/server/worktrees/registry-recovery");
+  }).pipe(Effect.provide(reprovisionLayer));
+});
+
+it.effect("reports branch-unavailable when recovery cannot recreate the deleted branch", () => {
+  const projectId = ProjectId.make("project:missing-branch");
+  const threadId = ThreadId.make("thread:missing-branch");
+  const projection = {
+    thread: {
+      id: threadId,
+      projectId,
+      branch: "feature/deleted-branch",
+      worktreePath: "/server/worktrees/deleted-branch",
+      worktreeStatus: "purged",
+      deletedAt: null,
+      archivedAt: null,
+    },
+  } as unknown as OrchestrationV2ThreadProjection;
+  const createWorktree = vi.fn(() =>
+    Effect.succeed({
+      worktree: { path: "/server/worktrees/should-not-exist", refName: "feature/deleted-branch" },
+    }),
+  );
+  const testLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () => Effect.succeed(projection),
+          dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(Option.some({ id: projectId, workspaceRoot: "/repo" } as never)),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          listLocalBranchNames: () => Effect.succeed([]),
+          createWorktree,
+        }),
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          getRemovedForThreadPath: () => Effect.succeed(Option.none()),
+          listAll: () => Effect.succeed([]),
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const error = yield* Effect.flip(service.ensureWorktreeForThread({ projectId, threadId }));
+
+    expect(error).toBeInstanceOf(ThreadManagementWorktreeReprovisionError);
+    expect(error).toMatchObject({ reason: "branch-unavailable", threadId });
+    expect(createWorktree).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("does not reprovision while the registry removal claim is active", () => {
+  const projectId = ProjectId.make("project:removal-in-progress");
+  const threadId = ThreadId.make("thread:removal-in-progress");
+  const projection = {
+    thread: {
+      id: threadId,
+      projectId,
+      branch: "feature/removal-in-progress",
+      worktreePath: "/server/worktrees/removal-in-progress",
+      worktreeStatus: "present",
+      deletedAt: null,
+      archivedAt: null,
+    },
+  } as unknown as OrchestrationV2ThreadProjection;
+  const createWorktree = vi.fn(() =>
+    Effect.succeed({
+      worktree: {
+        path: "/server/worktrees/replacement",
+        refName: "feature/removal-in-progress",
+      },
+    }),
+  );
+  const testLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () => Effect.succeed(projection),
+          dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(Option.some({ id: projectId, workspaceRoot: "/repo" } as never)),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          listLocalBranchNames: () => Effect.succeed(["feature/removal-in-progress"]),
+          createWorktree,
+        }),
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          getRemovedForThreadPath: () =>
+            Effect.succeed(
+              Option.some({
+                repositoryRoot: "/repo",
+                worktreePath: "/server/worktrees/removal-in-progress",
+                projectId: String(projectId),
+                threadId: String(threadId),
+                branch: "feature/removal-in-progress",
+                ownership: "t3-created",
+                createdAtMs: 1_000,
+                discoveredAtMs: 1_000,
+                lastActivityAtMs: 1_000,
+                state: "present",
+                lastReason: "maxAge",
+                updatedAtMs: 2_000,
+                generation: 1,
+                removalClaimedAtMs: 2_000,
+              } satisfies WorktreeRegistry.WorktreeRegistryEntry),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const error = yield* Effect.flip(service.ensureWorktreeForThread({ projectId, threadId }));
+
+    expect(error).toMatchObject({ reason: "removal-in-progress", threadId });
+    expect(createWorktree).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("does not reprovision a purged thread while its removal claim is active", () => {
+  const projectId = ProjectId.make("project:purged-removal-in-progress");
+  const threadId = ThreadId.make("thread:purged-removal-in-progress");
+  const projection = {
+    thread: {
+      id: threadId,
+      projectId,
+      branch: "feature/purged-removal-in-progress",
+      worktreePath: null,
+      worktreeStatus: "purged",
+      deletedAt: null,
+      archivedAt: null,
+    },
+  } as unknown as OrchestrationV2ThreadProjection;
+  const createWorktree = vi.fn(() =>
+    Effect.succeed({
+      worktree: {
+        path: "/server/worktrees/purged-replacement",
+        refName: "feature/purged-removal-in-progress",
+      },
+    }),
+  );
+  const testLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () => Effect.succeed(projection),
+          dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(Option.some({ id: projectId, workspaceRoot: "/repo" } as never)),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          listLocalBranchNames: () => Effect.succeed(["feature/purged-removal-in-progress"]),
+          createWorktree,
+        }),
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          listAll: () =>
+            Effect.succeed([
+              {
+                repositoryRoot: "/repo",
+                worktreePath: "/server/worktrees/purged-removal-in-progress",
+                projectId: String(projectId),
+                threadId: String(threadId),
+                branch: "feature/purged-removal-in-progress",
+                ownership: "t3-created",
+                createdAtMs: 1_000,
+                discoveredAtMs: 1_000,
+                lastActivityAtMs: 1_000,
+                state: "present",
+                lastReason: "maxAge",
+                updatedAtMs: 2_000,
+                generation: 1,
+                removalClaimedAtMs: 2_000,
+              } satisfies WorktreeRegistry.WorktreeRegistryEntry,
+            ]),
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const error = yield* Effect.flip(service.ensureWorktreeForThread({ projectId, threadId }));
+
+    expect(error).toMatchObject({ reason: "removal-in-progress", threadId });
+    expect(createWorktree).not.toHaveBeenCalled();
   }).pipe(Effect.provide(testLayer));
 });

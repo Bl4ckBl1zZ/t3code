@@ -25,6 +25,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as WorktreeRegistry from "../worktree/WorktreeRegistry.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -81,6 +82,7 @@ function makeHarness(options: HarnessOptions = {}) {
   const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
   const receipts = CommandReceiptStore.layer.pipe(Layer.provide(database));
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
+  const worktreeRegistry = WorktreeRegistry.layer.pipe(Layer.provide(database));
   const createWorktree = vi.fn(
     options.createWorktree ??
       (() =>
@@ -121,12 +123,13 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     ServerSettings.layerTest(options.serverSettings),
     makeProviderRegistryLayer(options.providers),
+    worktreeRegistry,
   );
   const launch = ThreadLaunch.layer.pipe(
     Layer.provide(Layer.mergeAll(externalServices, threadManagement, receipts, IdAllocator.layer)),
   );
   return {
-    layer: Layer.mergeAll(launch, threadManagement, outbox, database),
+    layer: Layer.mergeAll(launch, threadManagement, outbox, worktreeRegistry, database),
     createWorktree,
     generateBranchName,
     runSetup,
@@ -189,6 +192,51 @@ it.effect("starts projectless launches without workspace preparation", () =>
       assert.lengthOf(
         yield* outbox.listByCommandId(CommandId.make("command:launch:projectless:initial-message")),
         1,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("registers a created worktree with its owning thread", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const registry = yield* WorktreeRegistry.WorktreeRegistry;
+      const input = launchInput({
+        command: "command:launch:register-worktree",
+        thread: "thread:launch:register-worktree",
+        workspace: { type: "worktree", baseRef: "main", branch: "feature" },
+      });
+
+      yield* launches.launch(input);
+      yield* waitUntil(() =>
+        registry
+          .get({ repositoryRoot: "/repo", worktreePath: "/repo-worktrees/feature" })
+          .pipe(Effect.map(Option.isSome)),
+      );
+
+      const entry = yield* registry.get({
+        repositoryRoot: "/repo",
+        worktreePath: "/repo-worktrees/feature",
+      });
+      assert.deepStrictEqual(
+        entry.pipe(
+          Option.map((row) => ({
+            projectId: row.projectId,
+            threadId: row.threadId,
+            branch: row.branch,
+            ownership: row.ownership,
+            state: row.state,
+          })),
+        ),
+        Option.some({
+          projectId: String(projectId),
+          threadId: String(input.threadId),
+          branch: "feature",
+          ownership: "t3-created",
+          state: "present",
+        } as const),
       );
     }).pipe(Effect.provide(harness.layer));
   }),

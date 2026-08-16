@@ -34,6 +34,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
+import * as WorktreeRegistry from "../worktree/WorktreeRegistry.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import { layer as worktreeMcpServiceLayer, WorktreeMcpService } from "./WorktreeMcpService.ts";
 
@@ -284,6 +285,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
         } as const);
     }
   });
+  const registerWorktree = vi.fn((_: unknown) => Effect.succeed({} as never));
 
   // Optional deterministic Path semantics: providing this BEFORE the general
   // mocks means the service resolves Path here rather than from NodeServices,
@@ -332,6 +334,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
         Layer.mock(VcsStatusBroadcaster)({
           refreshStatus,
         } satisfies Partial<VcsStatusBroadcaster["Service"]>),
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          register: registerWorktree,
+        } satisfies Partial<WorktreeRegistry.WorktreeRegistry["Service"]>),
         NodeServices.layer,
       ),
     ),
@@ -346,6 +351,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     resolveRemoteTrackingCommit,
     createWorktree,
     removeWorktree,
+    registerWorktree,
     deleteLocalBranch,
     localStatus,
     runForThread,
@@ -406,6 +412,16 @@ describe("t3_worktree_handoff", () => {
         baseRefName: "dev",
         path: null,
       });
+      expect(harness.registerWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repositoryRoot: workspaceRoot,
+          worktreePath: "/worktrees/project/feature/handoff",
+          projectId: String(projectId),
+          threadId: String(threadId),
+          branch: "feature/handoff",
+          ownership: "t3-created",
+        }),
+      );
       expect(harness.dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "thread.metadata.update",

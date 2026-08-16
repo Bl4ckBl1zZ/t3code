@@ -26,6 +26,7 @@ import {
   OrchestrationV2DomainEvent,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2Subagent,
+  OrchestrationV2ThreadWorktreeStatus,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
@@ -45,6 +46,22 @@ const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Com
 const decodeOrchestrationV2TurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 
 describe("orchestration V2 contracts", () => {
+  it("accepts an explicit purged worktree status without requiring it on legacy commands", () => {
+    expect(Schema.decodeUnknownSync(OrchestrationV2ThreadWorktreeStatus)("purged")).toBe("purged");
+
+    const command = decodeOrchestrationV2Command({
+      type: "thread.metadata.update",
+      commandId: "command:worktree-purged",
+      threadId: "thread:worktree-purged",
+      worktreePath: null,
+      worktreeStatus: "purged",
+    });
+    expect(command.type).toBe("thread.metadata.update");
+    if (command.type === "thread.metadata.update") {
+      expect(command.worktreeStatus).toBe("purged");
+    }
+  });
+
   it("lets legacy snapshot decoders ignore enrichment metadata", () => {
     const decoded = decodeLegacyShellStreamItem({
       kind: "snapshot",

@@ -13,6 +13,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -28,6 +29,9 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as WorktreeOperationCoordinator from "../worktree/WorktreeOperationCoordinator.ts";
+import * as WorktreeProvisioningService from "../worktree/WorktreeProvisioningService.ts";
+import * as WorktreeRegistry from "../worktree/WorktreeRegistry.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
@@ -148,6 +152,13 @@ export const make = Effect.gen(function* () {
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const worktreeProvisioning = yield* Effect.serviceOption(
+    WorktreeProvisioningService.WorktreeProvisioningService,
+  );
+  const worktreeCoordinator = yield* Effect.serviceOption(
+    WorktreeOperationCoordinator.WorktreeOperationCoordinator,
+  );
+  const worktreeRegistry = yield* Effect.serviceOption(WorktreeRegistry.WorktreeRegistry);
   const preparationScope = yield* Scope.make("sequential");
   const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
@@ -296,17 +307,77 @@ export const make = Effect.gen(function* () {
             Effect.mapError(mapError(input, "provision-worktree", threadId)),
           );
       }
-      const worktree = yield* git
-        .createWorktree({
-          cwd: project.workspaceRoot,
-          refName: startRef,
-          newRefName: branch!,
-          baseRefName: input.workspaceStrategy.baseRef,
-          path: null,
-        })
-        .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-      worktreePath = worktree.worktree.path;
-      branch = worktree.worktree.refName;
+      const baseRefName = input.workspaceStrategy.baseRef;
+      const createAndRegister = Option.isSome(worktreeProvisioning)
+        ? worktreeProvisioning.value.create(
+            {
+              git: {
+                cwd: project.workspaceRoot,
+                refName: startRef,
+                newRefName: branch!,
+                baseRefName,
+                path: null,
+              },
+              projectId: String(input.projectId),
+              threadId: String(threadId),
+              ownership: "t3-created",
+            },
+            {
+              create: () =>
+                git.createWorktree({
+                  cwd: project.workspaceRoot,
+                  refName: startRef,
+                  newRefName: branch!,
+                  baseRefName,
+                  path: null,
+                }),
+              remove: (path) => git.removeWorktree({ cwd: project.workspaceRoot, path }),
+            },
+          )
+        : Effect.gen(function* () {
+            let createdPath: string | null = null;
+            const created = yield* git.createWorktree({
+              cwd: project.workspaceRoot,
+              refName: startRef,
+              newRefName: branch!,
+              baseRefName,
+              path: null,
+            });
+            createdPath = created.worktree.path;
+            const observedAtMs = yield* Clock.currentTimeMillis;
+            if (Option.isSome(worktreeRegistry)) {
+              yield* worktreeRegistry.value
+                .register({
+                  repositoryRoot: project.workspaceRoot,
+                  worktreePath: created.worktree.path,
+                  projectId: String(input.projectId),
+                  threadId: String(threadId),
+                  branch: created.worktree.refName,
+                  ownership: "t3-created",
+                  createdAtMs: observedAtMs,
+                  discoveredAtMs: observedAtMs,
+                  lastActivityAtMs: observedAtMs,
+                  observedAtMs,
+                })
+                .pipe(
+                  Effect.onError(() =>
+                    git
+                      .removeWorktree({ cwd: project.workspaceRoot, path: createdPath! })
+                      .pipe(Effect.ignore),
+                  ),
+                );
+            }
+            return { worktree: created.worktree } as const;
+          });
+      const provisioned = yield* (
+        Option.isSome(worktreeProvisioning)
+          ? createAndRegister
+          : Option.isSome(worktreeCoordinator)
+            ? worktreeCoordinator.value.withRepositoryLock(project.workspaceRoot, createAndRegister)
+            : createAndRegister
+      ).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+      worktreePath = provisioned.worktree.path;
+      branch = provisioned.worktree.refName;
     }
 
     yield* threads
@@ -316,6 +387,7 @@ export const make = Effect.gen(function* () {
         threadId,
         branch,
         worktreePath,
+        worktreeStatus: worktreePath === null ? "none" : "present",
       })
       .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
 
