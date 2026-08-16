@@ -91,7 +91,7 @@ describe("Hermes transport session import policy", () => {
     expect(isHermesSessionWithinImportAge(cutoffSeconds - 1, 1, now)).toBe(false);
   });
 
-  it("requires explicit negotiated import and session-list evidence", () => {
+  it("requires the session methods import actually spends, and nothing more", () => {
     expect(
       hermesImportCapabilityError({
         status: "legacy",
@@ -100,7 +100,7 @@ describe("Hermes transport session import policy", () => {
         inventory: null,
         reason: "no negotiation",
       }),
-    ).toContain("evidence-backed");
+    ).toContain("session.lifecycle");
     expect(
       hermesImportCapabilityError({
         status: "supported",
@@ -109,13 +109,24 @@ describe("Hermes transport session import policy", () => {
         inventory: ["session.lifecycle"],
         reason: "partial negotiation",
       }),
-    ).toContain("profile.import");
+    ).toContain("session.history");
+    // A gateway that advertises nothing but proved both methods is enough:
+    // there is no `profile.import` method in Hermes to hold out for.
+    expect(
+      hermesImportCapabilityError({
+        status: "legacy",
+        protocol: null,
+        capabilities: ["session.lifecycle", "session.history"],
+        inventory: null,
+        reason: "legacy",
+      }),
+    ).toBeNull();
     expect(
       hermesImportCapabilityError({
         status: "supported",
         protocol: { major: 1, minor: 0 },
-        capabilities: ["profile.import", "session.lifecycle"],
-        inventory: ["profile.import", "session.lifecycle"],
+        capabilities: ["session.lifecycle", "session.history"],
+        inventory: ["session.lifecycle", "session.history"],
         reason: "complete negotiation",
       }),
     ).toBeNull();
@@ -126,8 +137,8 @@ describe("Hermes transport session import policy", () => {
       hermesImportCapabilityError({
         status: "unsupported",
         protocol: { major: 9, minor: 0 },
-        capabilities: ["profile.import", "session.lifecycle"],
-        inventory: ["profile.import", "session.lifecycle"],
+        capabilities: ["session.lifecycle", "session.history"],
+        inventory: ["session.lifecycle", "session.history"],
         reason: "gateway protocol 9.0 is newer than this build supports",
       }),
     ).toBe("gateway protocol 9.0 is newer than this build supports");
@@ -135,8 +146,8 @@ describe("Hermes transport session import policy", () => {
       hermesImportCapabilityError({
         status: "unsupported",
         protocol: null,
-        capabilities: ["profile.import", "session.lifecycle"],
-        inventory: ["profile.import", "session.lifecycle"],
+        capabilities: ["session.lifecycle", "session.history"],
+        inventory: ["session.lifecycle", "session.history"],
         reason: "   ",
       }),
     ).toContain("unsupported");
@@ -269,8 +280,8 @@ describe("Hermes transport session import policy", () => {
                     compatibility: {
                       status: "supported",
                       protocol: { major: 1, minor: 0 },
-                      capabilities: ["profile.import", "session.lifecycle"],
-                      inventory: ["profile.import", "session.lifecycle"],
+                      capabilities: ["session.lifecycle", "session.history"],
+                      inventory: ["session.lifecycle", "session.history"],
                       reason: "test negotiation",
                     },
                     sessions: [
@@ -532,8 +543,8 @@ describe("Hermes transport session import policy", () => {
                   compatibility: {
                     status: "supported",
                     protocol: { major: 1, minor: 0 },
-                    capabilities: ["profile.import", "session.lifecycle"],
-                    inventory: ["profile.import", "session.lifecycle"],
+                    capabilities: ["session.lifecycle", "session.history"],
+                    inventory: ["session.lifecycle", "session.history"],
                     reason: "test negotiation",
                   },
                   sessions: [
@@ -660,8 +671,8 @@ describe("Hermes transport session import policy", () => {
                     compatibility: {
                       status: "supported",
                       protocol: { major: 1, minor: 0 },
-                      capabilities: ["profile.import", "session.lifecycle"],
-                      inventory: ["profile.import", "session.lifecycle"],
+                      capabilities: ["session.lifecycle", "session.history"],
+                      inventory: ["session.lifecycle", "session.history"],
                       reason: "test negotiation",
                     },
                     sessions: [
@@ -834,8 +845,8 @@ describe("Hermes transport session import policy", () => {
                   compatibility: {
                     status: "supported",
                     protocol: { major: 1, minor: 0 },
-                    capabilities: ["profile.import", "session.lifecycle"],
-                    inventory: ["profile.import", "session.lifecycle"],
+                    capabilities: ["session.lifecycle", "session.history"],
+                    inventory: ["session.lifecycle", "session.history"],
                     reason: "test negotiation",
                   },
                   sessions: [
@@ -934,8 +945,8 @@ describe("Hermes transport session import policy", () => {
                   compatibility: {
                     status: "supported",
                     protocol: { major: 1, minor: 0 },
-                    capabilities: ["profile.import", "session.lifecycle"],
-                    inventory: ["profile.import", "session.lifecycle"],
+                    capabilities: ["session.lifecycle", "session.history"],
+                    inventory: ["session.lifecycle", "session.history"],
                     reason: "test negotiation",
                   },
                   sessions: [
@@ -1033,8 +1044,8 @@ describe("Hermes transport session import policy", () => {
                   compatibility: {
                     status: "supported",
                     protocol: { major: 1, minor: 0 },
-                    capabilities: ["profile.import", "session.lifecycle"],
-                    inventory: ["profile.import", "session.lifecycle"],
+                    capabilities: ["session.lifecycle", "session.history"],
+                    inventory: ["session.lifecycle", "session.history"],
                     reason: "test negotiation",
                   },
                   sessions: [

@@ -86,18 +86,32 @@ export const HERMES_GATEWAY_LEGACY_CAPABILITIES =
  * them. Each entry is a side-effect-free read, so a gateway that does not
  * implement it answers `-32601` and simply stays without the capability —
  * the same signal the client already uses to revoke one at call time.
+ *
+ * `cron.manage` and `skills.manage` are single methods that dispatch on an
+ * `action`, and their inventory action is a plain read. Listing is therefore
+ * the same kind of evidence as any other probe here: it proves the method
+ * exists without touching durable state. Which *mutating* actions a gateway
+ * accepts is a separate question, answered by {@link cronActionInventory}.
  */
 const HERMES_GATEWAY_DISCOVERY_PROBES = [
-  { capability: "commands.catalog", method: "commands.catalog", params: {} },
+  { capabilities: ["commands.catalog"], method: "commands.catalog", params: {} },
   {
-    capability: "models.inventory",
+    capabilities: ["models.inventory"],
     method: "model.options",
     params: { explicit_only: true, include_unconfigured: false },
   },
-  { capability: "reasoning.effective_state", method: "config.get", params: { key: "reasoning" } },
-  { capability: "session.lifecycle", method: "session.list", params: {} },
+  {
+    capabilities: ["reasoning.effective_state"],
+    method: "config.get",
+    params: { key: "reasoning" },
+  },
+  { capabilities: ["session.lifecycle"], method: "session.list", params: {} },
+  // One method backs both: reading the inventory is what proves T3 can reach
+  // the scheduler at all, and mutations stay gated per action below.
+  { capabilities: ["cron.read", "cron.manage"], method: "cron.manage", params: { action: "list" } },
+  { capabilities: ["skills.manage"], method: "skills.manage", params: { action: "list" } },
 ] as const satisfies ReadonlyArray<{
-  readonly capability: HermesGatewayCapabilityName;
+  readonly capabilities: ReadonlyArray<HermesGatewayCapabilityName>;
   readonly method: string;
   readonly params: HermesGatewayUnknownRecord;
 }>;
@@ -116,18 +130,36 @@ const HERMES_GATEWAY_INFERRED_CAPABILITIES = [
 ] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
 
 /**
- * Tier 1b: attachment capabilities, whose methods all stage bytes and so
- * cannot be exercised as a read. Every one of them resolves the session
- * first, so asking with a session id the gateway cannot hold answers
- * "session not found" where the method exists and `-32601` where it does
- * not — the same evidence as tier 1, read from the error instead of the
- * result, and reaching no session state on the way.
+ * Granted alongside `skills.manage` for the same reason: reloading is part of
+ * the same subsystem and cannot be probed as a read, since asking for it
+ * performs it. Revoked on `-32601` at call time like any other.
+ */
+const HERMES_GATEWAY_SKILLS_INFERRED_CAPABILITIES = [
+  "skills.reload",
+] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
+
+/**
+ * Tier 1b: capabilities whose methods mutate — staging bytes, renaming,
+ * branching, answering a parked run — and so cannot be exercised as a read.
+ * Every one of them resolves the session first, so asking with a session id
+ * the gateway cannot hold answers "session not found" where the method exists
+ * and `-32601` where it does not — the same evidence as tier 1, read from the
+ * error instead of the result, and reaching no session state on the way.
+ *
+ * The two response methods matter most: a gateway that pushes
+ * `approval.request` but never advertises `approval.respond` leaves T3 forcing
+ * an interrupt on every run that asks for permission, when the method was
+ * there all along.
  */
 const HERMES_GATEWAY_EXISTENCE_PROBE_SESSION_ID = "t3-code:capability-probe";
 const HERMES_GATEWAY_EXISTENCE_PROBES = [
   { capability: "attachments.image", method: "image.attach_bytes" },
   { capability: "attachments.pdf", method: "pdf.attach" },
   { capability: "attachments.file", method: "file.attach" },
+  { capability: "session.title", method: "session.title" },
+  { capability: "session.branch.latest", method: "session.branch" },
+  { capability: "events.approvals", method: "approval.respond" },
+  { capability: "events.clarification", method: "clarify.respond" },
 ] as const satisfies ReadonlyArray<{
   readonly capability: HermesGatewayCapabilityName;
   readonly method: string;
@@ -136,11 +168,25 @@ const HERMES_GATEWAY_EXISTENCE_PROBES = [
 const HERMES_GATEWAY_METHOD_NOT_FOUND = -32601;
 
 /**
- * Tier 2 is everything absent from the three lists above: `session_mcp`,
- * `profile.import`, `cron.manage`, `skills.manage`, and approval
- * capabilities. Those mint credentials, read or destroy history from other
- * transports, or mutate durable state, so they require explicit advertisement
- * and are never synthesized from a probe.
+ * The mutating cron actions T3 knows how to send, probed as a set so the UI
+ * offers exactly the operations the connected gateway implements. `list` is
+ * excluded because reaching this point already proved it.
+ */
+const HERMES_CRON_PROBED_ACTIONS = ["add", "update", "pause", "resume", "remove", "run"] as const;
+
+/**
+ * Job name used to probe a cron action without reaching a real job. It has to
+ * be one no user would type, because `remove` and `run` would otherwise hit it.
+ */
+const HERMES_CRON_PROBE_JOB_NAME = "t3-code:cron-action-probe:0e4f1b6a";
+
+/**
+ * Tier 2 is everything absent from the lists above: `session_mcp`,
+ * `profile.import`, and `mutation.stable_ids`. `session_mcp` mints a T3 bearer
+ * credential and hands it to another process, which is not something a probe
+ * should ever be able to talk T3 into; the other two describe guarantees a
+ * gateway has to promise rather than methods it happens to answer. They
+ * require explicit advertisement and are never synthesized.
  */
 
 export type HermesGatewayConnectionState =
@@ -499,6 +545,11 @@ export class HermesGatewayClient {
   private discoveredCapabilities:
     | { readonly build: string; readonly capabilities: ReadonlyArray<string> }
     | undefined;
+  /** Cron action inventory keyed the same way, and for the same reason. */
+  private discoveredCronActions:
+    | { readonly build: string; readonly actions: ReadonlySet<string> }
+    | undefined;
+  private cronActionInventoryTask: Promise<ReadonlySet<string>> | undefined;
   private readonly logger: ((event: HermesGatewayLogEvent) => void) | undefined;
   private readonly supervisor: HermesGatewaySupervisor | undefined;
 
@@ -879,6 +930,77 @@ export class HermesGatewayClient {
       },
     );
     return decodeResult(HermesGatewayCronListResult, result, "cron.manage/list");
+  }
+
+  /**
+   * Which cron actions this gateway actually accepts.
+   *
+   * `cron.manage` dispatches on an `action`, so the method existing says
+   * nothing about which operations are behind it — the shipped Hermes build
+   * answers `list`/`add`/`pause`/`resume`/`remove` and rejects `update` and
+   * `run`. Asking is unambiguous: an unsupported action comes back as an RPC
+   * error, while a supported one reaches the scheduler and returns a result,
+   * `{success: false}` included. Naming a job that cannot exist is what keeps
+   * the supported branch inert.
+   */
+  async cronActionInventory(): Promise<ReadonlySet<string>> {
+    if (!this.hasCapability("cron.manage")) return new Set();
+    const build = `${this.compatibilityValue?.serverVersion ?? "unknown"}@${this.compatibilityValue?.revision ?? "unknown"}`;
+    const cached = this.discoveredCronActions;
+    if (cached !== undefined && cached.build === build) return cached.actions;
+    if (this.cronActionInventoryTask) return this.cronActionInventoryTask;
+
+    const task = (async () => {
+      const probes = HERMES_CRON_PROBED_ACTIONS.map(
+        async (action): Promise<string | null | undefined> => {
+          try {
+            await this.sendRequest(
+              "cron.manage",
+              action === "add"
+                ? // `add` validates its own required fields before it creates
+                  // anything, so an empty payload is refused by the scheduler
+                  // rather than by the dispatcher.
+                  { action }
+                : { action, name: HERMES_CRON_PROBE_JOB_NAME },
+              {
+                operation: "read",
+                operationId: undefined,
+                mutationId: undefined,
+                requiredCapability: undefined,
+                signal: undefined,
+                retryOnReconnect: false,
+                timeoutMs: this.requestTimeoutMs,
+              },
+            );
+            return action;
+          } catch (error) {
+            // Only a well-formed rejection is evidence of absence. A transport
+            // failure says nothing, and granting on it would offer the user a
+            // button that fails the moment the link recovers.
+            return error instanceof HermesGatewayRpcError ? null : undefined;
+          }
+        },
+      );
+      const settled = await Promise.all(probes);
+      const actions = new Set<string>(
+        settled.filter((action): action is string => typeof action === "string"),
+      );
+      // `list` got T3 this far, so it is known-good without spending a probe.
+      actions.add("list");
+      const inconclusive = settled.some((action) => action === undefined);
+      if (!inconclusive) this.discoveredCronActions = { build, actions };
+      this.logger?.({
+        type: "protocol",
+        outcome: "capability_discovered",
+        method: "cron.manage",
+        capability: [...actions].toSorted().join(",") || "none",
+      });
+      return actions as ReadonlySet<string>;
+    })().finally(() => {
+      this.cronActionInventoryTask = undefined;
+    });
+    this.cronActionInventoryTask = task;
+    return task;
   }
 
   async manageCron(
@@ -1700,8 +1822,10 @@ export class HermesGatewayClient {
     ]);
     const discovered = new Set<string>();
     results.forEach((result, index) => {
-      if (result.status === "fulfilled")
-        discovered.add(HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capability);
+      if (result.status !== "fulfilled") return;
+      for (const capability of HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capabilities) {
+        discovered.add(capability);
+      }
     });
     existenceResults.forEach((result, index) => {
       // The probe carries no session, so an implemented method rejects. Only
@@ -1715,6 +1839,11 @@ export class HermesGatewayClient {
     });
     if (discovered.has("session.lifecycle")) {
       for (const capability of HERMES_GATEWAY_INFERRED_CAPABILITIES) discovered.add(capability);
+    }
+    if (discovered.has("skills.manage")) {
+      for (const capability of HERMES_GATEWAY_SKILLS_INFERRED_CAPABILITIES) {
+        discovered.add(capability);
+      }
     }
 
     const capabilities = [...discovered].toSorted();

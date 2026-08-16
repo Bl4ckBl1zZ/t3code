@@ -11,24 +11,24 @@ import { assessHermesConnectionSecurity } from "./HermesConnectionSecurity.ts";
 import { HermesGatewayClient } from "./HermesGatewayClient.ts";
 import type { HermesServeConnection, HermesServeRuntimeError } from "./HermesServeRuntime.ts";
 
-const HERMES_IMPORT_REQUIRED_CAPABILITIES = ["profile.import", "session.lifecycle"] as const;
+/**
+ * What importing actually spends: `session.list` to discover, and
+ * `session.resume` plus `session.history` to open a shell once the user picks
+ * one. All three are `session.lifecycle`/`session.history`, both of which a
+ * gateway can prove by answering.
+ *
+ * This used to also demand `profile.import`, a capability no Hermes build has
+ * ever implemented — asking for it answers `-32601`. Requiring a method that
+ * does not exist made import permanently unreachable, including for the `cron`
+ * sessions that are the only durable record of a scheduled run.
+ */
+const HERMES_IMPORT_REQUIRED_CAPABILITIES = ["session.lifecycle", "session.history"] as const;
 
 const isHermesSessionsError = Schema.is(HermesSessionsError);
 
 export function hermesImportCapabilityError(
   compatibility: HermesGatewayCompatibility,
 ): string | null {
-  const available = new Set(compatibility.capabilities);
-  const missing = HERMES_IMPORT_REQUIRED_CAPABILITIES.filter(
-    (capability) => !available.has(capability),
-  );
-  if (
-    compatibility.status === "supported" &&
-    compatibility.inventory !== null &&
-    missing.length === 0
-  ) {
-    return null;
-  }
   // An explicitly unsupported protocol is fatal on its own: the advertised
   // capability list cannot be trusted, so report the negotiated reason instead
   // of a misleading "missing capabilities" message.
@@ -38,9 +38,14 @@ export function hermesImportCapabilityError(
       "Hermes import is unavailable because the gateway protocol is unsupported."
     );
   }
-  return compatibility.status === "legacy" || compatibility.inventory === null
-    ? "Hermes import requires an evidence-backed negotiated capability inventory."
-    : `Hermes import is unavailable because the gateway did not advertise: ${missing.join(", ")}.`;
+  const available = new Set(compatibility.capabilities);
+  const missing = HERMES_IMPORT_REQUIRED_CAPABILITIES.filter(
+    (capability) => !available.has(capability),
+  );
+  if (missing.length > 0) {
+    return `Hermes import is unavailable because the gateway does not implement: ${missing.join(", ")}.`;
+  }
+  return null;
 }
 
 export interface HermesSessionCatalogSnapshot {

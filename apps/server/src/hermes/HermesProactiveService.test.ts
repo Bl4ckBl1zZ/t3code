@@ -219,7 +219,7 @@ describe("HermesProactiveService", () => {
       );
       assert.isTrue(
         provider?.diagnostics.some((diagnostic) =>
-          diagnostic.includes("do not name their session"),
+          diagnostic.includes("happen on their own Hermes session"),
         ),
       );
     }),
@@ -246,13 +246,13 @@ describe("HermesProactiveService", () => {
       assert.equal(provider?.residentThreads[0]?.selectedBy, "job");
       assert.isFalse(
         provider?.diagnostics.some((diagnostic) =>
-          diagnostic.includes("do not name their session"),
+          diagnostic.includes("happen on their own Hermes session"),
         ),
       );
     }),
   );
 
-  it.effect("keeps nothing subscribed when every scheduled job is paused", () =>
+  it.effect("keeps threads subscribed even with no schedule to watch", () =>
     Effect.gen(function* () {
       const resident: Array<string> = [];
       const report = yield* runSweep({
@@ -262,7 +262,9 @@ describe("HermesProactiveService", () => {
         resident,
       });
       assert.equal(report.providers[0]?.enabledJobCount, 0);
-      assert.deepEqual(resident, []);
+      // Residency also carries a prompt another Hermes client sends to the same
+      // session, which a profile with no live cron job still has.
+      assert.deepEqual(resident, ["thread:a"]);
     }),
   );
 
@@ -284,7 +286,7 @@ describe("HermesProactiveService", () => {
       });
       assert.isTrue(
         report.providers[0]?.diagnostics.some((diagnostic) =>
-          diagnostic.includes("does not expose cron.read"),
+          diagnostic.includes("does not implement cron"),
         ),
       );
     }),
@@ -371,10 +373,10 @@ describe("HermesProactiveService missed runs", () => {
         assert.equal(after.witnessed.length, 1);
         assert.equal(after.witnessed[0]?.eventKind, "cron.run.missed");
         assert.equal(after.witnessed[0]?.threadId, "thread:b");
-        assert.equal(after.witnessed[0]?.runIdentity, "inbox:t2");
+        assert.equal(after.witnessed[0]?.runIdentity, "inbox:t2:unknown");
         assert.isTrue(
           report.providers[0]?.diagnostics.some((diagnostic) =>
-            diagnostic.includes("without T3 watching"),
+            diagnostic.includes("added to the inbox"),
           ),
         );
       }),
@@ -421,7 +423,73 @@ describe("HermesProactiveService missed runs", () => {
         ];
         yield* service.sweep();
         assert.equal(witnessed.length, 1);
-        assert.equal(witnessed[0]?.runIdentity, "inbox:t2");
+        assert.equal(witnessed[0]?.runIdentity, "inbox:t2:unknown");
+      }),
+    ),
+  );
+
+  it.effect("leads with the failure when Hermes says the run failed", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        const gateway: MutableGateway = {
+          jobs: [{ name: "nightly", enabled: true, last_run_at: "t1", last_status: "success" }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: false });
+        yield* service.sweep();
+
+        gateway.jobs = [
+          {
+            name: "nightly",
+            enabled: true,
+            last_run_at: "t2",
+            last_status: "error",
+            last_error: "RuntimeError: HTTP 429: The usage limit has been reached",
+          },
+        ];
+        const report = yield* service.sweep();
+
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.eventKind, "cron.run.failed");
+        assert.equal(witnessed[0]?.title, "“nightly” failed");
+        assert.equal(
+          witnessed[0]?.body,
+          "RuntimeError: HTTP 429: The usage limit has been reached",
+        );
+        assert.isTrue(
+          report.providers[0]?.diagnostics.some((diagnostic) =>
+            diagnostic.includes("1 of them failed"),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("announces a retry at the same reported time that ended differently", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        const gateway: MutableGateway = {
+          jobs: [{ name: "nightly", enabled: true, last_run_at: "t1", last_status: "running" }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: false });
+        yield* service.sweep();
+
+        // The run time never moves, only the outcome. Keying on time alone
+        // would swallow this entirely.
+        gateway.jobs = [
+          { name: "nightly", enabled: true, last_run_at: "t1", last_status: "error" },
+        ];
+        yield* service.sweep();
+
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.runIdentity, "nightly:t1:error");
+
+        // A sweep that finds nothing new says nothing.
+        yield* service.sweep();
+        assert.equal(witnessed.length, 1);
       }),
     ),
   );

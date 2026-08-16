@@ -2001,6 +2001,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     let refName: string | null = null;
     let upstreamRef: string | null = null;
+    let sawDivergence = false;
     let aheadCount = 0;
     let behindCount = 0;
     let aheadOfDefaultCount = 0;
@@ -2023,6 +2024,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (line.startsWith("# branch.ab ")) {
         const value = line.slice("# branch.ab ".length).trim();
         const parsed = parseBranchAb(value);
+        sawDivergence = true;
         aheadCount = parsed.ahead;
         behindCount = parsed.behind;
         continue;
@@ -2034,6 +2036,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
+    // A branch whose remote was deleted keeps its tracking config, so git still
+    // prints `# branch.upstream` for it — but it drops `# branch.ab`, because
+    // there is no ref left to count against. Reading that absence as "0 ahead,
+    // 0 behind" is what made T3 report a merged-and-deleted branch as up to
+    // date, skip the push, and then ask the host to open a change request for a
+    // head it had never pushed. The ref being gone is the same situation as
+    // having no upstream at all, and is handled as one.
+    const upstreamGone = upstreamRef !== null && !sawDivergence;
+    const trackedUpstreamRef = upstreamGone ? null : upstreamRef;
+
     const isDefaultBranch =
       refName !== null &&
       (refName === defaultBranch ||
@@ -2044,12 +2056,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // `computeAheadCountAgainstBase`: a ref with no upstream to count against,
     // or any ref that is not the default one.
     const baseRef =
-      refName !== null && (upstreamRef === null || !isDefaultBranch)
+      refName !== null && (trackedUpstreamRef === null || !isDefaultBranch)
         ? yield* resolveBaseBranchForNoUpstream(cwd, refName).pipe(Effect.orElseSucceed(() => null))
         : null;
 
     const fallbackAheadCount =
-      !upstreamRef && refName
+      !trackedUpstreamRef && refName
         ? baseRef === null
           ? 0
           : yield* countCommitsAgainstBase(cwd, baseRef).pipe(Effect.orElseSucceed(() => 0))
@@ -2119,7 +2131,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       hasOriginRemote: hasPrimaryRemote,
       isDefaultBranch,
       branch: refName,
-      upstreamRef,
+      upstreamRef: trackedUpstreamRef,
       hasWorkingTreeChanges,
       workingTree: {
         files,
@@ -2127,7 +2139,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         deletions,
       },
       branchDiff,
-      hasUpstream: upstreamRef !== null,
+      hasUpstream: trackedUpstreamRef !== null,
       aheadCount,
       behindCount,
       aheadOfDefaultCount,

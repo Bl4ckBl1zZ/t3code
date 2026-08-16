@@ -12,7 +12,7 @@ import {
   HermesProactiveEventRepository,
   layer as repositoryLayer,
 } from "./HermesProactiveEventRepository.ts";
-import { describeWitnessedRun, make } from "./HermesProactiveInbox.ts";
+import { describeScheduledRun, describeScheduledRunBody, make } from "./HermesProactiveInbox.ts";
 
 const PROVIDER_INSTANCE_ID = "hermes_main";
 const PROFILE_KEY = "work";
@@ -170,15 +170,53 @@ describe("HermesProactiveInbox", () => {
   );
 });
 
-describe("describeWitnessedRun", () => {
-  it("names the job when the gateway gave it one", () => {
+describe("describeScheduledRun", () => {
+  it("leads with the outcome, and names the job when the gateway gave it one", () => {
     assert.strictEqual(
-      describeWitnessedRun({ jobName: "inbox sweep", missed: true }),
-      "“inbox sweep” ran while T3 was closed",
+      describeScheduledRun({ jobName: "inbox sweep", outcome: "failed" }),
+      "“inbox sweep” failed",
     );
     assert.strictEqual(
-      describeWitnessedRun({ jobName: null, missed: false }),
-      "A scheduled Hermes job finished a run",
+      describeScheduledRun({ jobName: "inbox sweep", outcome: "succeeded" }),
+      "“inbox sweep” finished a run",
+    );
+    assert.strictEqual(
+      describeScheduledRun({ jobName: null, outcome: "unknown" }),
+      "A scheduled Hermes job ran",
+    );
+  });
+});
+
+describe("describeScheduledRunBody", () => {
+  it("carries the gateway's own reason when it gave one", () => {
+    assert.strictEqual(
+      describeScheduledRunBody({
+        outcome: "failed",
+        error: "RuntimeError: HTTP 429: The usage limit has been reached",
+        hasThread: false,
+      }),
+      "RuntimeError: HTTP 429: The usage limit has been reached",
+    );
+  });
+
+  it("truncates a reason too long to sit in a notification", () => {
+    const body = describeScheduledRunBody({
+      outcome: "failed",
+      error: "x".repeat(400),
+      hasThread: false,
+    });
+    assert.isTrue(body.endsWith("…"));
+    assert.isBelow(body.length, 400);
+  });
+
+  it("says where to look when the gateway reported no reason", () => {
+    assert.include(
+      describeScheduledRunBody({ outcome: "failed", error: null, hasThread: false }),
+      "Import this profile's Hermes sessions",
+    );
+    assert.include(
+      describeScheduledRunBody({ outcome: "succeeded", error: null, hasThread: true }),
+      "Open the thread",
     );
   });
 });

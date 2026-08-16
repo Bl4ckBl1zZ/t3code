@@ -1,5 +1,6 @@
 import {
   HermesProactiveInboxError,
+  type HermesCronRunOutcome,
   type HermesProactiveInboxSnapshot,
   type HermesProactiveMarkNotificationsInput,
   type HermesProactiveMarkNotificationsResult,
@@ -135,12 +136,59 @@ const isInboxError = Schema.is(HermesProactiveInboxError);
  * thread title is not available here, so the job's own words are used: the
  * prompt a cron job carries is what the user typed when they scheduled it.
  */
-export function describeWitnessedRun(input: {
+/**
+ * Titles a run T3 learned about from the schedule rather than from watching it.
+ *
+ * How the run ended leads, because that is the part worth interrupting someone
+ * for. "Ran while T3 was closed" reads as routine, which is exactly wrong for a
+ * job that has been failing every four hours since Tuesday.
+ */
+export function describeScheduledRun(input: {
   readonly jobName: string | null;
-  readonly missed: boolean;
+  readonly outcome: HermesCronRunOutcome;
 }): string {
   const subject = input.jobName === null ? "A scheduled Hermes job" : `“${input.jobName}”`;
-  return input.missed ? `${subject} ran while T3 was closed` : `${subject} finished a run`;
+  switch (input.outcome) {
+    case "failed":
+      return `${subject} failed`;
+    case "succeeded":
+      return `${subject} finished a run`;
+    case "running":
+      return `${subject} is running`;
+    case "unknown":
+      return `${subject} ran`;
+  }
+}
+
+/** How much of a run's error travels with its notification. */
+const RUN_ERROR_SUMMARY_LIMIT = 240;
+
+export function describeScheduledRunBody(input: {
+  readonly outcome: HermesCronRunOutcome;
+  readonly error: string | null;
+  readonly hasThread: boolean;
+}): string {
+  const error = input.error?.trim();
+  if (error !== undefined && error.length > 0) {
+    return error.length > RUN_ERROR_SUMMARY_LIMIT
+      ? `${error.slice(0, RUN_ERROR_SUMMARY_LIMIT).trimEnd()}…`
+      : error;
+  }
+  // The cron inventory carries an outcome but no transcript, and a scheduled
+  // run executes in its own session rather than a thread. Importing that
+  // session is how the run's actual output becomes readable, so an entry with
+  // nothing else to say points there.
+  const where = input.hasThread
+    ? "Open the thread for what Hermes kept."
+    : "Import this profile's Hermes sessions to read what it did.";
+  switch (input.outcome) {
+    case "failed":
+      return `Hermes reported this run as failed without a reason. ${where}`;
+    case "running":
+      return `Hermes still has this run in flight. ${where}`;
+    default:
+      return `T3 was not watching when this run finished. ${where}`;
+  }
 }
 
 export interface HermesProactiveInboxOptions {

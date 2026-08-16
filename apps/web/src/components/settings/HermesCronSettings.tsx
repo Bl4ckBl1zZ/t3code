@@ -66,6 +66,42 @@ const EMPTY_DRAFT: Draft = {
   prompt: "",
 };
 
+/** Gateways report either an ISO string or epoch seconds; both render here. */
+function formatCronTimestamp(value: string | number): string {
+  const parsed = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * How the job's most recent run ended.
+ *
+ * A schedule that keeps firing and keeps failing looks identical to a healthy
+ * one without this line, which is how a week of quota errors can go unnoticed.
+ */
+function HermesCronLastRun({ job }: { readonly job: HermesCronJob }) {
+  if (job.lastRunAt === null) {
+    return <p className="text-[11px] text-muted-foreground">Has not run yet.</p>;
+  }
+  const failed = job.lastOutcome === "failed";
+  return (
+    <div className="space-y-1">
+      <p className={`text-[11px] ${failed ? "text-destructive" : "text-muted-foreground"}`}>
+        Last run {formatCronTimestamp(job.lastRunAt)}
+        {job.lastOutcome === "unknown" ? null : <> · {job.lastOutcome}</>}
+      </p>
+      {failed && job.lastError !== null ? (
+        <p className="line-clamp-2 font-mono text-[11px] text-destructive/80">{job.lastError}</p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Proactive delivery is what makes a Hermes-side run (a cron job, or a prompt
  * from another Hermes client) appear in the T3 thread without anyone sending a
@@ -87,8 +123,9 @@ function HermesProactiveStatus() {
   return (
     <SettingsSection title="Proactive delivery" icon={<RadioIcon className="size-3.5" />}>
       <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
-        When proactive mode is on, T3 keeps Hermes threads subscribed so runs that start on the
-        gateway stream into the conversation on their own.
+        T3 checks the Hermes schedule on an interval and adds every run it finds to the inbox, with
+        how the run ended. When proactive mode is on it also keeps Hermes threads subscribed, so
+        work started on the gateway streams into the conversation on its own.
       </div>
       {query.error ? (
         <div className="px-5 py-4 text-xs text-destructive">{query.error}</div>
@@ -109,7 +146,9 @@ function HermesProactiveStatus() {
                 </Badge>
                 {provider.source ? (
                   <Badge variant={provider.source.state === "ready" ? "success" : "outline"}>
-                    {provider.source.state === "ready" ? "Durable replay" : "Live only"}
+                    {/* Whether a run T3 was not connected for can be streamed
+                        back in full. Either way its outcome is reported. */}
+                    {provider.source.state === "ready" ? "Replays transcripts" : "Reports runs"}
                   </Badge>
                 ) : null}
                 <span className="text-[11px] text-muted-foreground">
@@ -549,15 +588,16 @@ export function HermesCronSettings() {
                             </div>
                             <p className="font-mono text-[11px] text-muted-foreground">
                               {job.schedule ?? "Schedule unavailable"}
+                              {job.nextRunAt === null ? null : (
+                                <> · next {formatCronTimestamp(job.nextRunAt)}</>
+                              )}
                             </p>
                             {job.prompt ? (
                               <p className="line-clamp-2 text-xs text-muted-foreground">
                                 {job.prompt}
                               </p>
                             ) : null}
-                            <p className="text-[11px] text-muted-foreground">
-                              Executions: {job.executions.length}
-                            </p>
+                            <HermesCronLastRun job={job} />
                           </div>
                           <div className="flex items-start gap-1">
                             {provider.capabilities.edit ? (

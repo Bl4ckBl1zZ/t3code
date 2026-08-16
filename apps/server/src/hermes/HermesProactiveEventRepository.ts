@@ -110,6 +110,8 @@ export interface HermesCronRunWatermark {
   readonly jobIdentity: string;
   readonly jobName: string | null;
   readonly lastRunAt: string | null;
+  /** Verbatim gateway status for that run, so an outcome change is visible. */
+  readonly lastStatus: string | null;
   readonly threadId: string | null;
 }
 
@@ -265,6 +267,7 @@ interface CronWatermarkRow {
   readonly provider_instance_id: string;
   readonly profile_key: string;
   readonly job_identity: string;
+  readonly last_status: string | null;
   readonly job_name: string | null;
   readonly last_run_at: string | null;
   readonly thread_id: string | null;
@@ -1041,6 +1044,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
           job_identity,
           job_name,
           last_run_at,
+          last_status,
           thread_id
         FROM hermes_cron_run_watermarks
         WHERE provider_instance_id = ${input.providerInstanceId}
@@ -1053,6 +1057,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
               jobIdentity: row.job_identity,
               jobName: row.job_name,
               lastRunAt: row.last_run_at,
+              lastStatus: row.last_status,
               threadId: row.thread_id,
             })),
           ),
@@ -1075,6 +1080,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
                   job_identity,
                   job_name,
                   last_run_at,
+                  last_status,
                   thread_id,
                   updated_at
                 )
@@ -1084,6 +1090,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
                   ${watermark.jobIdentity},
                   ${watermark.jobName},
                   ${watermark.lastRunAt},
+                  ${watermark.lastStatus},
                   ${watermark.threadId},
                   ${input.now}
                 )
@@ -1091,6 +1098,7 @@ export const layer: Layer.Layer<HermesProactiveEventRepository, never, SqlClient
                 DO UPDATE SET
                   job_name = excluded.job_name,
                   last_run_at = excluded.last_run_at,
+                  last_status = excluded.last_status,
                   thread_id = excluded.thread_id,
                   updated_at = excluded.updated_at
               `,

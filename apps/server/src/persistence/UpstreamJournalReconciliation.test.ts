@@ -183,9 +183,12 @@ freshDatabase()("renumbered fork journal", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations();
-      // A patched build renumbered the fork migrations to 56+ in the journal.
+      // A patched build renumbered the fork migrations in the journal. The
+      // shift has to clear the real id range in one statement, or it collides
+      // with a row it has not moved yet — so it is far larger than the number
+      // of migrations rather than just past today's last one.
       yield* sql`
-        UPDATE effect_sql_migrations SET migration_id = migration_id + 20
+        UPDATE effect_sql_migrations SET migration_id = migration_id + 1000
         WHERE migration_id >= 36
       `;
 
@@ -195,11 +198,11 @@ freshDatabase()("renumbered fork journal", (it) => {
         SELECT migration_id, name FROM effect_sql_migrations
         WHERE migration_id >= 36 ORDER BY migration_id
       `;
-      assert.strictEqual(journal.length, 20);
+      assert.strictEqual(journal.length, 21);
       assert.deepStrictEqual(journal[0], { migration_id: 36, name: "OrchestrationV2" });
-      assert.deepStrictEqual(journal[19], {
-        migration_id: 55,
-        name: "WorktreeRetentionLifecycle",
+      assert.deepStrictEqual(journal[20], {
+        migration_id: 56,
+        name: "HermesCronRunOutcome",
       });
     }),
   );
@@ -217,7 +220,7 @@ freshDatabase()("partially migrated fork database", (it) => {
       const journal = yield* sql<{ readonly n: number }>`
         SELECT COUNT(*) AS n FROM effect_sql_migrations WHERE migration_id >= 36
       `;
-      assert.deepStrictEqual(journal, [{ n: 20 }]);
+      assert.deepStrictEqual(journal, [{ n: 21 }]);
 
       const hermes = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hermes_session_bindings'

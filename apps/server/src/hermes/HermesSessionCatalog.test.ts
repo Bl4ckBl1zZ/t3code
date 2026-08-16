@@ -13,8 +13,8 @@ import { HermesServeRuntimeError } from "./HermesServeRuntime.ts";
 const supportedCompatibility: HermesGatewayCompatibility = {
   status: "supported",
   protocol: { major: 1, minor: 0 },
-  capabilities: ["profile.import", "session.lifecycle"],
-  inventory: ["profile.import", "session.lifecycle"],
+  capabilities: ["session.lifecycle", "session.history"],
+  inventory: ["session.lifecycle", "session.history"],
   reason: "complete negotiation",
 };
 
@@ -89,7 +89,7 @@ describe("HermesSessionCatalog", () => {
     }),
   );
 
-  effectIt.effect("rejects gateways that do not advertise profile.import before listing", () =>
+  effectIt.effect("rejects gateways that cannot read a transcript before listing", () =>
     Effect.gen(function* () {
       const fake = makeFakeClient({
         ...supportedCompatibility,
@@ -102,12 +102,12 @@ describe("HermesSessionCatalog", () => {
       });
       const error = yield* Effect.flip(catalog.list(10));
       expect(error.code).toBe("import_failed");
-      expect(error.message).toContain("profile.import");
+      expect(error.message).toContain("session.history");
       expect(fake.calls).toEqual(["connect", "close"]);
     }),
   );
 
-  effectIt.effect("rejects legacy gateways without a negotiated inventory before listing", () =>
+  effectIt.effect("rejects gateways that implement no session methods at all", () =>
     Effect.gen(function* () {
       const fake = makeFakeClient({
         status: "legacy",
@@ -122,8 +122,29 @@ describe("HermesSessionCatalog", () => {
       });
       const error = yield* Effect.flip(catalog.list(10));
       expect(error.code).toBe("import_failed");
-      expect(error.message).toContain("evidence-backed");
+      expect(error.message).toContain("session.lifecycle");
       expect(fake.calls).toEqual(["connect", "close"]);
+    }),
+  );
+
+  effectIt.effect("imports from a legacy gateway that proved the session methods", () =>
+    Effect.gen(function* () {
+      // The shipped Hermes build advertises nothing and implements everything
+      // import needs. Holding it to a negotiated inventory made the whole
+      // feature unreachable.
+      const fake = makeFakeClient({
+        status: "legacy",
+        protocol: null,
+        capabilities: ["session.lifecycle", "session.history"],
+        inventory: null,
+        reason: "legacy",
+      });
+      const catalog = makeHermesSessionCatalog({
+        ...catalogInput,
+        clientFactory: () => fake.client,
+      });
+      yield* catalog.list(10);
+      expect(fake.calls).toEqual(["connect", "listSessions", "close"]);
     }),
   );
 

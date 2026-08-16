@@ -130,8 +130,12 @@ export type HermesProactiveEventProvenance = typeof HermesProactiveEventProvenan
  * because the pinned protocol offers nothing to replay it from.
  */
 export const HermesProactiveEventKinds = {
+  /** A run T3 saw stream on a session it was subscribed to. */
   cronRunWitnessed: "cron.run.witnessed",
+  /** A run T3 learned about only from the job's run time moving. */
   cronRunMissed: "cron.run.missed",
+  /** A reported run that Hermes says ended badly, whichever way T3 heard. */
+  cronRunFailed: "cron.run.failed",
 } as const;
 
 export const HermesProactiveEvent = Schema.Struct({
