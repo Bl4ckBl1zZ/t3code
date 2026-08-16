@@ -124,10 +124,10 @@ provider conversation. The storage contract is `VcsCheckpointOps` in
 ## Startup
 
 [`serverRuntimeStartup.ts`][startup] runs a fixed lifecycle: start keybindings, settings, and
-reactors; publish welcome; signal command readiness (logged as `Accepting commands`); wait for the
-HTTP listener via `markHttpListening`; publish ready; fork the heartbeat; then either print headless
-output or open the browser. Command readiness precedes the listener, so a socket that opens can
-already dispatch.
+reactors; park durable maintenance such as worktree retention until activation; publish welcome;
+signal command readiness (logged as `Accepting commands`); wait for the HTTP listener via
+`markHttpListening`; publish ready; fork the heartbeat; then either print headless output or open the
+browser. Command readiness precedes the listener, so a socket that opens can already dispatch.
 
 ## Related
 

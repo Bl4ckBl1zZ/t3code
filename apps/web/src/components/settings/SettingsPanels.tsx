@@ -153,6 +153,7 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { WorktreeRetentionSettingsSection } from "./WorktreeRetentionSettingsSection";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   backgroundActivitySharedPolicySettings,
@@ -667,6 +668,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
+  const isWorktreeRetentionDirty = !Equal.equals(
+    settings.worktreeRetention,
+    DEFAULT_UNIFIED_SETTINGS.worktreeRetention,
+  );
 
   const changedSettingLabels = useMemo(
     () => [
@@ -715,6 +720,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Provider update checks"]
         : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
+      ...(isWorktreeRetentionDirty ? ["Worktree retention"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
         : []),
@@ -739,6 +745,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     [
       isTextGenerationModelDirty,
       isBackgroundActivityDirty,
+      isWorktreeRetentionDirty,
       settings.autoOpenPlanSidebar,
       settings.alwaysExpandActivity,
       settings.confirmQuit,
@@ -850,6 +857,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
+      worktreeRetention: DEFAULT_UNIFIED_SETTINGS.worktreeRetention,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
@@ -2420,6 +2428,8 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <WorktreeRetentionSettingsSection />
 
         <SettingsRow
           {...searchableSetting("add-project-starts-in")}

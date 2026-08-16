@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -36,6 +37,75 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
+  });
+});
+
+describe("ServerSettings worktree retention", () => {
+  it("defaults to disabled with no deletion predicates", () => {
+    const settings = decodeServerSettings({});
+
+    expect(settings.worktreeRetention.mode).toBe("off");
+    expect(settings.worktreeRetention.schemaVersion).toBe(1);
+    expect(settings.worktreeRetention.maxAge).toBeNull();
+    expect(settings.worktreeRetention.staleAfter).toBeNull();
+    expect(settings.worktreeRetention.deleteOnPullRequestMerge).toBe(false);
+    expect(Duration.toMillis(settings.worktreeRetention.scanInterval)).toBe(86_400_000);
+  });
+
+  it("accepts a complete retention patch with duration values", () => {
+    const patch = decodeServerSettingsPatch({
+      worktreeRetention: {
+        schemaVersion: 1,
+        mode: "report",
+        maxAge: 30 * 86_400_000,
+        staleAfter: null,
+        deleteOnPullRequestMerge: true,
+        scanInterval: 6 * 3_600_000,
+      },
+    });
+
+    expect(patch.worktreeRetention?.mode).toBe("report");
+    expect(Duration.toMillis(patch.worktreeRetention?.maxAge ?? Duration.zero)).toBe(
+      30 * 86_400_000,
+    );
+    expect(patch.worktreeRetention?.staleAfter).toBeNull();
+    expect(patch.worktreeRetention?.deleteOnPullRequestMerge).toBe(true);
+    expect(Duration.toMillis(patch.worktreeRetention?.scanInterval ?? Duration.zero)).toBe(
+      6 * 3_600_000,
+    );
+  });
+
+  it("rejects unsupported retention modes", () => {
+    expect(() =>
+      decodeServerSettingsPatch({
+        worktreeRetention: { mode: "purge" },
+      }),
+    ).toThrow();
+  });
+
+  it.each([0, -1])("rejects non-positive retention durations: %s", (duration) => {
+    expect(() =>
+      decodeServerSettingsPatch({
+        worktreeRetention: { maxAge: duration },
+      }),
+    ).toThrow();
+  });
+
+  it.each([1, 59 * 60 * 1_000, 8 * 24 * 60 * 60 * 1_000])(
+    "rejects an unsafe scan interval: %s",
+    (scanInterval) => {
+      expect(() => decodeServerSettingsPatch({ worktreeRetention: { scanInterval } })).toThrow();
+    },
+  );
+
+  it("accepts the one-hour scan interval floor", () => {
+    expect(
+      Duration.toMillis(
+        decodeServerSettingsPatch({
+          worktreeRetention: { scanInterval: 60 * 60 * 1_000 },
+        }).worktreeRetention!.scanInterval!,
+      ),
+    ).toBe(60 * 60 * 1_000);
   });
 });
 

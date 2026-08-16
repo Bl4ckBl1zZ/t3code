@@ -51,6 +51,17 @@ export class AssetWorkspaceContextNotFoundError extends Schema.TaggedErrorClass<
   }
 }
 
+export class AssetWorkspacePurgedError extends Schema.TaggedErrorClass<AssetWorkspacePurgedError>()(
+  "AssetWorkspacePurgedError",
+  {
+    resource: AssetResource,
+  },
+) {
+  override get message(): string {
+    return "The thread worktree was purged; send a message or reopen the thread before opening workspace files.";
+  }
+}
+
 export class AssetWorkspaceContextResolutionError extends Schema.TaggedErrorClass<AssetWorkspaceContextResolutionError>()(
   "AssetWorkspaceContextResolutionError",
   {
@@ -204,6 +215,7 @@ export class AssetSigningKeyLoadError extends Schema.TaggedErrorClass<AssetSigni
 
 export const AssetAccessError = Schema.Union([
   AssetWorkspaceContextNotFoundError,
+  AssetWorkspacePurgedError,
   AssetWorkspaceContextResolutionError,
   AssetWorkspaceRootNormalizationError,
   AssetWorkspacePathValidationError,

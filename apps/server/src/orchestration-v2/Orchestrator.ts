@@ -942,6 +942,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       interactionMode: command.interactionMode,
       branch: command.branch,
       worktreePath: command.worktreePath,
+      worktreeStatus: command.worktreePath === null ? "none" : "present",
       activeProviderThreadId: null,
       lineage: {
         parentThreadId: null,
@@ -1239,6 +1240,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.title === undefined ? {} : { title: command.title }),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            ...(command.worktreeStatus === undefined
+              ? command.worktreePath === undefined
+                ? {}
+                : {
+                    worktreeStatus:
+                      command.worktreePath === null && thread.worktreeStatus === "purged"
+                        ? "purged"
+                        : command.worktreePath === null
+                          ? "none"
+                          : "present",
+                  }
+              : { worktreeStatus: command.worktreeStatus }),
             // regenerateTitle: true arms the in-flight marker; a landing title
             // or an explicit false (generation failed/abandoned) clears it.
             ...(command.regenerateTitle === true

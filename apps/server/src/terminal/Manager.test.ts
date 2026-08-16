@@ -297,6 +297,19 @@ it.layer(
     }),
   );
 
+  it.effect("reports active terminal use by thread", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      yield* manager.open(openInput());
+
+      assert.strictEqual(yield* manager.hasActiveSessionForThread("thread-1"), true);
+      assert.strictEqual(yield* manager.hasActiveSessionForThread("thread-2"), false);
+
+      yield* manager.close({ threadId: "thread-1" });
+      assert.strictEqual(yield* manager.hasActiveSessionForThread("thread-1"), false);
+    }),
+  );
+
   it.effect("attaches to running sessions without restarting them", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();

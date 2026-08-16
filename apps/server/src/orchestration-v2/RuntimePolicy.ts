@@ -62,11 +62,20 @@ export class RuntimePolicyV2 extends Context.Service<RuntimePolicyV2, RuntimePol
  */
 export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2, {
   resolve: (input) =>
-    Effect.succeed({
-      runtimeMode: input.thread.runtimeMode,
-      interactionMode: input.thread.interactionMode,
-      cwd: input.thread.worktreePath,
-    }),
+    input.thread.worktreeStatus === "purged"
+      ? Effect.fail(
+          new RuntimePolicyResolveError({
+            projectId: input.thread.projectId,
+            providerInstanceId: input.modelSelection.instanceId,
+            cause:
+              "The thread worktree was purged and must be reprovisioned before the turn starts.",
+          }),
+        )
+      : Effect.succeed({
+          runtimeMode: input.thread.runtimeMode,
+          interactionMode: input.thread.interactionMode,
+          cwd: input.thread.worktreePath,
+        }),
 });
 
 export const layerFromProjectRepository: Layer.Layer<
@@ -79,6 +88,14 @@ export const layerFromProjectRepository: Layer.Layer<
     const projects = yield* ProjectionProjects.ProjectionProjectRepository;
     return RuntimePolicyV2.of({
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
+        if (input.thread.worktreeStatus === "purged") {
+          return yield* new RuntimePolicyResolveError({
+            projectId: input.thread.projectId,
+            providerInstanceId: input.modelSelection.instanceId,
+            cause:
+              "The thread worktree was purged and must be reprovisioned before the turn starts.",
+          });
+        }
         const cwd =
           input.thread.worktreePath ??
           (yield* projects.getById({ projectId: input.thread.projectId }).pipe(

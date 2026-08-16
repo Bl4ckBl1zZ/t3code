@@ -41,6 +41,7 @@ import {
   writeMissingProjectFiles,
 } from "./project/T3ProjectFileBackfill.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as WorktreeRetentionService from "./worktree/WorktreeRetentionService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -390,6 +391,7 @@ export const make = (options?: StartupOptions) =>
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const worktreeRetention = yield* WorktreeRetentionService.WorktreeRetentionService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
@@ -454,6 +456,10 @@ export const make = (options?: StartupOptions) =>
           ),
         ),
       );
+
+      // Retention is a durable mutator, so a managed-update trial must park it
+      // until the activation boundary just like the orchestration worker.
+      yield* forkParked(runStartupPhase("worktree-retention.start", worktreeRetention.start));
 
       // Runs against settled settings, and only ever writes on the first boot
       // after proactive mode became the default: an instance stored under the

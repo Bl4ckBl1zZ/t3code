@@ -1083,6 +1083,9 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         branch: "feature/v2",
         worktreePath: "/tmp/t3-v2-worktree",
       });
+      const projectionAfterWorkspaceUpdate = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projectionAfterWorkspaceUpdate.thread.worktreePath, "/tmp/t3-v2-worktree");
+      assert.equal(projectionAfterWorkspaceUpdate.thread.worktreeStatus, "present");
       const staleWorkspaceUpdate = yield* orchestrator
         .dispatch({
           type: "thread.metadata.update",
@@ -1216,6 +1219,44 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(projection.thread.modelSelection.model, "gpt-5.5");
       assert.isNotNull(projection.thread.archivedAt);
       assert.isNotNull(projection.thread.deletedAt);
+    }),
+  );
+
+  it.effect("preserves purged status on a legacy null worktree update", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-legacy-null-purged-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-legacy-null-purged-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-legacy-null-purged-project"),
+        title: "Legacy null purged thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/legacy-null-purged",
+        worktreePath: "/tmp/runtime-layer-legacy-null-purged",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-legacy-null-purged-mark"),
+        threadId,
+        worktreePath: null,
+        worktreeStatus: "purged",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-legacy-null-purged-update"),
+        threadId,
+        worktreePath: null,
+      });
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(projection.thread.worktreePath);
+      assert.equal(projection.thread.worktreeStatus, "purged");
     }),
   );
 
