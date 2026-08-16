@@ -78,14 +78,29 @@ describe("Hermes operational onboarding and gates", () => {
       requested: true,
       available: true,
     });
+    // Import spends the session methods this gateway proved, so it is on.
     expect(diagnostics.find((entry) => entry.feature === "import")).toMatchObject({
       requested: true,
-      available: false,
-      missingCapabilities: ["profile.import"],
+      available: true,
     });
+    // Proactive needs to reach the scheduler, which this gateway has not shown.
     expect(diagnostics.find((entry) => entry.feature === "proactive")).toMatchObject({
       requested: true,
       available: false,
+      missingCapabilities: ["cron.read"],
+    });
+  });
+
+  it("keeps import off when the gateway cannot read a transcript back", () => {
+    const enabled = decodeHermesSettings({ ...settings, importEnabled: true });
+    const diagnostics = projectHermesFeatureDiagnostics(enabled, {
+      ...supported,
+      capabilities: ["session.lifecycle"],
+    });
+    expect(diagnostics.find((entry) => entry.feature === "import")).toMatchObject({
+      requested: true,
+      available: false,
+      missingCapabilities: ["session.history"],
     });
   });
 

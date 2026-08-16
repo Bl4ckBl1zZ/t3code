@@ -3,10 +3,10 @@ import Foundation
 // Ported from packages/contracts/src/hermesProactive.ts and the section
 // apps/web/src/components/settings/HermesCronSettings.tsx renders.
 //
-// Hermes owns its own scheduler, so a cron job keeps firing whether or not T3
-// is open. These are the runs T3 noticed that nobody was waiting for: the
-// transcript already went into its thread, and this is what says so anywhere
-// else.
+// Hermes owns its own scheduler, and a scheduled run executes in its own
+// short-lived session rather than in a thread T3 is subscribed to. These are the
+// runs the server noticed by watching the schedule, carrying how each one ended
+// — which for a failing job is the only place that failure surfaces.
 
 public enum FeatureHermesRunStatus: String, Sendable, Equatable, CaseIterable {
     case unread

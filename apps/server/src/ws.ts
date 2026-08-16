@@ -9,7 +9,6 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -450,15 +449,11 @@ const makeWsRpcLayer = (
       const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
       const hermesProactiveInbox = yield* HermesProactiveInbox;
-      const hermesProactive = yield* HermesProactive.make({ inbox: hermesProactiveInbox });
-      // Hermes only streams a cron run to clients that are connected when it
-      // fires, so residency is re-established on an interval for as long as
-      // the server runs.
-      yield* hermesProactive.sweep().pipe(
-        Effect.catchCause((cause) => Effect.logWarning("hermes.proactive.sweep-failed", { cause })),
-        Effect.repeat(Schedule.spaced(HermesProactive.SWEEP_INTERVAL)),
-        Effect.forkScoped,
-      );
+      // Shared with the server, which owns the sweep fiber. Building one here
+      // would give every connected client its own residency loop and its own
+      // "have I swept before" memory, which is how a live run gets announced
+      // as a missed one.
+      const hermesProactive = yield* HermesProactive.HermesProactiveService;
       const projectService = yield* ProjectService.ProjectService;
       const textGeneration = yield* TextGeneration.TextGeneration;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;

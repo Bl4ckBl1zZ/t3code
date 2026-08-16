@@ -15,6 +15,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import type * as Scope from "effect/Scope";
 
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -25,7 +27,8 @@ import {
   type HermesCronRunWatermark,
 } from "./HermesProactiveEventRepository.ts";
 import {
-  describeWitnessedRun,
+  describeScheduledRun,
+  describeScheduledRunBody,
   HermesProactiveInbox,
   type HermesProactiveInboxShape,
 } from "./HermesProactiveInbox.ts";
@@ -56,6 +59,11 @@ export interface HermesProactiveServiceShape {
    */
   readonly sweep: () => Effect.Effect<HermesProactiveStatusResult>;
   readonly report: () => Effect.Effect<HermesProactiveStatusResult>;
+  /**
+   * Forks the recurring sweep into the caller's scope. Called once, by server
+   * startup, so the schedule keeps being watched with no client connected.
+   */
+  readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }
 
 export class HermesProactiveService extends Context.Service<
@@ -186,16 +194,21 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
     );
 
   /**
-   * Turns a cron job whose last run time moved into an inbox entry, for the
-   * runs T3 had no way of seeing happen.
+   * Turns a cron job whose last run moved into an inbox entry.
    *
-   * Two cases qualify, and nothing else does. The first sweep of a process
-   * covers everything that ran while T3 was closed. After that, a job is only
-   * reported when it names a session T3 is not subscribed to — a run on a
-   * resident session arrives live through the adapter, and reporting it here
-   * as well would ping twice for one run.
+   * Every moved run is reported, not only the ones that happened while T3 was
+   * closed. A Hermes cron job does not run inside the gateway session T3
+   * subscribes to — it spawns its own, finishes, and ends it — so there is no
+   * live stream to double up with, and treating these as the exceptional case
+   * is what let a schedule fail for days without saying so. The one live path
+   * that does exist is a run on a session T3 has resident, which the adapter
+   * announces itself; that stays suppressed here.
+   *
+   * A run is new when its reported time moved, or when the same time now
+   * carries a different outcome — a gateway that retries in place would
+   * otherwise never get to say that the retry failed too.
    */
-  const reconcileMissedRuns = Effect.fn("HermesProactiveService.reconcileMissedRuns")(
+  const reconcileCronRuns = Effect.fn("HermesProactiveService.reconcileCronRuns")(
     function* (input: {
       readonly connection: HermesProviderConnection;
       readonly jobs: ReadonlyArray<HermesGatewayCronJob>;
@@ -224,6 +237,7 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
       const previous = new Map(known.map((entry) => [entry.jobIdentity, entry] as const));
 
       let reported = 0;
+      let failures = 0;
       const watermarks: Array<HermesCronRunWatermark> = [];
       for (const [ordinal, gatewayJob] of input.jobs.entries()) {
         const job = projectHermesCronJob(
@@ -242,6 +256,7 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
           jobIdentity: job.identity,
           jobName: job.name,
           lastRunAt,
+          lastStatus: job.lastStatus,
           threadId,
         });
 
@@ -249,25 +264,34 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
         // A job discovered for the first time reports nothing: its last run
         // predates T3 knowing the job exists, and announcing it would be noise on
         // every fresh install.
-        if (lastRunAt === null || seen === undefined || seen.lastRunAt === lastRunAt) continue;
+        if (lastRunAt === null || seen === undefined) continue;
+        if (seen.lastRunAt === lastRunAt && seen.lastStatus === job.lastStatus) continue;
         const witnessedLive = sessionKey !== null && input.residentSessionKeys.has(sessionKey);
         if (!firstSweep && witnessedLive) continue;
 
+        const runFailed = job.lastOutcome === "failed";
         yield* inbox.witness({
           providerInstanceId: connection.providerInstanceId,
           profileKey: connection.profileKey,
-          runIdentity: `${job.identity}:${lastRunAt}`,
-          eventKind: HermesProactiveEventKinds.cronRunMissed,
-          title: describeWitnessedRun({ jobName: job.name, missed: true }),
-          body:
-            threadId === null
-              ? "T3 was not connected when this run finished, so its transcript is only in Hermes."
-              : "T3 was not connected when this run finished. Open the thread for whatever Hermes kept.",
+          // The status is part of the identity so the same run time reported
+          // with a new outcome is a distinct entry rather than a silent
+          // duplicate of the one already delivered.
+          runIdentity: `${job.identity}:${lastRunAt}:${job.lastStatus ?? "unknown"}`,
+          eventKind: runFailed
+            ? HermesProactiveEventKinds.cronRunFailed
+            : HermesProactiveEventKinds.cronRunMissed,
+          title: describeScheduledRun({ jobName: job.name, outcome: job.lastOutcome }),
+          body: describeScheduledRunBody({
+            outcome: job.lastOutcome,
+            error: job.lastError,
+            hasThread: threadId !== null,
+          }),
           threadId,
           projectId: null,
           occurredAt: input.now,
         });
         reported += 1;
+        if (runFailed) failures += 1;
       }
 
       yield* proactiveRepository.upsertCronWatermarks({ watermarks, now: input.now }).pipe(
@@ -278,7 +302,7 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
           }),
         ),
       );
-      return reported;
+      return { reported, failures };
     },
   );
 
@@ -339,11 +363,11 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
       );
     if (source !== null && source.state === "degraded") {
       diagnostics.push(
-        `This gateway cannot replay events it emitted while T3 was closed (${source.diagnosticCode}). Runs are delivered live only.`,
+        `This gateway cannot stream back events it emitted while T3 was closed (${source.diagnosticCode}). Scheduled runs are still reported from the schedule, and their transcripts can be imported.`,
       );
     }
     if (!probe.success.cronReadable) {
-      diagnostics.push("This gateway does not expose cron.read, so no scheduled jobs were found.");
+      diagnostics.push("This gateway does not implement cron, so no scheduled jobs were found.");
     }
 
     const enabledJobs = probe.success.jobs.filter((job) => hermesCronJobIsEnabled(job));
@@ -353,21 +377,13 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
         return key === null ? [] : [key];
       }),
     );
-    if (enabledJobs.length === 0) {
-      return {
-        providerInstanceId: connection.providerInstanceId,
-        displayName: connection.displayName,
-        profileKey: connection.profileKey,
-        enabled: true,
-        source,
-        enabledJobCount: 0,
-        residentThreads: [],
-        diagnostics,
-      } satisfies HermesProactiveProviderStatus;
-    }
 
+    // Residency is not conditional on there being cron jobs. It is also what
+    // carries a prompt sent to the same session by another Hermes client, and
+    // a profile with no schedule at all still has those.
+    //
     // Read wider than residency needs: the extra rows are what turn a job's
-    // session key into the thread a missed-run notification should open, and
+    // session key into the thread a run notification should open, and
     // residency still only keeps the newest few subscribed.
     const profileBindings = yield* bindings
       .listProfileBindings({
@@ -390,9 +406,9 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
     const targeted = residencyCandidates.filter((binding) =>
       jobSessionKeys.has(binding.storedSessionKey),
     );
-    if (jobSessionKeys.size === 0) {
+    if (enabledJobs.length > 0 && jobSessionKeys.size === 0) {
       diagnostics.push(
-        "Scheduled jobs do not name their session, so the most recent Hermes threads are kept subscribed instead.",
+        "Scheduled runs happen on their own Hermes session, so they are reported from the schedule rather than streamed. The most recent threads stay subscribed for everything else.",
       );
     }
     // Falling back to recency keeps the feature working on gateways whose cron
@@ -418,16 +434,21 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
       diagnostics.push("No Hermes thread could be kept subscribed for this profile.");
     }
 
-    const missed = yield* reconcileMissedRuns({
-      connection,
-      jobs: enabledJobs,
-      threadBySessionKey,
-      residentSessionKeys: new Set(resident.map((thread) => thread.storedSessionKey)),
-      now,
-    });
-    if (missed > 0) {
+    const runs =
+      enabledJobs.length === 0
+        ? { reported: 0, failures: 0 }
+        : yield* reconcileCronRuns({
+            connection,
+            jobs: enabledJobs,
+            threadBySessionKey,
+            residentSessionKeys: new Set(resident.map((thread) => thread.storedSessionKey)),
+            now,
+          });
+    if (runs.reported > 0) {
       diagnostics.push(
-        `${missed} scheduled run(s) finished without T3 watching and were added to the inbox.`,
+        runs.failures > 0
+          ? `${runs.reported} scheduled run(s) were added to the inbox, ${runs.failures} of them failed.`
+          : `${runs.reported} scheduled run(s) were added to the inbox.`,
       );
     }
 
@@ -472,12 +493,21 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
       Effect.flatMap(Ref.get(lastReport), (report) =>
         report.sweptAt === null ? sweep() : Effect.succeed(report),
       ),
+    start: () =>
+      sweep().pipe(
+        Effect.catchCause((cause) => Effect.logWarning("hermes.proactive.sweep-failed", { cause })),
+        Effect.repeat(Schedule.spaced(SWEEP_INTERVAL)),
+        Effect.forkScoped,
+        Effect.asVoid,
+      ),
   });
 });
 
 /**
- * Provided for compositions that resolve the service from context. The RPC
- * layer builds it directly with {@link make} so it can own the sweep fiber's
- * lifetime alongside the other Hermes services.
+ * Server-lifetime. A scheduled run reaches T3 only if something was watching
+ * when it fired, so this cannot be scoped to a client connection: the sweep has
+ * to keep running with every tab closed, and running one copy of it rather than
+ * one per client is what keeps a multi-device setup from re-probing the gateway
+ * N times an interval.
  */
 export const layer = Layer.effect(HermesProactiveService, make());

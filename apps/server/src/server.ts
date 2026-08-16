@@ -39,6 +39,7 @@ import {
   layer as HermesProactiveEventRepositoryLayer,
 } from "./hermes/HermesProactiveEventRepository.ts";
 import { layer as HermesProactiveInboxLayer } from "./hermes/HermesProactiveInbox.ts";
+import { layer as HermesProactiveServiceLayer } from "./hermes/HermesProactiveService.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
 import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -388,9 +389,14 @@ const T3ProjectFileSyncLayerLive = T3ProjectFileSync.layer.pipe(
   Layer.provide(ProjectServiceLayerLive),
 );
 
-const RuntimeCoreDependenciesBaseLive = Layer.merge(
+const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   T3ProjectFileSyncLayerLive,
+  // Server-lifetime, not per-connection: Hermes only streams a run to whoever
+  // is connected when it fires, so residency has to outlive the last client
+  // closing its tab. Built here it also sweeps exactly once per interval
+  // instead of once per interval per client.
+  HermesProactiveServiceLayer,
 ).pipe(
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),

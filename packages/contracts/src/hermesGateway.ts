@@ -630,11 +630,26 @@ export type HermesGatewayInterruptResult = typeof HermesGatewayInterruptResult.T
  */
 export const HermesGatewayCronJob = Schema.Struct({
   id: Schema.optional(Schema.String),
+  // What the shipped gateway actually names the identity column. Both spellings
+  // are accepted because neither is required by the pinned protocol.
+  job_id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   schedule: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
+  // Hermes returns a truncated prompt rather than the whole one. It is the only
+  // prompt text on the wire, so it is what the job carries.
+  prompt_preview: Schema.optional(Schema.String),
   enabled: Schema.optional(Schema.Boolean),
   paused: Schema.optional(Schema.Boolean),
+  // How the last run ended. Without these a failing job is indistinguishable
+  // from a healthy one, which is the difference between noticing six days of
+  // quota errors and not.
+  last_status: Schema.optional(Schema.NullOr(Schema.String)),
+  last_error: Schema.optional(Schema.NullOr(Schema.String)),
+  last_delivery_error: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  paused_reason: Schema.optional(Schema.NullOr(Schema.String)),
+  workdir: Schema.optional(Schema.NullOr(Schema.String)),
   next_run_at: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
   last_run_at: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
   created_at: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
@@ -696,6 +711,14 @@ export const HermesCronExecution = Schema.Struct({
 });
 export type HermesCronExecution = typeof HermesCronExecution.Type;
 
+/**
+ * How the most recent run of a job ended, normalized from whatever the gateway
+ * calls it. `unknown` covers a gateway that reports no status at all, which is
+ * different from a job that has never run (`lastRunAt: null`).
+ */
+export const HermesCronRunOutcome = Schema.Literals(["succeeded", "failed", "running", "unknown"]);
+export type HermesCronRunOutcome = typeof HermesCronRunOutcome.Type;
+
 export const HermesCronJob = Schema.Struct({
   identity: Schema.String,
   identityStrength: Schema.Literals(["id", "name", "missing"]),
@@ -706,6 +729,11 @@ export const HermesCronJob = Schema.Struct({
   enabled: Schema.NullOr(Schema.Boolean),
   nextRunAt: Schema.NullOr(Schema.Union([Schema.String, Schema.Number])),
   lastRunAt: Schema.NullOr(Schema.Union([Schema.String, Schema.Number])),
+  lastOutcome: HermesCronRunOutcome,
+  lastStatus: Schema.NullOr(Schema.String),
+  lastError: Schema.NullOr(Schema.String),
+  state: Schema.NullOr(Schema.String),
+  workdir: Schema.NullOr(Schema.String),
   executions: Schema.Array(HermesCronExecution),
 });
 export type HermesCronJob = typeof HermesCronJob.Type;

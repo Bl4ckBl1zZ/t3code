@@ -2,51 +2,75 @@
 
 Hermes owns its own scheduler. A cron job you create — from a Hermes thread, or
 from **Settings → Hermes cron** — is stored and run by Hermes, not by T3 Code.
-That means the schedule keeps running whether or not T3 Code is open.
 
-This page is about what T3 Code does with those runs when they finish.
+This page is about what T3 Code does with those runs.
 
-## Runs appear in the thread
+## The panel shows what the gateway supports
 
-When proactive mode is on for a Hermes instance, T3 Code keeps that profile's
-Hermes threads subscribed to the gateway. A run that starts without anyone
-sending a message — a cron job firing, or a prompt from a different Hermes
-client on the same session — streams into the thread on its own and is written
-to the transcript like any other turn.
+**Settings → Hermes cron** lists every job on each connected Hermes instance
+with its schedule, its next run, and **how its last run ended**. A job whose
+last run failed is called out in red with the reason Hermes gave, so a schedule
+that has been firing and failing for a week does not read as a healthy one.
 
-## Runs also appear in the inbox
+Which buttons appear depends on the gateway in front of you. T3 asks it which
+cron operations it accepts and offers exactly those — the current Hermes build
+supports create, pause, resume, and delete, and does not implement edit or run
+now, so those two do not appear.
 
-**Settings → Hermes cron → Runs you did not start** lists every run T3 Code
-noticed that nobody was waiting for, newest first, with the first part of the
-reply. Selecting one opens the thread it landed in and marks it read.
+## Runs appear in the inbox
+
+**Settings → Hermes cron → Runs you did not start** lists every run T3 noticed,
+newest first, with how it ended. Selecting one marks it read.
 
 On iPhone and iPad the same list is **Settings → Hermes Runs**, and the row
-carries a badge with the unread count. Tap a run to open its thread; touch and
-hold one to mark it unread or dismiss it.
+carries a badge with the unread count. Tap a run to open it; touch and hold one
+to mark it unread or dismiss it.
 
 Each entry can be marked read or unread, and dismissed or restored, so nothing
 disappears permanently.
 
-## What happens while T3 Code is closed
+T3 finds these by comparing each job's last run against what it recorded on the
+previous check, which happens on an interval for as long as the server is
+running — no client has to be connected and no window has to be open. A run
+that Hermes reports at the same time with a different outcome (a retry that
+also failed, say) is reported again rather than swallowed.
 
-Hermes runs the job as scheduled, but no client is listening. The pinned Hermes
-gateway protocol has no way to replay events after the fact, so T3 Code cannot
-recover those transcripts.
+## Reading what a run actually did
 
-What it does instead: on the first check after starting up, T3 Code compares
-each job's last run time against the value it recorded before. A job whose last
-run moved gets an inbox entry saying it ran while T3 Code was closed. You will
-know it happened and which thread it belongs to; the run's own output stays in
-Hermes.
+A Hermes cron job does not run inside a conversation. Each run spawns its own
+Hermes session, does its work, and ends — which is why a run is reported from
+the schedule rather than streamed into an existing thread.
 
-The same applies to a run that lands on a session T3 Code is not subscribed to.
-Residency is capped per profile, so on a profile with many Hermes threads, a job
-running in a thread outside that set is reported this way rather than streamed.
+Those sessions are still real, and **Settings → Hermes → Import sessions**
+brings them in as T3 threads with their full transcripts. Scheduled runs show up
+there alongside your other Hermes conversations, titled with the job name and
+the time it ran.
+
+## Runs that do stream in
+
+Work Hermes starts on a session T3 is already subscribed to — a prompt sent from
+another Hermes client, or anything the model keeps doing after a turn settles —
+streams into that thread on its own and is written to the transcript like any
+other turn. **Proactive mode** is what keeps those sessions subscribed while
+nobody is looking. Residency is capped per profile, so on a profile with many
+Hermes threads only the most recent are held open.
+
+## Keeping the schedule alive
+
+The schedule runs inside `hermes serve`, so it only fires while that gateway is
+up.
+
+If you start Hermes yourself, it keeps running after you quit T3 Code and your
+jobs keep firing. If instead you let T3 Code launch it — the **Managed server**
+switch on the instance — then the gateway is T3's child process and stops when
+T3 does, taking the schedule with it. Run Hermes yourself if you want jobs to
+fire while T3 Code is closed.
 
 ## What still needs Hermes-side support
 
-The **Proactive delivery** panel labels each instance either **Durable replay**
-or **Live only**. Live only means the gateway does not advertise a durable
-global cron cursor, which is the case for every current Hermes build. Until a
-gateway offers one, T3 Code can report that a missed run happened but cannot
-reconstruct what it said.
+The **Proactive delivery** panel labels each instance either **Replays
+transcripts** or **Reports runs**. Reports runs means the gateway offers no
+durable event cursor — the case for every current Hermes build — so T3 cannot
+stream back the moment-by-moment events of a run it was not connected for. It
+still reports that the run happened and how it ended, and the transcript is
+still importable.

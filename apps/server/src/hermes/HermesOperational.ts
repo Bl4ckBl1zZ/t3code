@@ -68,9 +68,13 @@ export interface HermesImportProgress {
 const FEATURE_CAPABILITIES: Readonly<
   Record<Exclude<HermesFeatureName, "remote" | "attachments">, ReadonlyArray<string>>
 > = {
-  import: ["profile.import"],
+  // Discovery reads `session.list` and opening a shell resumes and reads
+  // history. There is no `profile.import` method in any Hermes build.
+  import: ["session.lifecycle", "session.history"],
   mcp: ["session_mcp"],
-  proactive: ["cron.events.global_cursor", "events.stable_ids"],
+  // Live delivery only needs to reach the scheduler. The durable-replay
+  // capabilities are a separate, still-unmet promise tracked on the source.
+  proactive: ["cron.read"],
   voice: ["voice"],
 };
 

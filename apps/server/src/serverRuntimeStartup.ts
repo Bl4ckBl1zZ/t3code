@@ -33,6 +33,7 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as HermesProactiveService from "./hermes/HermesProactiveService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { hermesProactiveDefaultMigration } from "./hermes/HermesProactiveDefaultMigration.ts";
@@ -388,6 +389,7 @@ export const make = (options?: StartupOptions) =>
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+    const hermesProactive = yield* HermesProactiveService.HermesProactiveService;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -706,6 +708,11 @@ export const make = (options?: StartupOptions) =>
       }),
       Effect.withSpan("server.startup", { kind: "server", root: true }),
     );
+
+    // Independent of the startup phases: watching the Hermes schedule needs no
+    // projection and blocks nothing, and a run that fires during a slow startup
+    // should still be noticed.
+    yield* hermesProactive.start();
 
     yield* Effect.forkScoped(
       Effect.exit(startup).pipe(

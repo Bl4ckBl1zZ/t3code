@@ -98,7 +98,8 @@ non-zero for any failure or any security-critical result that is not `passed`.
 
 Known pinned-protocol blockers are recorded rather than papered over:
 
-- `gateway.ready` contains only `{skin}`; there is no negotiated version/capability inventory.
+- `gateway.ready` contains only `{skin, change_events}`; there is no negotiated version/capability
+  inventory. Capabilities are recovered by probe instead — see the discovery section above.
 - Durable identity is profile plus `stored_session_id`/session key; the live session ID is
   ephemeral.
 - `session.branch` branches the latest head only.
@@ -106,14 +107,41 @@ Known pinned-protocol blockers are recorded rather than papered over:
 - `approval.respond` has no approval request ID.
 - There is no per-session MCP registration/revocation, writer fencing, or durable global cron
   event cursor.
+- A cron run executes in its own short-lived session rather than in the session that scheduled it,
+  and cron rows carry no session identity, so scheduled work cannot be delivered by subscription.
+- The cron inventory names its identity column `job_id` and its prompt `prompt_preview`, and reports
+  a run's outcome in `last_status` with no accompanying transcript or execution history.
+
+## Capability discovery on a gateway that advertises nothing
+
+`gateway.ready` carries no capability inventory on any shipped Hermes build, so every capability is
+earned by asking. `HermesGatewayClient` runs two kinds of probe at connect:
+
+- **Reads.** `commands.catalog`, `model.options`, `config.get`, `session.list`, and the inventory
+  actions of `cron.manage` and `skills.manage`. A gateway that does not implement one answers
+  `-32601` and stays without the capability.
+- **Existence.** Methods that cannot be exercised as a read — the attachment stagers, plus
+  `session.title`, `session.branch`, `approval.respond`, and `clarify.respond` — are asked with a
+  session id no gateway can hold. An implemented method rejects with a session error; an absent one
+  answers `-32601`. Nothing reaches session state either way.
+
+Only three capabilities are never synthesized: `session_mcp`, because granting it mints a T3 bearer
+credential and hands it to another process; and `profile.import` and `mutation.stable_ids`, which
+describe durability promises rather than methods. Everything else a gateway can prove.
+
+`cron.manage` dispatches on an `action`, so the method existing does not say which operations are
+behind it. `cronActionInventory()` asks, naming a job that cannot exist: an unsupported action comes
+back as an RPC error and a supported one reaches the scheduler and reports the job missing. The
+shipped build answers `list`/`add`/`pause`/`resume`/`remove` and rejects `update` and `run`, and the
+cron UI offers exactly that set.
 
 ## Requests the gateway cannot take an answer to
 
 Pushing `approval.request` and `clarify.request` is not the same capability as accepting a response
 to them. `approval.respond` needs `events.approvals` and `clarify.respond` needs
-`events.clarification`, and both are Tier 2 — a non-advertising gateway never earns them from a
-probe (see `HermesGatewayClient`). A gateway can therefore park a run on a decision it has no method
-to receive, which is the shape a legacy gateway actually has.
+`events.clarification`. Both are existence-probed above, so the shipped gateway earns them — but a
+gateway that answers `-32601` still cannot receive a decision, and the handling below is what
+happens then.
 
 The adapter reads that pair off the negotiated inventory per connection and projects it onto the
 session's capabilities, so `supportsCommandApproval` and `supportsStructuredQuestions` describe the
@@ -168,15 +196,30 @@ _spends_ on an external run instead:
   permission mode is applied to it only when the switch is on. With it off, an external
   `approval.request` is shown and left for a human: the run belongs to whoever started it.
 
-Live delivery is bounded by two pinned-protocol facts:
+Cron is the exception, and the important one. A Hermes cron job does **not** run in the gateway
+session T3 subscribes to: each firing creates its own session (`cron_<job_id>_<timestamp>`, with a
+null `session_key` and a null profile), runs, and ends. There is no live stream for residency to
+catch, and cron rows never name a session, so the residency path can never deliver a scheduled run
+no matter how many threads are held open.
 
-- There is no durable global cron event cursor, so a run that happens while T3 is not connected
-  cannot be replayed afterwards. `hermes_proactive_sources` records that state per gateway
-  (`missing_durable_global_cursor`) instead of pretending the backfill happened; the durable
-  ingest path in `HermesProactiveEventRepository` stays inert until a gateway advertises
-  `cron.events.global_cursor` and `events.stable_ids`.
-- Cron rows are not required to name the session a job runs in. When they do, T3 keeps exactly
-  that thread subscribed; when they do not, it falls back to the most recently used threads on the
+Scheduled runs are therefore reported from the schedule instead. `HermesProactiveService` polls the
+cron inventory and reports a run whenever a job's `last_run_at` moves, or when the same run time
+comes back with a different `last_status`. The run's outcome is part of the notification and part of
+its dedupe identity, so a retry that also failed is announced rather than swallowed. The watermark
+lives in `hermes_cron_run_watermarks` and survives restarts, which is what makes this work with no
+client connected — the sweep fiber is owned by server startup, not by a websocket connection.
+
+Two pinned-protocol facts still bound what T3 can show:
+
+- There is no durable global cron event cursor, so the moment-by-moment events of a run T3 was not
+  connected for cannot be streamed back. `hermes_proactive_sources` records that state per gateway
+  (`missing_durable_global_cursor`) instead of pretending the backfill happened; the durable ingest
+  path in `HermesProactiveEventRepository` stays inert until a gateway advertises
+  `cron.events.global_cursor` and `events.stable_ids`. The transcript itself is not lost — see the
+  import boundary below.
+- Residency still matters for everything that _is_ session-scoped: a prompt from another Hermes
+  client, or work the model continues after a turn settles. When a cron row does name a session, T3
+  keeps exactly that thread subscribed; otherwise it holds the most recently used threads on the
   profile, capped, and says so in the proactive status.
 
 Buffered events are trimmed once a continuation that never attaches grows past its limit, which
@@ -200,6 +243,17 @@ returns a durable session ID, title, preview, start timestamp, message count, an
 therefore create a lazy historic shell and bind that durable ID without resuming or reading the
 transcript during bulk import. Opening the shell uses the existing guarded `session.resume` plus
 `session.history` path.
+
+Import requires `session.lifecycle` and `session.history` — the capabilities it actually spends —
+and nothing else. It previously also demanded `profile.import`, a method no Hermes build implements
+(`-32601` on the shipped gateway), which made the whole feature permanently unreachable. That gate
+is also what hid scheduled runs: `session.list` returns every `source: "cron"` session, and
+`session.resume` on a finished one returns its complete transcript, so importing is how the output
+of a run T3 never watched becomes a readable thread.
+
+Note that `session.history` is keyed on the _live_ session id that `session.resume` returns, not on
+the stored one. Asking for history with a stored id answers `4001 session not found` for every
+session, including T3's own; that is not evidence the transcript is gone.
 
 Two child-session capabilities remain explicitly unavailable:
 

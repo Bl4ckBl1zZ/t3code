@@ -7,6 +7,7 @@ import {
   type HermesCronMutationInput,
   type HermesCronMutationResponse,
   type HermesCronProviderProjection,
+  type HermesCronRunOutcome,
   type HermesGatewayCompatibility,
   type HermesGatewayCronJob,
   type HermesGatewayCronListResult,
@@ -41,6 +42,7 @@ interface HermesCronGatewayClient {
   listCronJobs(
     options?: Omit<HermesGatewayReadOptions, "requiredCapability">,
   ): Promise<HermesGatewayCronListResult>;
+  cronActionInventory(): Promise<ReadonlySet<string>>;
   manageCron(
     params: Record<string, unknown>,
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
@@ -81,34 +83,38 @@ const string = (value: unknown): string | undefined =>
 const stringOrNumber = (value: unknown): string | number | undefined =>
   typeof value === "string" || typeof value === "number" ? value : undefined;
 
+const NO_CRON_CAPABILITIES: HermesCronCapabilities = {
+  inventory: false,
+  create: false,
+  edit: false,
+  pause: false,
+  resume: false,
+  delete: false,
+  runNow: false,
+};
+
+/**
+ * What the connected gateway lets T3 do with cron.
+ *
+ * `probedActions` is the authoritative answer when it is present: it comes from
+ * asking the gateway which actions its `cron.manage` dispatcher accepts, which
+ * is the only way to know on a build that advertises nothing. Guessing was the
+ * old behavior and it was wrong in both directions — it offered Edit and Run
+ * now, which the shipped gateway rejects, and hid Pause and Resume, which it
+ * supports.
+ */
 export function projectHermesCronCapabilities(
   compatibility: HermesGatewayCompatibility,
+  probedActions?: ReadonlySet<string>,
 ): HermesCronCapabilities {
-  if (compatibility.status === "unsupported") {
-    return {
-      inventory: false,
-      create: false,
-      edit: false,
-      pause: false,
-      resume: false,
-      delete: false,
-      runNow: false,
-    };
-  }
+  if (compatibility.status === "unsupported") return NO_CRON_CAPABILITIES;
   const capabilities = new Set(compatibility.capabilities);
   // The gateway client only accepts cron.read for list and cron.manage for
   // mutations, so the projection must not enable operations from granular
-  // aliases or legacy status that the client would reject.
+  // aliases that the client would reject.
   const manage = capabilities.has("cron.manage");
-  const inventoried = hermesManageActionInventory(compatibility, "cron.manage");
-  // Pinned legacy gateways have no negotiated action inventory; only the
-  // evidenced list/add/remove operations are enabled for them.
-  const actions =
-    inventoried.size > 0
-      ? inventoried
-      : compatibility.status === "legacy"
-        ? new Set(["add", "remove"])
-        : inventoried;
+  const advertised = hermesManageActionInventory(compatibility, "cron.manage");
+  const actions = probedActions ?? advertised;
   const allows = (...names: ReadonlyArray<string>) =>
     manage && (actions.size === 0 || names.some((name) => actions.has(name)));
   return {
@@ -172,15 +178,38 @@ function projectExecution(
   };
 }
 
+/**
+ * Normalizes the many spellings a gateway may use for "how did the last run
+ * end". Hermes reports `error` for a failed run and `success` for a good one,
+ * but nothing in the pinned protocol fixes that vocabulary.
+ */
+export function projectHermesCronRunOutcome(status: string | null): HermesCronRunOutcome {
+  if (status === null) return "unknown";
+  const normalized = status.trim().toLowerCase();
+  if (normalized.length === 0) return "unknown";
+  if (/(^|_)(error|fail|failed|failure|timeout|cancelled|canceled)($|_)/.test(normalized)) {
+    return "failed";
+  }
+  if (/(^|_)(running|started|in_progress|claimed|pending)($|_)/.test(normalized)) return "running";
+  if (/(^|_)(success|succeeded|ok|complete|completed|done)($|_)/.test(normalized)) {
+    return "succeeded";
+  }
+  return "unknown";
+}
+
 export function projectHermesCronJob(
   providerInstanceId: string,
   profileKey: string,
   job: HermesGatewayCronJob,
   ordinal: number,
 ): HermesCronJob {
-  const id = job.id?.trim() || null;
+  // The shipped gateway names these `job_id` and `prompt_preview`; the pinned
+  // protocol requires neither spelling, so both are read.
+  const id = (job.id ?? job.job_id)?.trim() || null;
   const name = job.name?.trim() || null;
-  const identity = id ?? name ?? `unaddressable:${digest([job.schedule, job.prompt, ordinal])}`;
+  const prompt = (job.prompt ?? job.prompt_preview)?.trim() || null;
+  const identity = id ?? name ?? `unaddressable:${digest([job.schedule, prompt, ordinal])}`;
+  const lastStatus = job.last_status?.trim() || null;
   const executionRows = job.executions ?? job.runs ?? job.history ?? [];
   const deduped = new Map<string, HermesCronExecution>();
   for (const value of executionRows) {
@@ -196,10 +225,18 @@ export function projectHermesCronJob(
     id,
     name,
     schedule: job.schedule ?? null,
-    prompt: job.prompt ?? null,
+    prompt,
     enabled: job.enabled ?? (job.paused === undefined ? null : !job.paused),
     nextRunAt: job.next_run_at ?? null,
     lastRunAt: job.last_run_at ?? null,
+    lastOutcome: projectHermesCronRunOutcome(lastStatus),
+    lastStatus,
+    // The shipped gateway keeps the run's own error out of the inventory and
+    // reports only a delivery failure, so either is taken as "what went wrong
+    // last". `lastOutcome` still comes from the run status alone.
+    lastError: job.last_error?.trim() || job.last_delivery_error?.trim() || null,
+    state: job.state?.trim() || job.paused_reason?.trim() || null,
+    workdir: job.workdir?.trim() || null,
     executions: [...deduped.values()],
   };
 }
@@ -208,7 +245,9 @@ function projectProvider(input: {
   readonly config: HermesCronProviderConfig;
   readonly compatibility: HermesGatewayCompatibility;
   readonly result: HermesGatewayCronListResult;
+  readonly actions: ReadonlySet<string>;
 }): HermesCronProviderProjection {
+  const capabilities = projectHermesCronCapabilities(input.compatibility, input.actions);
   if (!input.result.success) {
     return {
       providerInstanceId: input.config.providerInstanceId,
@@ -216,7 +255,7 @@ function projectProvider(input: {
       profileKey: input.config.profileKey,
       status: "error",
       protocolClassification: input.compatibility.status,
-      capabilities: projectHermesCronCapabilities(input.compatibility),
+      capabilities,
       jobs: [],
       diagnostics: ["Hermes gateway reported an unsuccessful cron inventory response."],
     };
@@ -238,10 +277,17 @@ function projectProvider(input: {
   ) {
     diagnostics.push("Hermes does not expose a durable global cron execution cursor.");
   }
-  if (input.compatibility.status === "legacy") {
-    diagnostics.push(
-      "Gateway capabilities are not negotiated; only pinned list/add/remove operations are enabled.",
-    );
+  const unsupported = (
+    [
+      ["edit", capabilities.edit],
+      ["run now", capabilities.runNow],
+      ["pause", capabilities.pause],
+      ["resume", capabilities.resume],
+      ["delete", capabilities.delete],
+    ] as const
+  ).flatMap(([label, allowed]) => (allowed ? [] : [label]));
+  if (unsupported.length > 0) {
+    diagnostics.push(`This gateway does not implement cron ${unsupported.join(", ")}.`);
   }
   return {
     providerInstanceId: input.config.providerInstanceId,
@@ -249,7 +295,7 @@ function projectProvider(input: {
     profileKey: input.config.profileKey,
     status: "ready",
     protocolClassification: input.compatibility.status,
-    capabilities: projectHermesCronCapabilities(input.compatibility),
+    capabilities,
     jobs,
     diagnostics,
   };
@@ -399,17 +445,19 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
       try: async () => {
         const client = sharedClient(config);
         const compatibility = await client.connect();
-        const capabilities = projectHermesCronCapabilities(compatibility);
-        if (!capabilities.inventory) {
+        if (!projectHermesCronCapabilities(compatibility).inventory) {
           return unavailableProjection(
             config.providerInstanceId,
             config.displayName,
             config.profileKey,
-            "Gateway does not advertise cron.read.",
+            "This gateway does not implement cron.",
           );
         }
-        const result = await client.listCronJobs();
-        return projectProvider({ config, compatibility, result });
+        const [result, actions] = await Promise.all([
+          client.listCronJobs(),
+          client.cronActionInventory(),
+        ]);
+        return projectProvider({ config, compatibility, result, actions });
       },
       catch: () =>
         new HermesCronError({
@@ -472,7 +520,8 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
       try: async () => {
         const client = sharedClient(config);
         const compatibility = await client.connect();
-        const capabilities = projectHermesCronCapabilities(compatibility);
+        const actions = await client.cronActionInventory();
+        const capabilities = projectHermesCronCapabilities(compatibility, actions);
         if (!mutationCapability(capabilities, input.operation)) {
           throw new HermesCronError({
             code: "unsupported_operation",
@@ -495,7 +544,7 @@ export const makeHermesCron = Effect.fn("HermesCron.make")(function* (
         const inventory = await client.listCronJobs().catch(() => null);
         return {
           provider: inventory
-            ? projectProvider({ config, compatibility, result: inventory })
+            ? projectProvider({ config, compatibility, result: inventory, actions })
             : unavailableProjection(
                 config.providerInstanceId,
                 config.displayName,

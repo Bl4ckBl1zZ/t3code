@@ -1570,26 +1570,109 @@ describe("HermesGatewayClient skills", () => {
     client.close();
   });
 
-  it("never synthesizes privileged capabilities for a legacy gateway", async () => {
+  it("never synthesizes credential-minting or promise-shaped capabilities", async () => {
     const factory = new FakeSocketFactory();
     const { client } = await openClient(
       factory,
       {
-        discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
+        // Answer every probe affirmatively. Even then, capabilities that hand
+        // out a T3 credential or describe a durability promise stay ungranted:
+        // no method existing can be evidence for either.
+        discoverySupports: [
+          "commands.catalog",
+          "model.options",
+          "config.get",
+          "session.list",
+          "cron.manage",
+          "skills.manage",
+        ],
+        discoveryImplements: [
+          "image.attach_bytes",
+          "pdf.attach",
+          "file.attach",
+          "session.title",
+          "session.branch",
+          "approval.respond",
+          "clarify.respond",
+          "session.mcp.register",
+        ],
       },
       legacyReady,
     );
     const capabilities = client.health.capabilities ?? [];
-    for (const privileged of [
-      "session_mcp",
-      "profile.import",
-      "cron.manage",
-      "skills.manage",
-      "events.approvals",
-    ]) {
+    for (const privileged of ["session_mcp", "profile.import", "mutation.stable_ids"]) {
       expect(capabilities).not.toContain(privileged);
     }
-    await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
+    client.close();
+  });
+
+  it("grants cron from the one method that backs both reading and managing it", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(
+      factory,
+      { discoverySupports: ["session.list", "cron.manage"] },
+      legacyReady,
+    );
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("cron.read");
+    expect(capabilities).toContain("cron.manage");
+    // Listing is a read, so the probe must not have asked for anything else.
+    const probes = sentFrames(socket).filter((frame) => frame.method === "cron.manage");
+    expect(probes).toHaveLength(1);
+    expect(probes[0]!.params).toEqual({ action: "list" });
+    client.close();
+  });
+
+  it("grants skills and its reload companion together", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(
+      factory,
+      { discoverySupports: ["session.list", "skills.manage"] },
+      legacyReady,
+    );
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("skills.manage");
+    expect(capabilities).toContain("skills.reload");
+    client.close();
+  });
+
+  it("grants the response methods that keep a parked run answerable", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(
+      factory,
+      {
+        discoverySupports: ["session.list"],
+        discoveryImplements: [
+          "approval.respond",
+          "clarify.respond",
+          "session.title",
+          "session.branch",
+        ],
+      },
+      legacyReady,
+    );
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("events.approvals");
+    expect(capabilities).toContain("events.clarification");
+    expect(capabilities).toContain("session.title");
+    expect(capabilities).toContain("session.branch.latest");
+    // The probe must not name a session the gateway could act on.
+    const probes = sentFrames(socket).filter((frame) => frame.method === "approval.respond");
+    expect(probes).toHaveLength(1);
+    expect(probes[0]!.params).toEqual({ session_id: "t3-code:capability-probe" });
+    client.close();
+  });
+
+  it("withholds response methods a gateway reports as unknown", async () => {
+    const factory = new FakeSocketFactory();
+    const { client } = await openClient(
+      factory,
+      { discoverySupports: ["session.list"], discoveryImplements: ["approval.respond"] },
+      legacyReady,
+    );
+    const capabilities = client.health.capabilities ?? [];
+    expect(capabilities).toContain("events.approvals");
+    expect(capabilities).not.toContain("events.clarification");
     client.close();
   });
 
@@ -1653,6 +1736,66 @@ describe("HermesGatewayClient skills", () => {
       legacyReady,
     );
     expect(client.health.capabilities ?? []).toEqual([]);
+    client.close();
+  });
+
+  it("reads the cron action inventory from what the dispatcher accepts", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(
+      factory,
+      { discoverySupports: ["session.list", "cron.manage"] },
+      legacyReady,
+    );
+    const inventory = client.cronActionInventory();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Mirrors the shipped gateway: an unknown action is an RPC error, while a
+    // known one reaches the scheduler and reports that the job is missing.
+    const supported = new Set(["add", "pause", "resume", "remove"]);
+    for (const frame of sentFrames(socket)) {
+      if (frame.method !== "cron.manage" || frame.params["action"] === "list") continue;
+      const action = String(frame.params["action"]);
+      socket.receive(
+        supported.has(action)
+          ? success(frame.id, { success: false, error: "Job with ID or name not found" })
+          : {
+              jsonrpc: "2.0",
+              id: frame.id,
+              error: { code: 4016, message: `unknown cron action: ${action}` },
+            },
+      );
+    }
+    const actions = await inventory;
+    expect([...actions].toSorted()).toEqual(["add", "list", "pause", "remove", "resume"]);
+    // Naming a real job would risk removing or running it.
+    const removeProbe = sentFrames(socket).find(
+      (frame) => frame.method === "cron.manage" && frame.params["action"] === "remove",
+    );
+    expect(removeProbe!.params["name"]).toBe("t3-code:cron-action-probe:0e4f1b6a");
+
+    // Probed once per build: a second call spends no further requests.
+    const before = socket.sent.length;
+    expect([...(await client.cronActionInventory())].toSorted()).toEqual([
+      "add",
+      "list",
+      "pause",
+      "remove",
+      "resume",
+    ]);
+    expect(socket.sent.length).toBe(before);
+    client.close();
+  });
+
+  it("reports no cron actions when the gateway has no cron at all", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(
+      factory,
+      { discoverySupports: ["session.list"] },
+      legacyReady,
+    );
+    const before = socket.sent.length;
+    expect((await client.cronActionInventory()).size).toBe(0);
+    expect(socket.sent.length).toBe(before);
     client.close();
   });
 
