@@ -56,6 +56,40 @@ export type WorktreeRetentionEvaluation =
       readonly reasons: ReadonlyArray<WorktreeRetentionSkipReason>;
     };
 
+/**
+ * The moment a candidate's time rules first make it eligible, or null when it
+ * has none that can be predicted.
+ *
+ * The two time rules are plain thresholds, so their due time is known long
+ * before it arrives — which is what lets the scan sleep until a worktree is
+ * actually due instead of rechecking everything on a fixed cadence.
+ * `pullRequestMerged` has no due time by nature: nothing here can know when a
+ * pull request will merge, so a candidate whose only rule is that one keeps
+ * waiting for the periodic scan.
+ *
+ * Deliberately mirrors the comparisons in `evaluateWorktreeRetentionCandidate`
+ * rather than restating them loosely: a deadline that disagrees with the
+ * evaluator either wakes the scan for a worktree it then declines to touch, or
+ * lets an eligible one sleep past its threshold.
+ */
+export const worktreeRetentionDeadlineMs = (input: {
+  readonly settings: WorktreeRetentionSettings;
+  readonly candidate: Pick<WorktreeRetentionCandidate, "createdAtMs" | "lastActivityAtMs">;
+}): number | null => {
+  const { candidate, settings } = input;
+  if (settings.mode === "off") return null;
+
+  const dueAtMs: Array<number> = [];
+  if (settings.maxAge !== null && candidate.createdAtMs !== null) {
+    dueAtMs.push(candidate.createdAtMs + Duration.toMillis(settings.maxAge));
+  }
+  if (settings.staleAfter !== null && candidate.lastActivityAtMs !== null) {
+    dueAtMs.push(candidate.lastActivityAtMs + Duration.toMillis(settings.staleAfter));
+  }
+
+  return dueAtMs.length === 0 ? null : Math.min(...dueAtMs);
+};
+
 const addSafetyReason = (
   reasons: Array<WorktreeRetentionSkipReason>,
   state: WorktreeRetentionSafetyState,

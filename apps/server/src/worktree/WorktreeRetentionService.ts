@@ -8,6 +8,7 @@ import {
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,7 @@ import * as WorktreeOperationCoordinator from "./WorktreeOperationCoordinator.ts
 import { purgeWorktree } from "./WorktreeRetentionExecutor.ts";
 import {
   evaluateWorktreeRetentionCandidate,
+  worktreeRetentionDeadlineMs,
   type WorktreeRetentionCandidate,
   type WorktreeRetentionEvaluation,
   type WorktreeRetentionPullRequestState,
@@ -35,6 +37,48 @@ import {
   type WorktreeRetentionSafetyState,
 } from "./WorktreeRetention.ts";
 import * as WorktreeRegistry from "./WorktreeRegistry.ts";
+
+/**
+ * Floor on how often the loop may wake. Deletion is a housekeeping action
+ * measured in hours, so a few seconds of lateness is invisible, while the floor
+ * keeps a cluster of near-simultaneous deadlines to one scan every half minute
+ * instead of a spin.
+ */
+const MIN_WAKE_MS = 30_000;
+
+/**
+ * How long to sleep before the next scan: until the earliest worktree that is
+ * actually due, rather than a fixed cadence that deletes everything on the same
+ * tick.
+ *
+ * Only deadlines still ahead of us count. An entry already past its due time
+ * that the scan just declined to delete — a dirty worktree, a live terminal —
+ * would otherwise drag every wake down to the floor and spin on a worktree it is
+ * never going to touch; those wait for the interval like anything else whose
+ * state is unresolved.
+ *
+ * The interval stays the upper bound because two things cannot be scheduled:
+ * `deleteOnPullRequestMerge` has no knowable due time, and reconciliation has to
+ * sweep for worktrees that changed outside T3 regardless. It also bounds how long
+ * a shortened threshold waits to take effect, which is what the interval already
+ * did before deadlines existed.
+ */
+export const nextWakeDelayMs = (input: {
+  readonly entries: ReadonlyArray<WorktreeRegistry.WorktreeRegistryEntry>;
+  readonly settings: typeof DEFAULT_SERVER_SETTINGS.worktreeRetention;
+  readonly nowMs: number;
+}): number => {
+  const intervalMs = Duration.toMillis(input.settings.scanInterval);
+  let earliestMs: number | null = null;
+  for (const entry of input.entries) {
+    if (entry.state !== "present") continue;
+    const dueAtMs = worktreeRetentionDeadlineMs({ settings: input.settings, candidate: entry });
+    if (dueAtMs === null || dueAtMs <= input.nowMs) continue;
+    if (earliestMs === null || dueAtMs < earliestMs) earliestMs = dueAtMs;
+  }
+  if (earliestMs === null) return intervalMs;
+  return Math.min(Math.max(earliestMs - input.nowMs, MIN_WAKE_MS), intervalMs);
+};
 
 export interface WorktreeRetentionReportItem {
   readonly path: string;
@@ -803,12 +847,24 @@ const make = Effect.gen(function* () {
 
   const start = Effect.forever(
     Effect.gen(function* () {
-      const settings = yield* readSettings;
       const report = yield* scanOnce;
       if (report.reported.length > 0 || report.deleted.length > 0 || report.skipped.length > 0) {
         yield* Effect.logInfo("worktree retention scan completed", report);
       }
-      yield* Effect.sleep(settings.worktreeRetention.scanInterval);
+      // Read after the scan, not before: the scan is what moved the registry,
+      // and the sleep is sized from where it left things.
+      const settings = yield* readSettings;
+      const entries = yield* listRegistryEntries().pipe(
+        Effect.catchCause(() =>
+          Effect.succeed<ReadonlyArray<WorktreeRegistry.WorktreeRegistryEntry>>([]),
+        ),
+      );
+      const delayMs = nextWakeDelayMs({
+        entries,
+        settings: settings.worktreeRetention,
+        nowMs: yield* Clock.currentTimeMillis,
+      });
+      yield* Effect.sleep(Duration.millis(delayMs));
     }),
   ).pipe(Effect.asVoid);
 

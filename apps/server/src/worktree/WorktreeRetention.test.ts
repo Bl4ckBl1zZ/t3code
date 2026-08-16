@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { ServerSettings } from "@t3tools/contracts";
 import {
   evaluateWorktreeRetentionCandidate,
+  worktreeRetentionDeadlineMs,
   type WorktreeRetentionCandidate,
 } from "./WorktreeRetention.ts";
 
@@ -196,5 +197,109 @@ describe("evaluateWorktreeRetentionCandidate", () => {
       eligible: false,
       reasons: ["retention_disabled"],
     });
+  });
+});
+
+describe("worktreeRetentionDeadlineMs", () => {
+  const day = 86_400_000;
+
+  it("dates the age rule from creation and the stale rule from last activity", () => {
+    const createdAtMs = nowMs - 10 * day;
+    const lastActivityAtMs = nowMs - 2 * day;
+
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings: decodeSettings({
+          worktreeRetention: { mode: "delete", maxAge: 30 * day },
+        }).worktreeRetention,
+        candidate: { createdAtMs, lastActivityAtMs },
+      }),
+    ).toBe(createdAtMs + 30 * day);
+
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings: decodeSettings({
+          worktreeRetention: { mode: "delete", staleAfter: 7 * day },
+        }).worktreeRetention,
+        candidate: { createdAtMs, lastActivityAtMs },
+      }),
+    ).toBe(lastActivityAtMs + 7 * day);
+  });
+
+  it("takes the earlier of the two rules when both are configured", () => {
+    const createdAtMs = nowMs - 25 * day;
+    const lastActivityAtMs = nowMs - 6 * day;
+
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings: decodeSettings({
+          worktreeRetention: { mode: "delete", maxAge: 30 * day, staleAfter: 7 * day },
+        }).worktreeRetention,
+        candidate: { createdAtMs, lastActivityAtMs },
+      }),
+      // Stale at +1 day beats aged at +5 days.
+    ).toBe(lastActivityAtMs + 7 * day);
+  });
+
+  // The deadline is what the loop sleeps on, so a rule the evaluator cannot act
+  // on must not produce one — otherwise the scan wakes for a worktree it will
+  // only ever skip.
+  it("has no deadline for a rule whose timestamp is missing", () => {
+    const settings = decodeSettings({
+      worktreeRetention: { mode: "delete", maxAge: 30 * day, staleAfter: 7 * day },
+    }).worktreeRetention;
+
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings,
+        candidate: { createdAtMs: null, lastActivityAtMs: null },
+      }),
+    ).toBeNull();
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings,
+        candidate: { createdAtMs: null, lastActivityAtMs: nowMs },
+      }),
+    ).toBe(nowMs + 7 * day);
+  });
+
+  it("has no deadline for the merge rule, which cannot be scheduled", () => {
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings: decodeSettings({
+          worktreeRetention: { mode: "delete", deleteOnPullRequestMerge: true },
+        }).worktreeRetention,
+        candidate: { createdAtMs: nowMs - 40 * day, lastActivityAtMs: nowMs - 40 * day },
+      }),
+    ).toBeNull();
+  });
+
+  it("has no deadline while retention is off", () => {
+    expect(
+      worktreeRetentionDeadlineMs({
+        settings: decodeSettings({
+          worktreeRetention: { mode: "off", maxAge: 30 * day },
+        }).worktreeRetention,
+        candidate: { createdAtMs: nowMs - 40 * day, lastActivityAtMs: nowMs },
+      }),
+    ).toBeNull();
+  });
+
+  // The loop wakes at the deadline and expects the evaluator to act, so the two
+  // have to agree on the boundary rather than land a millisecond apart.
+  it("lands exactly where the evaluator starts reporting the candidate", () => {
+    const settings = decodeSettings({
+      worktreeRetention: { mode: "report", staleAfter: 7 * day },
+    }).worktreeRetention;
+    const candidate = safeCandidate({ createdAtMs: null, lastActivityAtMs: nowMs });
+    const deadline = worktreeRetentionDeadlineMs({ settings, candidate });
+
+    expect(deadline).not.toBeNull();
+    expect(
+      evaluateWorktreeRetentionCandidate({ nowMs: deadline! - 1, settings, candidate }).eligible,
+    ).toBe(false);
+    expect(
+      evaluateWorktreeRetentionCandidate({ nowMs: deadline!, settings, candidate }).eligible,
+    ).toBe(true);
   });
 });

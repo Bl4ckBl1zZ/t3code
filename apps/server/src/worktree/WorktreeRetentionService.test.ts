@@ -19,6 +19,7 @@ import * as WorktreeRegistry from "./WorktreeRegistry.ts";
 import {
   WorktreeRetentionService,
   layer as worktreeRetentionLayer,
+  nextWakeDelayMs,
 } from "./WorktreeRetentionService.ts";
 
 const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
@@ -368,5 +369,94 @@ describe("WorktreeRetentionService", () => {
       });
       expect(harness.register).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("nextWakeDelayMs", () => {
+  const day = 86_400_000;
+  const hour = 3_600_000;
+  const scanNowMs = Date.parse("2026-08-16T00:00:00.000Z");
+  const deleteAfter = (staleAfterMs: number, scanIntervalMs = 24 * hour) =>
+    decodeSettings({
+      worktreeRetention: {
+        mode: "delete",
+        staleAfter: staleAfterMs,
+        scanInterval: scanIntervalMs,
+      },
+    }).worktreeRetention;
+
+  const present = (lastActivityAtMs: number, overrides: Partial<typeof entry> = {}) => ({
+    ...entry,
+    createdAtMs: null,
+    lastActivityAtMs,
+    ...overrides,
+  });
+
+  it("falls back to the scan interval when nothing has a deadline", () => {
+    expect(
+      nextWakeDelayMs({
+        entries: [present(scanNowMs, { lastActivityAtMs: null })],
+        settings: deleteAfter(7 * day),
+        nowMs: scanNowMs,
+      }),
+    ).toBe(24 * hour);
+  });
+
+  it("sleeps until the earliest worktree that is actually due", () => {
+    expect(
+      nextWakeDelayMs({
+        entries: [
+          present(scanNowMs - 7 * day + 6 * hour),
+          present(scanNowMs - 7 * day + 2 * hour),
+          present(scanNowMs - 7 * day + 9 * hour),
+        ],
+        settings: deleteAfter(7 * day),
+        nowMs: scanNowMs,
+      }),
+    ).toBe(2 * hour);
+  });
+
+  // The anti-spin property. A worktree past its deadline that the scan just
+  // declined to delete — dirty tree, live terminal — must not drag the next wake
+  // down to the floor forever; it waits for the interval like anything else.
+  it("ignores entries already past their deadline", () => {
+    expect(
+      nextWakeDelayMs({
+        entries: [present(scanNowMs - 30 * day), present(scanNowMs - 7 * day)],
+        settings: deleteAfter(7 * day),
+        nowMs: scanNowMs,
+      }),
+    ).toBe(24 * hour);
+  });
+
+  it("ignores entries that are no longer present", () => {
+    expect(
+      nextWakeDelayMs({
+        entries: [
+          present(scanNowMs - 7 * day + 2 * hour, { state: "removed" }),
+          present(scanNowMs - 7 * day + 6 * hour),
+        ],
+        settings: deleteAfter(7 * day),
+        nowMs: scanNowMs,
+      }),
+    ).toBe(6 * hour);
+  });
+
+  it("never wakes more often than the floor or later than the interval", () => {
+    expect(
+      nextWakeDelayMs({
+        entries: [present(scanNowMs - 7 * day + 1_000)],
+        settings: deleteAfter(7 * day),
+        nowMs: scanNowMs,
+      }),
+    ).toBe(30_000);
+
+    expect(
+      nextWakeDelayMs({
+        entries: [present(scanNowMs)],
+        settings: deleteAfter(7 * day, 6 * hour),
+        nowMs: scanNowMs,
+      }),
+    ).toBe(6 * hour);
   });
 });
