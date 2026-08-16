@@ -195,6 +195,21 @@ const make = Effect.gen(function* () {
       Effect.catchCause(() => Effect.succeed<string | null>(null)),
     );
 
+  /**
+   * Whether the worktree directory is still on disk, or "unknown" when the
+   * filesystem would not say.
+   *
+   * The authority on whether a worktree is gone. A ref map is not: `git worktree
+   * list` names a worktree only while a local branch is checked out in it, so a
+   * rebase, a bisect, or a restore that detaches HEAD drops a perfectly live
+   * worktree out of it — and a `git worktree list` that fails drops all of them
+   * at once.
+   */
+  const worktreeDirectoryPresent = (value: string): Effect.Effect<boolean | "unknown"> =>
+    fileSystem
+      .exists(path.resolve(value))
+      .pipe(Effect.catchCause(() => Effect.succeed<boolean | "unknown">("unknown")));
+
   const listRegistryEntries = () =>
     Option.isSome(inventory) ? inventory.value.listAll() : registry.listAll();
   const getRegistryEntry = (input: WorktreeRegistry.WorktreeRegistryLookup) =>
@@ -418,7 +433,15 @@ const make = Effect.gen(function* () {
       }
       const entryCanonical = yield* canonicalPath(entry.worktreePath);
       const entryKey = entryCanonical ?? path.normalize(path.resolve(entry.worktreePath));
-      if (!referencedPaths.has(entryKey)) {
+      // Missing from the ref map is a hint, never the verdict: marking a live
+      // worktree `removed` makes the next message on its thread purge the
+      // binding and provision a replacement, abandoning an in-progress rebase
+      // and every uncommitted and gitignored file in it. Only a filesystem that
+      // positively reports the directory gone may do that.
+      const presence = referencedPaths.has(entryKey)
+        ? (true as const)
+        : yield* worktreeDirectoryPresent(entry.worktreePath);
+      if (presence === false) {
         yield* markRegistryEntryRemoved({
           repositoryRoot: entry.repositoryRoot,
           worktreePath: entry.worktreePath,
@@ -426,7 +449,19 @@ const make = Effect.gen(function* () {
           reason: "reconcile_missing_ref",
           generation: entry.generation,
         }).pipe(Effect.ignoreCause({ log: true }));
-      } else if (
+        continue;
+      }
+      if (presence === "unknown") {
+        yield* Effect.logWarning(
+          "worktree retention kept a registry row: filesystem state unknown",
+          { repositoryRoot: entry.repositoryRoot, worktreePath: entry.worktreePath },
+        );
+      }
+      // Runs for every surviving row, not only the referenced ones. A worktree
+      // that is alive but absent from the ref map can still be holding a claim
+      // from an interrupted delete, and that claim blocks recovery until it is
+      // released.
+      if (
         entry.removalClaimedAtMs !== null &&
         input.nowMs - entry.removalClaimedAtMs > REMOVAL_CLAIM_LEASE_MS
       ) {
@@ -646,7 +681,12 @@ const make = Effect.gen(function* () {
               `worktree-retention:purge:${encodeURIComponent(entry.repositoryRoot)}:${encodeURIComponent(entry.worktreePath)}:${nowMs}`,
             ),
             threadId: ThreadId.make(entry.threadId),
-            branch: entry.branch,
+            // No `branch` on purpose. The reducer applies whatever is sent, and
+            // the registry's copy is a snapshot from the last reconcile: a
+            // branch renamed since then would be written back stale, and a null
+            // would clear the thread's branch outright. Either one makes the
+            // recovery this purge exists to enable fail `branch-unavailable`
+            // forever. Purging is about the worktree; the branch is not ours.
             worktreePath: null,
             worktreeStatus: "purged",
             expectedWorktreePath: entry.worktreePath,

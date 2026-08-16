@@ -210,10 +210,21 @@ const makeWorktreeRegistry = Effect.gen(function* () {
               excluded.discovered_at_ms
             )
           END,
-          last_activity_at_ms = COALESCE(
-            excluded.last_activity_at_ms,
-            worktree_retention_registry.last_activity_at_ms
-          ),
+          -- MAX, matching touch and touchThread. A reconcile carries the owning
+          -- shell's updatedAt, which lags a more recent touch and, where several
+          -- shells share a path, is only the first one's. Overwriting with it
+          -- moves recorded activity backwards and makes the worktree read as
+          -- staler than it is, which is the direction that deletes things early.
+          last_activity_at_ms = CASE
+            WHEN excluded.last_activity_at_ms IS NULL
+              THEN worktree_retention_registry.last_activity_at_ms
+            WHEN worktree_retention_registry.last_activity_at_ms IS NULL
+              THEN excluded.last_activity_at_ms
+            ELSE MAX(
+              worktree_retention_registry.last_activity_at_ms,
+              excluded.last_activity_at_ms
+            )
+          END,
           state = 'present',
           last_reason = CASE
             WHEN worktree_retention_registry.removal_claimed_at_ms IS NOT NULL

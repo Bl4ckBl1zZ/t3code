@@ -347,7 +347,14 @@ const make = Effect.gen(function* () {
                   reason: "handoff_rollback",
                 },
                 {
-                  remove: (path) => gitWorkflow.removeWorktree({ cwd: projectCwd, path }),
+                  // Forced, as this path was before the retention registry was
+                  // threaded through it. The comment above depends on it: the
+                  // branch delete only runs once removal succeeds, so a
+                  // `git worktree remove` that refuses — a submodule, a lock, a
+                  // file the setup script left behind — strands both the
+                  // directory and the branch this handoff just created.
+                  remove: (path) =>
+                    gitWorkflow.removeWorktree({ cwd: projectCwd, path, force: true }),
                   deleteBranch: (refName) =>
                     gitWorkflow.deleteLocalBranch({
                       cwd: projectCwd,
@@ -356,7 +363,7 @@ const make = Effect.gen(function* () {
                     }),
                 },
               )
-            : gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath }).pipe(
+            : gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force: true }).pipe(
                 Effect.tap(() =>
                   Clock.currentTimeMillis.pipe(
                     Effect.flatMap((removedAtMs) =>

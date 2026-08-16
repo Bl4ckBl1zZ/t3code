@@ -1,6 +1,8 @@
 import type { ServerSettingsPatch } from "@t3tools/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
+  MAX_WORKTREE_RETENTION_SCAN_INTERVAL,
+  MIN_WORKTREE_RETENTION_SCAN_INTERVAL,
   type WorktreeRetentionSettings,
 } from "@t3tools/contracts/settings";
 import * as Duration from "effect/Duration";
@@ -27,10 +29,27 @@ function durationToWholeUnits(duration: Duration.Duration, unitMs: number, minim
   return Math.max(minimum, Math.round(Duration.toMillis(duration) / unitMs));
 }
 
-function positiveDurationFromUnits(value: number | null, unitMs: number): Duration.Duration {
-  const units = value === null || !Number.isFinite(value) ? 1 : Math.max(1, Math.round(value));
+/**
+ * Clamped to both ends, because `NumberField` reports every keystroke and only
+ * applies `max` on commit: typing a digit onto `168` sends 1680 hours, which the
+ * settings schema rejects and which takes the rest of the patch down with it.
+ */
+function positiveDurationFromUnits(
+  value: number | null,
+  unitMs: number,
+  maximumUnits = Number.POSITIVE_INFINITY,
+): Duration.Duration {
+  const rounded = value === null || !Number.isFinite(value) ? 1 : Math.round(value);
+  const units = Math.min(Math.max(1, rounded), maximumUnits);
   return Duration.millis(units * unitMs);
 }
+
+const SCAN_INTERVAL_MIN_HOURS = Math.round(
+  Duration.toMillis(MIN_WORKTREE_RETENTION_SCAN_INTERVAL) / WORKTREE_RETENTION_HOUR_MS,
+);
+const SCAN_INTERVAL_MAX_HOURS = Math.round(
+  Duration.toMillis(MAX_WORKTREE_RETENTION_SCAN_INTERVAL) / WORKTREE_RETENTION_HOUR_MS,
+);
 
 export function WorktreeRetentionSettingsSection() {
   const settings = usePrimarySettings();
@@ -218,14 +237,18 @@ export function WorktreeRetentionSettingsSection() {
           <div className="flex items-center justify-end gap-2">
             <NumberField
               value={scanIntervalHours}
-              min={1}
-              max={168}
+              min={SCAN_INTERVAL_MIN_HOURS}
+              max={SCAN_INTERVAL_MAX_HOURS}
               step={1}
               size="sm"
               className="w-28"
               onValueChange={(value) =>
                 updateRetention({
-                  scanInterval: positiveDurationFromUnits(value, WORKTREE_RETENTION_HOUR_MS),
+                  scanInterval: positiveDurationFromUnits(
+                    value,
+                    WORKTREE_RETENTION_HOUR_MS,
+                    SCAN_INTERVAL_MAX_HOURS,
+                  ),
                 })
               }
             >
