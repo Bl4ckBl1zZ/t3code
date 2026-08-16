@@ -2106,7 +2106,13 @@ const makeWsRpcLayer = (
               )
               .pipe(
                 Effect.map(({ worktree }) => ({ worktree })),
-                Effect.mapError(
+                // Only the registry failure is reworded. `create` also fails with
+                // git's own GitCommandError when `git worktree add` refuses — a
+                // branch already checked out elsewhere, a path in the way — and
+                // rewriting that one to "the worktree was created but could not be
+                // registered" tells the user two things that are both false.
+                Effect.catchTag(
+                  "PersistenceSqlError",
                   (cause) =>
                     new GitCommandError({
                       operation: "vcsCreateWorktree.registry",

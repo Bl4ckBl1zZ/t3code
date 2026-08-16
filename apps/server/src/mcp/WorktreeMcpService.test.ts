@@ -733,6 +733,7 @@ describe("t3_worktree_handoff", () => {
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/dispatch-defect",
+        force: true,
       });
     });
   });
@@ -747,6 +748,7 @@ describe("t3_worktree_handoff", () => {
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/raced",
+        force: true,
       });
       expect(harness.deleteLocalBranch).toHaveBeenCalledWith({
         cwd: workspaceRoot,
@@ -765,6 +767,7 @@ describe("t3_worktree_handoff", () => {
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/recheck-fails",
+        force: true,
       });
       expect(harness.dispatch).not.toHaveBeenCalled();
     });
@@ -780,6 +783,7 @@ describe("t3_worktree_handoff", () => {
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/archived-race",
+        force: true,
       });
     });
   });
@@ -938,6 +942,7 @@ describe("t3_worktree_handoff", () => {
       expect(harness.removeWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         path: "/worktrees/project/feature/dispatch-fails",
+        force: true,
       });
     });
   });

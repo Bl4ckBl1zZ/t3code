@@ -65,6 +65,14 @@ const makeHarness = (input: {
   readonly active?: boolean;
   readonly scheduledRun?: boolean;
   readonly missingRef?: boolean;
+  /**
+   * Whether the worktree directory is still on disk. Consulted only when the
+   * entry is absent from the ref map, which is exactly where reconciliation
+   * decides whether to mark a row removed. Defaults to gone, matching the case
+   * the ref map is usually right about.
+   */
+  readonly worktreeOnDisk?: boolean;
+  readonly statFails?: boolean;
   readonly pullRequestState?: "merged" | "open" | "error";
   readonly dispatchFailure?: boolean;
 }) => {
@@ -77,6 +85,9 @@ const makeHarness = (input: {
   );
   const listAll = vi.fn(() => Effect.succeed([currentEntry]));
   const markRemoved = vi.fn((_: WorktreeRegistry.WorktreeRemoval) => Effect.void);
+  const releaseRemovalClaim = vi.fn((_: WorktreeRegistry.WorktreeRemovalClaimRelease) =>
+    Effect.succeed(true),
+  );
   const removeWorktree = vi.fn((_: { readonly cwd: string; readonly path: string }) => Effect.void);
   const dispatch = vi.fn((_: unknown) =>
     input.dispatchFailure
@@ -103,6 +114,7 @@ const makeHarness = (input: {
           get,
           listAll,
           markRemoved,
+          releaseRemovalClaim,
         }),
         Layer.mock(ProjectService.ProjectService)({
           snapshot: Effect.succeed({
@@ -167,12 +179,25 @@ const makeHarness = (input: {
         NodeServices.layer,
         Layer.succeed(FileSystem.FileSystem, {
           realPath: (value: string) => Effect.succeed(value),
+          exists: (_: string) =>
+            input.statFails
+              ? Effect.die("filesystem unavailable")
+              : Effect.succeed(input.worktreeOnDisk ?? false),
         } as unknown as FileSystem.FileSystem),
       ),
     ),
   );
 
-  return { layer, register, get, markRemoved, removeWorktree, dispatch, findFreshPullRequestState };
+  return {
+    layer,
+    register,
+    get,
+    markRemoved,
+    releaseRemovalClaim,
+    removeWorktree,
+    dispatch,
+    findFreshPullRequestState,
+  };
 };
 
 const runScan = (layer: Layer.Layer<WorktreeRetentionService>) =>
@@ -219,12 +244,15 @@ describe("WorktreeRetentionService", () => {
         expect.objectContaining({
           type: "thread.metadata.update",
           threadId,
-          branch: entry.branch,
           worktreePath: null,
           worktreeStatus: "purged",
           expectedWorktreePath: worktreePath,
         }),
       );
+      // The purge must not carry a branch. The reducer applies whatever is sent,
+      // and the registry's copy is a snapshot: writing back a renamed or null
+      // branch strands the thread on `branch-unavailable` with no way back.
+      expect(harness.dispatch.mock.calls[0]?.[0]).not.toHaveProperty("branch");
       expect(harness.markRemoved).toHaveBeenCalled();
     });
   });
@@ -458,5 +486,61 @@ describe("nextWakeDelayMs", () => {
         nowMs: scanNowMs,
       }),
     ).toBe(6 * hour);
+  });
+});
+
+describe("WorktreeRetentionService reconciliation", () => {
+  // `git worktree list` names a worktree only while a local branch is checked
+  // out in it, so an interactive rebase, a bisect, or a restore that detaches
+  // HEAD drops a live worktree out of the ref map. Marking that row removed
+  // makes the next message purge the thread's binding and provision a
+  // replacement, abandoning the rebase and every gitignored file with it.
+  it.effect(
+    "keeps a registry row for a worktree that is missing from the ref map but on disk",
+    () => {
+      const harness = makeHarness({
+        settings: decodeSettings({}),
+        missingRef: true,
+        worktreeOnDisk: true,
+      });
+
+      return Effect.gen(function* () {
+        yield* runScan(harness.layer);
+        expect(harness.markRemoved).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.effect("still marks a row removed once the directory is really gone", () => {
+    const harness = makeHarness({
+      settings: decodeSettings({}),
+      missingRef: true,
+      worktreeOnDisk: false,
+    });
+
+    return Effect.gen(function* () {
+      yield* runScan(harness.layer);
+      expect(harness.markRemoved).toHaveBeenCalledWith({
+        repositoryRoot,
+        worktreePath,
+        removedAtMs: expect.any(Number),
+        reason: "reconcile_missing_ref",
+        generation: entry.generation,
+      });
+    });
+  });
+
+  // Fail closed, like every other unknown in this feature.
+  it.effect("keeps a registry row when the filesystem will not answer", () => {
+    const harness = makeHarness({
+      settings: decodeSettings({}),
+      missingRef: true,
+      statFails: true,
+    });
+
+    return Effect.gen(function* () {
+      yield* runScan(harness.layer);
+      expect(harness.markRemoved).not.toHaveBeenCalled();
+    });
   });
 });
