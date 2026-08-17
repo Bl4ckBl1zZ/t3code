@@ -4,10 +4,13 @@ import SwiftUI
 // thread-details panel, opened from the thread header.
 //
 // Ports apps/mobile/src/features/threads/details/ThreadDetailsSheet.tsx and the
-// four section files beside it. Same sections in the same order (Workspace,
-// Ports, Background Tasks, Version Control, Automations, Lineage), each hiding
-// itself when it has nothing to report, so the sheet is only ever as tall as the
-// thread has facts.
+// four section files beside it: Workspace, Actions, Ports, Background Tasks,
+// Version Control, Automations, Lineage — each hiding itself when it has
+// nothing to report, so the sheet is only ever as tall as the thread has facts.
+//
+// One deliberate departure from the Expo client: it appends the project's
+// `t3.json` scripts to the Workspace card, and here they get their own Actions
+// section. See `actionsSection` for why.
 //
 // Every rule lives in ThreadDetailsSections.swift; this file is the view.
 
@@ -68,6 +71,7 @@ struct ThreadDetailsSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 connectionNotice
                 workspaceSection
+                actionsSection
                 if !isChatConversation {
                     portsSection
                 }
@@ -252,17 +256,38 @@ struct ThreadDetailsSheet: View {
                     onNavigate(.terminal)
                 }
             }
+        }
+    }
 
-            ForEach(isChatConversation ? [] : scripts) { script in
-                let isActive = activeScriptIDs.contains(script.id)
-                ThreadDetailsDivider()
-                ThreadDetailsRow(
-                    systemImage: ThreadDetailsWorkspace.scriptRowIcon(script, isActive: isActive),
-                    title: ThreadDetailsWorkspace.scriptRowTitle(script, isActive: isActive),
-                    subtitle: script.command,
-                    showsChevron: false,
-                    action: onRunScript.map { run in { run(script) } }
-                )
+    // MARK: - Actions
+
+    /// The project's `t3.json` scripts, which the app calls actions.
+    ///
+    /// Their own section rather than the tail of Workspace: every other row
+    /// there reports where the thread lives and pushes a screen when tapped,
+    /// while these run a command in place. Sharing one card made a destructive
+    /// script look like one more way to browse, and put a row whose subtitle is
+    /// a shell command next to rows whose subtitle is a description.
+    @ViewBuilder
+    private var actionsSection: some View {
+        if !isChatConversation, !scripts.isEmpty {
+            ThreadDetailsSection(title: "Actions") {
+                ForEach(Array(scripts.enumerated()), id: \.element.id) { index, script in
+                    let isActive = activeScriptIDs.contains(script.id)
+                    if index > 0 {
+                        ThreadDetailsDivider()
+                    }
+                    ThreadDetailsRow(
+                        systemImage: ThreadDetailsWorkspace.scriptRowIcon(
+                            script,
+                            isActive: isActive
+                        ),
+                        title: ThreadDetailsWorkspace.scriptRowTitle(script, isActive: isActive),
+                        subtitle: script.command,
+                        showsChevron: false,
+                        action: onRunScript.map { run in { run(script) } }
+                    )
+                }
             }
         }
     }
