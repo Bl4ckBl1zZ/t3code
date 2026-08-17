@@ -115,9 +115,15 @@ public struct FeatureSourceControlView: View {
                             .font(.caption2.monospaced().weight(.bold))
                             .foregroundStyle(file.state.color)
                             .frame(width: 18)
+                        // Truncate the head, not the tail: the file name is the
+                        // part that identifies the row, and a tail ellipsis eats
+                        // exactly that on the long paths this list is full of.
+                        // VoiceOver still reads the whole path — truncation here
+                        // is visual only.
                         Text(file.path)
                             .font(T3Typography.threadBody)
                             .lineLimit(1)
+                            .truncationMode(.head)
                         Spacer()
                         if file.isStaged {
                             Text("STAGED")
