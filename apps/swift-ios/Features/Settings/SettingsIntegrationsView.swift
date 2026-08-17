@@ -19,7 +19,7 @@ public struct SettingsIntegrationsView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 SettingsSection(
                     title: "Integrations",
                     footer: "OpenRouter powers Voice Input transcription."
@@ -94,7 +94,7 @@ public struct SettingsOpenRouterView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 connectionSection
                 apiKeySection
                 if status?.configured == true {
@@ -142,7 +142,7 @@ public struct SettingsOpenRouterView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
             .padding(.vertical, 12)
             .accessibilityElement(children: .combine)
         }
@@ -173,7 +173,7 @@ public struct SettingsOpenRouterView: View {
                     isDisabled: trimmedKey.isEmpty,
                     action: connect
                 )
-                .padding(.horizontal, 20)
+                .padding(.horizontal, SettingsMetrics.rowPadding)
             }
         }
     }
@@ -198,7 +198,7 @@ public struct SettingsOpenRouterView: View {
                     showingDisconnect = true
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
         }
     }
 

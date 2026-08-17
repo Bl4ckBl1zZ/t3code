@@ -81,7 +81,16 @@ public struct PullRequestReviewThread: Codable, Equatable, Sendable, Identifiabl
     public let side: String
     public let isResolved: Bool
     public let isOutdated: Bool
+    /// Only the first page. The server reads ten per thread so a hundred
+    /// threads cannot make GitHub reserve ten thousand nested rows.
     public let comments: [PullRequestThreadComment]
+    /// What the host says the thread holds, when it answered in pages.
+    public let commentCount: Int?
+    /// Feeds `pullRequests.threadComments`. Absent once the thread is whole,
+    /// so its presence is what says a page is missing. Nothing reads it yet —
+    /// review threads are decoded but not rendered — but dropping it here
+    /// would make a future reader believe short threads are whole threads.
+    public let nextCommentsCursor: String?
 }
 
 public enum PullRequestState: String, Codable, Sendable {

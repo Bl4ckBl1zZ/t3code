@@ -14,10 +14,13 @@ struct SettingsRowDivider: View {
     var isInsetForIcon = true
 
     var body: some View {
-        Divider()
-            .overlay(T3Colors.separator)
-            .padding(.leading, isInsetForIcon ? 54 : 20)
-            .padding(.trailing, 20)
+        Rectangle()
+            .fill(T3Colors.border)
+            .frame(height: 1)
+            .padding(.leading, isInsetForIcon
+                ? SettingsMetrics.dividerInset
+                : SettingsMetrics.rowPadding)
+            .accessibilityHidden(true)
     }
 }
 
@@ -34,7 +37,7 @@ struct SettingsValueNavigationRow: View {
         HStack(spacing: 12) {
             SettingsRowIcon(
                 systemName: systemImage,
-                color: isEnabled ? T3Colors.accent : T3Colors.textTertiary
+                color: isEnabled ? T3Colors.textSecondary : T3Colors.textTertiary
             )
             Text(title)
                 .font(T3Typography.threadBody)
@@ -50,8 +53,8 @@ struct SettingsValueNavigationRow: View {
                 .foregroundStyle(T3Colors.textTertiary)
                 .accessibilityHidden(true)
         }
-        .padding(.horizontal, 20)
-        .frame(minHeight: 52)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
+        .frame(minHeight: SettingsMetrics.rowMinHeight)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
@@ -71,7 +74,7 @@ struct SettingsFootnote: View {
             .font(T3Typography.supporting)
             .foregroundStyle(T3Colors.textTertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.headerInset)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
@@ -86,7 +89,7 @@ struct SettingsErrorBanner: View {
             .font(T3Typography.supporting)
             .foregroundStyle(T3Colors.danger)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
     }
@@ -178,7 +181,7 @@ struct SettingsFieldLabel: View {
             .font(T3Typography.supportingStrong)
             .foregroundStyle(T3Colors.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
     }
 }
 
@@ -188,7 +191,7 @@ extension View {
     func settingsInputField(minHeight: CGFloat = 48) -> some View {
         font(T3Typography.threadBody)
             .foregroundStyle(T3Colors.textPrimary)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
             .background(T3Colors.input)

@@ -50,7 +50,7 @@ public struct SettingsHermesRunsView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 if environments.isEmpty {
                     emptyEnvironmentsState
                 } else {
@@ -142,7 +142,7 @@ public struct SettingsHermesRunsView: View {
         ) {
             showsDismissed.toggle()
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.cardInset)
     }
 
     @ViewBuilder
@@ -273,7 +273,7 @@ private struct HermesRunRow: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
             .padding(.vertical, 12)
             .contentShape(Rectangle())
         }

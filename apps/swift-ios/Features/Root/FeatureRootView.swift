@@ -45,6 +45,16 @@ public struct FeatureRootView: View {
         .tint(T3Colors.accent)
         .background(T3Colors.background.ignoresSafeArea())
         .task { await model.start() }
+        // The palette lives in a store rather than the environment so every
+        // T3Colors reader picks it up; this is the one place settings feed it.
+        // `apply` no-ops unless the selection actually moved, so the frequent
+        // non-theme settings updates cost nothing.
+        .onChange(of: themeSelection, initial: true) { _, selection in
+            T3ThemeStore.shared.apply(
+                lightPaletteID: selection.light,
+                darkPaletteID: selection.dark
+            )
+        }
         .alert(
             "Something went wrong",
             isPresented: Binding(
@@ -77,6 +87,19 @@ public struct FeatureRootView: View {
         case .dark: .dark
         }
     }
+
+    /// Equatable so `onChange` fires on a palette edit and nothing else.
+    private var themeSelection: FeatureThemeSelection {
+        FeatureThemeSelection(
+            light: model.snapshot.settings.lightThemeID,
+            dark: model.snapshot.settings.darkThemeID
+        )
+    }
+}
+
+struct FeatureThemeSelection: Equatable {
+    let light: String
+    let dark: String
 }
 
 enum FeatureRootPresentation {

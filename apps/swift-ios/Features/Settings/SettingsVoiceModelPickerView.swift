@@ -123,7 +123,7 @@ public struct SettingsVoiceModelPickerView: View {
                 ) {
                     Task { await save(trimmedCustomModel) }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, SettingsMetrics.rowPadding)
 
                 SettingsFootnote(
                     """

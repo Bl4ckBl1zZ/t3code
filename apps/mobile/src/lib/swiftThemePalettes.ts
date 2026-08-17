@@ -1,0 +1,148 @@
+/**
+ * Renders `apps/swift-ios`'s palette table from the same source the Expo client
+ * themes itself with.
+ *
+ * The Swift client mirrors this repo by hand — there is no codegen — so a new
+ * palette, or a changed color inside one, would otherwise reach iOS only when
+ * somebody noticed and retyped it. Deriving the table here means the two
+ * clients cannot drift silently: `swiftThemePalettes.test.ts` fails the moment
+ * the committed Swift file stops matching what this produces.
+ *
+ * Only the roles Swift actually paints with are emitted. The rest of T3Colors —
+ * status, syntax, success/warning — has no palette role on the Expo side either
+ * (it renders those from fixed Tailwind classes), so those stay constant in
+ * Swift rather than being invented here.
+ */
+import {
+  getMobileThemeVariables,
+  MOBILE_THEME_OPTIONS,
+  type MobileThemeAppearance,
+  type MobileThemeId,
+  type MobileThemeVariables,
+} from "./mobileTheme";
+
+/**
+ * Swift property name -> the CSS variable it paints from.
+ *
+ * Derived by matching the Swift client's previously hardcoded light/dark pairs
+ * against the default palette, so this is the mapping the app already shipped
+ * rather than a fresh interpretation of it. Two entries deliberately differ
+ * from the name-alike variable: `textTertiary` matched `--color-foreground-muted`
+ * (not `-tertiary`), and `surfaceRaised` matched `--color-card-alt`.
+ */
+export const SWIFT_COLOR_ROLES: Readonly<Record<string, keyof MobileThemeVariables>> = {
+  background: "--color-screen",
+  sheet: "--color-sheet",
+  surface: "--color-card",
+  surfaceRaised: "--color-card-alt",
+  input: "--color-input",
+  border: "--color-border",
+  inputBorder: "--color-input-border",
+  separator: "--color-separator",
+  subtle: "--color-subtle",
+  subtleStrong: "--color-subtle-strong",
+  textPrimary: "--color-foreground",
+  textSecondary: "--color-foreground-secondary",
+  textTertiary: "--color-foreground-muted",
+  placeholder: "--color-placeholder",
+  primaryAction: "--color-primary",
+  primaryActionForeground: "--color-primary-foreground",
+  accent: "--color-user-bubble",
+  danger: "--color-danger-foreground",
+};
+
+/** The orb colors the theme picker previews each palette with. */
+export const SWIFT_PREVIEW_ROLES: Readonly<Record<string, keyof MobileThemeVariables>> = {
+  previewCanvas: "--color-screen",
+  previewAccent: "--color-user-bubble",
+  previewAction: "--color-primary",
+};
+
+export interface SwiftRgba {
+  readonly red: number;
+  readonly green: number;
+  readonly blue: number;
+  readonly alpha: number;
+}
+
+const HEX_PATTERN = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i;
+const RGBA_PATTERN = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i;
+
+/**
+ * The default palette is authored as `rgba(...)` to match `global.css`, while
+ * generated palettes come back as `#rrggbb(aa)`. Both reach Swift as one shape.
+ */
+export function parseCssColor(value: string): SwiftRgba {
+  const hex = HEX_PATTERN.exec(value.trim());
+  if (hex) {
+    const body = hex[1]!;
+    return {
+      red: Number.parseInt(body.slice(0, 2), 16) / 255,
+      green: Number.parseInt(body.slice(2, 4), 16) / 255,
+      blue: Number.parseInt(body.slice(4, 6), 16) / 255,
+      alpha: hex[2] === undefined ? 1 : Number.parseInt(hex[2], 16) / 255,
+    };
+  }
+
+  const rgba = RGBA_PATTERN.exec(value.trim());
+  if (rgba) {
+    return {
+      red: Number(rgba[1]) / 255,
+      green: Number(rgba[2]) / 255,
+      blue: Number(rgba[3]) / 255,
+      alpha: rgba[4] === undefined ? 1 : Number(rgba[4]),
+    };
+  }
+
+  throw new Error(`Unsupported palette color for the Swift table: ${value}`);
+}
+
+const round = (value: number) => Number(value.toFixed(4));
+
+function swiftColorLiteral(value: string): string {
+  const { red, green, blue, alpha } = parseCssColor(value);
+  return `.init(${round(red)}, ${round(green)}, ${round(blue)}, ${round(alpha)})`;
+}
+
+function swiftAppearanceBlock(themeId: MobileThemeId, appearance: MobileThemeAppearance): string {
+  const variables = getMobileThemeVariables(themeId, appearance);
+  const roles = { ...SWIFT_COLOR_ROLES, ...SWIFT_PREVIEW_ROLES };
+  const fields = Object.entries(roles).map(
+    ([name, role]) => `                ${name}: ${swiftColorLiteral(String(variables[role]))}`,
+  );
+  return [`            ${appearance}: T3PaletteColors(`, fields.join(",\n"), `            )`].join(
+    "\n",
+  );
+}
+
+/** The full contents of `DesignSystem/T3ThemePalettes.generated.swift`. */
+export function renderSwiftThemePalettes(): string {
+  const themes = MOBILE_THEME_OPTIONS.map((option) =>
+    [
+      `        T3Palette(`,
+      `            id: ${JSON.stringify(option.id)},`,
+      `            label: ${JSON.stringify(option.label)},`,
+      `${swiftAppearanceBlock(option.id, "light")},`,
+      swiftAppearanceBlock(option.id, "dark"),
+      `        )`,
+    ].join("\n"),
+  );
+
+  return `// Generated by apps/mobile/src/lib/swiftThemePalettes.ts — do not edit by hand.
+//
+// Regenerate with:
+//   UPDATE_SWIFT_THEME_PALETTES=1 vp test run apps/mobile/src/lib/swiftThemePalettes.test.ts
+//
+// The table is derived from @t3tools/shared/themePalettes, the same source the
+// Expo client themes from, so the two clients cannot drift apart unnoticed.
+
+import Foundation
+
+extension T3Palette {
+    /// Every built-in palette, in picker order. The first entry is the default.
+    static let builtIn: [T3Palette] = [
+${themes.join(",\n")}
+    ]
+}
+`;
+}

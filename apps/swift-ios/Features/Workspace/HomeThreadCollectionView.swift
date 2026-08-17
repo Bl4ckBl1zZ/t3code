@@ -53,13 +53,15 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             frame: .zero,
             collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration)
         )
-        collectionView.backgroundColor = T3Colors.uiBackground
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
         collectionView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
         collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
         collectionView.delegate = context.coordinator
         context.coordinator.configure(collectionView)
+        context.coordinator.themeRefresh = T3ThemeRefresh { [weak collectionView] in
+            collectionView?.backgroundColor = T3Colors.uiBackground
+        }
         return collectionView
     }
 
@@ -85,6 +87,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         private var selectedThreadID: String?
         private weak var collectionView: UICollectionView?
         private var timer: Timer?
+        var themeRefresh: T3ThemeRefresh?
         private var timerTick = 0
         private var timerInterval: TimeInterval = 0
 
