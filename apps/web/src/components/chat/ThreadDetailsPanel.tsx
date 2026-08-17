@@ -29,6 +29,7 @@ import { useProjectScriptRunStates } from "../../state/projectScriptRuns";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadBackgroundTasksPanel } from "./ThreadBackgroundTasksPanel";
+import { ThreadConversationPanel } from "./ThreadConversationPanel";
 import { ThreadPortsPanel } from "./ThreadPortsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -330,7 +331,11 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </section>
         ) : null}
 
-        {!props.isProjectlessConversation && !props.draftId ? (
+        {/* Keyed off `isServerThread` for the same reason as the section below:
+            automations bind to a thread id, which a local draft does not have
+            yet, and a T3 Work chat can schedule work just as a project thread
+            can — the binding has never been project-scoped. */}
+        {props.isServerThread ? (
           <ThreadAutomationsPanel environmentId={props.environmentId} threadId={props.threadId} />
         ) : null}
 
@@ -347,6 +352,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           />
         ) : props.isProjectlessConversation ? (
           delegatedTasksEmptyState
+        ) : null}
+
+        {/* Last, and only where there is no workspace to describe: on a project
+            thread these facts duplicate the composer and the sections above. */}
+        {props.isProjectlessConversation && props.isServerThread ? (
+          <ThreadConversationPanel environmentId={props.environmentId} threadId={props.threadId} />
         ) : null}
       </div>
     </div>
