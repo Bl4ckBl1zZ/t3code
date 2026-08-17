@@ -55,6 +55,8 @@ export interface ProviderTurnStartServiceV2Shape {
   readonly failPermanently: (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
+    /** The error that exhausted the attempts, when the worker still has it. */
+    readonly cause?: unknown;
   }) => Effect.Effect<void, ProviderTurnStartError>;
 }
 
@@ -534,7 +536,11 @@ export const layer: Layer.Layer<
     });
 
     const failPermanently = Effect.fn("orchestrationV2.providerTurnStart.failPermanently")(
-      function* (input: { readonly threadId: ThreadId; readonly runId: RunId }) {
+      function* (input: {
+        readonly threadId: ThreadId;
+        readonly runId: RunId;
+        readonly cause?: unknown;
+      }) {
         const projection = yield* projectionStore.getThreadProjection(input.threadId);
         const run = projection.runs.find((candidate) => candidate.id === input.runId);
         if (run === undefined) {
@@ -561,10 +567,19 @@ export const layer: Layer.Layer<
         }
 
         const now = yield* DateTime.now;
+        // The adapter usually knows exactly why the turn never started, and
+        // saying "could not connect" over that is how a diagnosable failure
+        // reaches the user as an unactionable one. Keep the generic text for
+        // the one path that has no error to report: a terminal projection
+        // being retried after its own write was rejected.
         const failure = makeProviderFailure({
-          message: "Could not connect to the provider after repeated attempts.",
+          ...(input.cause === undefined
+            ? {
+                message: "Could not connect to the provider after repeated attempts.",
+                class: "transport_error" as const,
+              }
+            : { cause: input.cause, class: "provider_error" as const }),
           code: "provider_turn_start_failed",
-          class: "transport_error",
           retryable: false,
         });
         const errorItemId = idAllocator.derive.turnItemFromProviderItem({

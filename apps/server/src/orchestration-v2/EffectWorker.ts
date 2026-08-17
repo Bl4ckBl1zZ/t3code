@@ -69,7 +69,11 @@ export function isNonRetryableProviderTurnStartPrerequisiteFailure(
   return (
     (effectType === "provider-turn.start" || effectType === "provider-turn.restart") &&
     (/CheckpointBaselineCaptureError/iu.test(errorText) ||
-      /Failed to capture checkpoint baseline/iu.test(errorText))
+      /Failed to capture checkpoint baseline/iu.test(errorText) ||
+      // The gateway has answered that it no longer stores the session behind
+      // this thread. Asking again four more times reaches the same answer and
+      // only delays the failure the user has to see.
+      /HermesImportedSessionUnavailableError/u.test(errorText))
   );
 }
 
@@ -77,8 +81,14 @@ export interface OrchestrationEffectExecutorV2Shape {
   readonly execute: (
     effect: OrchestrationEffectV2,
   ) => Effect.Effect<void, OrchestrationEffectExecutionError>;
+  /**
+   * `cause` is the typed error of the attempt that gave up, when there was
+   * one. Terminal projections report it instead of guessing, so the turn item
+   * a user reads names what actually failed.
+   */
   readonly handlePermanentFailure?: (
     effect: OrchestrationEffectV2,
+    cause?: unknown,
   ) => Effect.Effect<void, OrchestrationEffectExecutionError>;
 }
 
@@ -315,7 +325,7 @@ export const executorLayer: Layer.Layer<
               );
         }
       },
-      handlePermanentFailure: (effect) => {
+      handlePermanentFailure: (effect, cause) => {
         switch (effect.request.type) {
           case "provider-turn.start":
           case "provider-turn.restart":
@@ -323,6 +333,7 @@ export const executorLayer: Layer.Layer<
               .failPermanently({
                 threadId: effect.threadId,
                 runId: effect.request.runId,
+                ...(cause === undefined ? {} : { cause }),
               })
               .pipe(
                 Effect.mapError(
@@ -531,6 +542,7 @@ export const layerWithOptions = (
         let error: string;
         let ignorableControlFailure = false;
         let nonRetryableStartFailure = false;
+        let failureCause: unknown;
         if (pendingTerminalizationError === null) {
           const execution = executor.execute(effect).pipe(Effect.as("executed" as const));
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
@@ -555,6 +567,10 @@ export const layerWithOptions = (
           }
 
           error = Cause.pretty(exit.cause);
+          // Squash rather than read the typed failure: an adapter that dies on
+          // a defect still knows why, and that reason is what the terminal
+          // projection reports.
+          failureCause = Cause.hasInterruptsOnly(exit.cause) ? undefined : Cause.squash(exit.cause);
           ignorableControlFailure = isNonRetryableProviderTurnControlFailure(
             effect.request.type,
             error,
@@ -591,7 +607,9 @@ export const layerWithOptions = (
             ),
           );
           if (ownsLease) {
-            const projection = yield* Effect.exit(executor.handlePermanentFailure(effect));
+            const projection = yield* Effect.exit(
+              executor.handlePermanentFailure(effect, failureCause),
+            );
             if (Exit.isFailure(projection)) {
               permanentProjectionFailed = true;
               yield* Effect.logError("Failed to project permanent orchestration effect failure", {

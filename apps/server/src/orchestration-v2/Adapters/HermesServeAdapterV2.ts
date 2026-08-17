@@ -1348,10 +1348,14 @@ export function makeHermesServeAdapterV2(
         titleState: HermesGatewaySessionTitleResult,
       ) {
         const title = titleState.title?.trim();
-        const origin = titleState.origin.trim();
-        if (!title || !origin) return;
-        if (titleState.revision <= state.titleRevision) {
-          if (titleState.revision === state.titleRevision) state.title = title;
+        const origin = titleState.origin?.trim();
+        const revision = titleState.revision;
+        // A gateway that answers with the bare title gives nothing to order
+        // this update against, and guessing a revision would let a stale read
+        // overwrite a newer title. Leave T3's title state alone instead.
+        if (!title || !origin || revision === undefined) return;
+        if (revision <= state.titleRevision) {
+          if (revision === state.titleRevision) state.title = title;
           return;
         }
         const { now } = leaseTimes();
@@ -1360,18 +1364,18 @@ export function makeHermesServeAdapterV2(
           ownerKey: state.lease.ownerKey,
           generation: state.lease.generation,
           now,
-          revision: titleState.revision,
+          revision,
           origin,
         });
         if (!updated) return;
-        state.titleRevision = titleState.revision;
+        state.titleRevision = revision;
         state.title = title;
         yield* emit({
           type: "app_thread.title_reconciled",
           driver: HERMES_PROVIDER,
           threadId: state.providerThread.appThreadId ?? input.threadId,
           title,
-          revision: titleState.revision,
+          revision,
           origin,
         });
       });
@@ -3235,9 +3239,24 @@ export function makeHermesServeAdapterV2(
         return acquired.value;
       });
 
+      /**
+       * The title is decoration on a session that is already usable, so a
+       * gateway that answers `session.title` with a payload T3 cannot read
+       * costs the thread its title — never its bind.
+       */
       const readTitleState = Effect.fnUntraced(function* (liveSessionId: string) {
         if (!client.hasCapability("session.title")) return undefined;
-        return yield* gatewayEffect(() => client.readSessionTitle({ session_id: liveSessionId }));
+        return yield* gatewayEffect(() =>
+          client.readSessionTitle({ session_id: liveSessionId }),
+        ).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("orchestration-v2.hermes-title-read-failed", {
+              providerSessionId: input.providerSessionId,
+              liveSessionId,
+              cause,
+            }).pipe(Effect.as(undefined)),
+          ),
+        );
       });
 
       const ensureSessionMcp = Effect.fnUntraced(function* (
@@ -3679,8 +3698,18 @@ export function makeHermesServeAdapterV2(
 
       const createBinding = Effect.fnUntraced(function* (
         threadInput: ProviderAdapterV2EnsureThreadInput,
+        /**
+         * Set when this create replaces a stored session the gateway lost. The
+         * operation id has to differ from the one that produced the dead
+         * binding, or the gateway's mutation dedup answers the replacement
+         * with the very session that vanished.
+         */
+        replacesStoredSessionKey?: string,
       ) {
-        const operationId = `hermes:create:${options.instanceId}:${threadInput.threadId}`;
+        const operationId =
+          replacesStoredSessionKey === undefined
+            ? `hermes:create:${options.instanceId}:${threadInput.threadId}`
+            : `hermes:create:${options.instanceId}:${threadInput.threadId}:after:${replacesStoredSessionKey}`;
         const now = DateTime.formatIso(yield* DateTime.now);
         const payloadDigest = stableDigest(
           options.instanceId,
@@ -3841,6 +3870,43 @@ export function makeHermesServeAdapterV2(
         );
       });
 
+      /**
+       * Hermes writes a created session's durable row lazily, on its first
+       * prompt, so a bind that fails before that prompt leaves T3 holding a
+       * binding whose stored key the gateway has never heard of — and every
+       * later turn resumes into "session not found" forever.
+       *
+       * A session T3 created is safe to replace: there is no Hermes-side
+       * transcript to lose, and T3 keeps its own. An imported conversation is
+       * not — its Hermes transcript is the reason the thread exists — so that
+       * one keeps the read-only failure the import promised.
+       */
+      const rebindVanishedSession = Effect.fnUntraced(function* (
+        binding: HermesSessionBinding,
+        threadInput: ProviderAdapterV2EnsureThreadInput,
+        unavailable: HermesImportedSessionUnavailableError,
+      ) {
+        const imported = yield* options.repository.getSessionImportByStoredIdentity({
+          providerInstanceId: options.instanceId,
+          profileKey: binding.profileKey,
+          projectId: binding.projectId,
+          storedSessionKey: binding.storedSessionKey,
+        });
+        if (Option.isSome(imported)) return yield* unavailable;
+        const released = yield* options.repository.deleteBinding({
+          bindingId: binding.bindingId,
+          threadId: String(threadInput.threadId),
+          storedSessionKey: binding.storedSessionKey,
+        });
+        if (!released) return yield* unavailable;
+        yield* Effect.logWarning("orchestration-v2.hermes-rebinding-vanished-session", {
+          threadId: threadInput.threadId,
+          bindingId: binding.bindingId,
+          storedSessionKey: binding.storedSessionKey,
+        });
+        return yield* createBinding(threadInput, binding.storedSessionKey);
+      });
+
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           unsubscribe();
@@ -3917,9 +3983,12 @@ export function makeHermesServeAdapterV2(
               });
             }
             const existing = yield* options.repository.getByThreadId(String(threadInput.threadId));
-            return Option.isSome(existing)
-              ? yield* resumeBinding(existing.value, threadInput)
-              : yield* createBinding(threadInput);
+            if (Option.isNone(existing)) return yield* createBinding(threadInput);
+            return yield* resumeBinding(existing.value, threadInput).pipe(
+              Effect.catchTag("HermesImportedSessionUnavailableError", (unavailable) =>
+                rebindVanishedSession(existing.value, threadInput, unavailable),
+              ),
+            );
           }).pipe(
             Effect.mapError(
               (cause) =>

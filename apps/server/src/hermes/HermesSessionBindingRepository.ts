@@ -266,6 +266,17 @@ export interface HermesSessionBindingRepositoryShape {
   readonly getByStoredIdentity: (
     identity: HermesBindingStoredIdentity,
   ) => Effect.Effect<Option.Option<HermesSessionBinding>, HermesSessionBindingRepositoryError>;
+  /**
+   * Drops a binding whose stored session the gateway no longer has, so the
+   * thread can bind a fresh one. Fenced on the full stored identity: a binding
+   * another writer already replaced is not the one the caller found dead, and
+   * deleting it would strand that writer instead.
+   */
+  readonly deleteBinding: (input: {
+    readonly bindingId: string;
+    readonly threadId: string;
+    readonly storedSessionKey: string;
+  }) => Effect.Effect<boolean, HermesSessionBindingRepositoryError>;
   readonly updateNegotiation: (
     input: UpdateHermesNegotiationInput,
   ) => Effect.Effect<boolean, HermesSessionBindingRepositoryError>;
@@ -705,6 +716,24 @@ export const make = Effect.gen(function* () {
       return yield* optionFromRows(rows, bindingFromRow);
     },
     Effect.mapError(mapRepositoryError("getByStoredIdentity", "Could not load the binding.")),
+  );
+
+  const deleteBinding = Effect.fn("HermesSessionBindingRepository.deleteBinding")(
+    function* (input: {
+      readonly bindingId: string;
+      readonly threadId: string;
+      readonly storedSessionKey: string;
+    }) {
+      const rows = yield* sql<{ readonly binding_id: string }>`
+      DELETE FROM hermes_session_bindings
+      WHERE binding_id = ${input.bindingId}
+        AND thread_id = ${input.threadId}
+        AND stored_session_key = ${input.storedSessionKey}
+      RETURNING binding_id
+    `;
+      return rows.length === 1;
+    },
+    Effect.mapError(mapRepositoryError("deleteBinding", "Could not delete the binding.")),
   );
 
   const updateNegotiation = Effect.fn("HermesSessionBindingRepository.updateNegotiation")(
@@ -1482,6 +1511,7 @@ export const make = Effect.gen(function* () {
     createBinding,
     getByThreadId,
     getByStoredIdentity,
+    deleteBinding,
     updateNegotiation,
     updateReconciliation,
     updateTitleState,

@@ -135,6 +135,32 @@ back as an RPC error and a supported one reaches the scheduler and reports the j
 shipped build answers `list`/`add`/`pause`/`resume`/`remove` and rejects `update` and `run`, and the
 cron UI offers exactly that set.
 
+## A probed method is not always a usable one
+
+An existence probe reads an error, not a result, so a method can earn its capability and still
+answer in a shape T3 cannot read. `session.title` is the case that proved it: the shipped gateway
+answers a read with `{title, session_key}` and a write with `{title, pending}`, without the
+`revision` and `origin` that the revisioned title protocol carries. Both are optional in
+`HermesGatewaySessionTitleResult`, and a title that arrives without them is read but never
+reconciled — there is nothing to order it against, and inventing a revision would let a stale read
+overwrite a newer name. The read is also non-fatal: a title is decoration on a session that already
+works, so a gateway that cannot answer it costs the thread its title, never its bind.
+
+## The window before a created session is durable
+
+`session.create` returns a live session and a stored key, but the shipped gateway does not write the
+durable row until the first prompt — every launch opens a session to paint a composer, and empty
+drafts should not litter the sidebar. T3 persists its binding immediately, so anything that fails
+between the create and that first prompt leaves a binding naming a key the gateway has never heard
+of, and every later turn resumes into `4007 session not found`.
+
+`ensureThread` closes that gap. When a resume reports 4007, a binding whose stored identity came
+from an imported conversation keeps its read-only failure — that Hermes transcript is the reason the
+thread exists, and an empty session must not stand in for it. Any other binding is T3's own, has no
+Hermes-side history to lose, and is dropped and replaced with a fresh session. The replacement
+create carries a different operation id, or the gateway's mutation dedup answers it with the very
+session that vanished.
+
 ## Requests the gateway cannot take an answer to
 
 Pushing `approval.request` and `clarify.request` is not the same capability as accepting a response

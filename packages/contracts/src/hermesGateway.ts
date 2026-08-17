@@ -389,11 +389,20 @@ export const HermesGatewaySessionTitleParams = Schema.Struct({
 });
 export type HermesGatewaySessionTitleParams = typeof HermesGatewaySessionTitleParams.Type;
 
+/**
+ * Only the title itself is guaranteed. A gateway that does not implement the
+ * revisioned title protocol answers `session.title` with the stored title and
+ * nothing else, and answers a title write with `{title, pending}` — so
+ * requiring the ordering metadata here rejects the very payloads the method
+ * was called to read. Absent `revision`/`origin` means "this gateway cannot
+ * order title updates", which callers must treat as "leave the title alone",
+ * not as revision 0 from an unknown origin.
+ */
 export const HermesGatewaySessionTitleResult = Schema.Struct({
-  session_key: Schema.String,
+  session_key: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
-  revision: NonNegativeInt,
-  origin: HermesGatewayTitleOrigin,
+  revision: Schema.optional(NonNegativeInt),
+  origin: Schema.optional(HermesGatewayTitleOrigin),
   updated_at: Schema.optional(Schema.Number),
   pending: Schema.optional(Schema.Boolean),
 });

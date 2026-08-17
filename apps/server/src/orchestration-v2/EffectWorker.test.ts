@@ -730,6 +730,21 @@ it("classifies checkpoint baseline prerequisites as non-retryable start failures
   assert.isFalse(canTerminalizeProviderTurnStartFailure("completed"));
 });
 
+it("classifies a session Hermes no longer stores as a non-retryable start failure", () => {
+  assert.isTrue(
+    isNonRetryableProviderTurnStartPrerequisiteFailure(
+      "provider-turn.start",
+      "HermesImportedSessionUnavailableError: Hermes no longer stores session 20260817_141040.",
+    ),
+  );
+  assert.isFalse(
+    isNonRetryableProviderTurnStartPrerequisiteFailure(
+      "provider-turn.start",
+      "HermesGatewayRpcError: Hermes gateway RPC session.resume failed with code 5007.",
+    ),
+  );
+});
+
 it.effect("detaches a handed-off session only after the old turn terminalizes", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;

@@ -37,6 +37,8 @@ function stringField(value: unknown, key: "message" | "code" | "detail"): string
 }
 
 function describedMessage(value: unknown): string | undefined {
+  // Plenty of internal failures are a bare sentence rather than an Error.
+  if (typeof value === "string") return value.length > 0 ? value : undefined;
   if (value instanceof Error) {
     return typeof value.message === "string" && value.message.length > 0
       ? value.message
@@ -60,9 +62,9 @@ function deepestCauseMessage(cause: unknown): string | undefined {
   let current: unknown = cause;
   let deepest: string | undefined;
   for (let depth = 0; depth < MAX_PROVIDER_FAILURE_CAUSE_DEPTH; depth += 1) {
-    if (typeof current !== "object" || current === null) break;
     const message = describedMessage(current)?.trim();
     if (message !== undefined && message.length > 0) deepest = message;
+    if (typeof current !== "object" || current === null) break;
     let next: unknown;
     try {
       next = (current as { readonly cause?: unknown }).cause;

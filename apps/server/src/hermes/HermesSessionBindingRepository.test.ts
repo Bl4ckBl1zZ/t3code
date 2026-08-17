@@ -453,6 +453,40 @@ describe("HermesSessionBindingRepository", () => {
       );
     }).pipe(withMemoryDatabase),
   );
+
+  it.effect("deletes a binding only under the stored identity the caller found dead", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: MIGRATIONS_BEFORE_INHERITED_BOUNDARY });
+      const repository = yield* HermesSessionBindingRepository;
+      assert.isTrue(yield* createBinding(repository));
+
+      // A binding another writer already rebound is not the dead one.
+      assert.isFalse(
+        yield* repository.deleteBinding({
+          bindingId: "hermes-binding:1",
+          threadId: "thread:1",
+          storedSessionKey: "stored:conversation-2",
+        }),
+      );
+      assert.isTrue(Option.isSome(yield* repository.getByThreadId("thread:1")));
+
+      assert.isTrue(
+        yield* repository.deleteBinding({
+          bindingId: "hermes-binding:1",
+          threadId: "thread:1",
+          storedSessionKey: "stored:conversation-1",
+        }),
+      );
+      assert.isTrue(Option.isNone(yield* repository.getByThreadId("thread:1")));
+      // The thread is free to bind a fresh Hermes session.
+      assert.isTrue(
+        yield* createBinding(repository, {
+          bindingId: "hermes-binding:2",
+          storedSessionKey: "stored:conversation-2",
+        }),
+      );
+    }).pipe(withMemoryDatabase),
+  );
 });
 
 it.effect("records the inherited history boundary once and preserves it afterwards", () =>
