@@ -651,9 +651,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The visible label is what has to survive; the elaboration moved from a
-    // native title to a portalled Tooltip, which static markup never renders.
+    // The elaboration moved from a native title to a portalled Tooltip, which
+    // static markup never renders — so it rides the accessible name instead.
     expect(markup).toContain(">steered the run<");
+    expect(markup).toContain('aria-label="Steered the active turn"');
     expect(markup).not.toContain('title="Steered the active turn"');
   });
 
