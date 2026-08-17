@@ -347,6 +347,27 @@ export const layer = Layer.effect(
         ),
       );
 
+    // A thread-bound task posts into that thread rather than launching a fresh
+    // one, so once the thread is deleted the binding can never resolve again
+    // and every poll would dispatch at a dead id. Deleting the row is the only
+    // outcome that leaves no invisible, permanently-failing schedule behind.
+    const reapTasksForThread = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const deleted = yield* sql<{ readonly task_id: string }>`
+          DELETE FROM scheduled_tasks WHERE thread_id = ${threadId} RETURNING task_id
+        `.pipe(
+          Effect.mapError((cause) =>
+            taskError("Could not delete schedule tasks bound to a deleted thread.", { cause }),
+          ),
+        );
+        if (deleted.length === 0) return;
+        yield* Effect.logInfo("Deleted schedule tasks bound to a deleted thread", {
+          threadId,
+          taskIds: deleted.map((row) => row.task_id),
+        });
+        yield* notifyChanged;
+      });
+
     // Run-state transitions use targeted UPDATEs (never the full-row upsert) so
     // a completing run cannot resurrect a deleted task or clobber concurrent
     // edits to the task definition.
@@ -713,6 +734,43 @@ export const layer = Layer.effect(
       Effect.catch((cause) =>
         Effect.logWarning("Could not reset interrupted schedule task runs", { cause }),
       ),
+    );
+
+    // The live watch below only sees deletions this process witnesses. Threads
+    // deleted while the server was down, and rows that predate the cascade
+    // entirely, are caught here instead.
+    yield* Effect.gen(function* () {
+      const rows = yield* sql<{ readonly thread_id: string }>`
+        SELECT DISTINCT thread_id FROM scheduled_tasks WHERE thread_id IS NOT NULL
+      `;
+      yield* Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            const threadId = ThreadId.make(row.thread_id);
+            // Deletion is a soft delete that leaves the projection row in
+            // place, so `deletedAt` has to be checked explicitly — a null shell
+            // only covers threads that never existed at all.
+            const shell = yield* threadManagement.getThreadShell(threadId);
+            if (shell !== null && shell.deletedAt === null) return;
+            yield* reapTasksForThread(threadId);
+          }),
+        { concurrency: 1, discard: true },
+      );
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not sweep schedule tasks for deleted threads", { cause }),
+      ),
+    );
+
+    yield* threadManagement.streamDomainEvents.pipe(
+      Stream.runForEach((event) =>
+        event.type === "thread.deleted" ? reapTasksForThread(event.threadId) : Effect.void,
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Schedule task thread-deletion watch stopped", { cause }),
+      ),
+      Effect.forkScoped,
     );
 
     yield* runDueTasks().pipe(
