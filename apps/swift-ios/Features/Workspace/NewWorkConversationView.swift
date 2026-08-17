@@ -21,10 +21,16 @@ public struct NewWorkConversationView: View {
     let submit: (NewTaskRequest) async -> FeatureThread?
     let onCreated: (FeatureThread) -> Void
 
+    /// Which machine Work and Chat compose on. Persisted, not per-sheet: the
+    /// user picks their assistant's machine once, and every later compose
+    /// opens there instead of falling back to whichever environment resolves
+    /// first.
+    public static let environmentStorageKey = "swift-ios.work-environment"
+
     @State private var prompt = ""
     @State private var selection: FeatureSelection?
     @State private var attachments: [FeatureDraftAttachment] = []
-    @State private var selectedEnvironmentID: String?
+    @AppStorage(NewWorkConversationView.environmentStorageKey) private var selectedEnvironmentID: String?
     @State private var isSubmitting = false
     @State private var submissionFailed = false
     @FocusState private var promptFocused: Bool
