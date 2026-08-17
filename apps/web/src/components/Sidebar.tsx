@@ -129,6 +129,11 @@ import { useSidebarWorkspace } from "../sidebarWorkspace";
 import { isT3WorkBackingProject, t3WorkDirectoryForEnvironment } from "../t3WorkProject";
 import { createT3WorkBackingProject } from "../t3WorkProjectCreate";
 import type { SidebarThreadSummary } from "../types";
+import {
+  findReadyHermesEntry,
+  resolveWorkEnvironmentScope,
+  useWorkEnvironmentScopePreference,
+} from "../workEnvironmentScope";
 import { cn } from "~/lib/utils";
 import {
   applyManualThreadOrderForSidebarV2,
@@ -137,6 +142,7 @@ import {
   firstValidTimestampMs,
   hasUnseenCompletion,
   canPinWorkInboxThread,
+  formatBackgroundWorkTooltip,
   isSidebarNestedLinkClick,
   isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
@@ -922,7 +928,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // findable. In-flight rows recede the same as read-ready ones (inbox-zero:
   // working threads aren't your problem yet) — only the colored status label
   // stands out.
-  const isInFlight = status === "working" || status === "approval" || status === "input";
+  const isInFlight =
+    status === "working" || status === "background" || status === "approval" || status === "input";
   const shouldRecede =
     (status === "ready" || isInFlight) && !isUnread && !isWoke && !props.isActive && !isSelected;
   // Status hues follow the system-wide convention set by sidebar v1 and the
@@ -966,7 +973,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     icon: "done" as const,
                     className: "text-emerald-700 dark:text-emerald-300",
                   }
-                : null;
+                : // Ranked under Done and Woke, matching sidebar v1: a result the
+                  // reader has not seen yet outranks work that is still going.
+                  // Sky like Working, but unanimated — nothing is generating,
+                  // something is merely still out there.
+                  status === "background"
+                  ? {
+                      label: "Background",
+                      icon: "working" as const,
+                      className: "text-sky-600/80 dark:text-sky-400/80",
+                    }
+                  : null;
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1490,7 +1507,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         )}
       >
         {headStatus ? (
-          <span className={cn("inline-flex items-center gap-1 font-medium", headStatus.className)}>
+          <span
+            className={cn("inline-flex items-center gap-1 font-medium", headStatus.className)}
+            // "Background" alone does not say what is out there; the title names
+            // the agents and commands the row is still waiting on.
+            {...(status === "background" ? { title: formatBackgroundWorkTooltip(thread) } : {})}
+          >
             {headStatus.icon === "working" ? (
               <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
             ) : headStatus.icon === "done" ? (
@@ -1716,7 +1738,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           {workBadgeStyle.label}
                         </span>
                       ) : null}
-                      {workBadge === "working" ? (
+                      {/* Only a live run gets a ticking duration. A background
+                          row wears the same badge, but its run already settled,
+                          so a timer there would be counting nothing. */}
+                      {status === "working" ? (
                         <span
                           aria-hidden
                           className="shrink-0 text-xs text-sky-600 tabular-nums dark:text-sky-400"
@@ -2176,35 +2201,60 @@ export default function Sidebar() {
       ),
     [serverProviders],
   );
+  const providerDriverKindByInstance = useMemo(() => {
+    const result = new Map<string, ProviderInstanceEntry["driverKind"]>();
+    for (const [environmentId, serverConfig] of serverConfigs) {
+      for (const provider of serverConfig.providers) {
+        result.set(sidebarProviderInstanceKey(environmentId, provider.instanceId), provider.driver);
+      }
+    }
+    return result;
+  }, [serverConfigs]);
   // Work-mode environment scope: one menu above the list, mirroring the
   // code-mode project scope. Scoping filters the visible work threads and
-  // retargets the New-thread composer to the selected environment.
-  const [workEnvironmentScopeId, setWorkEnvironmentScopeId] = useState<EnvironmentId | null>(null);
-  useEffect(() => {
-    if (
-      workEnvironmentScopeId !== null &&
-      !environments.some((environment) => environment.environmentId === workEnvironmentScopeId)
-    ) {
-      setWorkEnvironmentScopeId(null);
+  // retargets the New-thread composer to the selected environment. Unlike the
+  // project scope this is never "all": Work and Chat run on one machine's
+  // Hermes, so the menu offers the machines that can host them and the choice
+  // is remembered across reloads.
+  const [storedWorkEnvironmentScopeId, setStoredWorkEnvironmentScopeId] =
+    useWorkEnvironmentScopePreference();
+  const workThreadEnvironmentIds = useMemo(() => {
+    const ids = new Set<EnvironmentId>();
+    if (workspace !== "work" && workspace !== "chat") return ids;
+    for (const thread of threads) {
+      if (isThreadVisibleInSidebarWorkspace(thread, workspace, providerDriverKindByInstance)) {
+        ids.add(thread.environmentId);
+      }
     }
-  }, [environments, workEnvironmentScopeId]);
+    return ids;
+  }, [providerDriverKindByInstance, threads, workspace]);
+  const { options: workEnvironmentOptions, scopeId: workEnvironmentScopeId } = useMemo(
+    () =>
+      resolveWorkEnvironmentScope({
+        environments,
+        serverConfigs,
+        threadEnvironmentIds: workThreadEnvironmentIds,
+        storedEnvironmentId: storedWorkEnvironmentScopeId,
+        primaryEnvironmentId,
+      }),
+    [
+      environments,
+      primaryEnvironmentId,
+      serverConfigs,
+      storedWorkEnvironmentScopeId,
+      workThreadEnvironmentIds,
+    ],
+  );
   const workTargetEnvironmentId = workEnvironmentScopeId ?? primaryEnvironmentId;
   const hermesProviderEntry = useMemo(() => {
-    const isReadyHermesEntry = (entry: ProviderInstanceEntry) =>
-      entry.driverKind === "hermes" &&
-      entry.enabled &&
-      entry.isAvailable &&
-      entry.status === "ready";
     const scopedProviders =
       workTargetEnvironmentId === null
         ? undefined
         : serverConfigs.get(workTargetEnvironmentId)?.providers;
-    if (scopedProviders !== undefined) {
-      return deriveProviderInstanceEntries(scopedProviders).find(isReadyHermesEntry) ?? null;
-    }
+    if (scopedProviders !== undefined) return findReadyHermesEntry(scopedProviders);
     if (workTargetEnvironmentId !== primaryEnvironmentId) return null;
-    return [...providerEntryByInstanceId.values()].find(isReadyHermesEntry) ?? null;
-  }, [primaryEnvironmentId, providerEntryByInstanceId, serverConfigs, workTargetEnvironmentId]);
+    return findReadyHermesEntry(serverProviders);
+  }, [primaryEnvironmentId, serverConfigs, serverProviders, workTargetEnvironmentId]);
   const t3WorkDirectory = t3WorkDirectoryForEnvironment(serverConfigs, workTargetEnvironmentId);
   const hermesBackingProject =
     projects.find(
@@ -2257,15 +2307,6 @@ export default function Sidebar() {
     workspace,
   ]);
   const [hermesImportOpen, setHermesImportOpen] = useState(false);
-  const providerDriverKindByInstance = useMemo(() => {
-    const result = new Map<string, ProviderInstanceEntry["driverKind"]>();
-    for (const [environmentId, serverConfig] of serverConfigs) {
-      for (const provider of serverConfig.providers) {
-        result.set(sidebarProviderInstanceKey(environmentId, provider.instanceId), provider.driver);
-      }
-    }
-    return result;
-  }, [serverConfigs]);
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -4034,7 +4075,7 @@ export default function Sidebar() {
                 </Tooltip>
               </div>
             ) : null}
-            {(workspace === "work" || workspace === "chat") && environments.length > 1 ? (
+            {(workspace === "work" || workspace === "chat") && workEnvironmentOptions.length > 1 ? (
               <div className="flex items-center gap-1">
                 <Menu>
                   <MenuTrigger
@@ -4049,26 +4090,18 @@ export default function Sidebar() {
                     <span className="min-w-0 flex-1 truncate">
                       {(workEnvironmentScopeId !== null
                         ? environmentLabelById.get(workEnvironmentScopeId)
-                        : null) ?? "All environments"}
+                        : null) ?? "Select environment"}
                     </span>
                     <ChevronDownIcon className="-mr-px size-4 shrink-0" />
                   </MenuTrigger>
                   <MenuPopup align="start" className="w-(--anchor-width)">
                     <MenuRadioGroup
-                      value={workEnvironmentScopeId ?? "all"}
+                      value={workEnvironmentScopeId ?? ""}
                       onValueChange={(value) =>
-                        setWorkEnvironmentScopeId(value === "all" ? null : (value as EnvironmentId))
+                        setStoredWorkEnvironmentScopeId(value as EnvironmentId)
                       }
                     >
-                      <MenuRadioItem
-                        value="all"
-                        closeOnClick
-                        className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                      >
-                        <ServerIcon className="size-4 shrink-0" />
-                        <span className="min-w-0 truncate text-sm">All environments</span>
-                      </MenuRadioItem>
-                      {environments.map((environment) => (
+                      {workEnvironmentOptions.map((environment) => (
                         <MenuRadioItem
                           key={environment.environmentId}
                           value={environment.environmentId}

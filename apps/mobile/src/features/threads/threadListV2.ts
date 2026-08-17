@@ -21,11 +21,17 @@ export { snoozeWakeLabel };
  * Thread List v2 model, ported from the web sidebar v2
  * (apps/web/src/components/Sidebar.logic.ts + SidebarV2.tsx).
  *
- * Four visual states, three colors: color is reserved for "act now"
- * (approval), "in motion" (working), and "broken" (failed). Ready is the
- * unlabeled resting state.
+ * Five visual states, three colors: color is reserved for "act now"
+ * (approval), "in motion" (working and background), and "broken" (failed).
+ * Ready is the unlabeled resting state.
  */
-export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type ThreadListV2Status =
+  | "approval"
+  | "input"
+  | "working"
+  | "background"
+  | "failed"
+  | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
 export function resolveThreadListV2SnoozeMenuSelection(input: {
@@ -145,7 +151,14 @@ export function threadHasUnseenCompletion(
 }
 
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime">,
+  thread: Pick<
+    EnvironmentThreadShell,
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "runtime"
+    | "backgroundProcessCount"
+    | "activeAgentCount"
+  >,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
@@ -161,6 +174,11 @@ export function resolveThreadListV2Status(
   }
   if (thread.runtime?.status === "failed") {
     return "failed";
+  }
+  // The state between working and ready: the turn settled, but a delegated
+  // agent or a detached command is still running and will wake the thread.
+  if (thread.backgroundProcessCount + thread.activeAgentCount > 0) {
+    return "background";
   }
   return "ready";
 }
@@ -187,6 +205,8 @@ export function resolveWorkInboxBadge(input: {
     case "input":
       return "needs-you";
     case "working":
+    // Background work reads as working in the inbox: the row is not yours yet.
+    case "background":
       return "working";
     case "failed":
       return "failed";

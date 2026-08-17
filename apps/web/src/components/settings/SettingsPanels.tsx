@@ -2640,7 +2640,6 @@ export function GeneralSettingsPanel() {
 export function ProviderSettingsPanel(
   props: {
     readonly includeDriver?: (driver: ProviderDriverKind) => boolean;
-    readonly isComingSoonDriver?: (driver: ProviderDriverKind) => boolean;
     readonly title?: string;
     readonly allowAddInstance?: boolean;
   } = {},
@@ -2867,9 +2866,6 @@ export function ProviderSettingsPanel(
       });
     }
   }
-  const displayedRows = rows.filter(
-    (row) => row.isDefault || !(props.isComingSoonDriver?.(row.driver) ?? false),
-  );
 
   const updateProviderInstance = (
     row: InstanceRow,
@@ -3097,7 +3093,7 @@ export function ProviderSettingsPanel(
           }
         />
 
-        {displayedRows.map((row) => {
+        {rows.map((row) => {
           const driverOption = getDriverOption(row.driver);
           const liveProvider = serverProviders.find(
             (candidate) => candidate.instanceId === row.instanceId,
@@ -3127,9 +3123,8 @@ export function ProviderSettingsPanel(
             favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
           );
           const resetLabel = driverOption?.label ?? String(row.driver);
-          const isComingSoon = props.isComingSoonDriver?.(row.driver) ?? false;
           const headerAction =
-            !isComingSoon && row.isDefault && row.isDirty ? (
+            row.isDefault && row.isDirty ? (
               <SettingResetButton
                 label={`${resetLabel} provider settings`}
                 onClick={() => resetDefaultInstance(row.driver)}
@@ -3149,7 +3144,6 @@ export function ProviderSettingsPanel(
               }
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
-                !isComingSoon &&
                 setOpenInstanceDetails((existing) => ({
                   ...existing,
                   [row.instanceId]: open,
@@ -3168,11 +3162,7 @@ export function ProviderSettingsPanel(
                   updateProviderInstance(row, next);
                 }
               }}
-              onDelete={
-                row.isDefault || isComingSoon
-                  ? undefined
-                  : () => deleteProviderInstance(row.instanceId)
-              }
+              onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
               headerAction={headerAction}
               hiddenModels={modelPreferences.hiddenModels}
               favoriteModels={favoriteModels}
@@ -3203,7 +3193,6 @@ export function ProviderSettingsPanel(
                   : undefined
               }
               isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
-              comingSoon={isComingSoon}
             />
           );
         })}

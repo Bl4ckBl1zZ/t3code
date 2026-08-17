@@ -65,6 +65,9 @@ const STATUS_LABEL_BY_STATUS: Partial<
   approval: { label: "Approval", className: "text-amber-700 dark:text-amber-300" },
   input: { label: "Input", className: "text-indigo-600 dark:text-indigo-300" },
   working: { label: "Working", className: "text-sky-600 dark:text-sky-400" },
+  // Sky like Working, dimmed: nothing is generating, something is merely still
+  // out there.
+  background: { label: "Background", className: "text-sky-600/80 dark:text-sky-400/80" },
   failed: { label: "Failed", className: "text-red-700 dark:text-red-300" },
 };
 
@@ -496,10 +499,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   // "Done" marks a completion the user has not opened yet — same emerald
   // label as the web sidebar, sourced from the server-side visited watermark
   // so checking a thread on any device clears it everywhere.
-  const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
-  const statusLabel =
-    STATUS_LABEL_BY_STATUS[status] ??
-    (isUnread ? { label: "Done", className: "text-emerald-700 dark:text-emerald-300" } : undefined);
+  // Background counts as unread-eligible: a result the reader has not seen yet
+  // outranks work that is still going, same order as the web sidebar.
+  const isUnread =
+    (status === "ready" || status === "background") && threadHasUnseenCompletion(thread);
+  const statusLabel = isUnread
+    ? { label: "Done", className: "text-emerald-700 dark:text-emerald-300" }
+    : STATUS_LABEL_BY_STATUS[status];
   const timeLabel = threadTimeLabel(thread);
   const workBadge = resolveWorkInboxBadge({ status, hasUnseenCompletion: isUnread });
   const preview = resolveThreadPreview(thread);

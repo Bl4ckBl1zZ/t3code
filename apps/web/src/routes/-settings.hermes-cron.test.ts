@@ -12,7 +12,7 @@ describe("T3 Work settings route", () => {
     expect(T3_WORK_SETTINGS_SCROLL_CLASS_NAME).toContain("overflow-y-auto");
   });
 
-  it("places OpenClaw immediately after Hermes in the Agent gateways list", () => {
-    expect(T3_WORK_GATEWAY_DRIVERS).toEqual(["hermes", "openclaw"]);
+  it("lists Hermes as the only agent gateway", () => {
+    expect(T3_WORK_GATEWAY_DRIVERS).toEqual(["hermes"]);
   });
 });

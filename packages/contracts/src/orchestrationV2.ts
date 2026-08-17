@@ -1296,6 +1296,34 @@ export function orchestrationV2BackgroundProcessCount(
   ).length;
 }
 
+/**
+ * How many delegated agents a thread is still waiting on.
+ *
+ * Non-terminal rather than "running", because the question this answers is
+ * whether the thread will speak again on its own — a queued or blocked agent
+ * has not finished. That makes it deliberately wider than the Agents roster's
+ * live badge, which reports what is generating right now.
+ *
+ * Background-kind tasks are excluded: watch loops and detached shells already
+ * report through `orchestrationV2BackgroundProcessCount`, and counting them
+ * here would double every monitor.
+ */
+export function orchestrationV2ActiveAgentCount(
+  subagents: ReadonlyArray<{
+    readonly status: OrchestrationV2Subagent["status"];
+    readonly taskType?: string | undefined;
+    readonly agentKind?: OrchestrationV2AgentKind | undefined;
+  }>,
+): number {
+  return subagents.filter(
+    (subagent) =>
+      (subagent.status === "pending" ||
+        subagent.status === "running" ||
+        subagent.status === "waiting") &&
+      (subagent.agentKind ?? classifyV2AgentKind({ taskType: subagent.taskType })) === "agent",
+  ).length;
+}
+
 export const OrchestrationV2ProjectedTurnItem = Schema.Struct({
   position: NonNegativeInt,
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),
@@ -1555,6 +1583,13 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
    * that outlived their process. Absent on servers that predate the field.
    */
   backgroundProcessCount: Schema.optional(NonNegativeInt),
+  /**
+   * Delegated agents still running for this thread. Unlike background commands
+   * these do survive a restart in the projection, but startup reconciliation
+   * cancels every subagent whose run it retires, so a stale one never outlives
+   * the process that owned it. Absent on servers that predate the field.
+   */
+  activeAgentCount: Schema.optional(NonNegativeInt),
   itemCount: NonNegativeInt,
   visibleItemCount: NonNegativeInt,
   createdAt: Schema.DateTimeUtc,
