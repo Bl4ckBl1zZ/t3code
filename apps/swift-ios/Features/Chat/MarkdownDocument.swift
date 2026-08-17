@@ -28,6 +28,11 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     /// `[!NOTE]`-style marker. Mirrors the web app's callout rendering.
     case githubAlert(kind: MarkdownAlertKind, content: MarkdownDocument)
     case table(MarkdownTable)
+    /// An image that stands alone on its line, lifted out of its paragraph so
+    /// the renderer can load it. An image inside a sentence stays in the
+    /// paragraph and keeps rendering as its alt text, which is all Foundation's
+    /// inline parser can express.
+    case image(MarkdownInlineImage)
     case codeBlock(language: String?, code: String)
     /// A `t3-html` fence, which renders as a live sandboxed embed rather than
     /// as source. The block carries the fence body verbatim; assembling the
@@ -60,6 +65,12 @@ enum MarkdownTableAlignment: Equatable, Sendable {
 struct MarkdownListItem: Equatable, Sendable {
     let task: MarkdownTaskState?
     let blocks: [MarkdownBlock]
+}
+
+struct MarkdownInlineImage: Equatable, Sendable {
+    /// Kept raw: it doubles as the caption when the media cannot be loaded.
+    let alt: String
+    let src: String
 }
 
 enum MarkdownTaskState: Equatable, Sendable {
@@ -125,7 +136,7 @@ private struct MarkdownBlockParser {
                 continue
             }
 
-            blocks.append(parseParagraph())
+            blocks.append(contentsOf: parseParagraph())
         }
 
         return blocks
@@ -294,7 +305,7 @@ private struct MarkdownBlockParser {
         return .unorderedList(items)
     }
 
-    private mutating func parseParagraph() -> MarkdownBlock {
+    private mutating func parseParagraph() -> [MarkdownBlock] {
         var paragraphLines: [String] = []
 
         while index < lines.count, !lines[index].isMarkdownBlank {
@@ -306,7 +317,32 @@ private struct MarkdownBlockParser {
             index += 1
         }
 
-        return .paragraph(paragraphLines.joined(separator: "\n"))
+        return Self.paragraphBlocks(paragraphLines)
+    }
+
+    /// Media on its own line becomes its own block; everything around it stays
+    /// one paragraph, so a run of images under a sentence keeps the sentence
+    /// intact instead of splitting on every newline.
+    private static func paragraphBlocks(_ paragraphLines: [String]) -> [MarkdownBlock] {
+        var blocks: [MarkdownBlock] = []
+        var pending: [String] = []
+
+        func flushPending() {
+            guard !pending.isEmpty else { return }
+            blocks.append(.paragraph(pending.joined(separator: "\n")))
+            pending.removeAll(keepingCapacity: true)
+        }
+
+        for line in paragraphLines {
+            guard let images = MarkdownImageLine.images(in: line) else {
+                pending.append(line)
+                continue
+            }
+            flushPending()
+            blocks.append(contentsOf: images.map(MarkdownBlock.image))
+        }
+        flushPending()
+        return blocks
     }
 
     private func tableOpening(at position: Int) -> TableOpening? {
@@ -590,6 +626,161 @@ private struct MarkdownBlockParser {
         }
         guard cursor - indent >= opening.length else { return false }
         return characters[cursor..<characters.endIndex].allSatisfy { $0.isMarkdownWhitespace }
+    }
+}
+
+/// Recognizes a line that holds nothing but images — `![alt](src)`, possibly
+/// several, optionally with an angle-bracketed destination or a title. That is
+/// how agents emit media, and it is the only shape that can become a block:
+/// text sharing the line would have to survive the split, so such a line stays
+/// a paragraph and its images keep rendering as alt text. Reference-style and
+/// linked images (`[![alt](src)](href)`) do the same.
+enum MarkdownImageLine {
+    static func images(in line: String) -> [MarkdownInlineImage]? {
+        let characters = Array(line)
+        var cursor = skippingWhitespace(characters, from: 0)
+        var images: [MarkdownInlineImage] = []
+
+        while cursor < characters.count {
+            guard let image = parseImage(characters, from: &cursor) else { return nil }
+            images.append(image)
+            cursor = skippingWhitespace(characters, from: cursor)
+        }
+        return images.isEmpty ? nil : images
+    }
+
+    private static func parseImage(
+        _ characters: [Character],
+        from cursor: inout Int
+    ) -> MarkdownInlineImage? {
+        guard cursor + 1 < characters.count,
+              characters[cursor] == "!",
+              characters[cursor + 1] == "[" else {
+            return nil
+        }
+
+        var index = cursor + 2
+        var alt = ""
+        var depth = 1
+        while index < characters.count {
+            let character = characters[index]
+            if character == "\\", index + 1 < characters.count {
+                alt.append(characters[index + 1])
+                index += 2
+                continue
+            }
+            if character == "[" {
+                depth += 1
+            }
+            if character == "]" {
+                depth -= 1
+                if depth == 0 { break }
+            }
+            alt.append(character)
+            index += 1
+        }
+
+        guard depth == 0,
+              index + 1 < characters.count,
+              characters[index + 1] == "(" else {
+            return nil
+        }
+
+        index = skippingWhitespace(characters, from: index + 2)
+        guard let source = parseDestination(characters, from: &index) else { return nil }
+        index = skippingWhitespace(characters, from: index)
+        if index < characters.count, characters[index] != ")" {
+            guard skipTitle(characters, from: &index) else { return nil }
+            index = skippingWhitespace(characters, from: index)
+        }
+        guard index < characters.count, characters[index] == ")" else { return nil }
+
+        cursor = index + 1
+        return MarkdownInlineImage(alt: alt, src: source)
+    }
+
+    private static func parseDestination(
+        _ characters: [Character],
+        from index: inout Int
+    ) -> String? {
+        guard index < characters.count else { return nil }
+        var destination = ""
+
+        if characters[index] == "<" {
+            index += 1
+            while index < characters.count, characters[index] != ">" {
+                if characters[index] == "\\", index + 1 < characters.count {
+                    destination.append(characters[index + 1])
+                    index += 2
+                    continue
+                }
+                destination.append(characters[index])
+                index += 1
+            }
+            guard index < characters.count else { return nil }
+            index += 1
+        } else {
+            // A bare destination ends at whitespace or at the closing paren.
+            // Parens inside it are balanced, which is what lets a Windows path
+            // or a query string carrying one survive.
+            var depth = 0
+            scan: while index < characters.count {
+                let character = characters[index]
+                if character == "\\", index + 1 < characters.count {
+                    destination.append(characters[index + 1])
+                    index += 2
+                    continue
+                }
+                switch character {
+                case " ", "\t":
+                    break scan
+                case "(":
+                    depth += 1
+                case ")":
+                    if depth == 0 { break scan }
+                    depth -= 1
+                default:
+                    break
+                }
+                destination.append(character)
+                index += 1
+            }
+        }
+
+        return destination.isEmpty ? nil : destination
+    }
+
+    private static func skipTitle(_ characters: [Character], from index: inout Int) -> Bool {
+        guard index < characters.count else { return false }
+        let closing: Character
+        switch characters[index] {
+        case "\"": closing = "\""
+        case "'": closing = "'"
+        case "(": closing = ")"
+        default: return false
+        }
+
+        index += 1
+        while index < characters.count {
+            if characters[index] == "\\", index + 1 < characters.count {
+                index += 2
+                continue
+            }
+            if characters[index] == closing {
+                index += 1
+                return true
+            }
+            index += 1
+        }
+        return false
+    }
+
+    private static func skippingWhitespace(_ characters: [Character], from index: Int) -> Int {
+        var cursor = index
+        while cursor < characters.count, characters[cursor].isMarkdownWhitespace {
+            cursor += 1
+        }
+        return cursor
     }
 }
 

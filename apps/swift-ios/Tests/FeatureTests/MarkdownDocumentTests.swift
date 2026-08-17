@@ -271,6 +271,97 @@ struct MarkdownDocumentTests {
         }
     }
 
+    /// The shape agents actually emit: a sentence, then media on its own lines.
+    /// Before these became blocks the renderer kept only the alt text, so a
+    /// message of three pictures read as three stray captions.
+    @Test
+    func liftsStandaloneImagesOutOfTheirParagraph() {
+        let document = MarkdownDocument(
+            parsing: """
+            Of course!
+            ![A happy dog](https://example.com/dog.png)
+            ![A cute puppy](./out/puppy.jpeg "Puppy")
+
+            ![](<spaced name.png>) ![Second](/tmp/browser-artifacts/shot.png)
+            """
+        )
+
+        #expect(
+            document.blocks == [
+                .paragraph("Of course!"),
+                .image(
+                    MarkdownInlineImage(
+                        alt: "A happy dog",
+                        src: "https://example.com/dog.png"
+                    )
+                ),
+                .image(MarkdownInlineImage(alt: "A cute puppy", src: "./out/puppy.jpeg")),
+                .image(MarkdownInlineImage(alt: "", src: "spaced name.png")),
+                .image(
+                    MarkdownInlineImage(
+                        alt: "Second",
+                        src: "/tmp/browser-artifacts/shot.png"
+                    )
+                ),
+            ]
+        )
+    }
+
+    /// An image sharing its line with text cannot become a block without losing
+    /// the text, so the line stays a paragraph and the image keeps rendering as
+    /// its alt text — which is all Foundation's inline parser can express.
+    @Test
+    func keepsImagesThatShareALineInsideTheirParagraph() {
+        for source in [
+            "Here you go: ![A dog](dog.png)",
+            "![A dog](dog.png) is the one",
+            "[![A dog](dog.png)](https://example.com)",
+            "![Unclosed](dog.png",
+            "![Reference][dog]",
+        ] {
+            #expect(MarkdownDocument(parsing: source).blocks == [.paragraph(source)], "\(source)")
+        }
+    }
+
+    /// A screenshot path from a Windows host arrives with a drive letter, and
+    /// capture tools number repeats with `(1)`. Both have to survive the
+    /// destination scan, which otherwise ends at the first paren.
+    @Test
+    func keepsBalancedParensInsideAnImageDestination() {
+        #expect(
+            MarkdownDocument(parsing: "![Shot](/C:/shots/out(1).png)").blocks == [
+                .image(MarkdownInlineImage(alt: "Shot", src: "/C:/shots/out(1).png")),
+            ]
+        )
+    }
+
+    @Test
+    func imagesInListItemsAndQuotesBecomeBlocksToo() {
+        let document = MarkdownDocument(
+            parsing: """
+            - ![In a list](a.png)
+
+            > ![In a quote](b.png)
+            """
+        )
+
+        #expect(
+            document.blocks == [
+                .unorderedList([
+                    MarkdownListItem(
+                        task: nil,
+                        blocks: [.image(MarkdownInlineImage(alt: "In a list", src: "a.png"))]
+                    ),
+                ]),
+                .blockquote(
+                    MarkdownDocument(
+                        parsing: "![In a quote](b.png)"
+                    )
+                ),
+            ]
+        )
+    }
+
     @Test
     func parsesSetextHeadingsAndNormalizesWindowsNewlines() {
         let document = MarkdownDocument(parsing: "Heading\r\n=======\r\n\r\nBody")

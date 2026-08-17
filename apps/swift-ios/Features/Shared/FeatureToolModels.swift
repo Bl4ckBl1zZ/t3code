@@ -17,6 +17,10 @@ public struct FeatureCapabilityUnavailable: LocalizedError, Sendable, Equatable 
 @MainActor
 public protocol FeatureWorkspaceAssetResolving: AnyObject {
     func workspaceAssetURL(threadID: String, path: String) async throws -> URL
+    /// Hermes screenshots and recordings, which live in the server's
+    /// browser-artifacts directory rather than in the workspace. The thread
+    /// only picks the environment to ask; the file is named, not pathed.
+    func browserArtifactAssetURL(threadID: String, fileName: String) async throws -> URL
 }
 
 /// Optional thread-role capability: marks a Hermes conversation as belonging

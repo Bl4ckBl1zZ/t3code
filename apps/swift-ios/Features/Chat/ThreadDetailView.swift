@@ -1,4 +1,3 @@
-import ImageIO
 import SwiftUI
 import UIKit
 
@@ -369,6 +368,10 @@ public struct ThreadDetailView: View {
                     // Projected rows name their source thread with a wire id, so
                     // the rollback affordance has to compare against one.
                     wireThreadID: thread.wireID ?? thread.id,
+                    markdownMedia: MarkdownMediaContext(
+                        threadID: thread.id,
+                        client: model.client
+                    ),
                     onRollback: { target in
                         // Preview first, never fire-and-forget: the sheet
                         // shows the computed blast radius, owns progress, and
@@ -1462,6 +1465,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
     let threadID: String
     let wireThreadID: String
+    /// Resolves assistant markdown media against this thread's environment.
+    let markdownMedia: MarkdownMediaContext?
     let onRollback: (ThreadActivityRollbackTarget) -> Void
     /// The whole detail rather than its rows: building the feed costs O(window),
     /// so it happens inside the coordinator once the revision guard has proved
@@ -1540,6 +1545,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             rowContext: Coordinator.RowContext(
                 currentThreadID: threadID,
                 currentWireThreadID: wireThreadID,
+                markdownMedia: markdownMedia,
                 onRollback: onRollback,
                 workspaceRoot: workspaceRoot,
                 alwaysExpandActivity: alwaysExpandActivity,
@@ -1596,6 +1602,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         struct RowContext {
             var currentThreadID: String = ""
             var currentWireThreadID: String = ""
+            /// How a message's markdown media resolves to a loadable URL. Set
+            /// on the hosted row rather than on the SwiftUI parent: a hosting
+            /// configuration roots its own environment, so nothing an ancestor
+            /// puts there reaches these cells.
+            var markdownMedia: MarkdownMediaContext?
             var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
             var workspaceRoot: String?
             var alwaysExpandActivity = false
@@ -1674,6 +1685,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     // when the cell is reused for a different row, rather than
                     // showing it against the wrong one.
                     .id(entryID)
+                    .environment(\.markdownMediaContext, context.markdownMedia)
                 }
                 .margins(.all, 0)
                 cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
@@ -2398,75 +2410,6 @@ private struct FeatureLocalAttachmentThumbnail: View {
     }
 }
 
-private enum FeatureAttachmentThumbnailLoader {
-    static func image(for url: URL, maximumPixelSize: Int) async throws -> UIImage {
-        let cacheKey = "\(url.absoluteString)#\(maximumPixelSize)" as NSString
-        if let cached = FeatureAttachmentThumbnailCache.shared.image(for: cacheKey) {
-            return cached
-        }
-
-        let (data, response) = try await URLSession.shared.data(from: url)
-        try Task.checkCancellation()
-        if let response = response as? HTTPURLResponse,
-           !(200...299).contains(response.statusCode) {
-            throw FeatureAttachmentThumbnailError.invalidResponse
-        }
-
-        let image = try await Task.detached(priority: .utility) {
-            try downsample(data: data, maximumPixelSize: maximumPixelSize)
-        }.value
-        try Task.checkCancellation()
-        FeatureAttachmentThumbnailCache.shared.insert(image, for: cacheKey)
-        return image
-    }
-
-    private static func downsample(data: Data, maximumPixelSize: Int) throws -> UIImage {
-        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-            throw FeatureAttachmentThumbnailError.decodingFailed
-        }
-
-        let thumbnailOptions = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
-            kCGImageSourceShouldCacheImmediately: true,
-        ] as CFDictionary
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(
-            source,
-            0,
-            thumbnailOptions
-        ) else {
-            throw FeatureAttachmentThumbnailError.decodingFailed
-        }
-        return UIImage(cgImage: thumbnail)
-    }
-}
-
-private final class FeatureAttachmentThumbnailCache: @unchecked Sendable {
-    static let shared = FeatureAttachmentThumbnailCache()
-
-    private let images = NSCache<NSString, UIImage>()
-
-    private init() {
-        images.countLimit = 96
-        images.totalCostLimit = 32 * 1_024 * 1_024
-    }
-
-    func image(for key: NSString) -> UIImage? {
-        images.object(forKey: key)
-    }
-
-    func insert(_ image: UIImage, for key: NSString) {
-        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
-        images.setObject(image, forKey: key, cost: cost)
-    }
-}
-
-private enum FeatureAttachmentThumbnailError: Error {
-    case invalidResponse
-    case decodingFailed
-}
 
 struct FeatureMessageView: View {
     let message: FeatureMessage
@@ -2705,7 +2648,7 @@ private struct FeatureMessageAttachmentsView: View {
                 }
             }
             .fullScreenCover(item: $previewedAttachment) { attachment in
-                FeatureAttachmentPreview(attachment: attachment)
+                FeatureImagePreviewSheet(url: attachment.url, title: attachment.name)
             }
         }
     }
@@ -2728,44 +2671,3 @@ private struct FeatureMessageAttachmentsView: View {
     }
 }
 
-private struct FeatureAttachmentPreview: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
-    let attachment: FeatureMessageAttachment
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                if let url = attachment.url {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .failure:
-                            ContentUnavailableView(
-                                "Image unavailable",
-                                systemImage: "exclamationmark.triangle"
-                            )
-                        case .empty:
-                            ProgressView()
-                        @unknown default:
-                            ProgressView()
-                        }
-                    }
-                    .padding(12)
-                }
-            }
-            .navigationTitle(attachment.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .t3NavigationChrome()
-        }
-        .preferredColorScheme(.dark)
-    }
-}
