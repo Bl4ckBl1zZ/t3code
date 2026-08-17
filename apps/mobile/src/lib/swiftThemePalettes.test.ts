@@ -1,11 +1,11 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { parseCssColor, renderSwiftThemePalettes } from "./swiftThemePalettes";
 
-const SWIFT_TABLE = resolve(
+const SWIFT_TABLE = NodePath.resolve(
   import.meta.dirname,
   "../../../swift-ios/DesignSystem/T3ThemePalettes.generated.swift",
 );
@@ -36,13 +36,13 @@ describe("the Swift palette table", () => {
     const rendered = renderSwiftThemePalettes();
 
     if (process.env.UPDATE_SWIFT_THEME_PALETTES === "1") {
-      writeFileSync(SWIFT_TABLE, rendered);
+      NodeFS.writeFileSync(SWIFT_TABLE, rendered);
       return;
     }
 
     // The Swift client has no codegen, so nothing but this test notices when a
     // palette changes shared-side and iOS keeps painting the old colors.
-    expect(readFileSync(SWIFT_TABLE, "utf8")).toBe(rendered);
+    expect(NodeFS.readFileSync(SWIFT_TABLE, "utf8")).toBe(rendered);
   });
 
   it("covers every built-in palette in both appearances", () => {
