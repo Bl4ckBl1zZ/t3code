@@ -362,6 +362,30 @@ describe("HermesGatewayClient protocol and ordering", () => {
     expect(classifyHermesGatewayReady(legacyReady).capabilities).toEqual([]);
   });
 
+  // The shipped gateway answers a title read with the title and its key, and a
+  // title write with the title alone. Demanding the revisioned fields turned
+  // both into protocol errors, which took the whole session bind down with
+  // them.
+  it("reads and writes a title on a gateway that omits the revision metadata", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory);
+
+    const reading = client.readSessionTitle({ session_id: "live-1" });
+    let frame = sentFrames(socket).at(-1)!;
+    expect(frame.method).toBe("session.title");
+    socket.receive(success(frame.id, { title: "Untitled", session_key: "stored-1" }));
+    await expect(reading).resolves.toEqual({ title: "Untitled", session_key: "stored-1" });
+
+    const writing = client.updateSessionTitle(
+      { session_id: "live-1", title: "Named", origin: "client:t3-code" },
+      { operationId: "title-write" },
+    );
+    frame = sentFrames(socket).at(-1)!;
+    socket.receive(success(frame.id, { pending: false, title: "Named" }));
+    await expect(writing).resolves.toEqual({ pending: false, title: "Named" });
+    client.close();
+  });
+
   it("publishes negotiated version, capability, and reconnect health", async () => {
     const factory = new FakeSocketFactory();
     const client = new HermesGatewayClient({

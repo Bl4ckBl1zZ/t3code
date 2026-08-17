@@ -2150,6 +2150,9 @@ it.layer(SharedApplicationDataPlaneTestLayer)("permanent provider start failure"
       assert.equal(errorItem?.status, "failed");
       if (errorItem?.type === "error") {
         assert.equal(errorItem.failure.code, "provider_turn_start_failed");
+        // The reason the attempts gave up, not a guess about the transport.
+        assert.equal(errorItem.failure.message, "sessions are not used by lifecycle tests");
+        assert.equal(errorItem.failure.class, "provider_error");
       }
     }).pipe(Effect.provide(TestClock.layer())),
   );

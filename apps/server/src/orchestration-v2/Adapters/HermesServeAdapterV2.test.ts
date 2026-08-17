@@ -24,6 +24,7 @@ import {
   type HermesGatewaySessionResumeParams,
   type HermesGatewaySessionResumeResult,
   type HermesGatewaySessionStatusResult,
+  type HermesGatewaySessionTitleResult,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
@@ -162,6 +163,8 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
   createError: Error | null = null;
   resumeError: Error | null = null;
   titleError: Error | null = null;
+  titleReadError: Error | null = null;
+  titleResult: HermesGatewaySessionTitleResult | null = null;
   promptError: Error | null = null;
   promptResult: HermesGatewayPromptSubmitResult | null = null;
   closeCount = 0;
@@ -261,12 +264,15 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
 
   async readSessionTitle(params: { readonly session_id: string }) {
     this.titleReads.push(params.session_id);
-    return {
-      session_key: "stored-session-1",
-      title: "Hermes session",
-      revision: 1,
-      origin: "gateway",
-    };
+    if (this.titleReadError) throw this.titleReadError;
+    return (
+      this.titleResult ?? {
+        session_key: "stored-session-1",
+        title: "Hermes session",
+        revision: 1,
+        origin: "gateway",
+      }
+    );
   }
 
   async updateSessionTitle(params: { readonly title: string }) {
@@ -702,11 +708,23 @@ describe("HermesServeAdapterV2", () => {
         const fake = new FakeHermesGatewayClient();
         fake.resumeError = new HermesGatewayRpcError(4007, "session.resume", "fatal");
         const repository = yield* HermesSessionBindingRepository;
+        // The imported transcript is the only copy of this conversation, so
+        // the thread keeps it read-only instead of taking a fresh session.
+        yield* repository.prepareSessionImport({
+          importId: "hermes-import:test-vanished",
+          providerInstanceId: String(instanceId),
+          profileKey: "imported-profile",
+          projectId: String(projectId),
+          importKind: "session",
+          storedSessionKey: "stored-vanished-1",
+          threadId: String(threadId),
+          now: "2020-01-01T00:00:00.000Z",
+        });
         yield* repository.createBinding({
           bindingId: "hermes-binding:test-vanished",
           providerInstanceId: String(instanceId),
           profileKey: "imported-profile",
-          projectId: String(threadId),
+          projectId: String(projectId),
           storedSessionKey: "stored-vanished-1",
           threadId: String(threadId),
           protocolClassification: "supported",
@@ -733,6 +751,94 @@ describe("HermesServeAdapterV2", () => {
         assert.include(unavailable.message, "4007");
         assert.include(unavailable.message, "read-only");
         assert.include(unavailable.message, "stored-vanished-1");
+        assert.lengthOf(fake.creates, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  // Hermes writes a created session's durable row on its first prompt, so a
+  // bind that fails before that prompt leaves a binding pointing at a key the
+  // gateway never stored. Nothing was ever said in that session, so the thread
+  // takes a fresh one instead of failing on every later turn.
+  it.effect("rebinds a session Hermes never stored rather than stranding the thread", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.resumeError = new HermesGatewayRpcError(4007, "session.resume", "fatal");
+        const repository = yield* HermesSessionBindingRepository;
+        yield* repository.createBinding({
+          bindingId: "hermes-binding:test-unstored",
+          providerInstanceId: String(instanceId),
+          profileKey: "real-profile",
+          projectId: String(threadId),
+          storedSessionKey: "stored-unstored-1",
+          threadId: String(threadId),
+          protocolClassification: "supported",
+          protocolMajor: 1,
+          protocolMinor: 0,
+          capabilities: [],
+          reconciliationCursor: null,
+          reconciliationFingerprint: null,
+          now: "2020-01-01T00:00:00.000Z",
+        });
+        const runtime = yield* makeRuntime(fake);
+
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.lengthOf(fake.creates, 1);
+        // Reusing the dead operation id would let the gateway's mutation dedup
+        // answer the replacement with the session that vanished.
+        assert.include(fake.creates[0]!.options.operationId, "after:stored-unstored-1");
+        assert.equal(providerThread.nativeThreadRef?.strength, "strong");
+        const rebound = yield* repository.getByThreadId(String(threadId));
+        assert.equal(
+          Option.getOrNull(Option.map(rebound, (value) => value.storedSessionKey)),
+          "stored-session-1",
+        );
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("binds a session whose title the gateway cannot answer", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("session.title");
+        fake.titleReadError = new Error("Hermes gateway returned malformed session.title result.");
+        const runtime = yield* makeRuntime(fake);
+
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.lengthOf(fake.titleReads, 1);
+        assert.equal(providerThread.nativeThreadRef?.strength, "strong");
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  // A gateway that cannot order its titles must not be able to move T3's, or a
+  // stale read would overwrite a newer name.
+  it.effect("leaves the title alone when the gateway sends no revision", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        fake.compatibility = answering("session.title");
+        fake.titleResult = { title: "Untitled", session_key: "stored-session-1" };
+        const runtime = yield* makeRuntime(fake);
+
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+
+        const repository = yield* HermesSessionBindingRepository;
+        const binding = yield* repository.getByThreadId(String(threadId));
+        assert.equal(Option.getOrNull(Option.map(binding, (value) => value.titleRevision)), 0);
+        assert.isNull(Option.getOrNull(Option.map(binding, (value) => value.titleOrigin)));
       }),
     ).pipe(Effect.provide(TestLayer)),
   );

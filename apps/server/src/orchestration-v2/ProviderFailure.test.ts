@@ -120,6 +120,19 @@ it("reads a cause chain that lost its prototypes in transit", () => {
   assert.equal(failure.message, "Hermes owner lease is no longer held");
 });
 
+it("reads a cause chain that ends in a bare sentence", () => {
+  const failure = makeProviderFailure({
+    cause: new Error("Failed to ensure the provider thread.", {
+      cause: "Hermes no longer stores session 20260817_141040 in profile default.",
+    }),
+  });
+
+  assert.equal(
+    failure.message,
+    "Hermes no longer stores session 20260817_141040 in profile default.",
+  );
+});
+
 it("falls back to the outermost readable message when the cause carries none", () => {
   const failure = makeProviderFailure({
     cause: new Error("gateway unavailable", { cause: { payload: { retry: true } } }),
