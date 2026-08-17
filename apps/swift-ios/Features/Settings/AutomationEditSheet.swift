@@ -132,7 +132,7 @@ public struct AutomationEditSheet: View {
                 Text("Interval").tag(AutomationDraft.ScheduleMode.interval)
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
 
             switch draft.scheduleMode {
             case .fixed: fixedTimeEditor
@@ -160,7 +160,7 @@ public struct AutomationEditSheet: View {
                     .foregroundStyle(draft.isTimeOfDayValid ? T3Colors.textPrimary : T3Colors.danger)
                     .accessibilityLabel("Time of day, 24 hour HH:MM")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
             .frame(minHeight: 52)
 
             SettingsRowDivider(isInsetForIcon: false)
@@ -191,7 +191,7 @@ public struct AutomationEditSheet: View {
                 .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
         .padding(.vertical, 12)
     }
 
@@ -212,7 +212,7 @@ public struct AutomationEditSheet: View {
                 .font(T3Typography.threadBody)
                 .foregroundStyle(T3Colors.textSecondary)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
         .frame(minHeight: 52)
     }
 
@@ -236,7 +236,7 @@ public struct AutomationEditSheet: View {
                     Text("No projects on this environment yet.")
                         .font(T3Typography.threadBody)
                         .foregroundStyle(T3Colors.textSecondary)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, SettingsMetrics.rowPadding)
                         .frame(minHeight: 52, alignment: .leading)
                 } else {
                     VStack(spacing: 0) {
@@ -347,7 +347,7 @@ public struct AutomationEditSheet: View {
                         .foregroundStyle(T3Colors.accent)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
             .frame(minHeight: 52)
             .contentShape(Rectangle())
         }

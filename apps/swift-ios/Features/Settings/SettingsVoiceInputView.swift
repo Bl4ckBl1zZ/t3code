@@ -37,7 +37,7 @@ public struct SettingsVoiceInputView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 if let errorMessage {
                     SettingsErrorBanner(message: errorMessage)
                 }

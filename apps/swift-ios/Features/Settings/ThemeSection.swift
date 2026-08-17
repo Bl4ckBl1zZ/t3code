@@ -52,8 +52,8 @@ struct ThemeSection: View {
                     .pickerStyle(.menu)
                     .tint(T3Colors.textSecondary)
                 }
-                .padding(.horizontal, 20)
-                .frame(minHeight: 52)
+                .padding(.horizontal, SettingsMetrics.rowPadding)
+                .frame(minHeight: SettingsMetrics.rowMinHeight)
 
                 SettingsRowDivider(isInsetForIcon: false)
 
@@ -68,13 +68,10 @@ struct ThemeSection: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, SettingsMetrics.rowPadding)
                     .padding(.vertical, 14)
                 }
             }
-            .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .padding(.horizontal, 16)
         }
     }
 

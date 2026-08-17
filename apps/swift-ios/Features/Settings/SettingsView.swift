@@ -34,12 +34,10 @@ public struct SettingsView: View {
                     .overlay(T3Colors.border)
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 28) {
+                    LazyVStack(alignment: .leading, spacing: 18) {
                         connectionSection
                         t3ConnectSection
                         agentSection
-                        preferencesSection
-                        configurationSection
                         ThemeSection(
                             appearance: $settings.appearance,
                             lightThemeID: $settings.lightThemeID,
@@ -48,6 +46,8 @@ public struct SettingsView: View {
                         ThreadAppearanceSection(
                             alwaysExpandActivity: $settings.alwaysExpandActivity
                         )
+                        preferencesSection
+                        configurationSection
                         aboutSection
                     }
                     .padding(.vertical, 18)
@@ -231,29 +231,37 @@ public struct SettingsView: View {
     }
 
     private var settingsHeader: some View {
+        // The title is centred by overlay rather than by two fixed-width
+        // columns: "Saving…" is wider than "Save", and the old 72pt column
+        // truncated it while shifting the title off centre as it changed.
         HStack(spacing: 12) {
             Button("Cancel") { dismiss() }
-                .frame(width: 72, alignment: .leading)
                 .foregroundStyle(T3Colors.accent)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
 
-            Text("Settings")
-                .font(T3Typography.navigationTitle)
-                .foregroundStyle(T3Colors.textPrimary)
-
-            Spacer(minLength: 0)
-
-            Button(isSaving ? "Saving…" : "Save") {
+            Button {
                 save()
+            } label: {
+                if isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Saving")
+                } else {
+                    Text("Save").fontWeight(.semibold)
+                }
             }
-            .fontWeight(.semibold)
-            .frame(width: 72, alignment: .trailing)
             .foregroundStyle(canSave ? T3Colors.accent : T3Colors.textTertiary)
             .disabled(!canSave)
         }
         .font(T3Typography.control)
-        .padding(.horizontal, 20)
+        .overlay {
+            Text("Settings")
+                .font(T3Typography.navigationTitle)
+                .foregroundStyle(T3Colors.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(.horizontal, SettingsMetrics.headerInset)
         .frame(minHeight: 54)
     }
 
@@ -319,22 +327,22 @@ public struct SettingsView: View {
                     providers: model.snapshot.providers,
                     selection: $settings.defaultSelection
                 )
-                .padding(.horizontal, 20)
+                .padding(.horizontal, SettingsMetrics.rowPadding)
                 .frame(minHeight: 58)
 
                 if let provider = selectedProvider {
-                    settingsDivider
+                    SettingsRowDivider(isInsetForIcon: false)
 
                     SettingsValueRow(title: "Provider", value: provider.name)
                 }
 
                 if let detail = selectedModel?.detail {
-                    settingsDivider
+                    SettingsRowDivider(isInsetForIcon: false)
 
                     Text(detail)
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textSecondary)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, SettingsMetrics.rowPadding)
                         .padding(.vertical, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -398,7 +406,7 @@ public struct SettingsView: View {
     /// single scroll rather than a navigation tree: three one-row sections would
     /// be three headers introducing nothing.
     private var configurationSection: some View {
-        SettingsSection(title: "Configuration") {
+        SettingsSection(title: "Features") {
             VStack(spacing: 0) {
                 Button {
                     showingIntegrations = true
@@ -465,9 +473,11 @@ public struct SettingsView: View {
     private var aboutSection: some View {
         SettingsSection(title: "About") {
             VStack(spacing: 0) {
-                SettingsValueRow(title: "App", value: appDisplayName)
-                settingsDivider
-                SettingsValueRow(title: "Platform", value: "Native SwiftUI")
+                SettingsValueRow(
+                    title: "Version",
+                    value: appVersion,
+                    systemImage: "info.circle"
+                )
                 settingsDivider
                 Link(destination: URL(string: "https://github.com/pingdotgg/t3code")!) {
                     SettingsNavigationRow(
@@ -498,7 +508,7 @@ public struct SettingsView: View {
                 .font(T3Typography.supportingStrong)
                 .foregroundStyle(connectionColor)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
         .frame(minHeight: 58)
         .accessibilityElement(children: .combine)
     }
@@ -537,8 +547,8 @@ public struct SettingsView: View {
                     .foregroundStyle(status.color)
 
             }
-            .padding(.leading, 20)
-            .padding(.trailing, environment.isActive ? 20 : 56)
+            .padding(.leading, SettingsMetrics.rowPadding)
+            .padding(.trailing, environment.isActive ? SettingsMetrics.rowPadding : 52)
             .frame(minHeight: 62)
             .contentShape(Rectangle())
         }
@@ -575,16 +585,19 @@ public struct SettingsView: View {
         }
     }
 
-    private var settingsDivider: some View {
-        Divider()
-            .overlay(T3Colors.separator)
-            .padding(.leading, 54)
-            .padding(.trailing, 20)
-    }
+    private var settingsDivider: some View { SettingsRowDivider() }
 
-    private var appDisplayName: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? "T3 Code SwiftUI"
+    /// Marketing version and build, which is what a reader is being asked for
+    /// when they are asked which version they are on.
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String
+        let build = info?["CFBundleVersion"] as? String
+        switch (version, build) {
+        case let (version?, build?): return "\(version) (\(build))"
+        case let (version?, nil): return version
+        default: return "Unknown"
+        }
     }
 
     private var canSave: Bool {
@@ -707,6 +720,35 @@ private struct EnvironmentStatusPresentation {
 
 /// The settings row vocabulary. Internal rather than private so every settings
 /// screen in this folder renders from the same chrome instead of re-deriving it.
+/// Shared metrics for the settings screens.
+///
+/// Named rather than repeated so a row, its divider and its card cannot drift
+/// apart — the previous inset was a literal in five files and had already
+/// stopped matching the icon it was supposed to clear.
+enum SettingsMetrics {
+    /// Card inset from the screen edge.
+    static let cardInset: CGFloat = 16
+    /// Row padding inside a card.
+    static let rowPadding: CGFloat = 12
+    static let rowMinHeight: CGFloat = 52
+    static let iconSize: CGFloat = 36
+    static let iconGap: CGFloat = 12
+    /// Starts at the icon's trailing edge, so the rule reads as a list
+    /// separator instead of cutting the card in half.
+    static let dividerInset: CGFloat = rowPadding + iconSize
+    static let cardRadius: CGFloat = 20
+    /// Section headers, and the footnotes that sit beside cards rather than in
+    /// them, align here — the card's own inset plus its internal header inset.
+    static let headerInset: CGFloat = cardInset + 4
+}
+
+/// A titled card of rows.
+///
+/// Matches `ThreadDetailsSection`, which is the card treatment the rest of the
+/// app already uses. Settings previously drew its rows straight onto the page
+/// background with a full-bleed rule between them, so the one screen a reader
+/// opens to change something looked less finished than the sheet they opened it
+/// from.
 struct SettingsSection<Content: View>: View {
     let title: String
     let footer: String?
@@ -723,34 +765,53 @@ struct SettingsSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(T3Typography.supportingStrong)
-                .foregroundStyle(T3Colors.textSecondary)
-                .padding(.horizontal, 20)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(T3Typography.eyebrow)
+                .kerning(0.9)
+                .foregroundStyle(T3Colors.textTertiary)
+                .padding(.horizontal, 4)
+                .frame(minHeight: 24, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
 
-            content
+            VStack(spacing: 0) {
+                content
+            }
+            .background(T3Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
+                    .strokeBorder(T3Colors.border, lineWidth: 1)
+            )
 
             if let footer {
                 Text(footer)
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textTertiary)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 4)
                     .padding(.top, 2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(.horizontal, SettingsMetrics.cardInset)
     }
 }
 
+/// The icon puck, matching `ThreadDetailsRowIcon`.
+///
+/// Neutral by default. Color is spent only where it carries meaning — a
+/// destructive action, a connected server — rather than tinting every row,
+/// which made the old screen read as a wall of accent blue with no hierarchy.
 struct SettingsRowIcon: View {
     let systemName: String
-    var color: Color = T3Colors.accent
+    var color: Color = T3Colors.textSecondary
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 17, weight: .medium))
+            .font(.system(size: 16, weight: .medium))
             .foregroundStyle(color)
-            .frame(width: 22, height: 22)
+            .frame(width: SettingsMetrics.iconSize, height: SettingsMetrics.iconSize)
+            .background(T3Colors.subtle, in: Circle())
             .accessibilityHidden(true)
     }
 }
@@ -784,8 +845,8 @@ struct SettingsNavigationRow: View {
                 .foregroundStyle(T3Colors.textTertiary)
                 .accessibilityHidden(true)
         }
-        .padding(.horizontal, 20)
-        .frame(minHeight: 52)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
+        .frame(minHeight: SettingsMetrics.rowMinHeight)
         .contentShape(Rectangle())
     }
 }
@@ -803,8 +864,8 @@ struct SettingsActionRow: View {
                 .foregroundStyle(color)
             Spacer(minLength: 8)
         }
-        .padding(.horizontal, 20)
-        .frame(minHeight: 52)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
+        .frame(minHeight: SettingsMetrics.rowMinHeight)
         .contentShape(Rectangle())
     }
 }
@@ -815,7 +876,7 @@ struct SettingsValueRow: View {
     var systemImage: String? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SettingsMetrics.iconGap) {
             if let systemImage {
                 SettingsRowIcon(systemName: systemImage)
             }
@@ -828,8 +889,8 @@ struct SettingsValueRow: View {
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 20)
-        .frame(minHeight: 52)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
+        .frame(minHeight: SettingsMetrics.rowMinHeight)
         .accessibilityElement(children: .combine)
     }
 }
@@ -849,8 +910,8 @@ struct SettingsToggleRow: View {
             }
         }
         .tint(T3Colors.accent)
-        .padding(.horizontal, 20)
-        .frame(minHeight: 52)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
+        .frame(minHeight: SettingsMetrics.rowMinHeight)
     }
 }
 

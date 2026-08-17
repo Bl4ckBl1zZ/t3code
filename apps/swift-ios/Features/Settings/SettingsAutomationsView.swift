@@ -44,7 +44,7 @@ public struct SettingsAutomationsView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 if environments.isEmpty {
                     emptyState
                 } else {
@@ -208,7 +208,7 @@ public struct SettingsAutomationsView: View {
         ) {
             editorTarget = AutomationEditorTarget(environmentID: environmentID, task: nil)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.cardInset)
     }
 
     // MARK: - Requests
@@ -351,7 +351,7 @@ private struct AutomationRow: View {
             .tint(T3Colors.accent)
             .disabled(isBusy)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.rowPadding)
         .frame(minHeight: 62)
         .contextMenu {
             Button(role: .destructive, action: onDelete) {

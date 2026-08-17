@@ -32,7 +32,7 @@ public struct SettingsUsageView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 windowSection
 
                 switch state {
@@ -72,7 +72,7 @@ public struct SettingsUsageView: View {
             Text("90 days").tag(90)
         }
         .pickerStyle(.segmented)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, SettingsMetrics.cardInset)
     }
 
     private var emptySection: some View {
@@ -112,7 +112,7 @@ public struct SettingsUsageView: View {
                     statCard("Cache savings", Self.cost(merged.cacheSavingsUsd))
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
         }
     }
 
@@ -148,7 +148,7 @@ public struct SettingsUsageView: View {
 
                 providerTotalsRows(merged)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
         }
     }
 
@@ -197,7 +197,7 @@ public struct SettingsUsageView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, SettingsMetrics.rowPadding)
         }
     }
 
