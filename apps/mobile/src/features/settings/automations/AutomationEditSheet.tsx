@@ -11,10 +11,11 @@ import type {
   ScheduledTaskUpsertSchedule,
 } from "@t3tools/contracts";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, Switch, View } from "react-native";
+import { Alert, Modal, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/AppText";
+import { ThemedSwitch } from "../../../components/ThemedSwitch";
 import { cn } from "../../../lib/cn";
 import { buildModelOptions } from "../../../lib/modelOptions";
 import { useThemeColor } from "../../../lib/useThemeColor";
@@ -105,8 +106,6 @@ export function AutomationEditSheet(props: {
 }) {
   const insets = useSafeAreaInsets();
   const accent = useThemeColor("--color-primary");
-  const activeTrack = String(useThemeColor("--color-switch-active"));
-  const track = String(useThemeColor("--color-secondary-border"));
 
   const projects = useProjects();
   const environmentProjects = useMemo(
@@ -397,12 +396,7 @@ export function AutomationEditSheet(props: {
 
           <View className="flex-row items-center justify-between rounded-[18px] border-continuous bg-card p-4">
             <Text className="text-base text-foreground">Enabled</Text>
-            <Switch
-              ios_backgroundColor={track}
-              trackColor={{ false: track, true: activeTrack }}
-              value={draft.enabled}
-              onValueChange={(enabled) => patch({ enabled })}
-            />
+            <ThemedSwitch value={draft.enabled} onValueChange={(enabled) => patch({ enabled })} />
           </View>
         </ScrollView>
       </View>

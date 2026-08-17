@@ -8,7 +8,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, View, useColorScheme } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 import {
   KeyboardController,
   KeyboardEvents,
@@ -47,7 +47,7 @@ import { useSelectedThreadProjection } from "../../state/use-thread-detail";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { TerminalSurface } from "./NativeTerminalSurface";
-import { getPierreTerminalTheme } from "./terminalTheme";
+import { getMobileTerminalTheme } from "./terminalTheme";
 import { terminalDebugLog } from "./terminalDebugLog";
 import {
   getTerminalBufferReplayKey,
@@ -169,7 +169,6 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const closeTerminal = useAtomCommand(terminalEnvironment.close, "terminal close");
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, "environment retry");
-  const appearanceScheme = useColorScheme() === "light" ? "light" : "dark";
   const { state: workspaceState } = useWorkspaceState();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const params = props.route.params;
@@ -191,6 +190,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const {
     isReady: hasResolvedFontPreference,
     appearance,
+    themeAppearance: appearanceScheme,
+    themeId,
     setTerminalFontSize,
   } = useAppearancePreferences();
   const fontSize = appearance.terminalFontSize;
@@ -471,7 +472,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     [selectedEnvironmentConnection?.environmentLabel],
   );
 
-  const terminalTheme = getPierreTerminalTheme(appearanceScheme);
+  const terminalTheme = getMobileTerminalTheme(themeId, appearanceScheme);
   const usesNativeHeaderGlass = Platform.OS === "ios";
   const pendingModifier =
     pendingModifierState.terminalId === terminalId ? pendingModifierState.value : null;
@@ -1244,6 +1245,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 onResize={handleResize}
                 style={{ flex: 1 }}
                 terminalKey={terminalKey}
+                theme={terminalTheme}
               />
             </View>
 

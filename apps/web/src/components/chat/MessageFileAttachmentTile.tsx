@@ -19,6 +19,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { attachmentKindLabel } from "./ComposerAttachmentChips.logic";
 import { PierreEntryIcon } from "./PierreEntryIcon";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** Matches the composer chip, so the same name truncates the same way in both. */
 const NAME_MAX_CHARS = 26;
@@ -60,34 +61,41 @@ export function MessageFileAttachmentTile(props: {
 
   const shared = cn("flex min-h-[60px] items-center gap-2 px-2.5 py-2 text-left", props.className);
 
-  // The full name goes on `title` because the visible one is truncated, and on
-  // the accessible name because a screen reader should not have to read the
+  // The full name goes on the tooltip because the visible one is truncated, and
+  // on the accessible name because a screen reader should not have to read the
   // ellipsis either.
   if (attachment.previewUrl === undefined) {
     return (
-      <div
-        className={shared}
-        title={attachment.name}
-        aria-label={`${attachment.name}, ${kind}, ${size}`}
-      >
-        {body}
-      </div>
+      <Tooltip>
+        <TooltipTrigger
+          render={<div className={shared} aria-label={`${attachment.name}, ${kind}, ${size}`} />}
+        >
+          {body}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+      </Tooltip>
     );
   }
 
   return (
-    <a
-      href={attachment.previewUrl}
-      target="_blank"
-      rel="noreferrer"
-      title={attachment.name}
-      aria-label={`Open ${attachment.name}, ${kind}, ${size}`}
-      className={cn(
-        shared,
-        "outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
-      )}
-    >
-      {body}
-    </a>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <a
+            href={attachment.previewUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Open ${attachment.name}, ${kind}, ${size}`}
+            className={cn(
+              shared,
+              "outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+          />
+        }
+      >
+        {body}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+    </Tooltip>
   );
 }

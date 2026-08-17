@@ -12,20 +12,13 @@ import {
 } from "@t3tools/shared/model";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Switch,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { Modal, Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { ThemedSwitch } from "../../components/ThemedSwitch";
 import { cn } from "../../lib/cn";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
@@ -237,8 +230,6 @@ function SwitchRow(props: {
   readonly disabled?: boolean;
   readonly onValueChange: (value: boolean) => void;
 }) {
-  const activeTrack = String(useThemeColor("--color-switch-active"));
-  const track = String(useThemeColor("--color-secondary-border"));
   return (
     <View
       className={cn(
@@ -247,11 +238,10 @@ function SwitchRow(props: {
       )}
     >
       <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
-      <Switch
+      <ThemedSwitch
+        accessibilityLabel={props.label}
         disabled={props.disabled}
-        ios_backgroundColor={track}
         onValueChange={props.onValueChange}
-        trackColor={{ false: track, true: activeTrack }}
         value={props.value}
       />
     </View>

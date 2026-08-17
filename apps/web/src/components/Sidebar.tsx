@@ -671,15 +671,21 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               {props.projectTitle}
             </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
-              <button
-                type="button"
-                aria-label="Discard draft"
-                title="Discard draft"
-                onClick={handleDiscard}
-                className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
-              >
-                <XIcon className="size-3" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Discard draft"
+                      onClick={handleDiscard}
+                      className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top">Discard draft</TooltipPopup>
+              </Tooltip>
             </span>
           </div>
           <div className="mt-0.5 truncate text-sm font-medium text-foreground/90">{preview}</div>
@@ -1525,13 +1531,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           )}
         >
           {thread.workInboxRole === "main" ? (
-            <span
-              aria-label="Main thread is always pinned"
-              title="Main thread is always pinned"
-              className="inline-flex items-center px-1.5 text-muted-foreground"
-            >
-              <PinIcon aria-hidden className="size-3" />
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label="Main thread is always pinned"
+                    className="inline-flex items-center px-1.5 text-muted-foreground"
+                  />
+                }
+              >
+                <PinIcon aria-hidden className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Main thread is always pinned</TooltipPopup>
+            </Tooltip>
           ) : props.canPin ? (
             <button
               type="button"
@@ -1610,10 +1622,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         </span>
       ) : null}
       {props.isPinned ? (
-        <span
-          className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70"
-          title="Pinned"
-        >
+        <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
           <PinIcon aria-hidden className="size-3.5" />
         </span>
       ) : driverKind && !isHermes ? (

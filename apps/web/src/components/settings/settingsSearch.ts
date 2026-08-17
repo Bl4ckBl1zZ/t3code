@@ -215,6 +215,30 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/providers",
   },
   {
+    id: "browser-default-viewport",
+    title: "Default browser viewport",
+    to: "/settings/integrations",
+    targetId: "browser",
+  },
+  {
+    id: "browser-default-zoom",
+    title: "Default browser zoom",
+    to: "/settings/integrations",
+    targetId: "browser",
+  },
+  {
+    id: "browser-default-appearance",
+    title: "Default browser appearance",
+    to: "/settings/integrations",
+    targetId: "browser",
+  },
+  {
+    id: "browser-auto-show-floating-preview",
+    title: "Auto-show floating preview",
+    to: "/settings/integrations",
+    targetId: "browser",
+  },
+  {
     id: "source-control",
     title: "Source control",
     to: "/settings/source-control",

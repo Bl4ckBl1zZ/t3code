@@ -59,7 +59,30 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   composer carries voice input, its own attachment menu, and a push-to-talk gesture whose stability
   depends on the pill never swapping view branches mid-hold. `apps/mobile` is being retired in
   favour of `apps/swift-ios`, so the fork keeps its own composer, `thread-settings-menu.ts`, and
-  `ThreadSettingsSheet.tsx`. Follow-on upstream work on those files resolves to the fork.
+  `ThreadSettingsSheet.tsx`. Follow-on upstream work on those files resolves to the fork — upstream
+  `89c52a331` (swap `AndroidSheetHeader` for `AndroidScreenHeader` so the sheet's actions clear the
+  status bar) is dropped for exactly this reason: it targets that restructure's
+  `ThreadSettingsModelsScreen`/`ThreadSettingsChoiceScreen`, which the fork's `Modal`-based sheet
+  does not have, and the fork ships no Android target.
+- Carries upstream's mobile built-in themes (`85389b988`'s successor `d23b181da`:
+  `lib/mobileTheme.ts`, `@t3tools/shared/themePalettes`, `ThemeAppearanceSection`,
+  `ThemedSwitch`, `useMobileNavigationTheme`) ported onto the fork's own composer, sheet, and
+  settings shells rather than merged. Consequence: the theme system replaces React Native's
+  `useColorScheme` with `useAppearancePreferences().themeAppearance` everywhere, so the fork also
+  converted its own sites — `ControlPill`, `InlineUnifiedDiff`, `VoiceComposerControls`,
+  `HtmlEmbedView` — and moved its three remaining raw `Switch`es (`ThreadSettingsSheet`,
+  `AutomationRow`, `AutomationEditSheet`) onto `ThemedSwitch`, because the theme commit deleted
+  `--color-switch-active`. `AppearancePreferencesProvider` now writes `Partial<Preferences>`, which
+  exposed that `alwaysExpandActivity` was written but never parsed back; it is now persisted.
+  `Stack.tsx` drops its hardcoded `SHEET_BACKGROUND_COLOR` in favour of the navigation theme.
+- Serves one Settings -> Integrations page from `apps/web/src/components/settings/`
+  `IntegrationsSettings.tsx` holding both halves: upstream's Browser defaults section
+  (`949feb61e`) first, then the fork's OpenRouter credential row and its
+  `OpenRouterIntegrationSettings` sub-page. The fork keeps exporting `IntegrationsSettings` (not
+  upstream's `IntegrationsSettingsPanel`) because its route and nav entry already point there, and
+  the fork already registers `/settings/integrations` in `SettingsSidebarNav`, `settingsSearch`,
+  and `routeTree.gen.ts` — upstream's registrations of the same path resolve to the fork to avoid
+  duplicate keys.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.

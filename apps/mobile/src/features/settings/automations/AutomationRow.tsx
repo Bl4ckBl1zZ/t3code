@@ -4,9 +4,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ScheduledTask } from "@t3tools/contracts";
 import { useState } from "react";
-import { Alert, Pressable, Switch, View } from "react-native";
+import { Alert, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../../components/AppText";
+import { ThemedSwitch } from "../../../components/ThemedSwitch";
 import { cn } from "../../../lib/cn";
 import { useThemeColor } from "../../../lib/useThemeColor";
 import { serverEnvironment } from "../../../state/server";
@@ -30,8 +31,6 @@ export function AutomationRow(props: {
   readonly onLongPress?: () => void;
 }) {
   const accent = useThemeColor("--color-primary");
-  const activeTrack = String(useThemeColor("--color-switch-active"));
-  const track = String(useThemeColor("--color-secondary-border"));
   const [busy, setBusy] = useState(false);
 
   const setEnabled = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
@@ -113,13 +112,11 @@ export function AutomationRow(props: {
           Run
         </Text>
       </Pressable>
-      <Switch
+      <ThemedSwitch
         accessibilityLabel={
           props.task.enabled ? `Pause ${props.task.title}` : `Resume ${props.task.title}`
         }
         disabled={busy}
-        ios_backgroundColor={track}
-        trackColor={{ false: track, true: activeTrack }}
         value={props.task.enabled}
         onValueChange={(enabled) => void toggle(enabled)}
       />

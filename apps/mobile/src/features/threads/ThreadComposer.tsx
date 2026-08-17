@@ -24,7 +24,6 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  useColorScheme,
   View,
   type ViewStyle,
 } from "react-native";
@@ -38,6 +37,7 @@ import Animated, {
   LinearTransition,
 } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 
@@ -64,6 +64,7 @@ import {
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { buildProviderDriverMap, isHermesThread } from "../../lib/mobileWorkspace";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
   insertRankedSearchResult,
@@ -166,11 +167,14 @@ export function ComposerSurface(props: {
   readonly style: ViewStyle;
   readonly isDarkMode: boolean;
 }) {
+  const cardColor = useThemeColor("--color-card-translucent");
+  const borderColor = useThemeColor("--color-border");
+  const shadowColor = useThemeColor("--color-primary-shadow");
   // Drop shadow lives on a wrapper: `overflow: "hidden"` on the surface itself
   // (needed to clip content to the pill shape) would clip the shadow on iOS.
   const shadowStyle: ViewStyle = {
     borderRadius: props.style.borderRadius,
-    shadowColor: "#000000",
+    shadowColor,
     shadowOpacity: props.isDarkMode ? 0.35 : 0.12,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 6 },
@@ -198,9 +202,9 @@ export function ComposerSurface(props: {
         style={[
           props.style,
           {
-            backgroundColor: props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)",
+            backgroundColor: cardColor,
             borderWidth: 1,
-            borderColor: props.isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+            borderColor,
           },
         ]}
       >
@@ -266,6 +270,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
   readonly status: ComposerStatusPillState;
 }) {
   const isReconnecting = props.status.kind !== "unavailable";
+  const indicatorColor = useThemeColor("--color-icon-muted");
 
   return (
     <Animated.View
@@ -277,10 +282,10 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
       <Pressable
         accessibilityRole="button"
         onPress={props.onPress}
-        className="max-w-full flex-row items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm active:opacity-70 dark:bg-neutral-900/90"
+        className="max-w-full flex-row items-center gap-2 rounded-full bg-card px-3 py-2 shadow-sm active:opacity-70"
       >
         {isReconnecting ? (
-          <ActivityIndicator size="small" color="#8e8e93" />
+          <ActivityIndicator size="small" color={indicatorColor} />
         ) : (
           <View className="h-2 w-2 rounded-full bg-red-500" />
         )}
@@ -296,7 +301,8 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
 });
 
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
-  const isDarkMode = useColorScheme() === "dark";
+  const { themeAppearance } = useAppearancePreferences();
+  const isDarkMode = themeAppearance === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
   const iconColor = useThemeColor("--color-icon");
   const dangerColor = useThemeColor("--color-danger");
@@ -362,8 +368,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     environmentLabel: props.environmentLabel,
     threadSyncPhase: props.threadSyncPhase,
   });
-  const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
-  const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
+  const toolbarSurface = String(useThemeColor("--color-card"));
+  const backdropSurface = String(useThemeColor("--color-screen"));
+  const toolbarFadeOpaque = themeColorWithAlpha(toolbarSurface, 0.95);
+  const toolbarFadeTransparent = themeColorWithAlpha(toolbarSurface, 0);
+  const backdropGradient = `linear-gradient(to bottom, ${themeColorWithAlpha(backdropSurface, 0)} 0%, ${themeColorWithAlpha(backdropSurface, 0.6)} 55%, ${themeColorWithAlpha(backdropSurface, 0.9)} 100%)`;
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
     return (
@@ -785,9 +794,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         style={[
           StyleSheet.absoluteFill,
           {
-            experimental_backgroundImage: isDarkMode
-              ? "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 55%, rgba(0,0,0,0.9) 100%)"
-              : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.6) 55%, rgba(255,255,255,0.9) 100%)",
+            experimental_backgroundImage: backdropGradient,
           },
         ]}
       />

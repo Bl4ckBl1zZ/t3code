@@ -2,7 +2,7 @@ import type { VoiceInputState } from "@t3tools/client-runtime/voice";
 import { VOICE_INPUT_MAX_DURATION_SECONDS } from "@t3tools/contracts/voice";
 import * as Haptics from "expo-haptics";
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, useColorScheme, View, type ColorValue } from "react-native";
+import { ActivityIndicator, Pressable, View, type ColorValue } from "react-native";
 import Animated, {
   cancelAnimation,
   Easing,
@@ -26,6 +26,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 const COUNTDOWN_THRESHOLD_SECONDS = 15;
 const HAPTIC_COUNTDOWN_SECONDS = 3;
@@ -328,7 +329,8 @@ export function VoiceRecordingBar(props: {
   /** Absolutely cover the composer surface instead of flowing inline above it. */
   readonly overlay?: { readonly borderRadius: number };
 }) {
-  const isDarkMode = useColorScheme() === "dark";
+  const { themeAppearance } = useAppearancePreferences();
+  const isDarkMode = themeAppearance === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
   const iconColor = useThemeColor("--color-icon");
   const iconSubtle = useThemeColor("--color-icon-subtle");

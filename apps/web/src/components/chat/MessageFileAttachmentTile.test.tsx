@@ -31,7 +31,11 @@ describe("MessageFileAttachmentTile", () => {
 
   it("keeps the untruncated name reachable when the visible one is shortened", () => {
     const markup = render({ ...CRASH_REPORT, name: "a-really-long-crash-report-name-here.ips" });
-    expect(markup).toContain('title="a-really-long-crash-report-name-here.ips"');
+    // The full name rides the accessible name and the styled Tooltip, never a
+    // native title.
+    expect(markup).toContain('aria-label="a-really-long-crash-report-name-here.ips, IPS, 49 KB"');
+    expect(markup).not.toContain('title="a-really-long-crash-report-name-here.ips"');
+    expect(markup).toContain('data-slot="tooltip-trigger"');
     expect(markup).toContain("…");
   });
 

@@ -10,11 +10,11 @@ import {
 import {
   ArchiveIcon,
   ArrowLeftIcon,
+  BlocksIcon,
   BotIcon,
   CalendarClockIcon,
   Clock3Icon,
   GitBranchIcon,
-  BlocksIcon,
   GraduationCapIcon,
   KeyboardIcon,
   Link2Icon,

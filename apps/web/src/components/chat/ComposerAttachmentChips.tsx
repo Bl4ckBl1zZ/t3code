@@ -123,43 +123,49 @@ export function ComposerAttachmentChips(props: {
                   className="h-full w-full bg-black object-contain"
                 />
               ) : (
-                <div
-                  ref={(node) => {
-                    if (node) chipRefs.current.set(attachment.id, node);
-                    else chipRefs.current.delete(attachment.id);
-                  }}
-                  tabIndex={0}
-                  role="button"
-                  aria-label={label}
-                  title={attachment.name}
-                  className="flex h-full w-full items-center gap-2 px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onKeyDown={(event) => {
-                    if (event.key !== "Backspace" && event.key !== "Delete") return;
-                    event.preventDefault();
-                    removeAt(attachment.id, true);
-                  }}
-                >
-                  <PierreEntryIcon
-                    pathValue={attachment.name}
-                    kind="file"
-                    theme={resolvedTheme}
-                    className="size-6 shrink-0"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className="block truncate text-xs"
-                      // Keeps an RTL or bidi-marked name from flipping the row.
-                      dir="ltr"
-                      style={{ unicodeBidi: "plaintext" }}
-                    >
-                      {middleTruncateFileName(attachment.name, NAME_MAX_CHARS)}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <div
+                        ref={(node) => {
+                          if (node) chipRefs.current.set(attachment.id, node);
+                          else chipRefs.current.delete(attachment.id);
+                        }}
+                        tabIndex={0}
+                        role="button"
+                        aria-label={label}
+                        className="flex h-full w-full items-center gap-2 px-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onKeyDown={(event) => {
+                          if (event.key !== "Backspace" && event.key !== "Delete") return;
+                          event.preventDefault();
+                          removeAt(attachment.id, true);
+                        }}
+                      />
+                    }
+                  >
+                    <PierreEntryIcon
+                      pathValue={attachment.name}
+                      kind="file"
+                      theme={resolvedTheme}
+                      className="size-6 shrink-0"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className="block truncate text-xs"
+                        // Keeps an RTL or bidi-marked name from flipping the row.
+                        dir="ltr"
+                        style={{ unicodeBidi: "plaintext" }}
+                      >
+                        {middleTruncateFileName(attachment.name, NAME_MAX_CHARS)}
+                      </span>
+                      <span className="block text-[11px] tabular-nums text-muted-foreground">
+                        {attachmentKindLabel(attachment)} ·{" "}
+                        {formatAttachmentSize(attachment.sizeBytes)}
+                      </span>
                     </span>
-                    <span className="block text-[11px] tabular-nums text-muted-foreground">
-                      {attachmentKindLabel(attachment)} ·{" "}
-                      {formatAttachmentSize(attachment.sizeBytes)}
-                    </span>
-                  </span>
-                </div>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+                </Tooltip>
               )}
 
               {props.nonPersistedIds.has(attachment.id) && (

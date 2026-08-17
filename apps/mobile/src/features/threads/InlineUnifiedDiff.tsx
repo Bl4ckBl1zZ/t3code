@@ -1,7 +1,8 @@
 import { memo, useMemo } from "react";
-import { ScrollView, StyleSheet, useColorScheme, View } from "react-native";
+import { ScrollView, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { resolveNativeReviewDiffView } from "../diffs/nativeReviewDiffSurface";
 import {
   buildNativeReviewDiffData,
@@ -22,8 +23,7 @@ export const InlineUnifiedDiff = memo(function InlineUnifiedDiff(props: {
   readonly maxHeight?: number;
 }) {
   const { nativeReviewDiffStyle } = useAppearanceCodeSurface();
-  const colorScheme = useColorScheme();
-  const appearanceScheme = colorScheme === "light" ? "light" : "dark";
+  const { themeAppearance: appearanceScheme, themeId } = useAppearancePreferences();
   const NativeReviewDiffView = resolveNativeReviewDiffView();
   const maxHeight = props.maxHeight ?? 360;
 
@@ -37,8 +37,8 @@ export const InlineUnifiedDiff = memo(function InlineUnifiedDiff(props: {
     [nativeReviewDiffData.rows],
   );
   const nativeReviewDiffTheme = useMemo(
-    () => createNativeReviewDiffTheme(appearanceScheme),
-    [appearanceScheme],
+    () => createNativeReviewDiffTheme(appearanceScheme, themeId),
+    [appearanceScheme, themeId],
   );
   const nativeRowsJson = useMemo(() => JSON.stringify(compactNativeRows), [compactNativeRows]);
   const nativeThemeJson = useMemo(
