@@ -459,6 +459,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    func browserArtifactAssetURL(threadID: String, fileName: String) async throws -> URL {
+        let route = try threadRoute(for: threadID)
+        return try await route.client.resolvedAssetURL(
+            resource: .browserArtifact(fileName: fileName)
+        )
+    }
+
     func usageSummary(
         environmentID: String,
         sinceDay: String,

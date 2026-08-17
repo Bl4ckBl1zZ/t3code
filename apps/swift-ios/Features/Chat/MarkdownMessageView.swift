@@ -244,6 +244,9 @@ private struct MarkdownBlockView: View, Equatable {
         case let .table(table):
             MarkdownTableView(table: table)
 
+        case let .image(image):
+            MarkdownMediaView(image: image)
+
         case let .codeBlock(language, code):
             MarkdownCodeBlockView(language: language, code: code)
 

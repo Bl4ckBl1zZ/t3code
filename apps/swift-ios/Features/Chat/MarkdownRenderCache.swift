@@ -130,6 +130,10 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// only the kind and rendered children are carried here.
     case githubAlert(kind: MarkdownAlertKind, blocks: [MarkdownRenderedBlock])
     case table(MarkdownRenderedTable)
+    /// Carried through unrendered: media resolves against the thread it was
+    /// posted in, which this render task does not know, and loading happens on
+    /// the main actor once the block is on screen.
+    case image(MarkdownInlineImage)
     case codeBlock(language: String?, code: String)
     /// Carried through unrendered: the embed's document is assembled on the
     /// main actor from the current colour scheme, which this render task does
@@ -370,6 +374,9 @@ final class MarkdownRenderCache: @unchecked Sendable {
             case let .table(table):
                 guard let table = renderTable(table) else { return nil }
                 rendered = .table(table)
+
+            case let .image(image):
+                rendered = .image(image)
 
             case let .codeBlock(language, code):
                 rendered = .codeBlock(language: language, code: code)
