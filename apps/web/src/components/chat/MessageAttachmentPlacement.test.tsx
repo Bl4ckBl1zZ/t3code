@@ -55,6 +55,9 @@ describe("MessageAttachmentPlacement", () => {
       materialization: "failed",
       materializationReason: "The worktree is read-only.",
     });
-    expect(markup).toContain("The worktree is read-only.");
+    // The detail rides the accessible name; its tooltip copy is portalled and
+    // so never lands in static markup.
+    expect(markup).toContain('aria-label="The worktree is read-only."');
+    expect(markup).not.toContain('title="The worktree is read-only."');
   });
 });

@@ -33,8 +33,10 @@ export function MessageAttachmentPlacement(props: {
         <TooltipTrigger
           render={
             <span
-              // Also on the title so the reason is reachable without a hover.
-              title={reason}
+              // Also the accessible name so the reason is reachable without a
+              // hover: the visible text is only "Not saved to the workspace",
+              // and the tooltip that carries the detail is portalled.
+              aria-label={reason}
               className={cn(
                 "flex items-center gap-1 px-2 py-1 text-[11px] text-amber-600",
                 props.className,
@@ -57,17 +59,23 @@ export function MessageAttachmentPlacement(props: {
 
   return (
     <div className={cn("flex items-center gap-1 px-1.5 py-1", props.className)}>
-      <button
-        type="button"
-        title={`Open ${workspacePath}`}
-        aria-label={`Open ${workspacePath}`}
-        disabled={props.onOpenWorkspaceFile === undefined}
-        onClick={() => props.onOpenWorkspaceFile?.(workspacePath)}
-        className="min-w-0 flex-1 rounded px-1 py-0.5 text-left font-mono text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground"
-      >
-        {/* Truncate from the left: the file name matters more than `.t3code/uploads`. */}
-        <span className="block truncate [direction:rtl] [text-align:left]">{workspacePath}</span>
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={`Open ${workspacePath}`}
+              disabled={props.onOpenWorkspaceFile === undefined}
+              onClick={() => props.onOpenWorkspaceFile?.(workspacePath)}
+              className="min-w-0 flex-1 rounded px-1 py-0.5 text-left font-mono text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground"
+            />
+          }
+        >
+          {/* Truncate from the left: the file name matters more than `.t3code/uploads`. */}
+          <span className="block truncate [direction:rtl] [text-align:left]">{workspacePath}</span>
+        </TooltipTrigger>
+        <TooltipPopup side="top">{`Open ${workspacePath}`}</TooltipPopup>
+      </Tooltip>
       {props.onCopyPath !== undefined && (
         <Button
           variant="ghost"

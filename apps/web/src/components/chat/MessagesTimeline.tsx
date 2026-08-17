@@ -1274,12 +1274,16 @@ function UserMessageReplyPreview({ text }: { readonly text: string }) {
         <ReplyIcon className="size-3" aria-hidden="true" />
         <span>Replying to</span>
       </div>
-      <p
-        className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/70"
-        title={text}
-      >
-        {text}
-      </p>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <p className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/70" />
+          }
+        >
+          {text}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{text}</TooltipPopup>
+      </Tooltip>
     </aside>
   );
 }
@@ -1297,19 +1301,25 @@ function UserMessageIntentNote({
       : intent === "promoted_queued_to_steer"
         ? "queued → steered the run"
         : "steered the run";
+  const detail =
+    intent === "queued_turn"
+      ? "Queued behind the active turn"
+      : intent === "promoted_queued_to_steer"
+        ? "Originally queued, then promoted to steer the active turn"
+        : "Steered the active turn";
   return (
-    <span
-      className="me-1 text-[11px] text-muted-foreground/60"
-      title={
-        intent === "queued_turn"
-          ? "Queued behind the active turn"
-          : intent === "promoted_queued_to_steer"
-            ? "Originally queued, then promoted to steer the active turn"
-            : "Steered the active turn"
-      }
-    >
-      {label}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          // Also the accessible name so the detail is reachable without a hover:
+          // the tooltip that carries it is portalled.
+          <span aria-label={detail} className="me-1 text-[11px] text-muted-foreground/60" />
+        }
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{detail}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -1471,18 +1481,27 @@ function AssistantMessageAttachments({
                 />
               </button>
               <figcaption className="flex min-w-0 items-center gap-2 border-t border-border/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-                <span className="min-w-0 flex-1 truncate" title={attachment.name}>
-                  {attachment.name}
-                </span>
-                <a
-                  href={attachment.previewUrl}
-                  download={attachment.name}
-                  className="shrink-0 rounded p-1 transition-colors hover:bg-accent hover:text-foreground"
-                  aria-label={`Download ${attachment.name}`}
-                  title={`Download ${attachment.name}`}
-                >
-                  <DownloadIcon className="size-3.5" />
-                </a>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
+                    {attachment.name}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <a
+                        href={attachment.previewUrl}
+                        download={attachment.name}
+                        className="shrink-0 rounded p-1 transition-colors hover:bg-accent hover:text-foreground"
+                        aria-label={`Download ${attachment.name}`}
+                      />
+                    }
+                  >
+                    <DownloadIcon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{`Download ${attachment.name}`}</TooltipPopup>
+                </Tooltip>
               </figcaption>
             </figure>
           );
@@ -1514,18 +1533,27 @@ function AssistantMessageAttachments({
               className="min-w-0 rounded-xl border border-border/60 bg-muted/20 p-3 sm:col-span-2"
             >
               <figcaption className="mb-2 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-                <span className="min-w-0 flex-1 truncate" title={attachment.name}>
-                  {attachment.name}
-                </span>
-                <a
-                  href={attachment.previewUrl}
-                  download={attachment.name}
-                  className="shrink-0 rounded p-1 transition-colors hover:bg-accent hover:text-foreground"
-                  aria-label={`Download ${attachment.name}`}
-                  title={`Download ${attachment.name}`}
-                >
-                  <DownloadIcon className="size-3.5" />
-                </a>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
+                    {attachment.name}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <a
+                        href={attachment.previewUrl}
+                        download={attachment.name}
+                        className="shrink-0 rounded p-1 transition-colors hover:bg-accent hover:text-foreground"
+                        aria-label={`Download ${attachment.name}`}
+                      />
+                    }
+                  >
+                    <DownloadIcon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{`Download ${attachment.name}`}</TooltipPopup>
+                </Tooltip>
               </figcaption>
               <audio
                 src={attachment.previewUrl}
@@ -1551,13 +1579,16 @@ function AssistantMessageAttachments({
           );
         }
         return (
-          <div
-            key={attachment.id}
-            className="min-w-0 truncate rounded-lg border border-border/50 bg-muted/15 px-3 py-2 text-xs text-muted-foreground"
-            title={attachment.name}
-          >
-            Media unavailable · {attachment.name}
-          </div>
+          <Tooltip key={attachment.id}>
+            <TooltipTrigger
+              render={
+                <div className="min-w-0 truncate rounded-lg border border-border/50 bg-muted/15 px-3 py-2 text-xs text-muted-foreground" />
+              }
+            >
+              Media unavailable · {attachment.name}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+          </Tooltip>
         );
       })}
     </div>
@@ -2648,15 +2679,23 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
 function T3CodeToolLogo({ className }: { className?: string }) {
   const logoUrl = `${import.meta.env.BASE_URL}apple-touch-icon.png`;
   return (
-    <span
-      className={cn(
-        "flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-[4px] bg-background ring-1 ring-border/65",
-        className,
-      )}
-      title="T3 Code MCP tool"
-    >
-      <img alt="" aria-hidden="true" className="size-4 object-cover" src={logoUrl} />
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label="T3 Code MCP tool"
+            className={cn(
+              "flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-[4px] bg-background ring-1 ring-border/65",
+              className,
+            )}
+          />
+        }
+      >
+        <img alt="" aria-hidden="true" className="size-4 object-cover" src={logoUrl} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">T3 Code MCP tool</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -2790,7 +2829,7 @@ function buildToolCallExpandedBody(
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
-export const toolCallExpandedBodyClassName =
+const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {

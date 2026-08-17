@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const COUNTDOWN_THRESHOLD_SECONDS = 15;
 const LEVEL_BAR_COUNT = 14;
@@ -318,20 +319,28 @@ export function ComposerVoiceAction(props: {
               aria-hidden="true"
             />
             <VoiceLevelMeter subscribeLevel={props.subscribeLevel} dimmed={gesture.armed} />
-            <span
-              className={cn(
-                "tabular-nums",
-                showCountdown && "animate-voice-countdown-tick motion-reduce:animate-none",
-              )}
-              aria-label={
-                showCountdown
-                  ? `Recording, ${remainingSeconds} seconds remaining`
-                  : `Recording, ${formatClock(elapsedSeconds)}`
-              }
-              title={showCountdown ? "Recording stops automatically at the limit" : undefined}
-            >
-              {showCountdown ? `-${formatClock(remainingSeconds)}` : formatClock(elapsedSeconds)}
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    className={cn(
+                      "tabular-nums",
+                      showCountdown && "animate-voice-countdown-tick motion-reduce:animate-none",
+                    )}
+                    aria-label={
+                      showCountdown
+                        ? `Recording, ${remainingSeconds} seconds remaining`
+                        : `Recording, ${formatClock(elapsedSeconds)}`
+                    }
+                  />
+                }
+              >
+                {showCountdown ? `-${formatClock(remainingSeconds)}` : formatClock(elapsedSeconds)}
+              </TooltipTrigger>
+              {showCountdown ? (
+                <TooltipPopup side="top">Recording stops automatically at the limit</TooltipPopup>
+              ) : null}
+            </Tooltip>
           </span>
           {gesture.holding ? (
             // Finger/mouse is still down during push-to-talk, so the row's buttons are
@@ -347,38 +356,58 @@ export function ComposerVoiceAction(props: {
             <>
               {/* Small animation-delays build the row left-to-right; fill-mode `both` (baked
                   into the animate token) keeps the delayed buttons invisible until their turn. */}
-              <button
-                type="button"
-                className={cn(
-                  "rounded-full px-1.5 py-1 text-[11px] transition-colors animate-voice-row-in [animation-delay:40ms] motion-reduce:animate-none",
-                  recording.cleanup
-                    ? "bg-destructive/10 text-destructive"
-                    : "text-muted-foreground hover:bg-muted",
-                )}
-                onClick={() => props.onCleanupChange(!recording.cleanup)}
-                aria-pressed={recording.cleanup}
-                title="Clean up filler words and punctuation after transcribing"
-              >
-                Cleanup {recording.cleanup ? "on" : "off"}
-              </button>
-              <button
-                type="button"
-                className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted animate-voice-row-in [animation-delay:75ms] motion-reduce:animate-none"
-                onClick={props.onCancel}
-                aria-label="Cancel voice recording"
-                title="Cancel · Esc"
-              >
-                <XIcon className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                className="flex size-6 shrink-0 items-center justify-center rounded-full bg-destructive text-white transition-transform hover:scale-105 animate-voice-row-in [animation-delay:110ms] motion-reduce:animate-none motion-reduce:transition-none"
-                onClick={props.onToggle}
-                aria-label="Stop recording and transcribe"
-                title="Stop and transcribe · ⌘⇧M / Ctrl⇧M"
-              >
-                <SquareIcon className="size-3 fill-current" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded-full px-1.5 py-1 text-[11px] transition-colors animate-voice-row-in [animation-delay:40ms] motion-reduce:animate-none",
+                        recording.cleanup
+                          ? "bg-destructive/10 text-destructive"
+                          : "text-muted-foreground hover:bg-muted",
+                      )}
+                      onClick={() => props.onCleanupChange(!recording.cleanup)}
+                      aria-pressed={recording.cleanup}
+                    />
+                  }
+                >
+                  Cleanup {recording.cleanup ? "on" : "off"}
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  Clean up filler words and punctuation after transcribing
+                </TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted animate-voice-row-in [animation-delay:75ms] motion-reduce:animate-none"
+                      onClick={props.onCancel}
+                      aria-label="Cancel voice recording"
+                    />
+                  }
+                >
+                  <XIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">Cancel · Esc</TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex size-6 shrink-0 items-center justify-center rounded-full bg-destructive text-white transition-transform hover:scale-105 animate-voice-row-in [animation-delay:110ms] motion-reduce:animate-none motion-reduce:transition-none"
+                      onClick={props.onToggle}
+                      aria-label="Stop recording and transcribe"
+                    />
+                  }
+                >
+                  <SquareIcon className="size-3 fill-current" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">Stop and transcribe · ⌘⇧M / Ctrl⇧M</TooltipPopup>
+              </Tooltip>
             </>
           )}
         </>
@@ -388,92 +417,118 @@ export function ComposerVoiceAction(props: {
           <span className="whitespace-nowrap px-1.5 text-xs text-muted-foreground animate-voice-row-in [animation-delay:40ms] motion-reduce:animate-none">
             Transcribing…
           </span>
-          <button
-            type="button"
-            className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted animate-voice-row-in [animation-delay:75ms] motion-reduce:animate-none"
-            onClick={props.onCancel}
-            aria-label="Cancel transcription"
-            title="Cancel transcription"
-          >
-            <XIcon className="size-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted animate-voice-row-in [animation-delay:75ms] motion-reduce:animate-none"
+                  onClick={props.onCancel}
+                  aria-label="Cancel transcription"
+                />
+              }
+            >
+              <XIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Cancel transcription</TooltipPopup>
+          </Tooltip>
         </>
       ) : failedState ? (
         <>
-          <button
-            type="button"
-            className="flex size-7 shrink-0 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10"
-            // retry() re-requests microphone access for permission failures and re-sends the
-            // kept recording for transcription failures.
-            onClick={props.onRetry}
-            aria-label={
-              failedState.stage === "permission"
-                ? "Try microphone access again"
-                : "Retry voice transcription"
-            }
-            title={
-              failedState.stage === "permission"
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10"
+                  // retry() re-requests microphone access for permission failures and re-sends the
+                  // kept recording for transcription failures.
+                  onClick={props.onRetry}
+                  aria-label={
+                    failedState.stage === "permission"
+                      ? "Try microphone access again"
+                      : "Retry voice transcription"
+                  }
+                />
+              }
+            >
+              <RotateCwIcon className="size-4" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {failedState.stage === "permission"
                 ? "Microphone access failed — try again"
-                : "Transcription failed — retry with the same recording"
-            }
-          >
-            <RotateCwIcon className="size-4" />
-          </button>
-          <button
-            type="button"
-            className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted"
-            onClick={props.onCancel}
-            aria-label="Discard failed voice recording"
-            title="Discard recording"
-          >
-            <XIcon className="size-3.5" />
-          </button>
+                : "Transcription failed — retry with the same recording"}
+            </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted"
+                  onClick={props.onCancel}
+                  aria-label="Discard failed voice recording"
+                />
+              }
+            >
+              <XIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Discard recording</TooltipPopup>
+          </Tooltip>
         </>
       ) : (
-        <button
-          type="button"
-          className={cn(
-            // touch-none keeps a touch hold from turning into a page scroll (which would
-            // pointercancel the push-to-talk gesture).
-            // Press feel: a quick dip to .92 on press and a plain ease-out release.
-            "flex size-9 shrink-0 touch-none select-none items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.92] active:duration-100 motion-reduce:transition-none motion-reduce:active:scale-100 sm:size-8",
-            requestingPermission && "bg-muted",
-          )}
-          disabled={props.disabled || requestingPermission}
-          onPointerDown={(event) => {
-            if (!event.isPrimary) return;
-            suppressClickRef.current = false;
-            pendingStopRef.current = false;
-            // Capture on the capsule so the gesture survives this button unmounting when the
-            // capsule morphs into the recording row.
-            capsuleRef.current?.setPointerCapture(event.pointerId);
-            applyGestureEvent({ type: "press", at: performance.now(), y: event.clientY });
-            clearHoldTimer();
-            holdTimerRef.current = window.setTimeout(() => {
-              holdTimerRef.current = null;
-              applyGestureEvent({ type: "hold_elapsed" });
-            }, VOICE_GESTURE_DEFAULTS.holdClassifyMs);
-          }}
-          onContextMenu={(event) => {
-            if (gestureRef.current.type !== "idle") event.preventDefault();
-          }}
-          onClick={() => {
-            if (suppressClickRef.current) {
-              suppressClickRef.current = false;
-              return;
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={cn(
+                  // touch-none keeps a touch hold from turning into a page scroll (which would
+                  // pointercancel the push-to-talk gesture).
+                  // Press feel: a quick dip to .92 on press and a plain ease-out release.
+                  "flex size-9 shrink-0 touch-none select-none items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.92] active:duration-100 motion-reduce:transition-none motion-reduce:active:scale-100 sm:size-8",
+                  requestingPermission && "bg-muted",
+                )}
+                disabled={props.disabled || requestingPermission}
+                onPointerDown={(event) => {
+                  if (!event.isPrimary) return;
+                  suppressClickRef.current = false;
+                  pendingStopRef.current = false;
+                  // Capture on the capsule so the gesture survives this button unmounting when the
+                  // capsule morphs into the recording row.
+                  capsuleRef.current?.setPointerCapture(event.pointerId);
+                  applyGestureEvent({ type: "press", at: performance.now(), y: event.clientY });
+                  clearHoldTimer();
+                  holdTimerRef.current = window.setTimeout(() => {
+                    holdTimerRef.current = null;
+                    applyGestureEvent({ type: "hold_elapsed" });
+                  }, VOICE_GESTURE_DEFAULTS.holdClassifyMs);
+                }}
+                onContextMenu={(event) => {
+                  if (gestureRef.current.type !== "idle") event.preventDefault();
+                }}
+                onClick={() => {
+                  if (suppressClickRef.current) {
+                    suppressClickRef.current = false;
+                    return;
+                  }
+                  // Keyboard activation (Enter/Space) arrives here with no pointer sequence.
+                  props.onToggle();
+                }}
+                aria-label={
+                  requestingPermission ? "Requesting microphone access" : "Dictate message"
+                }
+              />
             }
-            // Keyboard activation (Enter/Space) arrives here with no pointer sequence.
-            props.onToggle();
-          }}
-          aria-label={requestingPermission ? "Requesting microphone access" : "Dictate message"}
-          title={
-            requestingPermission
+          >
+            {requestingPermission ? <Spinner className="size-4" /> : <MicIcon className="size-4" />}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {requestingPermission
               ? "Requesting microphone…"
-              : "Dictate message · ⌘⇧M / Ctrl⇧M · hold to talk"
-          }
-        >
-          {requestingPermission ? <Spinner className="size-4" /> : <MicIcon className="size-4" />}
-        </button>
+              : "Dictate message · ⌘⇧M / Ctrl⇧M · hold to talk"}
+          </TooltipPopup>
+        </Tooltip>
       )}
     </div>
   );

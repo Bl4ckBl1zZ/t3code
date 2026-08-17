@@ -14,6 +14,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { AgentOrb } from "./chat/AgentOrb";
 import { ScrollArea } from "./ui/scroll-area";
 import { Badge } from "./ui/badge";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useThreadProjection } from "../state/entities";
 import {
@@ -48,14 +49,20 @@ function WorkflowProgress({ row }: { row: AgentRow }) {
           show shape (how far along, how many total) at a glance. */}
       <span className="flex items-center gap-0.5">
         {workflow.phases.map((phase, index) => (
-          <span
-            key={`${phase.index}-${phase.title}`}
-            title={phase.detail ?? phase.title}
-            className={cn(
-              "h-1 w-3 rounded-full transition-colors",
-              index < progress.current ? "bg-primary/70" : "bg-muted-foreground/20",
-            )}
-          />
+          <Tooltip key={`${phase.index}-${phase.title}`}>
+            <TooltipTrigger
+              render={
+                <span
+                  aria-label={phase.detail ?? phase.title}
+                  className={cn(
+                    "h-1 w-3 rounded-full transition-colors",
+                    index < progress.current ? "bg-primary/70" : "bg-muted-foreground/20",
+                  )}
+                />
+              }
+            />
+            <TooltipPopup side="top">{phase.detail ?? phase.title}</TooltipPopup>
+          </Tooltip>
         ))}
       </span>
       {workflow.currentPhase !== undefined ? (

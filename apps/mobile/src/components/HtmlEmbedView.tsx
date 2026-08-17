@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Modal, Pressable, useColorScheme, View } from "react-native";
+import { Modal, Pressable, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { AppText as Text } from "./AppText";
 import { SymbolView } from "./AppSymbol";
 import { useThemeColor } from "../lib/useThemeColor";
+import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 export const HTML_EMBED_FENCE_LANGUAGE = "t3-html";
 
@@ -106,8 +107,7 @@ function EmbedWebView(props: {
 }
 
 export function HtmlEmbedView(props: { readonly html: string }) {
-  const colorScheme = useColorScheme();
-  const theme = colorScheme === "dark" ? "dark" : "light";
+  const { themeAppearance: theme } = useAppearancePreferences();
   const settledHtml = useSettledValue(props.html, SETTLE_DELAY_MS);
   const document = useMemo(() => buildHtmlEmbedDocument(settledHtml, theme), [settledHtml, theme]);
   const [inlineHeight, setInlineHeight] = useState(INLINE_DEFAULT_HEIGHT);

@@ -5,7 +5,7 @@ import type { EnvironmentId, OrchestrationV2TurnItem, ThreadId } from "@t3tools/
 import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { useNavigation } from "@react-navigation/native";
-import { LayoutAnimation, Pressable, useColorScheme, View } from "react-native";
+import { LayoutAnimation, Pressable, View } from "react-native";
 
 import {
   changedFileName,
@@ -31,6 +31,7 @@ import {
   type ThreadFeedActivity,
 } from "../../lib/threadActivity";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
+import { useThemeColor } from "../../lib/useThemeColor";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { ThreadActivityInspector } from "./ThreadActivityInspector";
 import { threadWorkLogOverflowNoun } from "./thread-work-log-labels";
@@ -474,8 +475,7 @@ export function ThreadWorkLog(props: {
   readonly onToggleRow: (rowId: string) => void;
   readonly workspaceRoot?: string | null;
 }) {
-  const colorScheme = useColorScheme();
-  const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
+  const pressedBackground = String(useThemeColor("--color-subtle"));
   const rows = visibleWorkLogActivities(props.activities).map((activity) => ({
     ...activity,
     detail: compactActivityDetail(activity.detail),
@@ -743,8 +743,7 @@ export function ThreadWorkGroupToggle(props: {
   readonly onlyToolActivities: boolean;
   readonly onToggle: () => void;
 }) {
-  const colorScheme = useColorScheme();
-  const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
+  const pressedBackground = String(useThemeColor("--color-subtle"));
   const noun = threadWorkLogOverflowNoun(props.onlyToolActivities, props.hiddenCount);
 
   return (

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function TimelineSystemDivider(props: {
   readonly label: string;
@@ -61,17 +62,25 @@ export function TimelineSystemDivider(props: {
     >
       <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
       {props.onAction ? (
-        <button
-          type="button"
-          aria-label={props.actionLabel}
-          {...(props.expanded === undefined ? {} : { "aria-expanded": props.expanded })}
-          onClick={props.onAction}
-          className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 bg-background px-2.5 py-1 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-          title={props.actionLabel}
-          {...props.dataAttributes}
-        >
-          {content}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label={props.actionLabel}
+                {...(props.expanded === undefined ? {} : { "aria-expanded": props.expanded })}
+                onClick={props.onAction}
+                className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 bg-background px-2.5 py-1 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+                {...props.dataAttributes}
+              />
+            }
+          >
+            {content}
+          </TooltipTrigger>
+          {props.actionLabel === undefined ? null : (
+            <TooltipPopup side="top">{props.actionLabel}</TooltipPopup>
+          )}
+        </Tooltip>
       ) : (
         <span
           className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1"
