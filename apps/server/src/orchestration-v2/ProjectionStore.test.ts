@@ -647,6 +647,98 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("counts live delegated agents in the shell the sidebar reads", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const nowIso = DateTime.formatIso(now);
+      const threadId = ThreadId.make("thread:projection-shell-agents");
+      const projectId = ProjectId.make("project:projection-shell-agents");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-agents-thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId,
+          title: "Agent shell",
+          providerInstanceId,
+          modelSelection: modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      const insertSubagent = (input: {
+        readonly id: string;
+        readonly status: string;
+        readonly taskType?: string;
+        readonly agentKind?: "agent" | "background";
+      }) =>
+        sql`
+          INSERT INTO orchestration_v2_projection_subagents (
+            subagent_id, thread_id, run_id, parent_node_id, provider,
+            provider_thread_id, child_thread_id, origin, status, started_at,
+            completed_at, updated_at, payload_json
+          )
+          VALUES (
+            ${input.id}, ${threadId}, ${null}, ${"node:parent"}, ${"claude"},
+            ${null}, ${null}, ${"app_owned"}, ${input.status}, ${nowIso},
+            ${null}, ${nowIso},
+            ${encodeUnknownJsonString({
+              id: input.id,
+              threadId,
+              status: input.status,
+              ...(input.taskType === undefined ? {} : { taskType: input.taskType }),
+              ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
+            })}
+          )
+        `;
+
+      // Two live delegated agents, one live watch loop, and one that finished.
+      yield* insertSubagent({ id: "subagent:live-1", status: "running", agentKind: "agent" });
+      // No stamped kind: classification falls back to the task type, and an
+      // unrecognized type is an agent rather than a silently dropped row.
+      yield* insertSubagent({ id: "subagent:live-2", status: "pending", taskType: "local_agent" });
+      yield* insertSubagent({
+        id: "subagent:monitor",
+        status: "running",
+        taskType: "monitor",
+        agentKind: "background",
+      });
+      yield* insertSubagent({ id: "subagent:done", status: "completed", agentKind: "agent" });
+
+      const shell = yield* projectionStore.getShellSnapshot();
+      const threadShell = yield* projectionStore.getThreadShell(threadId);
+
+      // The watch loop reports as a background command instead, and the
+      // finished agent does not report at all.
+      assert.equal(shell.threads.find((thread) => thread.id === threadId)?.activeAgentCount, 2);
+      assert.equal(threadShell?.activeAgentCount, 2);
+    }),
+  );
+
   it.effect("counts imported runless history inherited by fork shells", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;

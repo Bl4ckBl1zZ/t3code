@@ -445,6 +445,7 @@ type ThreadStatusInput = Pick<
 > & {
   lastVisitedAt?: string | null | undefined;
   backgroundProcessCount?: number | undefined;
+  activeAgentCount?: number | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -761,24 +762,58 @@ export function resolveThreadRowClassName(input: {
 }
 
 // ── Sidebar thread status model ─────────────────────────────────────
-// Five visual states, three colors: color is reserved for "act now"
-// (approval), "in motion" (working), and "broken" (failed). Ready is the
-// unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan.
+// Six visual states, three colors: color is reserved for "act now"
+// (approval), "in motion" (working and background), and "broken" (failed).
+// Ready is the unlabeled resting state — the agent stopped and is waiting on
+// the user, whether it finished, asked a question, or proposed a plan.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "working"
-  | "monitoring"
+  | "background"
   | "failed"
   | "ready";
+
+/** Optional so both sidebars' inputs satisfy it; absent counts as none. */
+interface SidebarBackgroundWorkInput {
+  readonly backgroundProcessCount?: number | undefined;
+  readonly activeAgentCount?: number | undefined;
+}
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
->;
+> &
+  SidebarBackgroundWorkInput;
+
+/**
+ * Live work the thread is waiting on with no run of its own in flight:
+ * delegated agents and detached commands. Counted together because the row
+ * shows one state either way — what it means to the reader is the same, "this
+ * will speak again without me".
+ */
+export function sidebarBackgroundWorkCount(thread: SidebarBackgroundWorkInput): number {
+  return (thread.backgroundProcessCount ?? 0) + (thread.activeAgentCount ?? 0);
+}
+
+const pluralize = (count: number, singular: string, plural: string) =>
+  `${count} ${count === 1 ? singular : plural}`;
+
+/**
+ * Names what is actually still running, since "Background" alone does not say
+ * whether the user is waiting on an agent or on a shell command.
+ */
+export function formatBackgroundWorkTooltip(thread: SidebarBackgroundWorkInput): string {
+  const agents = thread.activeAgentCount ?? 0;
+  const processes = thread.backgroundProcessCount ?? 0;
+  const parts = [
+    ...(agents > 0 ? [pluralize(agents, "background agent", "background agents")] : []),
+    ...(processes > 0 ? [pluralize(processes, "background process", "background processes")] : []),
+  ];
+  return `${parts.join(" and ")} running`;
+}
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
@@ -795,6 +830,12 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   }
   if (thread.runtime?.status === "failed") {
     return "failed";
+  }
+  // The state between working and ready: the turn settled, but a delegated
+  // agent or a detached command is still running and will wake the thread.
+  // Ranked below failed so a broken run still owns the row.
+  if (sidebarBackgroundWorkCount(thread) > 0) {
+    return "background";
   }
   return "ready";
 }
@@ -824,10 +865,11 @@ export function resolveWorkInboxBadge(input: {
     case "input":
       return "needs-you";
     case "working":
+    // Background work reads as working in the inbox: the row is not yours yet.
+    case "background":
       return "working";
     case "failed":
       return "failed";
-    case "monitoring":
     case "ready":
       return input.hasUnseenCompletion ? "done" : null;
   }
@@ -1080,17 +1122,14 @@ export function resolveThreadStatusPill(input: {
   }
 
   // The third state, between working and idle: nothing is generating right now,
-  // but a background command is still running and the thread will speak again on
-  // its own. Ranked below "Completed" so a result the reader has not seen yet
-  // still wins the dot.
-  const backgroundProcessCount = thread.backgroundProcessCount ?? 0;
-  if (backgroundProcessCount > 0) {
+  // but a delegated agent or a detached command is still running and the thread
+  // will speak again on its own. Ranked below "Completed" so a result the reader
+  // has not seen yet still wins the dot.
+  const backgroundWorkCount = sidebarBackgroundWorkCount(thread);
+  if (backgroundWorkCount > 0) {
     return {
       label: "Background",
-      tooltip:
-        backgroundProcessCount === 1
-          ? "1 background process running"
-          : `${backgroundProcessCount} background processes running`,
+      tooltip: formatBackgroundWorkTooltip(thread),
       colorClass: "text-sky-600 dark:text-sky-300/80",
       // Hollow, so it reads as "will speak again" rather than "speaking now".
       dotClass: "bg-transparent ring-1 ring-inset ring-sky-500 dark:ring-sky-300/80",

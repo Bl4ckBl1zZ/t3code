@@ -142,6 +142,7 @@ import {
   firstValidTimestampMs,
   hasUnseenCompletion,
   canPinWorkInboxThread,
+  formatBackgroundWorkTooltip,
   isSidebarNestedLinkClick,
   isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
@@ -933,7 +934,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // findable. In-flight rows recede the same as read-ready ones (inbox-zero:
   // working threads aren't your problem yet) — only the colored status label
   // stands out.
-  const isInFlight = status === "working" || status === "approval" || status === "input";
+  const isInFlight =
+    status === "working" || status === "background" || status === "approval" || status === "input";
   const shouldRecede =
     (status === "ready" || isInFlight) && !isUnread && !isWoke && !props.isActive && !isSelected;
   // Status hues follow the system-wide convention set by sidebar v1 and the
@@ -977,7 +979,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     icon: "done" as const,
                     className: "text-emerald-700 dark:text-emerald-300",
                   }
-                : null;
+                : // Ranked under Done and Woke, matching sidebar v1: a result the
+                  // reader has not seen yet outranks work that is still going.
+                  // Sky like Working, but unanimated — nothing is generating,
+                  // something is merely still out there.
+                  status === "background"
+                  ? {
+                      label: "Background",
+                      icon: "working" as const,
+                      className: "text-sky-600/80 dark:text-sky-400/80",
+                    }
+                  : null;
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1501,7 +1513,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         )}
       >
         {headStatus ? (
-          <span className={cn("inline-flex items-center gap-1 font-medium", headStatus.className)}>
+          <span
+            className={cn("inline-flex items-center gap-1 font-medium", headStatus.className)}
+            // "Background" alone does not say what is out there; the title names
+            // the agents and commands the row is still waiting on.
+            {...(status === "background" ? { title: formatBackgroundWorkTooltip(thread) } : {})}
+          >
             {headStatus.icon === "working" ? (
               <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
             ) : headStatus.icon === "done" ? (
@@ -1730,7 +1747,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           {workBadgeStyle.label}
                         </span>
                       ) : null}
-                      {workBadge === "working" ? (
+                      {/* Only a live run gets a ticking duration. A background
+                          row wears the same badge, but its run already settled,
+                          so a timer there would be counting nothing. */}
+                      {status === "working" ? (
                         <span
                           aria-hidden
                           className="shrink-0 text-xs text-sky-600 tabular-nums dark:text-sky-400"

@@ -405,6 +405,9 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case approval
     case input
     case working
+    /// Nothing is generating, but a delegated agent or a detached command is
+    /// still running and will wake the thread.
+    case background
     case failed
     case done
     case ready
@@ -458,7 +461,9 @@ extension FeatureThread {
         case .completed:
             .done
         case .idle:
-            .ready
+            // Ranked under Done, matching the web sidebar: a result the reader
+            // has not seen yet outranks work that is still going.
+            (backgroundWorkCount ?? 0) > 0 ? .background : .ready
         }
     }
 
@@ -476,7 +481,8 @@ extension FeatureThread {
     var workInboxBadge: WorkInboxBadge? {
         switch homeStatus {
         case .approval, .input: .needsYou
-        case .working: .working
+        // Background work reads as working in the inbox: the row is not yours yet.
+        case .working, .background: .working
         case .failed: .failed
         case .done: .done
         case .ready: nil
@@ -488,6 +494,7 @@ extension FeatureThread {
         case .approval: "Approval"
         case .input: "Input"
         case .working: "Working"
+        case .background: "Background"
         case .failed: "Failed"
         case .done: "Done"
         case .ready: nil

@@ -4485,6 +4485,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 ? nil
                 : (thread.latestRunStartedAt ?? thread.latestRunRequestedAt).map(parseDate),
             latestTurnCompletedAt: thread.latestRunCompletedAt.map(parseDate),
+            // Detached commands and delegated agents read as one thing on a row:
+            // work still going with no turn of the thread's own behind it.
+            backgroundWorkCount: (thread.backgroundProcessCount ?? 0)
+                + (thread.activeAgentCount ?? 0),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
         )

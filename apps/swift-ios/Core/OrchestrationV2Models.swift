@@ -1289,6 +1289,8 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// Background commands still running. Deliberately never persisted server
     /// side, so it is absent rather than zero on a cached read.
     public var backgroundProcessCount: Int?
+    /// Delegated agents still running. Absent on servers that predate the field.
+    public var activeAgentCount: Int?
     public var itemCount: Int
     public var visibleItemCount: Int
     public var createdAt: OrchestrationV2Timestamp

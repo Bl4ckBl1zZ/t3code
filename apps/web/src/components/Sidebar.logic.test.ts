@@ -6,6 +6,7 @@ import {
   canPinWorkInboxThread,
   createThreadJumpHintVisibilityController,
   filterSidebarV2VisibleThreads,
+  formatBackgroundWorkTooltip,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -1290,6 +1291,49 @@ describe("resolveSidebarThreadStatus", () => {
   it("defaults to ready with no runtime", () => {
     expect(resolveSidebarThreadStatus(idle)).toBe("ready");
   });
+
+  it("reports background once the run settles but agents or commands keep running", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        runtime: { ...runtime, status: "completed" as const },
+        activeAgentCount: 2,
+      }),
+    ).toBe("background");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        runtime: { ...runtime, status: "completed" as const },
+        backgroundProcessCount: 1,
+      }),
+    ).toBe("background");
+    // No runtime at all still counts: a delegated agent can outlive the run
+    // that spawned it, and the row has to say so.
+    expect(resolveSidebarThreadStatus({ ...idle, activeAgentCount: 1 })).toBe("background");
+  });
+
+  it("keeps a live run and a broken one ahead of background work", () => {
+    expect(resolveSidebarThreadStatus({ ...idle, runtime, activeAgentCount: 3 })).toBe("working");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        runtime: { ...runtime, status: "failed" as const, lastError: "boom" },
+        backgroundProcessCount: 2,
+      }),
+    ).toBe("failed");
+  });
+});
+
+describe("formatBackgroundWorkTooltip", () => {
+  it("names both kinds of work and pluralizes each", () => {
+    expect(formatBackgroundWorkTooltip({ activeAgentCount: 1 })).toBe("1 background agent running");
+    expect(formatBackgroundWorkTooltip({ backgroundProcessCount: 2 })).toBe(
+      "2 background processes running",
+    );
+    expect(formatBackgroundWorkTooltip({ activeAgentCount: 2, backgroundProcessCount: 1 })).toBe(
+      "2 background agents and 1 background process running",
+    );
+  });
 });
 
 describe("searchSidebarThreadsByTitle", () => {
@@ -2347,7 +2391,6 @@ describe("resolveWorkInboxBadge", () => {
   it("badges a finished thread only until it has been opened", () => {
     expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: true })).toBe("done");
     expect(resolveWorkInboxBadge({ status: "ready", hasUnseenCompletion: false })).toBeNull();
-    expect(resolveWorkInboxBadge({ status: "monitoring", hasUnseenCompletion: true })).toBe("done");
   });
 
   it("carries working and failed through", () => {
@@ -2355,5 +2398,12 @@ describe("resolveWorkInboxBadge", () => {
       "working",
     );
     expect(resolveWorkInboxBadge({ status: "failed", hasUnseenCompletion: false })).toBe("failed");
+  });
+
+  it("badges lingering background work as working", () => {
+    // The row is not the reader's problem yet either way.
+    expect(resolveWorkInboxBadge({ status: "background", hasUnseenCompletion: false })).toBe(
+      "working",
+    );
   });
 });

@@ -332,7 +332,7 @@ public struct ThreadDetailView: View {
 
     private var headerStatusIcon: String? {
         switch currentThread.homeStatus {
-        case .working: "circle.dotted"
+        case .working, .background: "circle.dotted"
         case .done: "checkmark.circle"
         case .failed: "exclamationmark.circle"
         case .approval, .input, .ready: nil
@@ -342,6 +342,9 @@ public struct ThreadDetailView: View {
     private var headerStatusColor: Color {
         switch currentThread.homeStatus {
         case .working: T3Colors.statusRunning
+        // The running hue, dimmed: nothing is generating, something is merely
+        // still out there.
+        case .background: T3Colors.statusRunning.opacity(0.8)
         case .approval: T3Colors.warning
         case .input: T3Colors.statusInput
         case .failed: T3Colors.danger

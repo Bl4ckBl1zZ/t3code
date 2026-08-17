@@ -101,6 +101,11 @@ export interface EnvironmentThreadShell {
    * is idle now but will speak again on its own.
    */
   readonly backgroundProcessCount: number;
+  /**
+   * Delegated agents still running for this thread. Nonzero means the same
+   * thing as a background command: idle now, will speak again on its own.
+   */
+  readonly activeAgentCount: number;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -238,6 +243,7 @@ export function presentThreadShell(
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     backgroundProcessCount: thread.backgroundProcessCount ?? 0,
+    activeAgentCount: thread.activeAgentCount ?? 0,
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,
     createdAt: iso(thread.createdAt),

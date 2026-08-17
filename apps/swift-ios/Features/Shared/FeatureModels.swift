@@ -237,6 +237,11 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var attentionAt: Date?
     public var workingStartedAt: Date?
     public var latestTurnCompletedAt: Date?
+    /// Delegated agents and detached commands still running with no turn of the
+    /// thread's own in flight. Nonzero means the row is idle now but will speak
+    /// again on its own. Optional so cached rows written before the field
+    /// decode unchanged.
+    public var backgroundWorkCount: Int?
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
 
@@ -278,6 +283,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
+        backgroundWorkCount: Int? = nil,
         runtimeMode: FeatureRuntimeMode = .fullAccess,
         interactionMode: FeatureInteractionMode = .standard
     ) {
@@ -318,6 +324,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
+        self.backgroundWorkCount = backgroundWorkCount
         self.runtimeMode = runtimeMode
         self.interactionMode = interactionMode
     }

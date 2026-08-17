@@ -26,6 +26,7 @@ import {
   OrchestrationV2RuntimeRequestJson as OrchestrationV2RuntimeRequestJsonSchema,
   OrchestrationV2SubagentJson as OrchestrationV2SubagentJsonSchema,
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
+  orchestrationV2ActiveAgentCount,
   orchestrationV2BackgroundProcessCount,
   RunId,
   ThreadId,
@@ -430,6 +431,7 @@ type ShellThreadRow = {
   readonly item_count: number;
   readonly runless_item_count: number;
   readonly live_background_commands_json: string | null;
+  readonly live_subagents_json: string | null;
 };
 
 /**
@@ -471,6 +473,41 @@ function backgroundProcessCountFromRow(liveBackgroundCommandsJson: string | null
       ...(row.taskId === null ? {} : { taskId: row.taskId }),
       ...(row.waitKind === "monitor" ? { waitKind: "monitor" as const } : {}),
       ...(row.waitingOnTaskId === null ? {} : { waitingOnTaskId: row.waitingOnTaskId }),
+    })),
+  );
+}
+
+/**
+ * The `json_object` rows the shell query selects for live subagents. Only the
+ * fields the roster classification reads; the status filter lives in SQL.
+ */
+const LiveSubagentRows = Schema.Array(
+  Schema.Struct({
+    taskType: Schema.NullOr(Schema.String),
+    agentKind: Schema.NullOr(Schema.String),
+  }),
+);
+const decodeLiveSubagentRows = Schema.decodeUnknownOption(Schema.fromJsonString(LiveSubagentRows));
+
+/**
+ * Count live delegated agents from the shell row. Rows rather than a count for
+ * the same reason as background commands: whether a task is an agent or a watch
+ * loop is one rule, and it lives in `orchestrationV2ActiveAgentCount`.
+ */
+function activeAgentCountFromRow(liveSubagentsJson: string | null): number {
+  if (liveSubagentsJson === null) {
+    return 0;
+  }
+  // A malformed row costs a sidebar label, not the whole shell read.
+  const rows = Option.getOrElse(decodeLiveSubagentRows(liveSubagentsJson), () => []);
+  return orchestrationV2ActiveAgentCount(
+    rows.map((row) => ({
+      // The query already filtered to non-terminal rows.
+      status: "running" as const,
+      ...(row.taskType === null ? {} : { taskType: row.taskType }),
+      ...(row.agentKind === "agent" || row.agentKind === "background"
+        ? { agentKind: row.agentKind }
+        : {}),
     })),
   );
 }
@@ -920,6 +957,7 @@ export function threadShellFromProjection(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
     ),
     backgroundProcessCount: orchestrationV2BackgroundProcessCount(projection.turnItems),
+    activeAgentCount: orchestrationV2ActiveAgentCount(projection.subagents),
     itemCount: activeLocalTurnItems(projection).length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
@@ -957,6 +995,7 @@ type ShellThreadState = {
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
   readonly backgroundProcessCount: number;
+  readonly activeAgentCount: number;
   readonly itemCount: number;
   readonly runlessItemCount: number;
   readonly updatedAt: OrchestrationV2ThreadProjection["updatedAt"];
@@ -1100,6 +1139,7 @@ function shellFromState(input: {
     latestUserMessageAt: input.state.latestUserMessageAt,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     backgroundProcessCount: input.state.backgroundProcessCount,
+    activeAgentCount: input.state.activeAgentCount,
     itemCount: input.state.itemCount,
     visibleItemCount: input.visibleItemCount,
     createdAt: input.state.thread.createdAt,
@@ -2359,7 +2399,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND i.type = 'command_execution'
                   AND i.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted')
                   AND json_extract(i.payload_json, '$.background') = 1
-              ) AS live_background_commands_json
+              ) AS live_background_commands_json,
+              -- Delegated agents still running. Rows rather than a count for the
+              -- same reason as above: agent-vs-watch-loop is a shared rule, and
+              -- the Agents panel and the sidebar have to apply the same one.
+              (
+                SELECT json_group_array(
+                  json_object(
+                    'taskType', json_extract(s.payload_json, '$.taskType'),
+                    'agentKind', json_extract(s.payload_json, '$.agentKind')
+                  )
+                )
+                FROM orchestration_v2_projection_subagents s
+                WHERE s.thread_id = t.thread_id
+                  AND s.status IN ('pending', 'running', 'waiting')
+              ) AS live_subagents_json
             FROM orchestration_v2_projection_threads t
             WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
             ORDER BY t.updated_at ASC, t.thread_id ASC
@@ -2463,6 +2517,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           // reconciliation retires every item that outlived one before any client
           // reads this.
           backgroundProcessCount: backgroundProcessCountFromRow(row.live_background_commands_json),
+          activeAgentCount: activeAgentCountFromRow(row.live_subagents_json),
           itemCount: row.item_count,
           runlessItemCount: row.runless_item_count,
           updatedAt: thread.updatedAt,
