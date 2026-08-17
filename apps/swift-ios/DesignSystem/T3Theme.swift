@@ -2,42 +2,51 @@ import SwiftUI
 import UIKit
 
 enum T3Colors {
-    // Keep these values aligned with apps/mobile/global.css. UIKit variants
-    // let recycled collection and terminal surfaces participate in the same
-    // system appearance changes as SwiftUI views.
-    static let uiBackground = adaptive(light: rgb(0xF2F2F7), dark: rgb(0x0A0A0A))
-    static let uiTextPrimary = adaptive(light: rgb(0x262626), dark: rgb(0xF5F5F5))
+    // Palette-driven roles read through T3ThemeStore, so selecting a theme in
+    // Settings repaints every surface. Reads inside a SwiftUI `body` register
+    // an Observation dependency on the store even though the spelling here is a
+    // static — see T3ThemeStore for why that is what makes this work.
+    //
+    // The UIKit variants exist because recycled collection and terminal
+    // surfaces resolve colors outside any `body`; they follow the system's
+    // light/dark change for free and follow a palette change via
+    // `.t3ThemeDidChange`.
+    private static var palette: T3ResolvedColors { T3ThemeStore.shared.resolved }
 
-    static let background = Color(uiColor: uiBackground)
-    static let sheet = color(light: rgb(0xF2F2F7, alpha: 0.98), dark: rgb(0x0E0E0E, alpha: 0.98))
-    static let surface = color(light: rgb(0xFFFFFF), dark: rgb(0x171717))
-    static let surfaceRaised = color(light: rgb(0xF5F5F5), dark: rgb(0x1C1C1C))
-    static let input = color(light: rgb(0xFFFFFF), dark: rgb(0x141414))
-    static let border = color(light: rgb(0x000000, alpha: 0.08), dark: rgb(0xFFFFFF, alpha: 0.06))
-    static let inputBorder = color(
-        light: rgb(0x000000, alpha: 0.10), dark: rgb(0xFFFFFF, alpha: 0.08))
-    static let separator = color(
-        light: rgb(0x000000, alpha: 0.04), dark: rgb(0xFFFFFF, alpha: 0.03))
-    static let subtle = color(light: rgb(0x000000, alpha: 0.04), dark: rgb(0xFFFFFF, alpha: 0.04))
-    static let subtleStrong = color(
-        light: rgb(0x000000, alpha: 0.08), dark: rgb(0xFFFFFF, alpha: 0.08))
+    static var uiBackground: UIColor { palette.background }
+    static var uiTextPrimary: UIColor { palette.textPrimary }
+
+    static var background: Color { Color(uiColor: palette.background) }
+    static var sheet: Color { Color(uiColor: palette.sheet) }
+    static var surface: Color { Color(uiColor: palette.surface) }
+    static var surfaceRaised: Color { Color(uiColor: palette.surfaceRaised) }
+    static var input: Color { Color(uiColor: palette.input) }
+    static var border: Color { Color(uiColor: palette.border) }
+    static var inputBorder: Color { Color(uiColor: palette.inputBorder) }
+    static var separator: Color { Color(uiColor: palette.separator) }
+    static var subtle: Color { Color(uiColor: palette.subtle) }
+    static var subtleStrong: Color { Color(uiColor: palette.subtleStrong) }
+    static var ledgerSurface: Color { surface }
+    static var ledgerSelected: Color { surfaceRaised }
+
+    static var textPrimary: Color { Color(uiColor: palette.textPrimary) }
+    static var textSecondary: Color { Color(uiColor: palette.textSecondary) }
+    static var textTertiary: Color { Color(uiColor: palette.textTertiary) }
+    static var placeholder: Color { Color(uiColor: palette.placeholder) }
+
+    static var primaryAction: Color { Color(uiColor: palette.primaryAction) }
+    static var primaryActionForeground: Color { Color(uiColor: palette.primaryActionForeground) }
+    static var accent: Color { Color(uiColor: palette.accent) }
+    static var danger: Color { Color(uiColor: palette.danger) }
+
+    // Fixed roles. These have no palette counterpart on the Expo client either
+    // — it renders them from constant Tailwind classes — so a palette that
+    // recolored them here would put the two clients out of step.
     static let shadow = color(light: rgb(0x000000, alpha: 0.18), dark: rgb(0x000000, alpha: 0.32))
-    static let ledgerSurface = surface
-    static let ledgerSelected = surfaceRaised
-
-    static let textPrimary = Color(uiColor: uiTextPrimary)
-    static let textSecondary = color(light: rgb(0x525252), dark: rgb(0xA3A3A3))
-    static let textTertiary = color(light: rgb(0x737373), dark: rgb(0x8E8E93))
-    static let placeholder = color(light: rgb(0xA3A3A3), dark: rgb(0x8E8E93))
-
-    static let primaryAction = color(light: rgb(0x262626), dark: rgb(0xF5F5F5))
-    static let primaryActionForeground = color(light: rgb(0xFFFFFF), dark: rgb(0x0A0A0A))
-    static let accent = color(light: rgb(0x007AFF), dark: rgb(0x0A84FF))
     static let statusRunning = color(light: rgb(0x0284C7), dark: rgb(0x22D3EE))
     static let statusInput = color(light: rgb(0x4F46E5), dark: rgb(0xA5B4FC))
     static let success = color(light: rgb(0x16A34A), dark: rgb(0x30D158))
     static let warning = color(light: rgb(0xD97706), dark: rgb(0xFF9F0A))
-    static let danger = color(light: rgb(0xDC2626), dark: rgb(0xFF453A))
 
     static let syntaxKeyword = color(light: rgb(0x7C3AED), dark: rgb(0xC78EFF))
     static let syntaxLiteral = color(light: rgb(0x2563EB), dark: rgb(0x8CC7FF))

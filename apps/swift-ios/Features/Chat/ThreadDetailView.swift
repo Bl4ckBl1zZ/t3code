@@ -1495,7 +1495,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             frame: .zero,
             collectionViewLayout: Self.makeLayout()
         )
-        collectionView.backgroundColor = T3Colors.uiBackground
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag
         collectionView.delaysContentTouches = false
@@ -1503,6 +1502,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         collectionView.isPrefetchingEnabled = true
         collectionView.accessibilityIdentifier = "thread-transcript"
         context.coordinator.connect(to: collectionView)
+        // Assigns the background now and again on every palette change; the
+        // token dies with the coordinator, so it cannot outlive this view.
+        context.coordinator.themeRefresh = T3ThemeRefresh { [weak collectionView] in
+            collectionView?.backgroundColor = T3Colors.uiBackground
+        }
         return collectionView
     }
 
@@ -1612,6 +1616,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var rowContext = RowContext()
         private var onLoadEarlier: (() -> Void)?
         private var onDismissKeyboard: (() -> Void)?
+        var themeRefresh: T3ThemeRefresh?
 
         deinit {
             markdownPrefetches.values.forEach { $0.task.cancel() }

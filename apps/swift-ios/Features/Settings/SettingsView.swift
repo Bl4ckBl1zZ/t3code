@@ -40,6 +40,11 @@ public struct SettingsView: View {
                         agentSection
                         preferencesSection
                         configurationSection
+                        ThemeSection(
+                            appearance: $settings.appearance,
+                            lightThemeID: $settings.lightThemeID,
+                            darkThemeID: $settings.darkThemeID
+                        )
                         ThreadAppearanceSection(
                             alwaysExpandActivity: $settings.alwaysExpandActivity
                         )
@@ -365,24 +370,8 @@ public struct SettingsView: View {
     private var preferencesSection: some View {
         SettingsSection(title: "Preferences") {
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    SettingsRowIcon(systemName: "circle.lefthalf.filled")
-                    Text("Theme")
-                        .font(T3Typography.threadBody)
-                    Spacer(minLength: 12)
-                    Picker("Theme", selection: $settings.appearance) {
-                        Text("System").tag(FeatureAppearance.system)
-                        Text("Light").tag(FeatureAppearance.light)
-                        Text("Dark").tag(FeatureAppearance.dark)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .tint(T3Colors.textSecondary)
-                }
-                .padding(.horizontal, 20)
-                .frame(minHeight: 52)
-
-                settingsDivider
+                // Appearance moved into ThemeSection, where it sits with the
+                // palette it selects a half of.
                 SettingsToggleRow(
                     title: "Haptics",
                     systemImage: "iphone.radiowaves.left.and.right",
