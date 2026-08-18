@@ -14,6 +14,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -54,6 +55,11 @@ import {
   isWildcardHost,
   issueHeadlessServeAccessInfo,
 } from "./startupAccess.ts";
+
+// Slow enough that the scan it costs stays invisible next to the superseded
+// rows it collects, frequent enough that a host left running for weeks never
+// carries a full boot-to-now backlog.
+const EVENT_STORE_COMPACTION_INTERVAL = "6 hours";
 
 export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -610,8 +616,15 @@ export const make = (options?: StartupOptions) =>
       // Off the startup path: the first run after an upgrade deletes the whole
       // superseded-event and legacy-v1 backlog (potentially millions of rows,
       // paced in small batches), and nothing at boot depends on it.
+      //
+      // Then on a slow repeat, because a long-lived server is exactly where
+      // the backlog rebuilds: compaction used to run only at boot, so a host
+      // left up for weeks accumulated every superseded copy until someone
+      // restarted it. The interval is long because each run costs a couple of
+      // seconds of scanning on the synchronous driver — often enough to keep
+      // the store bounded, rare enough not to become its own source of jank.
       yield* forkParked(
-        projectionMaintenance.compactEventStore.pipe(
+        projectionMaintenance.compactEventStore().pipe(
           Effect.tap((summary) =>
             summary.deletedEventCount === 0 && summary.deletedReceiptCount === 0
               ? Effect.void
@@ -631,6 +644,7 @@ export const make = (options?: StartupOptions) =>
           Effect.catch((cause) =>
             Effect.logWarning("Unable to compact the event store", { cause }),
           ),
+          Effect.repeat(Schedule.spaced(EVENT_STORE_COMPACTION_INTERVAL)),
         ),
       );
 

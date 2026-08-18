@@ -480,23 +480,47 @@ const makeEventStore = Effect.gen(function* () {
       ),
     );
 
+  // Branch in TypeScript rather than with `? IS NULL OR stream_id = ?`: the
+  // latter is opaque to the planner, so the scoped case fell back to walking
+  // the application-sequence index and checking stream_id row by row. Naming
+  // stream_id directly lets the scoped case use the stream index.
   const latestAgentSequence: OrchestrationEventStoreShape["latestAgentSequence"] = (threadId) =>
-    sql<{ readonly sequence: number | null }>`
-      SELECT MAX(sequence) AS sequence
-      FROM orchestration_events
-      WHERE application_event_version = 2
-        AND aggregate_kind = 'thread'
-        AND (${threadId ?? null} IS NULL OR stream_id = ${threadId ?? null})
-    `.pipe(
+    (threadId === undefined || threadId === null
+      ? sql<{ readonly sequence: number | null }>`
+          SELECT MAX(sequence) AS sequence
+          FROM orchestration_events
+          WHERE application_event_version = 2
+            AND aggregate_kind = 'thread'
+        `
+      : sql<{ readonly sequence: number | null }>`
+          SELECT MAX(sequence) AS sequence
+          FROM orchestration_events
+          WHERE aggregate_kind = 'thread'
+            AND stream_id = ${threadId}
+            AND application_event_version = 2
+        `
+    ).pipe(
       Effect.map((rows) => rows[0]?.sequence ?? 0),
       Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.latestAgentSequence:query")),
     );
 
+  // One MAX per leg rather than an OR across both. The OR form makes SQLite
+  // plan a MULTI-INDEX OR whose two legs together match every row in the
+  // table, so finding a single number walked the entire event log — ~600ms at
+  // 270k events, on a synchronous driver where that blocks every other query
+  // behind it. Split, each leg is answered from the tail of an index.
   const latestApplicationSequence = sql<{ readonly sequence: number | null }>`
     SELECT MAX(sequence) AS sequence
-    FROM orchestration_events
-    WHERE aggregate_kind = 'project'
-      OR (application_event_version = 2 AND aggregate_kind = 'thread')
+    FROM (
+      SELECT MAX(sequence) AS sequence
+      FROM orchestration_events
+      WHERE aggregate_kind = 'project'
+      UNION ALL
+      SELECT MAX(sequence) AS sequence
+      FROM orchestration_events
+      WHERE application_event_version = 2
+        AND aggregate_kind = 'thread'
+    )
   `.pipe(
     Effect.map((rows) => rows[0]?.sequence ?? 0),
     Effect.mapError(
