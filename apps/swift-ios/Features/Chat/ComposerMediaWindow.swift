@@ -228,8 +228,8 @@ struct ComposerCameraWindow: View {
 
 // MARK: - Photo library
 
-/// The photo grid occupying the media window. Multi-select; sliding the window
-/// down is the confirmation.
+/// The photo grid occupying the media window. Multi-select, confirmed with the
+/// Done button or by sliding the window down.
 struct ComposerPhotoLibraryWindow: View {
     /// How many more images the draft can take.
     let maximumSelectable: Int
@@ -264,6 +264,11 @@ struct ComposerPhotoLibraryWindow: View {
             }
         }
         .background(T3Colors.background)
+        .overlay(alignment: .bottom) {
+            if authorization != .denied, authorization != .restricted {
+                windowControls
+            }
+        }
         .overlay {
             if isLoadingSelection {
                 ZStack {
@@ -315,6 +320,48 @@ struct ComposerPhotoLibraryWindow: View {
         .accessibilityAction { confirm() }
     }
 
+    /// The window's two explicit exits, floating over the grid on glass:
+    /// cancel at the left, confirm at the right. The slide-down gesture still
+    /// confirms — this is the same decision for the thumb that never finds it.
+    private var windowControls: some View {
+        T3GlassContainer(spacing: 12) {
+            HStack(spacing: 12) {
+                Button { onConfirm([]) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(T3Colors.textPrimary)
+                        .frame(width: 46, height: 46)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .t3GlassEffect(.clear, in: Circle())
+                .accessibilityLabel("Close without adding photos")
+                .accessibilityIdentifier("composer-photo-cancel")
+
+                Spacer(minLength: 0)
+
+                Button { confirm() } label: {
+                    Text("Done")
+                        .font(T3Typography.control.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 22)
+                        .frame(height: 46)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .t3GlassEffect(tint: T3Colors.accent, in: Capsule())
+                .accessibilityLabel(
+                    selectedIDs.isEmpty
+                        ? "Done"
+                        : "Done, add \(selectedIDs.count) photo\(selectedIDs.count == 1 ? "" : "s")"
+                )
+                .accessibilityIdentifier("composer-photo-done")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 18)
+    }
+
     private var grabberHint: String {
         selectedIDs.isEmpty
             ? "Slide down to close"
@@ -338,6 +385,9 @@ struct ComposerPhotoLibraryWindow: View {
                         photoCell(asset, side: side)
                     }
                 }
+                // Clears the floating controls, so the last row is reachable
+                // rather than parked under the Done button.
+                .padding(.bottom, 82)
             }
             .scrollIndicators(.hidden)
         }

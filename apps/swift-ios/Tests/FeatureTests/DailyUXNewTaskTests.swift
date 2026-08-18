@@ -139,7 +139,24 @@ struct DailyUXNewTaskTests {
     @Test
     func mobileModeChoicesOnlyExposeSupportedValues() {
         #expect(FeatureRuntimeMode.allCases == [.fullAccess])
-        #expect(FeatureInteractionMode.allCases == [.standard])
+    }
+
+    /// The composer's Plan/Build toggle only means anything if both modes
+    /// survive the trip to a request: normalization used to flatten plan back
+    /// to standard, which made every toggle a no-op.
+    @Test
+    func interactionModeSurvivesNormalizationIntoARequest() {
+        #expect(FeatureInteractionMode.allCases == [.standard, .plan])
+        #expect(FeatureInteractionMode.plan.mobileNormalized == .plan)
+
+        let request = NewTaskRequest(
+            projectID: "project",
+            prompt: "Draw up an approach",
+            selection: nil,
+            runtimeMode: .fullAccess,
+            interactionMode: .plan
+        )
+        #expect(request.interactionMode == .plan)
     }
 
     @Test

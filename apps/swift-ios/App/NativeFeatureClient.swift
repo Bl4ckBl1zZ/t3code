@@ -1510,7 +1510,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let model = selection.map(coreModelSelection)
         let uploads = try makeUploadAttachments(attachments)
         let runtimeMode = coreRuntimeMode(mapRuntimeMode(shellThread.runtimeMode))
-        let interactionMode = InteractionMode.default
+        // The thread's own mode, not a constant: `sendTurn` carries neither
+        // mode on the wire, but a signature that ignores plan/build would fold
+        // two genuinely different resends into one.
+        let interactionMode = shellThread.interactionMode
         let signature = TurnSubmissionSignature(
             text: text,
             model: model,
@@ -4594,12 +4597,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         mode.mobileNormalized == .fullAccess ? .fullAccess : .auto
     }
 
-    private func mapInteractionMode(_: InteractionMode) -> FeatureInteractionMode {
-        .standard
+    private func mapInteractionMode(_ mode: InteractionMode) -> FeatureInteractionMode {
+        switch mode {
+        case .default: .standard
+        case .plan: .plan
+        }
     }
 
-    private func coreInteractionMode(_: FeatureInteractionMode) -> InteractionMode {
-        .default
+    private func coreInteractionMode(_ mode: FeatureInteractionMode) -> InteractionMode {
+        switch mode {
+        case .standard: .default
+        case .plan: .plan
+        }
     }
 
     /// The mapped catalog for the config-driven branch of mapProviders. Every
@@ -4673,6 +4682,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     driver: provider.driver,
                     requiresNewThreadForModelChange:
                         provider.requiresNewThreadForModelChange ?? false,
+                    // Absent means yes, the way web reads the same flag: only a
+                    // provider that explicitly opts out loses the toggle.
+                    supportsPlanMode: provider.showInteractionModeToggle ?? true,
                     models: (modelPreferences[provider.instanceId]?.apply(to: provider.models)
                         ?? provider.models).map { model in
                         let options = (model.capabilities?.optionDescriptors ?? [])

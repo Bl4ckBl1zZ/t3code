@@ -33,6 +33,11 @@ struct FeatureComposerView: View {
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
+    /// The thread's Plan/Build mode, or nil on a surface that has no mode to
+    /// offer. A binding rather than a callback so a thread composer can write
+    /// straight through to thread state while a compose sheet holds its own
+    /// pending choice.
+    private let interactionMode: Binding<FeatureInteractionMode>?
 
     private let providers: [FeatureProvider]
     private let threadSelection: FeatureSelection?
@@ -55,6 +60,7 @@ struct FeatureComposerView: View {
         text: Binding<String>,
         selection: Binding<FeatureSelection?>,
         attachments: Binding<[FeatureDraftAttachment]>,
+        interactionMode: Binding<FeatureInteractionMode>? = nil,
         providers: [FeatureProvider],
         threadSelection: FeatureSelection?,
         materializesDefaultSelection: Bool = true,
@@ -75,6 +81,7 @@ struct FeatureComposerView: View {
         _text = text
         _selection = selection
         _attachments = attachments
+        self.interactionMode = interactionMode
         self.providers = providers
         self.threadSelection = threadSelection
         self.materializesDefaultSelection = materializesDefaultSelection
@@ -557,9 +564,64 @@ struct FeatureComposerView: View {
                 FeatureContextMeter(usage: contextUsage)
                     .fixedSize(horizontal: true, vertical: false)
             }
+
+            if showsInteractionModeToggle {
+                interactionModeToggle
+                    .fixedSize(horizontal: true, vertical: false)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+    }
+
+    /// Plan and Build are one tap apart, in the corner opposite the model.
+    /// Hidden entirely for providers that ignore the mode — a switch that
+    /// changes nothing is worse than no switch.
+    private var showsInteractionModeToggle: Bool {
+        interactionMode != nil && activeProvider?.supportsPlanMode == true
+    }
+
+    private var isPlanMode: Bool {
+        interactionMode?.wrappedValue == .plan
+    }
+
+    private var interactionModeToggle: some View {
+        Button {
+            guard let interactionMode else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            interactionMode.wrappedValue = isPlanMode ? .standard : .plan
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isPlanMode ? "list.bullet.clipboard" : "hammer")
+                    .font(.system(size: 10, weight: .bold))
+                    .contentTransition(.symbolEffect(.replace))
+                Text(isPlanMode ? "Plan" : "Build")
+            }
+            .font(T3Typography.supportingStrong)
+            // Plan is the mode that changes what the agent is allowed to do, so
+            // it is the one that reads as switched on; Build is the quiet
+            // default the composer normally sits in.
+            .foregroundStyle(isPlanMode ? T3Colors.accent : T3Colors.textSecondary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background {
+                Capsule().fill(isPlanMode ? T3Colors.accent.opacity(0.14) : T3Colors.subtle)
+            }
+            .overlay {
+                Capsule().stroke(
+                    isPlanMode ? T3Colors.accent.opacity(0.45) : T3Colors.border,
+                    lineWidth: 1
+                )
+            }
+            .frame(height: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: isPlanMode)
+        .accessibilityLabel("Agent mode")
+        .accessibilityValue(isPlanMode ? "Plan" : "Build")
+        .accessibilityHint(isPlanMode ? "Switches to build mode" : "Switches to plan mode")
+        .accessibilityIdentifier("composer-interaction-mode")
     }
 
     /// One control for the model and everything it publishes. A single trigger
