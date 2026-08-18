@@ -356,6 +356,32 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
+  it.effect("drops the browser block when the credential withholds preview", () =>
+    Effect.gen(function* () {
+      const params = yield* buildCodexTurnStartParams({
+        nativeThreadId: "native-default-without-browser",
+        codexInput: [{ type: "text", text: "implement this task" }],
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: null,
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        hasT3Mcp: true,
+        hasBrowserTools: false,
+      });
+
+      const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+      assert.notInclude(instructions, "preview_status");
+      assert.notInclude(instructions, "Do not switch to global browser skills");
+      // Orchestration survives: only browser access was withheld.
+      assert.include(instructions, "use `delegate_task`");
+    }),
+  );
+
   it.effect("omits default-mode collaboration settings without the T3 MCP server", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({

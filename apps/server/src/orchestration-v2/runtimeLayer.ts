@@ -1,4 +1,7 @@
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+
+import { ServerSettingsService } from "../serverSettings.ts";
 import {
   OrchestrationEventInfrastructureLayerLive,
   OrchestrationLayerLive,
@@ -29,7 +32,7 @@ import { layer as providerContinuationRequestsLayer } from "./ProviderContinuati
 import { workerLive as providerContinuationWorkerLive } from "./ProviderContinuationService.ts";
 import { workerLive as threadTitleRegenerationWorkerLive } from "./ThreadTitleRegenerationService.ts";
 import { layer as providerEventIngestorLayer } from "./ProviderEventIngestor.ts";
-import { layer as providerSessionManagerLayer } from "./ProviderSessionManager.ts";
+import { layerWithOptions as providerSessionManagerLayerWithOptions } from "./ProviderSessionManager.ts";
 import { layer as providerRuntimeRecoveryLayer } from "./ProviderRuntimeRecoveryService.ts";
 import { layer as providerSwitchServiceLayer } from "./ProviderSwitchService.ts";
 import { layer as providerTurnControlServiceLayer } from "./ProviderTurnControlService.ts";
@@ -105,7 +108,30 @@ const providerSwitchServiceProvided = providerSwitchServiceLayer.pipe(
   Layer.provide(providerAdapterRegistryProvided),
 );
 
-const providerSessionManagerProvided = providerSessionManagerLayer.pipe(
+/**
+ * Denies on an unreadable settings file rather than letting the read failure
+ * escape into session startup: an explicit "off" silently becoming "on" would
+ * violate the user's stated choice, whereas the reverse costs an agent one
+ * toolset and is visible immediately.
+ */
+const agentBrowserAccessEnabled = ServerSettingsService.pipe(
+  Effect.flatMap((serverSettings) => serverSettings.getSettings),
+  Effect.map((settings) => settings.enableAgentBrowserAccess),
+  Effect.catch((cause) =>
+    Effect.logWarning(
+      "Could not read server settings; withholding agent browser access for this session.",
+      { cause },
+    ).pipe(Effect.as(false)),
+  ),
+);
+
+const providerSessionManagerProvided = Layer.unwrap(
+  Effect.map(Effect.context<ServerSettingsService>(), (context) =>
+    providerSessionManagerLayerWithOptions({
+      agentBrowserAccessEnabled: Effect.provideContext(agentBrowserAccessEnabled, context),
+    }),
+  ),
+).pipe(
   Layer.provide(
     Layer.mergeAll(
       providerAdapterRegistryProvided,

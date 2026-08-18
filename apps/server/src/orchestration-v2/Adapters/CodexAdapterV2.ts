@@ -56,8 +56,8 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
-  CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-  CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+  codexDefaultModeDeveloperInstructions,
+  codexPlanModeDeveloperInstructions,
 } from "../../provider/CodexDeveloperInstructions.ts";
 import {
   materializeCodexShadowHome,
@@ -606,6 +606,13 @@ export function buildCodexTurnStartParams(input: {
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly modelSelection: ModelSelection;
   readonly hasT3Mcp?: boolean;
+  /**
+   * Whether the thread's MCP credential grants the `preview` capability. False
+   * when the user has withheld agent browser access, in which case the browser
+   * block is dropped from the developer instructions while the orchestration
+   * block stays.
+   */
+  readonly hasBrowserTools?: boolean;
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -624,12 +631,13 @@ export function buildCodexTurnStartParams(input: {
     const effort =
       selectedEffort === undefined ? undefined : yield* decodeTurnReasoningEffort(selectedEffort);
     const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
+    const browserToolsAvailable = input.hasT3Mcp === true && input.hasBrowserTools !== false;
     const developerInstructions =
       input.hasT3Mcp !== true
         ? undefined
         : input.runtimePolicy.interactionMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+          ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
+          : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined
@@ -4768,13 +4776,18 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
 
               const codexInput = yield* toCodexInput(turnInput);
+              const mcpSession = McpProviderSession.readMcpProviderSession(turnInput.threadId);
               const turnStartParams = yield* buildCodexTurnStartParams({
                 nativeThreadId: threadId,
                 codexInput,
                 runtimePolicy: turnInput.runtimePolicy,
                 modelSelection: turnInput.modelSelection,
-                hasT3Mcp:
-                  McpProviderSession.readMcpProviderSession(turnInput.threadId) !== undefined,
+                hasT3Mcp: mcpSession !== undefined,
+                // The registry always stamps capabilities; treat an absent list
+                // as "unknown, don't degrade the prompt" rather than as a denial.
+                hasBrowserTools:
+                  mcpSession?.capabilities === undefined ||
+                  mcpSession.capabilities.includes("preview"),
               });
               yield* Ref.update(pendingRootTurns, (current) => {
                 const updated = new Map(current);

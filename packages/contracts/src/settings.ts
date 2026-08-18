@@ -946,6 +946,19 @@ export const ServerSettings = Schema.Struct({
   enableHermes: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableRemoteHermes: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Whether agents may drive the in-app preview browser. Turning this off
+   * withholds the `preview` capability from the MCP credential minted for a
+   * provider session, so every `preview_*` tool call is denied, and the prompt
+   * text describing those tools is dropped along with them. The thread's other
+   * `t3-code` tools (orchestration, worktree) are unaffected, and so is the
+   * user's own browser panel — this gates agent browser access only.
+   *
+   * Server-authoritative rather than client-local: credential minting and
+   * prompt construction both happen on the server, and the answer must not
+   * differ between a desktop window and a phone attached to the same server.
+   */
+  enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -1151,6 +1164,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableHermes: Schema.optionalKey(Schema.Boolean),
   enableRemoteHermes: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
