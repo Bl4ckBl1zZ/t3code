@@ -133,13 +133,21 @@ extension View {
     /// The rim is deliberately not drawn here: real glass carries its own
     /// specular edge and a material does not, so call sites that need a visible
     /// boundary add one stroke that both paths share.
+    ///
+    /// `tint` colors the glass itself rather than painting over it, so a
+    /// tinted control still refracts what is behind it. The pre-26 fallback has
+    /// no such trick and settles for a translucent wash over the material.
     @ViewBuilder
     func t3GlassEffect(
         _ prominence: T3Glass.Prominence = .regular,
+        tint: Color? = nil,
         in shape: some Shape
     ) -> some View {
         if #available(iOS 26, *) {
-            glassEffect(prominence == .clear ? Glass.clear : Glass.regular, in: shape)
+            glassEffect(
+                (prominence == .clear ? Glass.clear : Glass.regular).tint(tint),
+                in: shape
+            )
         } else {
             background {
                 shape.fill(
@@ -147,6 +155,9 @@ extension View {
                         ? AnyShapeStyle(.ultraThinMaterial)
                         : AnyShapeStyle(.regularMaterial)
                 )
+                if let tint {
+                    shape.fill(tint.opacity(0.7))
+                }
             }
         }
     }

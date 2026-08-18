@@ -167,11 +167,11 @@ public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
     case standard
     case plan
 
-    /// Plan remains decodable for existing server state, but is no longer a
-    /// mobile prompt choice.
-    public static let allCases: [FeatureInteractionMode] = [.standard]
+    /// Both modes are real mobile choices: the composer's Plan/Build toggle
+    /// writes them straight through to the thread's interaction mode.
+    public static let allCases: [FeatureInteractionMode] = [.standard, .plan]
 
-    public var mobileNormalized: FeatureInteractionMode { .standard }
+    public var mobileNormalized: FeatureInteractionMode { self }
 }
 
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {
@@ -994,6 +994,11 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     public var isAvailable: Bool
     public var driver: String
     public var requiresNewThreadForModelChange: Bool
+    /// Whether this provider runs a distinct plan mode. Mirrors the server's
+    /// `showInteractionModeToggle`, which is what decides whether web offers the
+    /// choice; drivers that ignore the mode (Grok, OpenCode) say no and the
+    /// composer hides the toggle rather than sending a setting nothing honors.
+    public var supportsPlanMode: Bool
     public var models: [FeatureModel]
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
@@ -1004,6 +1009,7 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
         isAvailable: Bool = true,
         driver: String = "",
         requiresNewThreadForModelChange: Bool = false,
+        supportsPlanMode: Bool = true,
         models: [FeatureModel] = [],
         slashCommands: [FeatureProviderSlashCommand] = [],
         skills: [FeatureProviderSkill] = []
@@ -1013,6 +1019,7 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
         self.isAvailable = isAvailable
         self.driver = driver
         self.requiresNewThreadForModelChange = requiresNewThreadForModelChange
+        self.supportsPlanMode = supportsPlanMode
         self.models = models
         self.slashCommands = slashCommands
         self.skills = skills

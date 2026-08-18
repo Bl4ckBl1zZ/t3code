@@ -30,6 +30,7 @@ public struct NewWorkConversationView: View {
     @State private var prompt = ""
     @State private var selection: FeatureSelection?
     @State private var attachments: [FeatureDraftAttachment] = []
+    @State private var interactionMode: FeatureInteractionMode = .standard
     @AppStorage(NewWorkConversationView.environmentStorageKey) private var selectedEnvironmentID: String?
     @State private var isSubmitting = false
     @State private var submissionFailed = false
@@ -69,6 +70,7 @@ public struct NewWorkConversationView: View {
                 text: $prompt,
                 selection: $selection,
                 attachments: $attachments,
+                interactionMode: $interactionMode,
                 providers: targetProviders,
                 threadSelection: defaultSelection,
                 materializesDefaultSelection: false,
@@ -304,7 +306,7 @@ public struct NewWorkConversationView: View {
             prompt: trimmed,
             selection: selection ?? defaultSelection,
             runtimeMode: .fullAccess,
-            interactionMode: .standard,
+            interactionMode: interactionMode,
             workspaceMode: .local,
             branch: nil,
             worktreePath: nil,

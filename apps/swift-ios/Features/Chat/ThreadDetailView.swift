@@ -543,11 +543,25 @@ public struct ThreadDetailView: View {
         )
     }
 
+    /// Plan/Build is thread state, so a tap here is written through to the
+    /// server and mirrored locally for the frame before the echo lands — the
+    /// same shape as the model selection above.
+    private var composerInteractionMode: Binding<FeatureInteractionMode> {
+        Binding(
+            get: { currentThread.interactionMode },
+            set: { next in
+                guard next != currentThread.interactionMode else { return }
+                Task { await model.setInteractionMode(thread.id, mode: next) }
+            }
+        )
+    }
+
     private func composer(_ detail: FeatureThreadDetail) -> some View {
         FeatureComposerView(
             text: $draft,
             selection: composerSelection,
             attachments: $attachments,
+            interactionMode: composerInteractionMode,
             providers: threadProviders,
             threadSelection: currentSelection,
             materializesDefaultSelection: false,

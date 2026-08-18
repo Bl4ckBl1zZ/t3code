@@ -17,6 +17,10 @@ public struct NewThreadView: View {
     @State private var preferredSelection: FeatureSelection?
     @State private var projectMemory: NewTaskProjectMemory
     @State private var attachments: [FeatureDraftAttachment] = []
+    /// The mode the thread is created in. Not persisted with the draft: it is a
+    /// choice about the turn being written now, and a stale Plan from a draft
+    /// reopened days later would be a surprise, not a restoration.
+    @State private var interactionMode: FeatureInteractionMode = .standard
     @State private var workspaceMode: FeatureWorkspaceMode = .local
     @State private var workspaceSelectionIsExplicit = false
     @State private var branches: [FeatureWorkspaceBranch] = []
@@ -83,6 +87,7 @@ public struct NewThreadView: View {
                         text: $prompt,
                         selection: selectionBinding,
                         attachments: $attachments,
+                        interactionMode: $interactionMode,
                         providers: creationProviders,
                         threadSelection: nil,
                         isSending: isSubmitting,
@@ -528,7 +533,7 @@ public struct NewThreadView: View {
             prompt: trimmedPrompt,
             selection: concreteSelection,
             runtimeMode: .fullAccess,
-            interactionMode: .standard,
+            interactionMode: interactionMode,
             workspaceMode: effectiveWorkspaceMode,
             branch: isWorkConversation ? nil : selectedBranch?.name,
             worktreePath: !isWorkConversation && effectiveWorkspaceMode == .local
