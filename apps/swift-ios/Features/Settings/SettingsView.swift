@@ -124,7 +124,12 @@ public struct SettingsView: View {
             }
             .sheet(isPresented: $showingIntegrations) {
                 NavigationStack {
-                    SettingsIntegrationsView(manager: voiceSettingsManager)
+                    SettingsIntegrationsView(
+                        manager: voiceSettingsManager,
+                        serverSettings: serverSettingsManager,
+                        environmentID: activeEnvironmentID,
+                        preferences: activeEnvironmentPreferences
+                    )
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { showingIntegrations = false }
@@ -614,6 +619,23 @@ public struct SettingsView: View {
     private var voiceSettingsManager: any FeatureVoiceSettingsManaging {
         (model.client as? any FeatureVoiceSettingsManaging)
             ?? EmptyFeatureVoiceSettingsManager.shared
+    }
+
+    private var serverSettingsManager: any FeatureServerSettingsManaging {
+        (model.client as? any FeatureServerSettingsManaging)
+            ?? EmptyFeatureServerSettingsManager.shared
+    }
+
+    /// The server a server-authoritative row writes to. Settings is otherwise
+    /// scoped to the connected environment — it is the one "Disconnect current
+    /// server" means — so a setting belonging to a server follows the same one.
+    private var activeEnvironmentID: String? {
+        model.snapshot.environments.first(where: \.isActive)?.id
+    }
+
+    private var activeEnvironmentPreferences: FeatureEnvironmentPreferences? {
+        guard let activeEnvironmentID else { return nil }
+        return model.snapshot.preferencesByEnvironment?[activeEnvironmentID]
     }
 
     private var scheduledTaskManager: any FeatureScheduledTaskManaging {

@@ -1084,8 +1084,13 @@ struct HomeShelfHeader: View {
             Rectangle()
                 .fill((accent ?? T3Colors.textTertiary).opacity(accent == nil ? 0.16 : 0.24))
                 .frame(height: 1)
-            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+            // One glyph rotated, never two glyphs swapped: swapping replaces the
+            // view and the arrow changes without travelling, which also drops any
+            // animation the caller wrapped the toggle in.
+            Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .bold))
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                .animation(.easeInOut(duration: 0.2), value: isExpanded)
         }
         .font(T3Typography.homeMetadata.weight(.bold))
         .foregroundStyle(accent ?? T3Colors.textTertiary)

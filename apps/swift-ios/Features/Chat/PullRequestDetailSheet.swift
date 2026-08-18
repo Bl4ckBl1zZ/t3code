@@ -87,7 +87,7 @@ struct PullRequestDetailSheet: View {
 
                 switch tab {
                 case .summary:
-                    summary(overview.detail)
+                    summary(overview.detail, activity: overview.activity)
                 case .timeline:
                     timeline(overview.activity)
                 }
@@ -139,7 +139,7 @@ struct PullRequestDetailSheet: View {
     // MARK: - Summary
 
     @ViewBuilder
-    private func summary(_ detail: PullRequestDetail) -> some View {
+    private func summary(_ detail: PullRequestDetail, activity: PullRequestActivity?) -> some View {
         if detail.body.isEmpty {
             Text("No description.")
                 .font(T3Typography.supporting)
@@ -157,7 +157,30 @@ struct PullRequestDetailSheet: View {
             }
         }
 
-        if !detail.reviewers.isEmpty {
+        // Verdicts need the conversation, so they can only be shown where the
+        // activity read landed. Without it the reviewers still list — as bare
+        // names, because "awaiting review" would be a claim this cannot make
+        // when the verdicts simply were not read.
+        if let activity {
+            // Reviewers come from the activity where it has them: its
+            // conversation query reports reviewers the basic detail does not.
+            let reviewerRows = PullRequestDetailSections.reviewerRows(
+                reviewers: activity.reviewers ?? detail.reviewers,
+                outcomes: PullRequestDetailSections.latestReviewOutcomes(
+                    comments: activity.comments,
+                    commits: activity.commits
+                )
+            )
+            if !reviewerRows.isEmpty {
+                section("Reviewers") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(reviewerRows) { row in
+                            reviewerRow(row)
+                        }
+                    }
+                }
+            }
+        } else if !detail.reviewers.isEmpty {
             section("Reviewers") {
                 Text(detail.reviewers.map(\.login).joined(separator: " · "))
                     .font(T3Typography.supporting)
@@ -174,6 +197,52 @@ struct PullRequestDetailSheet: View {
                 }
             }
         }
+    }
+
+    private func reviewerRow(_ row: PullRequestReviewerRow) -> some View {
+        HStack(spacing: 8) {
+            Text(row.login)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textPrimary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let entry = row.entry {
+                verdictBadge(entry.outcome, label: entry.label, isStale: entry.isStale)
+            } else {
+                Text("Awaiting review")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textTertiary)
+            }
+        }
+    }
+
+    /// A verdict reads in the tone a check of the same standing already wears
+    /// in this sheet, so "approved" and "all checks passed" cannot look like
+    /// two different kinds of good news. A stale verdict keeps its words and
+    /// loses its strength: it still happened, it just no longer speaks for
+    /// what is on the branch.
+    private func verdictBadge(
+        _ outcome: PullRequestReviewOutcome,
+        label: String,
+        isStale: Bool
+    ) -> some View {
+        let tone = color(outcome.tone)
+        return HStack(spacing: 4) {
+            Image(systemName: outcome.symbol)
+                .font(.system(size: 11, weight: .semibold))
+            Text(label)
+                .font(T3Typography.supportingStrong)
+                .lineLimit(1)
+        }
+        .foregroundStyle(isStale ? T3Colors.textTertiary : tone)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(
+            (isStale ? T3Colors.textTertiary : tone).opacity(isStale ? 0.10 : 0.14),
+            in: Capsule()
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
     }
 
     private func checkRow(_ check: PullRequestCheck) -> some View {
@@ -251,8 +320,13 @@ struct PullRequestDetailSheet: View {
                     Text(PullRequestDetailSections.commentAuthorLabel(comment))
                         .font(T3Typography.supportingStrong)
                         .foregroundStyle(T3Colors.textPrimary)
-                    if let verdict = PullRequestDetailSections.reviewStateLabel(comment) {
-                        Text(verdict)
+                    if let outcome = PullRequestDetailSections.reviewOutcome(comment) {
+                        // Not dimmed for staleness here: the row sits in the
+                        // chronology, so the commits that superseded it are
+                        // already visible underneath.
+                        verdictBadge(outcome, label: outcome.label, isStale: false)
+                    } else if let state = PullRequestDetailSections.reviewStateLabel(comment) {
+                        Text(state)
                             .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textTertiary)
                     }
