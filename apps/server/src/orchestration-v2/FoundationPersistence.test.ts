@@ -23,6 +23,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -429,7 +430,9 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         ON CONFLICT(command_id) DO NOTHING
       `;
 
-      const summary = yield* maintenance.compactEventStore;
+      const summary = yield* maintenance.compactEventStore({
+        retainNewerThan: Duration.zero,
+      });
       // meta + visit-1 (superseded thread state), message-1, and the two
       // imported v1 events.
       assert.isAtLeast(summary.deletedEventCount, 5);
@@ -475,6 +478,83 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       // Replay across the deletion gaps must still produce a valid projection.
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
+    }),
+  );
+
+  it.effect("retains recent history and keeps both ends of a compacted turn item", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const maintenance = yield* ProjectionMaintenanceV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:foundation-retention");
+      const thread = makeThread(threadId, now);
+      const turnItemId = TurnItemId.make("turn-item:foundation-retention");
+      const turnItemEvent = (suffix: string, title: string): OrchestrationV2DomainEvent => ({
+        id: EventId.make(`event:foundation-retention:${suffix}`),
+        type: "turn-item.updated",
+        threadId,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: turnItemId,
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "completed" as const,
+          title,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "dynamic_tool" as const,
+          toolName: "tool",
+          input: {},
+          output: { completed: true },
+        },
+      });
+
+      yield* eventSink.write({
+        events: [
+          threadCreatedEvent({ id: "event:foundation-retention:create", thread, now }),
+          turnItemEvent("item-1", "first"),
+          turnItemEvent("item-2", "second"),
+          turnItemEvent("item-3", "third"),
+          turnItemEvent("item-4", "fourth"),
+        ],
+      });
+
+      // Everything just written is inside the default window, so a scheduled
+      // run leaves the streaming rewrites in place for anyone reading back.
+      const retained = yield* maintenance.compactEventStore();
+      assert.equal(retained.deletedEventCount, 0);
+      assert.isNotNull(retained.retentionCutoff);
+
+      // Past the window the middle rewrites go, but the first event survives
+      // alongside the latest so replay still positions the item identically.
+      const compacted = yield* maintenance.compactEventStore({ retainNewerThan: Duration.zero });
+      assert.equal(compacted.deletedEventCount, 2);
+      assert.isNull(compacted.retentionCutoff);
+
+      const remaining = yield* sql<{ readonly event_id: string }>`
+        SELECT event_id
+        FROM orchestration_events
+        WHERE stream_id = ${threadId}
+          AND event_type = 'turn-item.updated'
+        ORDER BY sequence ASC
+      `;
+      assert.deepEqual(
+        remaining.map((row) => row.event_id),
+        ["event:foundation-retention:item-1", "event:foundation-retention:item-4"],
+      );
+
+      assert.isTrue((yield* maintenance.verify).valid);
+      const rebuilt = yield* maintenance.rebuild;
+      assert.isTrue(rebuilt.valid);
     }),
   );
 
