@@ -75,6 +75,21 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `--color-switch-active`. `AppearancePreferencesProvider` now writes `Partial<Preferences>`, which
   exposed that `alwaysExpandActivity` was written but never parsed back; it is now persisted.
   `Stack.tsx` drops its hardcoded `SHEET_BACKGROUND_COLOR` in favour of the navigation theme.
+- Implements upstream's "withhold browser access from agents" setting
+  (`enableAgentBrowserAccess`) on orchestration V2 rather than upstream's retired V1
+  `ProviderService.prepareMcpSession`. Upstream withholds the whole MCP credential; the fork's
+  `t3-code` server also carries orchestration and worktree tools that have nothing to do with
+  browsing, so `orchestration-v2/ProviderSessionManager.ts` instead drops only the `preview`
+  capability from the credential it mints. Every `preview_*` tool already checks that capability,
+  and the manager's credential-reuse check treats a capability-set change as a mismatch, so
+  toggling the setting rotates the credential on the next session prepare. Known difference from
+  upstream: the fork's MCP toolkits are registered process-wide, not per credential, so the
+  `preview_*` tools stay in `tools/list` and are denied at call time rather than disappearing.
+  Dropping the browser prompt block is what keeps a Codex agent from trying them. The reader is injected
+  through `ProviderSessionManagerV2LayerOptions.agentBrowserAccessEnabled` and wired to
+  `ServerSettingsService` in `orchestration-v2/runtimeLayer.ts`, keeping the manager's layer
+  requirements narrow. The prompt half rides `CodexAdapterV2`'s existing `hasT3Mcp` plumbing as a
+  companion `hasBrowserTools`, read off the credential's own capability list.
 - Serves one Settings -> Integrations page from `apps/web/src/components/settings/`
   `IntegrationsSettings.tsx` holding both halves: upstream's Browser defaults section
   (`949feb61e`) first, then the fork's OpenRouter credential row and its

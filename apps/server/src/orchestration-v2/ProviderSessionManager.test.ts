@@ -345,6 +345,7 @@ function makeTestLayer(input: {
   readonly failReleaseEventWrites?: boolean;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
+  readonly agentBrowserAccessEnabled?: Effect.Effect<boolean>;
 }) {
   const configuredEventSinkLayer = input.failReleaseEventWrites
     ? FailingReleaseEventSinkLayer
@@ -371,6 +372,9 @@ function makeTestLayer(input: {
     providerSessionManagerLayerWithOptions({
       idleTimeoutMs: input.idleTimeoutMs,
       ...(input.maxIdlePinMs === undefined ? {} : { maxIdlePinMs: input.maxIdlePinMs }),
+      ...(input.agentBrowserAccessEnabled === undefined
+        ? {}
+        : { agentBrowserAccessEnabled: input.agentBrowserAccessEnabled }),
     }).pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -786,6 +790,61 @@ it.effect(
             state,
             idleTimeoutMs: 1_000,
             mcpConfigs,
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 withholds the preview capability when agent browser access is off",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSinkV2;
+        const idAllocator = yield* IdAllocatorV2;
+        const manager = yield* ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-no-browser");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        // The credential is still issued: withholding browser access must not
+        // cost the thread its orchestration and worktree tools.
+        const captured = (yield* Ref.get(mcpConfigs))[0];
+        assert.isDefined(captured);
+        assert.deepEqual([...(captured?.capabilities ?? [])], ["orchestration", "worktree"]);
+        const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
+        const resolved = yield* registry.resolve(token!, registry.audience);
+        assert.deepEqual(resolved?.capabilities, new Set(["orchestration", "worktree"]));
+
+        yield* manager.close(providerSessionId);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 1_000,
+            mcpConfigs,
+            agentBrowserAccessEnabled: Effect.succeed(false),
           }),
         ),
       );

@@ -219,6 +219,15 @@ export interface ProviderSessionManagerV2LayerOptions {
   readonly maxIdlePinMs?: number;
   /** Test replay harnesses can omit T3's MCP server from provider protocol fixtures. */
   readonly configureMcp?: boolean;
+  /**
+   * Reads the `enableAgentBrowserAccess` server setting, deciding whether a
+   * session's MCP credential carries the `preview` capability. Injected rather
+   * than taken as a layer requirement so the manager keeps its narrow
+   * dependency set; `runtimeLayer` supplies the reader backed by
+   * `ServerSettingsService`. Omitting it grants access, which is the shipped
+   * default.
+   */
+  readonly agentBrowserAccessEnabled?: Effect.Effect<boolean>;
 }
 
 function releaseStatusFor(
@@ -324,6 +333,7 @@ export const layerWithOptions = (
        * Serialized per thread so two concurrent prepares cannot interleave
        * their rotate steps and revoke each other's freshly minted credential.
        */
+      const agentBrowserAccessEnabled = options.agentBrowserAccessEnabled ?? Effect.succeed(true);
       const prepareMcpSession = (
         threadId: ThreadId,
         providerInstanceId: ProviderInstanceId,
@@ -337,8 +347,14 @@ export const layerWithOptions = (
           : mcpPrepareLock.withLock(
               threadId,
               Effect.gen(function* () {
+                // Withholding `preview` is what disables agent browser access:
+                // every `preview_*` tool checks the capability on the credential
+                // it was invoked with, and the reuse check below treats a
+                // capability-set change as a mismatch, so flipping the setting
+                // rotates the credential on the next session prepare. The
+                // thread's orchestration and worktree tools are untouched.
                 const capabilities = new Set<McpInvocationContext.McpCapability>([
-                  "preview",
+                  ...((yield* agentBrowserAccessEnabled) ? (["preview"] as const) : []),
                   "orchestration",
                   ...(runtimePolicy.runtimeMode === "full-access" ? (["worktree"] as const) : []),
                 ]);
