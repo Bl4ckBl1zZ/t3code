@@ -202,6 +202,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// Matches `sidebarAutoSettleOnMerge`'s decoding default in
     /// `packages/contracts`, applied when a server predates the setting.
     public static let defaultSidebarAutoSettleOnMerge = true
+    /// Matches `enableAgentBrowserAccess`'s decoding default in
+    /// `packages/contracts`. A server that predates the setting grants access,
+    /// which is what it did before the setting existed.
+    public static let defaultEnableAgentBrowserAccess = true
 
     public let defaultThreadEnvMode: ServerThreadEnvironmentMode
     public let newWorktreesStartFromOrigin: Bool
@@ -216,6 +220,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// the driver kind, so `"hermes"`, `"codex"`, `"claudeAgent"`, …). Empty
     /// against a server that predates the setting being server-authoritative.
     public let providerModelPreferences: [String: ProviderModelPreferencesSnapshot]
+    /// Whether agents on this server may drive the preview browser. Withheld
+    /// access drops the `preview` capability from the MCP credential a provider
+    /// session is given, so it is the server's answer and not this device's.
+    public let enableAgentBrowserAccess: Bool
 
     public init(
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
@@ -224,13 +232,16 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             .defaultSidebarAutoSettleAfterDays,
         sidebarAutoSettleOnMerge: Bool = ServerSettingsSnapshot
             .defaultSidebarAutoSettleOnMerge,
-        providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:]
+        providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:],
+        enableAgentBrowserAccess: Bool = ServerSettingsSnapshot
+            .defaultEnableAgentBrowserAccess
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
         self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.providerModelPreferences = providerModelPreferences
+        self.enableAgentBrowserAccess = enableAgentBrowserAccess
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -239,6 +250,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case sidebarAutoSettleAfterDays
         case sidebarAutoSettleOnMerge
         case providerModelPreferences
+        case enableAgentBrowserAccess
     }
 
     public init(from decoder: any Decoder) throws {
@@ -262,6 +274,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             [String: ProviderModelPreferencesSnapshot].self,
             forKey: .providerModelPreferences
         ) ?? [:]
+        enableAgentBrowserAccess = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .enableAgentBrowserAccess
+        ) ?? Self.defaultEnableAgentBrowserAccess
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -273,6 +289,36 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(sidebarAutoSettleAfterDays, forKey: .sidebarAutoSettleAfterDays)
         try container.encode(sidebarAutoSettleOnMerge, forKey: .sidebarAutoSettleOnMerge)
         try container.encode(providerModelPreferences, forKey: .providerModelPreferences)
+        try container.encode(enableAgentBrowserAccess, forKey: .enableAgentBrowserAccess)
+    }
+}
+
+/// A sparse write to server-authoritative settings, matching
+/// `ServerSettingsPatch` in `packages/contracts`.
+///
+/// Every field is optional and only the ones that were set are encoded: the
+/// server deep-merges the patch, so sending a whole snapshot would overwrite
+/// whatever another client changed in between. Add a field here — and one line
+/// to `json` — as each new server setting reaches this client.
+public struct ServerSettingsPatchInput: Equatable, Sendable {
+    public var enableAgentBrowserAccess: Bool?
+
+    public init(enableAgentBrowserAccess: Bool? = nil) {
+        self.enableAgentBrowserAccess = enableAgentBrowserAccess
+    }
+
+    public var json: JSONValue {
+        var fields: [String: JSONValue] = [:]
+        if let enableAgentBrowserAccess {
+            fields["enableAgentBrowserAccess"] = .bool(enableAgentBrowserAccess)
+        }
+        return .object(fields)
+    }
+
+    /// Nothing to send. Callers skip the round trip rather than asking the
+    /// server to merge an empty object.
+    public var isEmpty: Bool {
+        json == .object([:])
     }
 }
 

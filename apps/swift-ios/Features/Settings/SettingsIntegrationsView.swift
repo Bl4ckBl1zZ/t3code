@@ -8,18 +8,63 @@ import SwiftUI
 /// without making the reader open the detail to see it.
 public struct SettingsIntegrationsView: View {
     private let manager: any FeatureVoiceSettingsManaging
+    private let serverSettings: any FeatureServerSettingsManaging
+    /// The server a write lands on. Nil while none is connected, which — along
+    /// with a nil `preferences` — is what leaves the Browser section out
+    /// entirely: a row that can be shown but not saved is worse than no row.
+    private let environmentID: String?
+    /// The server's own answer, republished whenever the config subscription
+    /// reports it changing.
+    private let preferences: FeatureEnvironmentPreferences?
 
     @State private var status: OpenRouterIntegrationStatus?
     @State private var isLoaded = false
     @State private var showingOpenRouter = false
+    /// What the row shows while the write is in flight, so the switch moves
+    /// under the thumb instead of after the round trip. Cleared once the
+    /// server's own answer arrives through `preferences`.
+    @State private var pendingBrowserAccess: Bool?
+    @State private var browserAccessError: String?
 
-    public init(manager: any FeatureVoiceSettingsManaging) {
+    public init(
+        manager: any FeatureVoiceSettingsManaging,
+        serverSettings: any FeatureServerSettingsManaging,
+        environmentID: String?,
+        preferences: FeatureEnvironmentPreferences?
+    ) {
         self.manager = manager
+        self.serverSettings = serverSettings
+        self.environmentID = environmentID
+        self.preferences = preferences
+    }
+
+    /// The pending value while a write is in flight, and the server's own
+    /// answer otherwise.
+    private var browserAccessEnabled: Bool {
+        pendingBrowserAccess ?? preferences?.enableAgentBrowserAccess ?? true
+    }
+
+    private var browserAccessBinding: Binding<Bool> {
+        Binding(get: { browserAccessEnabled }, set: { setBrowserAccess($0) })
     }
 
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
+                if preferences != nil, environmentID != nil {
+                    SettingsSection(
+                        title: "Browser",
+                        footer: browserAccessError ?? (browserAccessEnabled
+                            ? "Agents can open and drive the preview browser. Your own browser is unaffected either way."
+                            : "Applies to sessions started from now on; a running agent keeps the tools it was given.")
+                    ) {
+                        SettingsToggleRow(
+                            title: "Agent browser access",
+                            systemImage: "globe",
+                            isOn: browserAccessBinding
+                        )
+                    }
+                }
                 SettingsSection(
                     title: "Integrations",
                     footer: "OpenRouter powers Voice Input transcription."
@@ -58,6 +103,30 @@ public struct SettingsIntegrationsView: View {
                 }
             }
             .presentationDragIndicator(.visible)
+        }
+    }
+
+    /// Writes the server's copy of the setting, not this device's.
+    ///
+    /// The switch moves first and the failure path puts it back, because the
+    /// alternative — a switch that sits still until the server answers — reads
+    /// as an unresponsive control on a slow link.
+    private func setBrowserAccess(_ enabled: Bool) {
+        guard let environmentID else { return }
+        pendingBrowserAccess = enabled
+        browserAccessError = nil
+        Task { @MainActor in
+            do {
+                try await serverSettings.updateServerSettings(
+                    environmentID: environmentID,
+                    patch: ServerSettingsPatchInput(enableAgentBrowserAccess: enabled)
+                )
+            } catch {
+                browserAccessError = "Could not save: \(error.localizedDescription)"
+            }
+            // Either way the row goes back to reading the snapshot, which now
+            // carries whatever the server actually settled on.
+            pendingBrowserAccess = nil
         }
     }
 

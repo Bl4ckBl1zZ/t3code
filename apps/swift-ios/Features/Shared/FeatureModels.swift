@@ -1142,13 +1142,20 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
 public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     public var defaultWorkspaceMode: FeatureWorkspaceMode
     public var newWorktreesStartFromOrigin: Bool
+    /// Whether agents on this server may drive the preview browser. Read here
+    /// rather than fetched by the settings screen so the config subscription's
+    /// `settingsUpdated` events keep the row honest when another client flips
+    /// it.
+    public var enableAgentBrowserAccess: Bool
 
     public init(
         defaultWorkspaceMode: FeatureWorkspaceMode = .local,
-        newWorktreesStartFromOrigin: Bool = true
+        newWorktreesStartFromOrigin: Bool = true,
+        enableAgentBrowserAccess: Bool = true
     ) {
         self.defaultWorkspaceMode = defaultWorkspaceMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+        self.enableAgentBrowserAccess = enableAgentBrowserAccess
     }
 }
 

@@ -2757,17 +2757,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     case let .settingsUpdated(settings):
-                        let previous = self.serverConfigsByEnvironmentID[
-                            activeClient.environment.id
-                        ]
-                        let config = ServerConfigSnapshot(
-                            providers: previous?.providers
-                                ?? self.latestServerConfig?.providers ?? [],
-                            settings: settings,
-                            t3WorkDirectory: previous?.t3WorkDirectory,
-                            threadSnapshotWindow: previous?.threadSnapshotWindow,
-                            threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
-                            shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
+                        let config = self.mergingSettings(
+                            settings,
+                            environmentID: activeClient.environment.id
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
@@ -3892,7 +3884,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 }
             preferences[environment.id] = FeatureEnvironmentPreferences(
                 defaultWorkspaceMode: defaultWorkspaceMode,
-                newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin
+                newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin,
+                enableAgentBrowserAccess: serverSettings.enableAgentBrowserAccess
             )
         }
         return FeatureSnapshot(
@@ -4615,6 +4608,26 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// wasted work. Entries are invalidated wherever
     /// serverConfigsByEnvironmentID is written.
     private var providerCatalogCache: [String: [FeatureProvider]] = [:]
+
+    /// The cached config for an environment with only its settings replaced.
+    ///
+    /// Every other field is copied from the last full snapshot —
+    /// `t3WorkDirectory` in particular, because dropping it would silently
+    /// disable T3 Work the first time settings changed.
+    private func mergingSettings(
+        _ settings: ServerSettingsSnapshot?,
+        environmentID: String
+    ) -> ServerConfigSnapshot {
+        let previous = serverConfigsByEnvironmentID[environmentID]
+        return ServerConfigSnapshot(
+            providers: previous?.providers ?? latestServerConfig?.providers ?? [],
+            settings: settings,
+            t3WorkDirectory: previous?.t3WorkDirectory,
+            threadSnapshotWindow: previous?.threadSnapshotWindow,
+            threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
+            shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
+        )
+    }
 
     /// Single write path for server configs so the provider catalog cache can
     /// never go stale against the config that feeds it.
@@ -5882,6 +5895,35 @@ extension NativeFeatureClient: FeatureHermesInboxManaging {
             },
             unreadCount: snapshot.unreadCount,
             deadLetterCount: snapshot.deadLetterCount
+        )
+    }
+}
+
+// MARK: - Server settings
+
+/// Server-authoritative settings, scoped to the environment whose row the user
+/// touched rather than to the active one: Settings lists every paired server,
+/// and a write has to land on the one it was made against.
+extension NativeFeatureClient: FeatureServerSettingsManaging {
+    @discardableResult
+    func updateServerSettings(
+        environmentID: String,
+        patch: ServerSettingsPatchInput
+    ) async throws -> FeatureEnvironmentPreferences {
+        let client = try await environmentClient(id: environmentID)
+        let settings = try await client.updateServerSettings(patch: patch)
+        // Fold the server's answer into the cached config now. The active
+        // environment would also hear it on the config subscription, but a
+        // second server has no live stream, and a row that waits for one it
+        // will never get reads as a write that did not stick.
+        let config = mergingSettings(settings, environmentID: environmentID)
+        if environmentID == activeEnvironment?.id { latestServerConfig = config }
+        setServerConfig(config, environmentID: environmentID)
+        if let shell = latestShell { await emitSnapshot(shell) }
+        return FeatureEnvironmentPreferences(
+            defaultWorkspaceMode: settings.defaultThreadEnvMode == .worktree ? .worktree : .local,
+            newWorktreesStartFromOrigin: settings.newWorktreesStartFromOrigin,
+            enableAgentBrowserAccess: settings.enableAgentBrowserAccess
         )
     }
 }

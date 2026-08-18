@@ -103,6 +103,27 @@ public actor T3Client {
         )
     }
 
+    /// Writes one or more server-authoritative settings.
+    ///
+    /// The patch is deliberately sparse: `ServerSettingsPatch` is optional
+    /// throughout and the server deep-merges it, so sending only what changed
+    /// is both correct and the smallest thing that works — a full snapshot
+    /// would overwrite whatever another client changed in between.
+    ///
+    /// The result is the server's whole settings object; it is decoded through
+    /// the same narrow view the config subscription uses, so a caller sees
+    /// exactly the fields this client models.
+    @discardableResult
+    public func updateServerSettings(
+        patch: ServerSettingsPatchInput
+    ) async throws -> ServerSettingsSnapshot {
+        try await rpc.request(
+            RPCMethod.serverUpdateSettings.rawValue,
+            payload: .object(["patch": patch.json]),
+            as: ServerSettingsSnapshot.self
+        )
+    }
+
     public func serverConfigEvents() async
         -> AsyncThrowingStream<ServerConfigStreamEvent, Error>
     {
@@ -1672,6 +1693,7 @@ public actor EnvironmentRuntime {
 public enum RPCMethod: String, Sendable {
     case serverProbe = "server.probe"
     case serverGetConfig = "server.getConfig"
+    case serverUpdateSettings = "server.updateSettings"
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"
     case generateHandoffScript = "orchestration.generateHandoffScript"
