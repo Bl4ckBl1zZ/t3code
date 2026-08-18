@@ -226,6 +226,7 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [54, { kind: "table", table: "worktree_retention_registry" }],
   [55, { kind: "index", index: "idx_worktree_retention_registry_claim" }],
   [56, { kind: "column", table: "hermes_cron_run_watermarks", column: "last_status" }],
+  [57, { kind: "index", index: "orchestration_v2_projection_turn_items_thread_run_idx" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {
