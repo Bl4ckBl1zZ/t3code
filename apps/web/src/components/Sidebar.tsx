@@ -2468,9 +2468,9 @@ export default function Sidebar() {
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const snapshot = changeRequestSnapshotByKey.get(threadKey);
-      const changeRequestState =
+      const changeRequest =
         snapshot != null && (thread.worktreePath === null || snapshot.branch === thread.branch)
-          ? snapshot.pr.state
+          ? snapshot.pr
           : null;
       // Snooze outranks settled classification: an explicitly snoozed thread
       // belongs to the shelf even if it would also auto-settle (the shelf's
@@ -2487,7 +2487,7 @@ export default function Sidebar() {
           now,
           autoSettleAfterDays,
           autoSettleOnMerge,
-          changeRequestState,
+          changeRequest,
         })
       ) {
         settled.push(thread);
