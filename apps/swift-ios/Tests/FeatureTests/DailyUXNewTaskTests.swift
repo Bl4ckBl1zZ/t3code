@@ -354,4 +354,75 @@ struct DailyUXNewTaskTests {
         #expect(max(thumbnail.size.width, thumbnail.size.height) <= 160)
         #expect(attachment.mimeType == "image/jpeg")
     }
+
+    @Test
+    func projectMenuLabelNamesTheEnvironmentOnlyWhenMoreThanOneIsOffered() {
+        let home = FeatureEnvironment(id: "home", name: "Home", endpoint: "https://home.example")
+        let studio = FeatureEnvironment(
+            id: "studio",
+            name: "Studio",
+            endpoint: "https://studio.example"
+        )
+        let project = FeatureProject(
+            id: "app",
+            environmentID: "studio",
+            name: "t3code",
+            path: "/Users/dev/Github/t3code"
+        )
+
+        // One environment: the hero's "on <environment>" line already says it.
+        #expect(
+            DailyUXCreationContext.projectMenuLabel(for: project, in: [studio])
+                == "t3code · ~/Github/t3code"
+        )
+        // Several: the row has to carry which machine it lives on.
+        #expect(
+            DailyUXCreationContext.projectMenuLabel(for: project, in: [home, studio])
+                == "t3code · Studio · ~/Github/t3code"
+        )
+    }
+
+    @Test
+    func projectMenuLabelKeepsPathsItCannotAbbreviateAndDropsRedundantOnes() {
+        let environment = FeatureEnvironment(
+            id: "box",
+            name: "Box",
+            endpoint: "https://box.example"
+        )
+        let container = FeatureProject(
+            id: "srv",
+            environmentID: "box",
+            name: "service",
+            path: "/srv/service"
+        )
+        #expect(
+            DailyUXCreationContext.projectMenuLabel(for: container, in: [environment])
+                == "service · /srv/service"
+        )
+
+        // A project whose path collapses to exactly its name would otherwise
+        // read "t3code · t3code".
+        let redundant = FeatureProject(
+            id: "dup",
+            environmentID: "box",
+            name: "~/t3code",
+            path: "/home/dev/t3code"
+        )
+        #expect(
+            DailyUXCreationContext.projectMenuLabel(for: redundant, in: [environment])
+                == "~/t3code"
+        )
+    }
+
+    @Test
+    func homeAbbreviationOnlyTouchesConventionalPosixLayouts() {
+        #expect(ProjectCreationPath.abbreviatingHome("/Users/dev/Github/app") == "~/Github/app")
+        #expect(ProjectCreationPath.abbreviatingHome("/home/dev/app") == "~/app")
+        // The home directory itself.
+        #expect(ProjectCreationPath.abbreviatingHome("/Users/dev") == "~")
+        // Not a home layout: shown verbatim rather than guessed at.
+        #expect(ProjectCreationPath.abbreviatingHome("/srv/app") == "/srv/app")
+        #expect(ProjectCreationPath.abbreviatingHome("/Users") == "/Users")
+        #expect(ProjectCreationPath.abbreviatingHome("C:\\code\\app") == "C:\\code\\app")
+    }
 }

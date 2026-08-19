@@ -95,6 +95,32 @@ public struct FeatureMessageSubmission: Sendable, Equatable {
 }
 
 enum DailyUXCreationContext {
+    /// A project row's menu text: the name, then the location that tells two
+    /// same-named projects apart.
+    ///
+    /// `environments` is the set the picker actually offers. The environment is
+    /// named only when more than one is in play — the New Task hero already says
+    /// "on <environment>" for the current selection, so repeating it on every
+    /// row would be noise. Unlike web's picker there is no local/remote split to
+    /// draw: the phone reaches every environment over the network.
+    static func projectMenuLabel(
+        for project: FeatureProject,
+        in environments: [FeatureEnvironment]
+    ) -> String {
+        var parts = [project.name]
+        if environments.count > 1,
+           let environment = environments.first(where: { $0.id == project.environmentID }) {
+            parts.append(environment.name)
+        }
+        // A project whose path is its whole identity (an unnamed root) would
+        // otherwise read "t3code · t3code".
+        let path = ProjectCreationPath.abbreviatingHome(project.path)
+        if !path.isEmpty, path != project.name {
+            parts.append(path)
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// The projects a task can be started in.
     ///
     /// `serverConfigs` is required rather than defaulted because it is the only
