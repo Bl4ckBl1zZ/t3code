@@ -13,6 +13,7 @@ import {
   DesktopPreviewRecordingSaveInputSchema,
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
+  DesktopPreviewSetAudioMutedInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewCreateTabInputSchema,
   DesktopPreviewSetDeviceEmulationInputSchema,
@@ -161,6 +162,16 @@ export const setDeviceEmulation = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.setDeviceEmulation")(function* ({ tabId, emulation }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.setDeviceEmulation(tabId, emulation);
+  }),
+});
+
+export const setAudioMuted = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL,
+  payload: DesktopPreviewSetAudioMutedInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setAudioMuted")(function* ({ tabId, audioMuted }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setAudioMuted(tabId, audioMuted);
   }),
 });
 export const openDevTools = tabMethod(
@@ -383,6 +394,7 @@ export const methods = [
   hardReload,
   setColorScheme,
   setDeviceEmulation,
+  setAudioMuted,
   openDevTools,
   clearCookies,
   clearCache,

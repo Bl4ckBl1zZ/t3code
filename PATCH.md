@@ -38,6 +38,17 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   items built inline in `Sidebar.tsx`. Upstream changes to those retired modules resolve to the
   fork: port the menu feature itself (new items, handlers) into `Sidebar.tsx`/`useThreadActions.ts`
   instead of merging the files.
+- Keeps upstream's `EnvironmentProviderSettings` inline in
+  `apps/web/src/components/settings/SettingsPanels.tsx`; the fork carries no
+  `ProviderSettingsPanel.tsx`. Upstream changes to that file resolve to the fork: port the behavior
+  into `SettingsPanels.tsx` instead of restoring the module.
+- Runs the shared settle rules (`packages/client-runtime/src/state/threadSettled.ts`) against the
+  fork's orchestration V2 thread shell. Upstream types them on `OrchestrationThreadShell` and reads
+  `latestTurn`; the fork uses structural shapes (`QueuedThreadShell`/`SettlementThreadShell`,
+  `ThreadActivitySource`) and reads `latestRun`, and tolerates shells that carry no `createdAt`.
+  Upstream edits here need translating rather than merging, including their test fixtures. The
+  fork's `SidebarThreadRow` also resolves the row's PR after the Woke pill is computed, so
+  upstream's `changeRequestAutoSettles` guard on `isWoke` has no fork counterpart.
 - Owns SQLite migration numbers 36 and up (orchestration V2, Hermes, scheduled tasks). Upstream
   migrations that claim those numbers must be renumbered or dropped on sync — applying two different
   migrations under one number would corrupt existing fork databases. Upstream's

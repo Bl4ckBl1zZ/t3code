@@ -21,6 +21,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
+  resolveProviderInstanceEnabled,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
@@ -2851,12 +2852,17 @@ export function ProviderSettingsPanel(
     >;
     const legacyConfig = legacyProviders[providerSettings.provider]!;
     const defaultLegacyConfig = defaultLegacyProviders[providerSettings.provider]!;
+    // The envelope is the single enabled flag: keep the legacy in-config
+    // flag out of the synthesized blob, or an explicit `enabled: false`
+    // would keep winning over the envelope and the Switch could never
+    // turn a default-off provider on.
+    const { enabled: legacyEnabled, ...legacyConfigRest } = legacyConfig;
     const effectiveInstance: ProviderInstanceConfig =
       explicitInstance ??
       ({
         driver,
-        enabled: legacyConfig.enabled,
-        config: legacyConfig,
+        enabled: legacyEnabled,
+        config: legacyConfigRest,
       } satisfies ProviderInstanceConfig);
     const isDirty =
       explicitInstance !== undefined || !Equal.equals(legacyConfig, defaultLegacyConfig);
@@ -3167,7 +3173,7 @@ export function ProviderSettingsPanel(
                 }))
               }
               onUpdate={(next) => {
-                const wasEnabled = row.instance.enabled ?? true;
+                const wasEnabled = resolveProviderInstanceEnabled(row.instance);
                 const isDisabling = next.enabled === false && wasEnabled;
                 const shouldClearTextGen = isDisabling && textGenInstanceId === row.instanceId;
                 if (shouldClearTextGen) {

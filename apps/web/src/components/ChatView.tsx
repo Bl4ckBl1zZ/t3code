@@ -4799,6 +4799,18 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+  // Primitive slice of the displayed PR for the settle-rule memos below:
+  // resolveDisplayedThreadPr returns a fresh object every render, so memoize
+  // on the fields the rules read instead of the object identity.
+  const activeThreadPrState = activeThreadPr?.state ?? null;
+  const activeThreadPrUpdatedAt = activeThreadPr?.updatedAt ?? null;
+  const activeThreadChangeRequest = useMemo(
+    () =>
+      activeThreadPrState === null
+        ? null
+        : { state: activeThreadPrState, updatedAt: activeThreadPrUpdatedAt },
+    [activeThreadPrState, activeThreadPrUpdatedAt],
+  );
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -4824,10 +4836,10 @@ function ChatViewContent(props: ChatViewProps) {
       now: `${nowMinute}:00.000Z`,
       autoSettleAfterDays,
       autoSettleOnMerge,
-      changeRequestState: activeThreadPr?.state ?? null,
+      changeRequest: activeThreadChangeRequest,
     });
   }, [
-    activeThreadPr?.state,
+    activeThreadChangeRequest,
     activeThreadShell,
     autoSettleAfterDays,
     autoSettleOnMerge,
