@@ -95,6 +95,32 @@ public struct FeatureMessageSubmission: Sendable, Equatable {
 }
 
 enum DailyUXCreationContext {
+    /// A project row's menu text: the name, then the location that tells two
+    /// same-named projects apart.
+    ///
+    /// `environments` is the set the picker actually offers. The environment is
+    /// named only when more than one is in play — the New Task hero already says
+    /// "on <environment>" for the current selection, so repeating it on every
+    /// row would be noise. Unlike web's picker there is no local/remote split to
+    /// draw: the phone reaches every environment over the network.
+    static func projectMenuLabel(
+        for project: FeatureProject,
+        in environments: [FeatureEnvironment]
+    ) -> String {
+        var parts = [project.name]
+        if environments.count > 1,
+           let environment = environments.first(where: { $0.id == project.environmentID }) {
+            parts.append(environment.name)
+        }
+        // A project whose path is its whole identity (an unnamed root) would
+        // otherwise read "t3code · t3code".
+        let path = ProjectCreationPath.abbreviatingHome(project.path)
+        if !path.isEmpty, path != project.name {
+            parts.append(path)
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// The projects a task can be started in.
     ///
     /// `serverConfigs` is required rather than defaulted because it is the only
@@ -227,7 +253,7 @@ struct DailyUXSidebarIndex {
         let isSettled = { (thread: FeatureThread) in
             thread.canShelveSettled && thread.isEffectivelySettled(
                 at: now,
-                changeRequestState: changeRequests[thread.id]?.state
+                changeRequest: changeRequests[thread.id]
             )
         }
 
@@ -316,7 +342,7 @@ enum DailyUXSidebarRefresh {
             let settlementBoundary = automaticSettlementBoundary(
                 for: thread,
                 after: now,
-                changeRequestState: changeRequests[thread.id]?.state
+                changeRequest: changeRequests[thread.id]
             )
             let threadBoundary = [snoozeBoundary, settlementBoundary]
                 .compactMap { $0 }
@@ -330,7 +356,7 @@ enum DailyUXSidebarRefresh {
     private static func automaticSettlementBoundary(
         for thread: FeatureThread,
         after now: Date,
-        changeRequestState: String?
+        changeRequest: FeaturePullRequest?
     ) -> Date? {
         guard thread.canShelveSettled,
               !thread.isArchived,
@@ -339,11 +365,13 @@ enum DailyUXSidebarRefresh {
               !thread.keepsActive,
               // A change request that resolves the thread pins the shelf either
               // way — those rows are settled now and open ones never
-              // inactivity-settle — so no clock tick moves them. A merge the
-              // user opted out of settling on is the exception: it leaves the
-              // row on the ordinary inactivity clock.
-              changeRequestState == nil
-              || (changeRequestState == "merged" && !thread.autoSettleOnMerge),
+              // inactivity-settle — so no clock tick moves them. A terminal
+              // request the thread outlived is the exception, whether because
+              // the user opted out of settling on merges or because the request
+              // predates their latest engagement: those rows stay on the
+              // ordinary inactivity clock.
+              !thread.changeRequestAutoSettles(changeRequest),
+              changeRequest?.state != "open",
               let autoSettleAfterDays = thread.autoSettleAfterDays,
               let lastActivityAt = thread.lastActivityAt else {
             return nil
@@ -536,12 +564,41 @@ extension FeatureThread {
         state == .waitingForApproval || state == .waitingForInput || state == .failed
     }
 
+    /// The anchor `changeRequestAutoSettles` measures a terminal change request
+    /// against: the newest user-initiated event in the thread, falling back to
+    /// creation time for a thread the user has not touched since starting it.
+    var userActivityAnchorAt: Date {
+        guard let latestUserActivityAt else { return createdAt }
+        return max(createdAt, latestUserActivityAt)
+    }
+
+    /// Swift port of `changeRequestAutoSettles` in
+    /// `packages/client-runtime/src/state/threadSettled.ts`.
+    ///
+    /// A closed change request is abandoned work and always settles; a merge
+    /// only counts as finished when the user leaves that setting on. Either way
+    /// it settles the thread only while it postdates every user-initiated event
+    /// in it, so settling on a merge happens ONCE: a request last touched before
+    /// the thread was created is inherited branch history (a new thread started
+    /// at a worktree root whose PR already merged), and one older than the
+    /// user's latest engagement was already adjudicated — re-engaging a thread
+    /// whose PR merged is the user saying the conversation outlived the PR.
+    /// A request whose last activity the server does not report keeps the old
+    /// always-settle behavior.
+    func changeRequestAutoSettles(_ changeRequest: FeaturePullRequest?) -> Bool {
+        guard let changeRequest else { return false }
+        let isTerminal = changeRequest.state == "closed"
+            || (changeRequest.state == "merged" && autoSettleOnMerge)
+        guard isTerminal else { return false }
+        guard let updatedAt = changeRequest.updatedAt else { return true }
+        return updatedAt >= userActivityAnchorAt
+    }
+
     /// Swift port of `effectiveSettled` in
     /// `packages/client-runtime/src/state/threadSettled.ts` — keep the two in
     /// step or the same thread parks on different shelves on web and mobile.
-    /// `changeRequestState` is the thread's pull-request state ("open" /
-    /// "merged" / "closed") when one is being observed.
-    func isEffectivelySettled(at now: Date, changeRequestState: String? = nil) -> Bool {
+    /// `changeRequest` is the thread's pull request when one is being observed.
+    func isEffectivelySettled(at now: Date, changeRequest: FeaturePullRequest? = nil) -> Bool {
         switch state {
         case .queued, .working, .waitingForApproval, .waitingForInput:
             return false
@@ -554,14 +611,12 @@ extension FeatureThread {
         if keepsActive {
             return false
         }
-        // A closed PR is abandoned work and always settles; a merge only counts
-        // as finished when the user leaves that on. An open one is unfinished
-        // business that blocks the inactivity path no matter how quiet the
-        // thread has been.
-        if changeRequestState == "closed" || (changeRequestState == "merged" && autoSettleOnMerge) {
+        if changeRequestAutoSettles(changeRequest) {
             return true
         }
-        if changeRequestState == "open" {
+        // An open PR is unfinished business that blocks the inactivity path no
+        // matter how quiet the thread has been.
+        if changeRequest?.state == "open" {
             return false
         }
         guard let autoSettleAfterDays else {

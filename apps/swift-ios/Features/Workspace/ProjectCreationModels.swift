@@ -144,6 +144,26 @@ enum ProjectCreationPath {
         return sanitized.isEmpty ? "repository" : sanitized
     }
 
+    /// Collapses a home directory to `~` for display.
+    ///
+    /// The path belongs to the environment's machine rather than the phone, so
+    /// Foundation's tilde abbreviation — which measures against the device's own
+    /// home — would be wrong here. Only the two conventional POSIX layouts are
+    /// recognised; anything else (Windows, a container root, a bare mount) is
+    /// shown verbatim rather than guessed at.
+    static func abbreviatingHome(_ path: String) -> String {
+        for root in ["/Users/", "/home/"] {
+            guard path.hasPrefix(root) else { continue }
+            let remainder = path.dropFirst(root.count)
+            guard let separator = remainder.firstIndex(of: "/") else {
+                // The home directory itself, with no trailing component.
+                return remainder.isEmpty ? path : "~"
+            }
+            return "~" + remainder[separator...]
+        }
+        return path
+    }
+
     static func appending(_ component: String, to basePath: String) -> String {
         let base = basePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return component }

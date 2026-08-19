@@ -894,12 +894,25 @@ public struct FeaturePullRequest: Sendable, Equatable, Hashable, Codable {
     public var title: String
     public var state: String
     public var url: URL?
+    /// Last provider-side activity. For a merged or closed request this bounds
+    /// when it reached that state, which is what
+    /// `FeatureThread.changeRequestAutoSettles` compares against the thread's
+    /// own timeline. Nil when the server does not report it, which keeps the
+    /// old always-settle behavior.
+    public var updatedAt: Date?
 
-    public init(number: Int, title: String, state: String, url: URL? = nil) {
+    public init(
+        number: Int,
+        title: String,
+        state: String,
+        url: URL? = nil,
+        updatedAt: Date? = nil
+    ) {
         self.number = number
         self.title = title
         self.state = state
         self.url = url
+        self.updatedAt = updatedAt
     }
 }
 

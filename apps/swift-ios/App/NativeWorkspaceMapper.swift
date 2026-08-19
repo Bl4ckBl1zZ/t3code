@@ -109,9 +109,26 @@ enum NativeWorkspaceMapper {
             number: changeRequest.number,
             title: changeRequest.title,
             state: changeRequest.state,
-            url: URL(string: changeRequest.url)
+            url: URL(string: changeRequest.url),
+            updatedAt: changeRequest.updatedAt.flatMap(isoDate)
         )
     }
+
+    /// Servers stamp with and without fractional seconds depending on the
+    /// provider, so both spellings are tried before giving up. An unparseable
+    /// stamp reads as absent, which the settle rules treat as "server does not
+    /// report it" — the same always-settle fallback web takes.
+    static func isoDate(_ value: String) -> Date? {
+        fractionalISO8601.date(from: value) ?? plainISO8601.date(from: value)
+    }
+
+    private static let fractionalISO8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let plainISO8601 = ISO8601DateFormatter()
 
     /// One changed path, with the porcelain code the server now carries.
     ///

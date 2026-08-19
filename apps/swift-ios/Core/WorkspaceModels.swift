@@ -389,6 +389,12 @@ public struct VCSChangeRequest: Codable, Equatable, Sendable {
     public let baseRef: String
     public let headRef: String
     public let state: String
+    /// Last provider-side activity (ISO). For a merged or closed request this
+    /// bounds when it reached that state, which is what lets the settle rules
+    /// tell a request that terminated during a thread's life from one that was
+    /// already history when the thread was created. Absent on old servers and
+    /// on providers whose lookups do not report it.
+    public let updatedAt: String?
 }
 
 public struct VCSLocalStatus: Codable, Equatable, Sendable {

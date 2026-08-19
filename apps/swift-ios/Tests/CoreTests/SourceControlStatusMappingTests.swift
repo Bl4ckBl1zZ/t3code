@@ -66,7 +66,8 @@ final class SourceControlStatusMappingTests: XCTestCase {
                     url: "https://example.com/pr/7",
                     baseRef: "main",
                     headRef: "feature/native",
-                    state: "open"
+                    state: "open",
+                    updatedAt: nil
                 )
             )
         )

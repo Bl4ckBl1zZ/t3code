@@ -178,10 +178,11 @@ public struct NewThreadView: View {
                         Button {
                             selectProject(project.id)
                         } label: {
+                            let label = projectMenuLabel(project)
                             if project.id == projectID {
-                                Label(project.name, systemImage: "checkmark")
+                                Label(label, systemImage: "checkmark")
                             } else {
-                                Text(project.name)
+                                Text(label)
                             }
                         }
                     }
@@ -371,6 +372,10 @@ public struct NewThreadView: View {
         }
         .foregroundStyle(T3Colors.textSecondary)
         .contentShape(Rectangle())
+    }
+
+    private func projectMenuLabel(_ project: FeatureProject) -> String {
+        DailyUXCreationContext.projectMenuLabel(for: project, in: creationEnvironments)
     }
 
     private var creationProjects: [FeatureProject] {
