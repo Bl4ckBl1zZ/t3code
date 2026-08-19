@@ -356,7 +356,7 @@ struct DailyUXNewTaskTests {
     }
 
     @Test
-    func projectMenuLabelNamesTheEnvironmentOnlyWhenMoreThanOneIsOffered() {
+    func projectMenuRowNamesTheEnvironmentOnlyWhenMoreThanOneIsOffered() {
         let home = FeatureEnvironment(id: "home", name: "Home", endpoint: "https://home.example")
         let studio = FeatureEnvironment(
             id: "studio",
@@ -372,18 +372,18 @@ struct DailyUXNewTaskTests {
 
         // One environment: the hero's "on <environment>" line already says it.
         #expect(
-            DailyUXCreationContext.projectMenuLabel(for: project, in: [studio])
-                == "t3code · ~/Github/t3code"
+            DailyUXCreationContext.projectMenuRow(for: project, in: [studio])
+                == ("t3code", "~/Github/t3code")
         )
         // Several: the row has to carry which machine it lives on.
         #expect(
-            DailyUXCreationContext.projectMenuLabel(for: project, in: [home, studio])
-                == "t3code · Studio · ~/Github/t3code"
+            DailyUXCreationContext.projectMenuRow(for: project, in: [home, studio])
+                == ("t3code", "Studio · ~/Github/t3code")
         )
     }
 
     @Test
-    func projectMenuLabelKeepsPathsItCannotAbbreviateAndDropsRedundantOnes() {
+    func projectMenuRowKeepsPathsItCannotAbbreviateAndDropsRedundantOnes() {
         let environment = FeatureEnvironment(
             id: "box",
             name: "Box",
@@ -396,12 +396,12 @@ struct DailyUXNewTaskTests {
             path: "/srv/service"
         )
         #expect(
-            DailyUXCreationContext.projectMenuLabel(for: container, in: [environment])
-                == "service · /srv/service"
+            DailyUXCreationContext.projectMenuRow(for: container, in: [environment])
+                == ("service", "/srv/service")
         )
 
         // A project whose path collapses to exactly its name would otherwise
-        // read "t3code · t3code".
+        // read "t3code" over "t3code".
         let redundant = FeatureProject(
             id: "dup",
             environmentID: "box",
@@ -409,8 +409,8 @@ struct DailyUXNewTaskTests {
             path: "/home/dev/t3code"
         )
         #expect(
-            DailyUXCreationContext.projectMenuLabel(for: redundant, in: [environment])
-                == "~/t3code"
+            DailyUXCreationContext.projectMenuRow(for: redundant, in: [environment])
+                == ("~/t3code", String?.none)
         )
     }
 

@@ -178,11 +178,16 @@ public struct NewThreadView: View {
                         Button {
                             selectProject(project.id)
                         } label: {
-                            let label = projectMenuLabel(project)
+                            // A menu row reads a second Text as its subtitle and
+                            // a bare Image as its icon, so the path sits small
+                            // under the name instead of wrapping beside it.
+                            let row = projectMenuRow(project)
+                            Text(row.title)
+                            if let detail = row.detail {
+                                Text(detail)
+                            }
                             if project.id == projectID {
-                                Label(label, systemImage: "checkmark")
-                            } else {
-                                Text(label)
+                                Image(systemName: "checkmark")
                             }
                         }
                     }
@@ -374,8 +379,8 @@ public struct NewThreadView: View {
         .contentShape(Rectangle())
     }
 
-    private func projectMenuLabel(_ project: FeatureProject) -> String {
-        DailyUXCreationContext.projectMenuLabel(for: project, in: creationEnvironments)
+    private func projectMenuRow(_ project: FeatureProject) -> (title: String, detail: String?) {
+        DailyUXCreationContext.projectMenuRow(for: project, in: creationEnvironments)
     }
 
     private var creationProjects: [FeatureProject] {
