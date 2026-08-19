@@ -241,7 +241,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             } else {
                 let isSettled = thread.isEffectivelySettled(
                     at: .now,
-                    changeRequestState: parent.changeRequests[thread.id]?.state
+                    changeRequest: parent.changeRequests[thread.id]
                 )
                 primaryAction = UIContextualAction(
                     style: .normal,
@@ -415,7 +415,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 isPinned: thread.pinnedAt != nil,
                 isSettled: thread.canShelveSettled && thread.isEffectivelySettled(
                     at: now,
-                    changeRequestState: parent.changeRequests[thread.id]?.state
+                    changeRequest: parent.changeRequests[thread.id]
                 ),
                 isSnoozed: thread.canShelveSnoozed && thread.isEffectivelySnoozed(at: now),
                 canSnooze: thread.state != .queued

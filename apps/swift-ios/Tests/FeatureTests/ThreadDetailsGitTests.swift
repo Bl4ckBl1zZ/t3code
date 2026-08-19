@@ -333,7 +333,8 @@ final class ThreadDetailsGitTests: XCTestCase {
                 url: "https://example.com/pr/7",
                 baseRef: "main",
                 headRef: "main",
-                state: "open"
+                state: "open",
+                updatedAt: nil
             )
         )
         let status = ThreadDetailsGitStatus(wire)

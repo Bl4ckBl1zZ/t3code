@@ -625,6 +625,110 @@ struct DailyUXSidebarTests {
         )
     }
 
+    @Test
+    func aMergeSettlesTheThreadOnlyOnce() {
+        // Swift half of web's "never re-settles a thread revived after the
+        // merge". Both threads carry the same merged PR; the only difference is
+        // whether the user spoke after it landed.
+        let revived = thread(
+            id: "revived",
+            created: -1_000,
+            updated: -100,
+            userActivity: -100
+        )
+        let untouched = thread(
+            id: "untouched",
+            created: -1_000,
+            updated: -100,
+            userActivity: -100
+        )
+
+        let index = makeIndex(
+            [revived, untouched],
+            changeRequests: [
+                // Merged before the user came back: they said the conversation
+                // outlived the PR, so the row stays where they can see it.
+                "revived": pullRequest(state: "merged", updated: -500),
+                // Merged after: the settle it earned still lands.
+                "untouched": pullRequest(state: "merged", updated: -50),
+            ]
+        )
+
+        #expect(index.active.map(\.id) == ["revived"])
+        #expect(index.settled.map(\.id) == ["untouched"])
+    }
+
+    @Test
+    func changeRequestOlderThanTheThreadIsInheritedBranchHistory() {
+        // A new thread started at a worktree root whose PR already merged must
+        // not open on the shelf.
+        let inherited = thread(id: "inherited", created: -1_000, updated: -10)
+
+        let index = makeIndex(
+            [inherited],
+            changeRequests: ["inherited": pullRequest(state: "merged", updated: -2_000)]
+        )
+
+        #expect(index.active.map(\.id) == ["inherited"])
+        #expect(index.settled.isEmpty)
+    }
+
+    @Test
+    func aMergeLandingMidTurnStillSettlesWhenTheTurnFinishes() {
+        // The anchor is user-initiated activity only: the agent finishing a turn
+        // after the merge must not block the settle the merge earned. Here the
+        // turn was requested at -600 and completed at -100, and the merge landed
+        // between them.
+        let midTurn = thread(
+            id: "mid-turn",
+            created: -1_000,
+            updated: -100,
+            userActivity: -600
+        )
+
+        let index = makeIndex(
+            [midTurn],
+            changeRequests: ["mid-turn": pullRequest(state: "merged", updated: -500)]
+        )
+
+        #expect(index.settled.map(\.id) == ["mid-turn"])
+    }
+
+    @Test
+    func aChangeRequestWithNoReportedActivityStillSettlesImmediately() {
+        // Servers and providers that never report the request's last activity
+        // keep the old always-settle behavior rather than stranding the row.
+        let merged = thread(id: "merged", created: -1_000, updated: -10, userActivity: -10)
+
+        let index = makeIndex(
+            [merged],
+            changeRequests: ["merged": pullRequest(state: "merged")]
+        )
+
+        #expect(index.settled.map(\.id) == ["merged"])
+    }
+
+    @Test
+    func aChangeRequestTheThreadOutlivedKeepsTheSettlementBoundaryTicking() {
+        var resting = thread(
+            id: "resting",
+            created: -400_000,
+            updated: -100_000,
+            userActivity: -100_000
+        )
+        resting.autoSettleAfterDays = 2
+
+        // The merge predates the user's latest engagement, so it no longer pins
+        // the shelf and the row still needs a clock tick to move it.
+        #expect(
+            DailyUXSidebarRefresh.nextBoundary(
+                for: [resting],
+                after: now,
+                changeRequests: ["resting": pullRequest(state: "merged", updated: -200_000)]
+            ) == resting.lastActivityAt?.addingTimeInterval(2 * 24 * 60 * 60)
+        )
+    }
+
     private func makeIndex(
         _ threads: [FeatureThread],
         changeRequests: [String: FeaturePullRequest] = [:]
@@ -637,8 +741,13 @@ struct DailyUXSidebarTests {
         )
     }
 
-    private func pullRequest(state: String) -> FeaturePullRequest {
-        FeaturePullRequest(number: 1, title: "PR", state: state)
+    private func pullRequest(state: String, updated: TimeInterval? = nil) -> FeaturePullRequest {
+        FeaturePullRequest(
+            number: 1,
+            title: "PR",
+            state: state,
+            updatedAt: updated.map(now.addingTimeInterval)
+        )
     }
 
     private func thread(
@@ -649,6 +758,7 @@ struct DailyUXSidebarTests {
         updated: TimeInterval,
         state: FeatureThreadState = .idle,
         isSettled: Bool = false,
+        userActivity: TimeInterval? = nil,
         supportsSettlement: Bool? = true,
         supportsSnooze: Bool? = true,
         workInboxRole: String? = nil
@@ -662,6 +772,7 @@ struct DailyUXSidebarTests {
             state: state,
             isSettled: isSettled,
             lastActivityAt: now.addingTimeInterval(updated),
+            latestUserActivityAt: userActivity.map(now.addingTimeInterval),
             supportsSettlement: supportsSettlement,
             supportsSnooze: supportsSnooze,
             workInboxRole: workInboxRole

@@ -4371,6 +4371,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 latestRunCompletedAt: latestRun?.completedAt,
                 updatedAt: thread.updatedAt
             ),
+            latestUserActivityAt: userActivityDate(
+                latestUserMessageAt: nil,
+                latestRunRequestedAt: latestRun?.requestedAt
+            ),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
@@ -4463,6 +4467,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 latestUserMessageAt: thread.latestUserMessageAt,
                 latestRunCompletedAt: thread.latestRunCompletedAt,
                 updatedAt: thread.updatedAt
+            ),
+            latestUserActivityAt: userActivityDate(
+                latestUserMessageAt: thread.latestUserMessageAt,
+                latestRunRequestedAt: thread.latestRunRequestedAt
             ),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
@@ -5139,6 +5147,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             .compactMap { $0.flatMap(parseValidDate) }
             .max()
         return activity ?? parseValidDate(updatedAt)
+    }
+
+    /// Latest user-initiated activity, for `FeatureThread.latestUserActivityAt`.
+    /// Unlike `lastActivityDate` this has no `updatedAt` floor and never reads a
+    /// run's completion: an agent finishing work is not the user re-engaging,
+    /// and treating it as such would let a merge that landed mid-turn miss the
+    /// settle it earned.
+    private func userActivityDate(
+        latestUserMessageAt: String?,
+        latestRunRequestedAt: String?
+    ) -> Date? {
+        [latestUserMessageAt, latestRunRequestedAt]
+            .compactMap { $0.flatMap(parseValidDate) }
+            .max()
     }
 
     /// The kind is classified rather than assumed: the contract has separate

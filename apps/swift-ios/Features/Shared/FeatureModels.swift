@@ -211,6 +211,13 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// `sidebarAutoSettleOnMerge`). A closed one always settles it.
     public var autoSettleOnMerge: Bool
     public var lastActivityAt: Date?
+    /// Latest USER-initiated activity: the newest of the thread's own messages
+    /// and the turn requests they start. Deliberately excludes the agent-side
+    /// run stamps `lastActivityAt` folds in, because it anchors
+    /// `changeRequestAutoSettles`: a merge landing mid-turn must still settle
+    /// the thread when that turn finishes, while a user re-engaging after the
+    /// merge blocks it for good. Nil falls back to `createdAt`.
+    public var latestUserActivityAt: Date?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
     public var pinnedAt: Date?
@@ -270,6 +277,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         autoSettleAfterDays: Double? = 3,
         autoSettleOnMerge: Bool = true,
         lastActivityAt: Date? = nil,
+        latestUserActivityAt: Date? = nil,
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
@@ -311,6 +319,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.autoSettleAfterDays = autoSettleAfterDays
         self.autoSettleOnMerge = autoSettleOnMerge
         self.lastActivityAt = lastActivityAt
+        self.latestUserActivityAt = latestUserActivityAt
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
