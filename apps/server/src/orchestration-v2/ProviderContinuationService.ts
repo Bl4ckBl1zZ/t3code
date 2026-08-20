@@ -1,6 +1,9 @@
-import { CommandId, type RunId } from "@t3tools/contracts";
+import { CommandId, type OrchestrationV2ThreadProjection, type RunId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+
+import { formatDelegatedTaskWakeMessage } from "@t3tools/shared/delegatedTaskWake";
 
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
@@ -10,6 +13,53 @@ import {
 import { isActiveRun, ThreadManagementService } from "./ThreadManagementService.ts";
 
 const CONTINUATION_MESSAGE_TEXT = "Background task completed.";
+
+/** Same rendering as the orchestrator: one task keeps the singular sentence. */
+function delegatedCompletionText(
+  projection: OrchestrationV2ThreadProjection,
+  taskIds: ReadonlyArray<string>,
+): string {
+  return formatDelegatedTaskWakeMessage(
+    taskIds.map((taskId) => {
+      const task = projection.subagents.find((candidate) => candidate.id === taskId);
+      return { id: taskId, title: task?.title ?? null, status: task?.status ?? "completed" };
+    }),
+  );
+}
+
+/**
+ * Re-reads the cohort at dispatch time. A task that finished after the offer
+ * can have joined the delivery, and an acknowledged or stopped cohort must not
+ * produce a turn at all.
+ */
+function currentDelegatedCompletionDelivery(
+  projection: OrchestrationV2ThreadProjection,
+  completion: NonNullable<ProviderContinuationRequest["delegatedCompletion"]>,
+) {
+  const sourceRun = projection.runs.find((candidate) => candidate.id === completion.parentRunId);
+  const delivery = sourceRun?.delegatedCompletion?.delivery;
+  const alreadyDispatched = projection.messages.some(
+    (message) => message.id === completion.messageId,
+  );
+  if (
+    sourceRun?.delegatedCompletion?.disposition !== "open" ||
+    delivery === null ||
+    delivery === undefined ||
+    delivery.generation !== completion.generation ||
+    delivery.messageId !== completion.messageId ||
+    alreadyDispatched
+  ) {
+    return undefined;
+  }
+  return delivery;
+}
+
+function delegatedCompletionRetryKey(
+  request: ProviderContinuationRequest,
+  completion: NonNullable<ProviderContinuationRequest["delegatedCompletion"]>,
+): string {
+  return `${request.threadId}:${completion.parentRunId}:${completion.generation}:${completion.messageId}`;
+}
 
 /**
  * Drains ProviderContinuationRequests and dispatches an internal
@@ -30,15 +80,40 @@ export const workerLive = Layer.effectDiscard(
     const ids = yield* IdAllocatorV2;
     const requests = yield* ProviderContinuationRequests;
     const threads = yield* ThreadManagementService;
+    const retryAttempts = yield* Ref.make(new Map<string, number>());
+
+    const clearRetryAttempt = (key: string) =>
+      Ref.update(retryAttempts, (current) => {
+        if (!current.has(key)) return current;
+        const updated = new Map(current);
+        updated.delete(key);
+        return updated;
+      });
+
+    const nextRetryDelay = (key: string) =>
+      Ref.modify(retryAttempts, (current) => {
+        const attempt = current.get(key) ?? 0;
+        const updated = new Map(current);
+        updated.set(key, attempt + 1);
+        return [Math.min(100 * 2 ** Math.min(attempt, 6), 5_000), updated] as const;
+      });
 
     const dispatchContinuation = Effect.fn("ProviderContinuationService.dispatchContinuation")(
       function* (request: ProviderContinuationRequest) {
         const projection = yield* threads.getThreadProjection(request.threadId);
-        if (projection.thread.archivedAt !== null) {
+        if (
+          projection.thread.archivedAt !== null ||
+          (projection.thread.deletedAt ?? null) !== null
+        ) {
           yield* Effect.logInfo("orchestration-v2.provider-continuation.thread-archived", {
             threadId: request.threadId,
             providerThreadId: request.providerThreadId,
           });
+          if (request.delegatedCompletion !== undefined) {
+            yield* clearRetryAttempt(
+              delegatedCompletionRetryKey(request, request.delegatedCompletion),
+            );
+          }
           // No continuation turn will start to clear the adapter's sticky offer.
           if (request.clearIfCurrent !== undefined) {
             yield* request.clearIfCurrent();
@@ -47,6 +122,42 @@ export const workerLive = Layer.effectDiscard(
             // drop callback.
             yield* request.dispatchIfCurrent(Effect.void);
           }
+          return;
+        }
+        // A cohort delivery is always its own queued run, never a steer: the
+        // run is what the user can dismiss and what the orchestrator reconciles
+        // against when it terminalizes.
+        if (request.delegatedCompletion !== undefined) {
+          const retryKey = delegatedCompletionRetryKey(request, request.delegatedCompletion);
+          const delivery = currentDelegatedCompletionDelivery(
+            projection,
+            request.delegatedCompletion,
+          );
+          if (delivery === undefined) {
+            yield* clearRetryAttempt(retryKey);
+            return;
+          }
+          const commandId = yield* ids.allocate.command({
+            fixtureName: "delegated-completion",
+            commandName: "dispatch",
+          });
+          yield* threads.dispatch({
+            type: "message.dispatch",
+            commandId,
+            threadId: request.threadId,
+            messageId: delivery.messageId,
+            text: delegatedCompletionText(projection, delivery.taskIds),
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: "agent",
+            creationSource: "server",
+            delegatedCompletion: {
+              parentRunId: request.delegatedCompletion.parentRunId,
+              generation: delivery.generation,
+              taskIds: delivery.taskIds,
+            },
+          });
+          yield* clearRetryAttempt(retryKey);
           return;
         }
         const dispatchWith = (
@@ -103,10 +214,38 @@ export const workerLive = Layer.effectDiscard(
       Effect.flatMap((request) =>
         dispatchContinuation(request).pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
-              threadId: request.threadId,
-              providerThreadId: request.providerThreadId,
-              cause,
+            Effect.gen(function* () {
+              yield* Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
+                threadId: request.threadId,
+                providerThreadId: request.providerThreadId,
+                cause,
+              });
+              // A cohort delivery is the only announcement of a delegated
+              // result, so a transient dispatch failure retries with backoff
+              // until the cohort itself says it is no longer wanted.
+              if (request.delegatedCompletion !== undefined) {
+                const completion = request.delegatedCompletion;
+                const retryKey = delegatedCompletionRetryKey(request, completion);
+                const retryDelay = yield* nextRetryDelay(retryKey);
+                yield* Effect.gen(function* () {
+                  yield* Effect.sleep(`${retryDelay} millis`);
+                  const projection = yield* threads.getThreadProjection(request.threadId);
+                  if (currentDelegatedCompletionDelivery(projection, completion) !== undefined) {
+                    yield* requests.offer(request);
+                  } else {
+                    yield* clearRetryAttempt(retryKey);
+                  }
+                }).pipe(
+                  Effect.catchCause((retryCause) =>
+                    Effect.logWarning("orchestration-v2.provider-continuation.retry-check-failed", {
+                      threadId: request.threadId,
+                      providerThreadId: request.providerThreadId,
+                      cause: retryCause,
+                    }).pipe(Effect.andThen(requests.offer(request))),
+                  ),
+                  Effect.forkScoped,
+                );
+              }
             }),
           ),
         ),

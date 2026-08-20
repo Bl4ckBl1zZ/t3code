@@ -373,6 +373,47 @@ export const OrchestrationV2RunStatus = Schema.Literals([
 ]);
 export type OrchestrationV2RunStatus = typeof OrchestrationV2RunStatus.Type;
 
+export const OrchestrationV2DelegatedCompletionTaskDeliveryState = Schema.Literals([
+  "pending",
+  "claimed",
+  "acknowledged",
+  "delivered",
+  "disposed",
+]);
+export type OrchestrationV2DelegatedCompletionTaskDeliveryState =
+  typeof OrchestrationV2DelegatedCompletionTaskDeliveryState.Type;
+
+export const OrchestrationV2DelegatedCompletionTaskDelivery = Schema.Struct({
+  state: OrchestrationV2DelegatedCompletionTaskDeliveryState,
+  observedByRunId: Schema.NullOr(RunId),
+});
+export type OrchestrationV2DelegatedCompletionTaskDelivery =
+  typeof OrchestrationV2DelegatedCompletionTaskDelivery.Type;
+
+export const OrchestrationV2DelegatedCompletionDelivery = Schema.Struct({
+  generation: PositiveInt,
+  messageId: MessageId,
+  taskIds: Schema.Array(NodeId),
+});
+export type OrchestrationV2DelegatedCompletionDelivery =
+  typeof OrchestrationV2DelegatedCompletionDelivery.Type;
+
+/**
+ * One parent run's batched delegated-task wake. Several children finishing
+ * around the same time join a single delivery instead of each starting its own
+ * follow-up turn.
+ */
+export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
+  disposition: Schema.Literals(["open", "stopped", "disposed"]),
+  nextGeneration: PositiveInt,
+  // Optional for compatibility with cohorts persisted before bounded
+  // follow-up delivery was introduced. Missing means no delivery has settled.
+  settledDeliveryCount: Schema.optional(NonNegativeInt),
+  delivery: Schema.NullOr(OrchestrationV2DelegatedCompletionDelivery),
+});
+export type OrchestrationV2DelegatedCompletionCohort =
+  typeof OrchestrationV2DelegatedCompletionCohort.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
@@ -396,6 +437,7 @@ export const OrchestrationV2Run = Schema.Struct({
       planId: PlanId,
     }),
   ),
+  delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -621,6 +663,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   // live run (wait-mode delegations, whose result returns through the
   // blocking tool call). Absent on legacy records; treated as settled_only.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
+  completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   status: Schema.Literals([
     "pending",
     "running",
@@ -790,6 +833,13 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   streaming: Schema.Boolean,
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
+  delegatedCompletion: Schema.optional(
+    Schema.Struct({
+      parentRunId: RunId,
+      generation: PositiveInt,
+      taskIds: Schema.Array(NodeId),
+    }),
+  ),
 });
 export type OrchestrationV2ConversationMessage = typeof OrchestrationV2ConversationMessage.Type;
 
@@ -2093,6 +2143,14 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  titleRegeneration: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        startedAt: Schema.DateTimeUtcFromString,
+      }),
+    ),
+  ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2ThreadShellJson = typeof OrchestrationV2ThreadShellJson.Type;
@@ -2389,6 +2447,13 @@ export const OrchestrationV2Command = Schema.Union([
     attachments: Schema.Array(ChatAttachment),
     modelSelection: Schema.optional(ModelSelection),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
+    delegatedCompletion: Schema.optional(
+      Schema.Struct({
+        parentRunId: RunId,
+        generation: PositiveInt,
+        taskIds: Schema.Array(NodeId),
+      }),
+    ),
     dispatchMode: Schema.Union([
       Schema.Struct({ type: Schema.Literal("defer_start") }),
       Schema.Struct({ type: Schema.Literal("steer_active"), targetRunId: RunId }),
@@ -2508,6 +2573,19 @@ export const OrchestrationV2Command = Schema.Union([
     parentThreadId: ThreadId,
     taskId: NodeId,
     completionWake: Schema.Literals(["always", "settled_only"]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("delegated_task.completion-delivery.acknowledge"),
+    commandId: CommandId,
+    parentThreadId: ThreadId,
+    taskId: NodeId,
+    observedByRunId: Schema.NullOr(RunId),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("delegated_task.completion-delivery.dispose"),
+    commandId: CommandId,
+    parentThreadId: ThreadId,
+    taskId: NodeId,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.created.record"),

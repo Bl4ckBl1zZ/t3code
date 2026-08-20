@@ -5,17 +5,20 @@ import type {
   OrchestrationV2StoredEvent,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
 import {
   archivedShellStreamItemFromThreadShell,
+  buildActiveShellSnapshot,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
+  shellStreamItemsFromResumeSnapshot,
 } from "./ShellStream.ts";
 
 function project(sequence: number, id: string): ApplicationStoredEvent {
@@ -40,6 +43,35 @@ const emptyShellSnapshot = {
   threads: [],
   archivedThreads: [],
 } as OrchestrationV2ShellSnapshot;
+
+describe("buildActiveShellSnapshot", () => {
+  it("never duplicates archived rows into the regular shell", () => {
+    const active = shellFixture({ archivedAt: null });
+    const archived = shellFixture({
+      id: ThreadId.make("thread-archived"),
+      archivedAt: "2026-07-30T00:00:00.000Z" as never,
+    });
+
+    expect(
+      buildActiveShellSnapshot({
+        projects: [],
+        threads: {
+          schemaVersion: 1,
+          snapshotSequence: 4,
+          threads: [active],
+          archivedThreads: [archived],
+        },
+        snapshotSequence: 7,
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      snapshotSequence: 7,
+      projects: [],
+      threads: [active],
+      archivedThreads: [],
+    });
+  });
+});
 
 describe("coalesceShellApplicationEvents", () => {
   it("keeps the newest event per aggregate and preserves sequence order", () => {
@@ -92,19 +124,19 @@ describe("shellStreamItemFromThreadShell", () => {
     });
   });
 
-  it("emits an archive update when the shell is archived", () => {
+  it("removes archived threads from the active-only shell", () => {
     const shell = shellFixture({ archivedAt: "2026-07-30T00:00:00.000Z" as never });
     expect(
       shellStreamItemFromThreadShell({ stored: storedThreadEvent(4, "thread-a"), shell }),
     ).toEqual({
-      kind: "thread.updated",
+      kind: "thread.removed",
       sequence: 4,
-      location: "archive",
-      thread: shell,
+      location: "active",
+      threadId: "thread-a",
     });
   });
 
-  it("emits a removal from the archive when an archived thread is deleted", () => {
+  it("emits an active-shell removal when an archived thread is deleted", () => {
     expect(
       shellStreamItemFromThreadShell({
         stored: storedThreadEvent(6, "thread-a", {
@@ -116,7 +148,7 @@ describe("shellStreamItemFromThreadShell", () => {
     ).toEqual({
       kind: "thread.removed",
       sequence: 6,
-      location: "archive",
+      location: "active",
       threadId: "thread-a",
     });
   });
@@ -191,13 +223,42 @@ describe("shellStreamItemFromEnrichmentRefresh", () => {
       }),
     ).toEqual({
       kind: "snapshot",
-      snapshot: emptyShellSnapshot,
+      snapshot: { ...emptyShellSnapshot, projects: [], threads: [], archivedThreads: [] },
       resolvedRepositoryIdentityRoots: ["/workspace/a", "/workspace/b"],
     });
   });
 });
 
 describe("shellStreamItemsFromInitialSnapshot", () => {
+  it("keeps thread rows out of the metadata-only enrichment frame", () => {
+    const snapshot = {
+      ...emptyShellSnapshot,
+      projects: [
+        { id: "project-a", workspaceRoot: "/workspace/a" },
+        { id: "project-b", workspaceRoot: "/workspace/b" },
+      ],
+      threads: [shellFixture({})],
+      archivedThreads: [shellFixture({ id: ThreadId.make("thread-archived"), archivedAt: null })],
+    } as unknown as OrchestrationV2ShellSnapshot;
+
+    const items = shellStreamItemsFromInitialSnapshot({
+      snapshot,
+      resolvedRepositoryIdentityRoots: ["/workspace/a"],
+    });
+
+    expect(items[0]).toEqual({ kind: "snapshot", snapshot });
+    expect(items[1]).toMatchObject({
+      kind: "snapshot",
+      snapshot: {
+        projects: [{ id: "project-a", workspaceRoot: "/workspace/a" }],
+        threads: [],
+        archivedThreads: [],
+      },
+      resolvedRepositoryIdentityRoots: ["/workspace/a"],
+    });
+    expect(JSON.stringify(items[1]).length).toBeLessThan(JSON.stringify(items[0]).length);
+  });
+
   it("emits unmarked authoritative then same-sequence marked enrichment when roots resolved", () => {
     const snapshot = {
       ...emptyShellSnapshot,
@@ -213,7 +274,7 @@ describe("shellStreamItemsFromInitialSnapshot", () => {
       { kind: "snapshot", snapshot },
       {
         kind: "snapshot",
-        snapshot,
+        snapshot: { ...snapshot, projects: [], threads: [], archivedThreads: [] },
         resolvedRepositoryIdentityRoots: ["/workspace/a"],
       },
     ]);
@@ -226,6 +287,20 @@ describe("shellStreamItemsFromInitialSnapshot", () => {
         resolvedRepositoryIdentityRoots: [],
       }),
     ).toEqual([{ kind: "snapshot", snapshot: emptyShellSnapshot }]);
+  });
+});
+
+describe("shellStreamItemsFromResumeSnapshot", () => {
+  it("never repeats the authoritative shell snapshot", () => {
+    expect(
+      shellStreamItemsFromResumeSnapshot({
+        snapshot: {
+          ...emptyShellSnapshot,
+          threads: [shellFixture({})],
+        },
+        resolvedRepositoryIdentityRoots: [],
+      }),
+    ).toEqual([]);
   });
 });
 

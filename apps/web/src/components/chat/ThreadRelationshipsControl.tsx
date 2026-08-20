@@ -2,6 +2,8 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
+  isParentThreadRelationship,
+  orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
 } from "@t3tools/client-runtime/state/thread-relationships";
@@ -55,21 +57,6 @@ function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: Thread
     return edge.sourceThreadId === currentThreadId ? "Subagent" : "Parent agent";
   }
   return edge.sourceThreadId === currentThreadId ? "Fork" : "Parent thread";
-}
-
-function isParentRelationship(edge: ThreadRelationshipEdge, currentThreadId: ThreadId): boolean {
-  return edge.kind !== "transfer" && edge.targetThreadId === currentThreadId;
-}
-
-function relationshipSortKey(input: {
-  readonly edge: ThreadRelationshipEdge;
-  readonly threadId: ThreadId;
-  readonly currentThreadId: ThreadId;
-  readonly mergeTargetThreadId: ThreadId | null;
-}): number {
-  if (isParentRelationship(input.edge, input.currentThreadId)) return 0;
-  if (input.threadId === input.mergeTargetThreadId) return 1;
-  return 2;
 }
 
 function statusDotClass(status: string | null): string {
@@ -127,21 +114,12 @@ export function ThreadRelationshipsPanel(props: {
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
   const mergeTargetThreadId = resolveMergeBackTargetThreadId(projection);
-  const relationshipRows = immediateThreadRelationships(graph, props.threadId).toSorted(
-    (left, right) =>
-      relationshipSortKey({
-        edge: left.edge,
-        threadId: left.threadId,
-        currentThreadId: props.threadId,
-        mergeTargetThreadId,
-      }) -
-      relationshipSortKey({
-        edge: right.edge,
-        threadId: right.threadId,
-        currentThreadId: props.threadId,
-        mergeTargetThreadId,
-      }),
-  );
+  const relationshipRows = orderWebThreadLineageRows({
+    graph,
+    rows: immediateThreadRelationships(graph, props.threadId),
+    currentThreadId: props.threadId,
+    mergeTargetThreadId,
+  });
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
   const [subagentsExpanded, setSubagentsExpanded] = useState(false);
@@ -246,7 +224,7 @@ export function ThreadRelationshipsPanel(props: {
           const node = graph.nodes.get(threadId);
           const isSubagent = edge.kind === "subagent";
           const isMergeTarget = threadId === mergeTargetThreadId;
-          const isParent = isParentRelationship(edge, props.threadId);
+          const isParent = isParentThreadRelationship(edge, props.threadId);
           const showOrb = isSubagent && !isParent;
           const RelationshipIcon = isParent ? CornerLeftUpIcon : GitForkIcon;
           const relationship = relationshipLabel(edge, props.threadId);

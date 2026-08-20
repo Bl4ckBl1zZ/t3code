@@ -127,6 +127,8 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
       return [command.threadId];
     case "delegated_task.request":
     case "delegated_task.wake-policy":
+    case "delegated_task.completion-delivery.acknowledge":
+    case "delegated_task.completion-delivery.dispose":
     case "thread.created.record":
       return [command.parentThreadId];
     case "thread.fork":
@@ -163,6 +165,14 @@ const hasActiveRun = (projection: OrchestrationV2ThreadProjection) =>
   );
 
 const SCENARIO_WAIT_ATTEMPTS = 10_000;
+// Iterations count event-loop turns, not time: while async work (git
+// subprocesses, fixture IO) is in flight the loop is idle and the counter
+// burns at full speed on slow runners. A wait is exhausted only once BOTH
+// the iteration budget and this wall-clock deadline are spent.
+const SCENARIO_WAIT_DEADLINE_MS = 60_000;
+const scenarioWaitDeadline = () => performance.now() + SCENARIO_WAIT_DEADLINE_MS;
+const scenarioWaitExhausted = (attemptsRemaining: number, deadlineAt: number) =>
+  attemptsRemaining <= 0 && performance.now() >= deadlineAt;
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -230,6 +240,7 @@ export function runOrchestratorV2Scenario(
       const waitForPendingRuntimeRequest = (
         threadId: ThreadId,
         attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
       ): Effect.Effect<
         OrchestrationV2RuntimeRequest,
         OrchestratorV2Error | OrchestratorV2ScenarioStepError,
@@ -241,7 +252,7 @@ export function runOrchestratorV2Scenario(
           if (request !== undefined) {
             return request;
           }
-          if (attemptsRemaining <= 0) {
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
             const runState = projection.runs.map((run) => `${run.id}:${run.status}`).join(",");
             return yield* new OrchestratorV2ScenarioStepError({
               scenario: scenario.name,
@@ -249,19 +260,20 @@ export function runOrchestratorV2Scenario(
             });
           }
           yield* yieldToRuntime;
-          return yield* waitForPendingRuntimeRequest(threadId, attemptsRemaining - 1);
+          return yield* waitForPendingRuntimeRequest(threadId, attemptsRemaining - 1, deadlineAt);
         });
 
       const waitForThreadIdle = (
         threadId: ThreadId,
         attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
       ): Effect.Effect<void, OrchestratorV2Error | OrchestratorV2ScenarioStepError, never> =>
         Effect.gen(function* () {
           const projection = yield* orchestrator.getThreadProjection(threadId);
           if (!hasActiveRun(projection)) {
             return;
           }
-          if (attemptsRemaining <= 0) {
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
             const activeRuns = projection.runs
               .filter((run) =>
                 ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
@@ -278,13 +290,14 @@ export function runOrchestratorV2Scenario(
             });
           }
           yield* yieldToRuntime;
-          return yield* waitForThreadIdle(threadId, attemptsRemaining - 1);
+          return yield* waitForThreadIdle(threadId, attemptsRemaining - 1, deadlineAt);
         });
 
       const waitForRunSteerable = (
         threadId: ThreadId,
         runId: OrchestrationV2Run["id"],
         attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
       ): Effect.Effect<void, OrchestratorV2Error | OrchestratorV2ScenarioStepError, never> =>
         Effect.gen(function* () {
           const projection = yield* orchestrator.getThreadProjection(threadId);
@@ -298,14 +311,14 @@ export function runOrchestratorV2Scenario(
           if (run?.status === "running" && providerTurn !== undefined) {
             return;
           }
-          if (attemptsRemaining <= 0) {
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
             return yield* new OrchestratorV2ScenarioStepError({
               scenario: scenario.name,
               step: `await_run_steerable:${runId}`,
             });
           }
           yield* yieldToRuntime;
-          return yield* waitForRunSteerable(threadId, runId, attemptsRemaining - 1);
+          return yield* waitForRunSteerable(threadId, runId, attemptsRemaining - 1, deadlineAt);
         });
 
       const waitForRunStatus = (
@@ -313,6 +326,7 @@ export function runOrchestratorV2Scenario(
         runId: OrchestrationV2Run["id"],
         status: OrchestrationV2Run["status"],
         attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
       ): Effect.Effect<void, OrchestratorV2Error | OrchestratorV2ScenarioStepError, never> =>
         Effect.gen(function* () {
           const projection = yield* orchestrator.getThreadProjection(threadId);
@@ -320,14 +334,20 @@ export function runOrchestratorV2Scenario(
           if (run?.status === status) {
             return;
           }
-          if (attemptsRemaining <= 0) {
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
             return yield* new OrchestratorV2ScenarioStepError({
               scenario: scenario.name,
               step: `await_run_status:${runId}:${status}:actual=${run?.status ?? "missing"}`,
             });
           }
           yield* yieldToRuntime;
-          return yield* waitForRunStatus(threadId, runId, status, attemptsRemaining - 1);
+          return yield* waitForRunStatus(
+            threadId,
+            runId,
+            status,
+            attemptsRemaining - 1,
+            deadlineAt,
+          );
         });
 
       const waitForRunTurnItem = (
@@ -335,6 +355,7 @@ export function runOrchestratorV2Scenario(
         runId: OrchestrationV2Run["id"],
         itemType: OrchestrationV2TurnItem["type"],
         attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
       ): Effect.Effect<void, OrchestratorV2Error | OrchestratorV2ScenarioStepError, never> =>
         Effect.gen(function* () {
           const projection = yield* orchestrator.getThreadProjection(threadId);
@@ -344,14 +365,20 @@ export function runOrchestratorV2Scenario(
           if (hasTurnItem) {
             return;
           }
-          if (attemptsRemaining <= 0) {
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
             return yield* new OrchestratorV2ScenarioStepError({
               scenario: scenario.name,
               step: `await_run_turn_item:${runId}:${itemType}`,
             });
           }
           yield* yieldToRuntime;
-          return yield* waitForRunTurnItem(threadId, runId, itemType, attemptsRemaining - 1);
+          return yield* waitForRunTurnItem(
+            threadId,
+            runId,
+            itemType,
+            attemptsRemaining - 1,
+            deadlineAt,
+          );
         });
 
       for (const step of scenarioSteps(scenario)) {

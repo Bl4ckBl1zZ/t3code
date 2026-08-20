@@ -93,6 +93,8 @@ export function existingThreadIdsForCommand(
         : [command.sourceThreadId, command.targetThreadId];
     case "delegated_task.request":
     case "delegated_task.wake-policy":
+    case "delegated_task.completion-delivery.acknowledge":
+    case "delegated_task.completion-delivery.dispose":
       return [command.parentThreadId];
     case "thread.created.record":
       return command.parentThreadId === command.targetThreadId
@@ -302,10 +304,9 @@ export interface ThreadManagementServiceShape {
     },
     use: (projection: OrchestrationV2ThreadProjection) => Effect.Effect<A, E>,
   ) => Effect.Effect<A, E | ThreadManagementError>;
-  readonly getShellSnapshot: () => Effect.Effect<
-    OrchestrationV2ThreadShellSnapshot,
-    OrchestratorV2Error
-  >;
+  readonly getShellSnapshot: (options?: {
+    readonly location?: "active" | "archive";
+  }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>;
   readonly getThreadShell: OrchestratorV2["Service"]["getThreadShell"];
   readonly listProjectThreads: (input: {
     readonly projectId: ProjectId;

@@ -348,7 +348,6 @@ const PROVIDER_HYDRATED_MESSAGE_ID_PATTERN = /^message:provider:[^:]+:native-ite
 const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"]["type"]>([
   "approval_request",
   "compaction",
-  "error",
   "fork",
   "handoff",
   "run_interrupt_request",
@@ -399,6 +398,7 @@ function projectedWorkEntryStatus(
 }
 
 function projectedWorkEntryTone(item: OrchestrationV2TurnItem): WorkLogEntry["tone"] {
+  if (item.type === "error") return "info";
   if (item.status === "failed") return "error";
   if (item.type === "reasoning") return "thinking";
   switch (item.type) {

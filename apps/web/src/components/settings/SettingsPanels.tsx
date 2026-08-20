@@ -781,6 +781,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
+      settings.persistComposerContextStrip,
       settings.timestampFormat,
       settings.wordWrap,
       themeHalves,
@@ -855,6 +856,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+      persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -1511,6 +1513,39 @@ function FontSmoothingRow() {
   );
 }
 
+function ComposerContextRow() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("composer-context")}
+      description="Keep branch and worktree controls below the composer after a thread starts."
+      resetAction={
+        settings.persistComposerContextStrip !==
+        DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip ? (
+          <SettingResetButton
+            label="composer context"
+            onClick={() =>
+              updateSettings({
+                persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.persistComposerContextStrip}
+          onCheckedChange={(checked) =>
+            updateSettings({ persistComposerContextStrip: Boolean(checked) })
+          }
+          aria-label="Keep composer context controls visible in active threads"
+        />
+      }
+    />
+  );
+}
+
 function WordWrapRow() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -1634,6 +1669,7 @@ function TypographySection() {
     >
       {advanced ? <FontSettingsGroup /> : <SimpleFontRows />}
       <WordWrapRow />
+      <ComposerContextRow />
     </SettingsSection>
   );
 }

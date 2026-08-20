@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseDelegatedTaskWakeMessage } from "./delegatedTaskWake.ts";
+import {
+  formatDelegatedTaskWakeMessage,
+  parseDelegatedTaskWakeMessage,
+  parseDelegatedTaskWakeMessages,
+} from "./delegatedTaskWake.ts";
 
 describe("parseDelegatedTaskWakeMessage", () => {
   it("parses the completed variant with a quoted title", () => {
@@ -43,5 +47,50 @@ describe("parseDelegatedTaskWakeMessage", () => {
     expect(parseDelegatedTaskWakeMessage("Please check the deploy logs.")).toBeNull();
     expect(parseDelegatedTaskWakeMessage("Delegated task finished")).toBeNull();
     expect(parseDelegatedTaskWakeMessage("")).toBeNull();
+  });
+});
+
+describe("delegated task cohort wakes", () => {
+  it("keeps the singular sentence so existing clients parse it unchanged", () => {
+    const text = formatDelegatedTaskWakeMessage([
+      { id: "task-1", title: "Ship the fix", status: "completed" },
+    ]);
+    expect(text).toBe(
+      'Delegated task "Ship the fix" completed. Use task_status with taskId task-1 to read the result.',
+    );
+    expect(parseDelegatedTaskWakeMessage(text)).toEqual({
+      title: "Ship the fix",
+      taskId: "task-1",
+      status: "completed",
+    });
+    expect(parseDelegatedTaskWakeMessages(text)).toEqual([
+      { title: "Ship the fix", taskId: "task-1", status: "completed" },
+    ]);
+  });
+
+  it("round-trips a cohort of several tasks with mixed statuses", () => {
+    const text = formatDelegatedTaskWakeMessage([
+      { id: "task-1", title: "Ship the fix", status: "completed" },
+      { id: "task-2", title: null, status: "failed" },
+    ]);
+    expect(parseDelegatedTaskWakeMessages(text)).toEqual([
+      { title: "Ship the fix", taskId: "task-1", status: "completed" },
+      { title: "task-2", taskId: "task-2", status: "failed" },
+    ]);
+  });
+
+  it("survives a comma inside a task title", () => {
+    const text = formatDelegatedTaskWakeMessage([
+      { id: "task-1", title: "Fix a, b and c", status: "completed" },
+      { id: "task-2", title: "Second", status: "cancelled" },
+    ]);
+    expect(parseDelegatedTaskWakeMessages(text)).toEqual([
+      { title: "Fix a, b and c", taskId: "task-1", status: "completed" },
+      { title: "Second", taskId: "task-2", status: "cancelled" },
+    ]);
+  });
+
+  it("returns null for text that is not a wake message", () => {
+    expect(parseDelegatedTaskWakeMessages("Just a normal message.")).toBeNull();
   });
 });
