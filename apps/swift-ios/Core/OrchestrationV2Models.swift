@@ -1336,7 +1336,17 @@ public struct OrchestrationV2ShellSnapshot: Codable, Equatable, Sendable {
 /// to the active list or the archive.
 public enum OrchestrationV2ShellStreamItem: Decodable, Sendable {
     case synchronized
-    case snapshot(OrchestrationV2ShellSnapshot)
+    /// `resolvedRepositoryIdentityRoots` is what separates the two kinds of
+    /// snapshot frame that share this shape. Absent means authoritative: the
+    /// whole shell, which replaces what the client holds. Present means a
+    /// metadata-only enrichment refresh carrying repository identity for the
+    /// listed workspace roots and nothing else — its `threads` and
+    /// `archivedThreads` are empty by design, so applying it as authoritative
+    /// empties the sidebar.
+    case snapshot(
+        OrchestrationV2ShellSnapshot,
+        resolvedRepositoryIdentityRoots: [String]?
+    )
     case projectUpdated(sequence: Int, project: OrchestrationProject)
     case projectRemoved(sequence: Int, projectID: String)
     case threadUpdated(sequence: Int, location: Location, thread: OrchestrationV2ThreadShell)
@@ -1349,6 +1359,7 @@ public enum OrchestrationV2ShellStreamItem: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case kind, sequence, snapshot, project, projectId, thread, threadId, location
+        case resolvedRepositoryIdentityRoots
     }
 
     public init(from decoder: any Decoder) throws {
@@ -1364,7 +1375,11 @@ public enum OrchestrationV2ShellStreamItem: Decodable, Sendable {
             self = .synchronized
         case "snapshot":
             self = .snapshot(
-                try container.decode(OrchestrationV2ShellSnapshot.self, forKey: .snapshot)
+                try container.decode(OrchestrationV2ShellSnapshot.self, forKey: .snapshot),
+                resolvedRepositoryIdentityRoots: try container.decodeIfPresent(
+                    [String].self,
+                    forKey: .resolvedRepositoryIdentityRoots
+                )
             )
         case "project.updated":
             self = .projectUpdated(
