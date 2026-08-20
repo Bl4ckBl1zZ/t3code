@@ -23,6 +23,10 @@ public struct FeatureUsageProviderTotals: Sendable, Equatable, Identifiable {
     public let costUsd: Double
     public let totalTokens: Int
     public let records: Int
+    /// Distinct sessions attributed to this provider. Counted from the owned
+    /// transcript directories rather than the buckets: a session spanning three
+    /// days and two models is one session, not six.
+    public let sessions: Int
 
     public var id: String { provider }
 }
@@ -122,7 +126,8 @@ public enum FeatureUsageMerge {
             }
         }
 
-        var providerTotals: [String: (costUsd: Double, tokens: Int, records: Int)] = [:]
+        var providerTotals: [String: (costUsd: Double, tokens: Int, records: Int, sessions: Int)] =
+            [:]
         var modelTotals: [String: (provider: String, model: String, costUsd: Double, tokens: Int)] =
             [:]
         var dailyTotals: [String: [String: FeatureUsageDailySlice]] = [:]
@@ -131,10 +136,18 @@ public enum FeatureUsageMerge {
             var ownedProviders: Set<String> = []
             for source in environment.summary.sources where source.status != "missing" {
                 if ownerByFingerprint[source.fingerprint.mergeKey] == environment.environmentID {
-                    ownedProviders.insert(source.fingerprint.provider)
+                    let providerKind = source.fingerprint.provider
+                    ownedProviders.insert(providerKind)
                     // Distinct within a directory; summing per-bucket session
                     // counts would count a session once per day it spans.
                     merged.sessions += source.distinctSessions
+                    guard source.distinctSessions > 0 else { continue }
+                    // Seeded before the bucket loop on purpose: a provider whose
+                    // transcripts hold sessions but no priced buckets still owes
+                    // the reader a row.
+                    var provider = providerTotals[providerKind] ?? (0, 0, 0, 0)
+                    provider.sessions += source.distinctSessions
+                    providerTotals[providerKind] = provider
                 }
             }
 
@@ -151,7 +164,7 @@ public enum FeatureUsageMerge {
                 merged.totalTokens += tokens
                 merged.records += bucket.records
 
-                var provider = providerTotals[bucket.provider] ?? (0, 0, 0)
+                var provider = providerTotals[bucket.provider] ?? (0, 0, 0, 0)
                 provider.costUsd += bucket.costUsd
                 provider.tokens += tokens
                 provider.records += bucket.records
@@ -180,7 +193,8 @@ public enum FeatureUsageMerge {
                 provider: $0.key,
                 costUsd: $0.value.costUsd,
                 totalTokens: $0.value.tokens,
-                records: $0.value.records
+                records: $0.value.records,
+                sessions: $0.value.sessions
             ) }
             .sorted { $0.costUsd > $1.costUsd }
         merged.models = modelTotals.values

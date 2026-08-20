@@ -33,6 +33,9 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     /// Both are slow server round trips whose result is a pasteboard write or a
     /// streamed title, so the row hands them off rather than awaiting anything.
     let onCopyHandoffScript: (FeatureThread) -> Void
+    /// The pasteboard copies that need no server: path, branch, thread id. The
+    /// value itself comes from ``ThreadCopy``; the row only says which one.
+    let onCopy: (FeatureThread, ThreadCopyTarget) -> Void
     let onRegenerateTitle: (FeatureThread) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -424,13 +427,22 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 offersParking: parent.workspace != .chat,
                 settlementSupported: thread.canShelveSettled,
                 snoozeSupported: thread.canShelveSnoozed,
+                hasWorktreePath: ThreadCopy.value(for: .path, on: thread) != nil,
+                hasBranch: ThreadCopy.value(for: .branch, on: thread) != nil,
                 titleRegenerationSupported: thread.canRegenerateTitle,
                 isRegeneratingTitle: thread.isRegeneratingTitle
             )
 
-            return ThreadRowMenuActions.homeRowActions(context, now: now).map {
-                menuElement(for: $0, on: thread)
-            }
+            // One inline `UIMenu` per section, so the separators the menu data
+            // asks for are the rules UIKit draws between groups.
+            return ThreadRowMenu.sections(ThreadRowMenuActions.homeRowActions(context, now: now))
+                .map { section in
+                    UIMenu(
+                        title: "",
+                        options: .displayInline,
+                        children: section.map { menuElement(for: $0, on: thread) }
+                    )
+                }
         }
 
         private func menuElement(
@@ -491,7 +503,11 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             case ThreadRowMenuActions.deleteActionID:
                 parent.onDelete(thread)
             default:
-                break
+                // The pasteboard copies share one arm: they differ only in
+                // which field of the row they read.
+                if let target = ThreadCopyTarget(actionID: actionID) {
+                    parent.onCopy(thread, target)
+                }
             }
         }
 

@@ -105,6 +105,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             onPin: { _, _ in },
             onDelete: { _ in },
             onCopyHandoffScript: { _ in },
+            onCopy: { _, _ in },
             onRegenerateTitle: { _ in }
         )
     }

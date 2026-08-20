@@ -312,6 +312,7 @@ public struct WorkspaceView: View {
                     Task { await model.deleteThread(thread.id) }
                 },
                 onCopyHandoffScript: copyHandoffScript,
+                onCopy: copyThreadDetail,
                 onRegenerateTitle: regenerateTitle
             )
         }
@@ -849,6 +850,18 @@ public struct WorkspaceView: View {
                 break
             }
         }
+    }
+
+    /// Path, branch and thread id are already on the row, so these copies are a
+    /// pasteboard write and a confirmation — no server round trip and nothing to
+    /// serialise against. The value is resolved in ``ThreadCopy`` so the choice
+    /// stays testable; only the write lives here.
+    private func copyThreadDetail(for thread: FeatureThread, target: ThreadCopyTarget) {
+        // The menu omits targets with nothing to copy, so a nil here means the
+        // row changed under an open menu. Silent: there is nothing to report.
+        guard let value = ThreadCopy.value(for: target, on: thread) else { return }
+        UIPasteboard.general.string = value
+        noticeAlert = ThreadCopy.confirmation(for: target)
     }
 
     private func regenerateTitle(for thread: FeatureThread) {

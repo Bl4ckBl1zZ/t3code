@@ -119,7 +119,9 @@ private struct FeatureComposerCommandRow: View {
         switch item {
         case .modelCommand, .providerCommand: return "terminal"
         case .model: return "cpu"
-        case .skill: return "shippingbox"
+        // Where the skill came from — a plugin, the repo, the user's own
+        // directory — is what tells two similarly named skills apart.
+        case let .skill(skill): return skill.sourceSymbolName
         case let .path(entry): return entry.kind == .directory ? "folder" : "doc"
         }
     }

@@ -7,13 +7,29 @@ private struct StubFailure: LocalizedError {
     let errorDescription: String?
 }
 
+private func copyableThread(
+    id: String = "local-1",
+    wireID: String? = "wire-1",
+    branch: String? = "feat/parity",
+    worktreePath: String? = "/Users/julius/code/t3code"
+) -> FeatureThread {
+    FeatureThread(
+        id: id,
+        wireID: wireID,
+        projectID: "project-1",
+        title: "Sync upstream",
+        branch: branch,
+        worktreePath: worktreePath
+    )
+}
+
 /// Ports the row-menu assembly of
 /// apps/mobile/src/features/threads/thread-list-v2-items.tsx and the two slow
 /// server-side actions in apps/mobile/src/features/home/useThreadListActions.ts.
 final class ThreadListActionsTests: XCTestCase {
     // MARK: - Menu
 
-    func testHandoffAndRegenerationSitAboveDeleteInThatOrder() {
+    func testTheMenuIsGroupedLifecycleNamingCopyThenDestructive() {
         let actions = ThreadRowMenuActions.homeRowActions(
             ThreadRowMenuContext(titleRegenerationSupported: true)
         )
@@ -21,14 +37,23 @@ final class ThreadListActionsTests: XCTestCase {
         XCTAssertEqual(
             actions.map(\.id),
             [
-                "rename",
-                "archive",
                 "pin",
                 "settle",
                 "snooze",
-                "copy-handoff-script",
+                "rename",
                 "regenerate-title",
+                "copy",
+                "archive",
                 "delete",
+            ]
+        )
+        XCTAssertEqual(
+            ThreadRowMenu.sections(actions).map { $0.map(\.id) },
+            [
+                ["pin", "settle", "snooze"],
+                ["rename", "regenerate-title"],
+                ["copy"],
+                ["archive", "delete"],
             ]
         )
         // The destructive item stays last however the menu grows.
@@ -36,11 +61,37 @@ final class ThreadListActionsTests: XCTestCase {
         XCTAssertTrue(actions.last?.destructive == true)
     }
 
+    func testTheCopySubmenuGathersEveryTargetTheRowCanOffer() {
+        let copy = ThreadRowMenuActions.homeRowActions(ThreadRowMenuContext())
+            .first { $0.id == ThreadRowMenuActions.copyActionID }
+
+        XCTAssertEqual(
+            copy?.children.map(\.id),
+            ["copy-path", "copy-branch", "copy-handoff-script", "copy-thread-id"]
+        )
+        // Nesting must not rename the ids the row dispatches on.
+        XCTAssertEqual(copy?.children.map(\.title), ["Path", "Branch", "Handoff script", "Thread ID"])
+    }
+
+    func testCopyTargetsWithNothingToCopyAreOmittedRatherThanOffered() {
+        let copy = ThreadRowMenuActions.homeRowActions(
+            ThreadRowMenuContext(handoffScriptSupported: false, hasWorktreePath: false, hasBranch: false)
+        )
+        .first { $0.id == ThreadRowMenuActions.copyActionID }
+
+        // The thread id is always there, so the submenu never empties out and
+        // the section never collapses into a stray separator.
+        XCTAssertEqual(copy?.children.map(\.id), ["copy-thread-id"])
+    }
+
     func testRegenerationIsOmittedEntirelyOnServersThatWouldRejectIt() {
         let actions = ThreadRowMenuActions.homeRowActions(ThreadRowMenuContext())
 
         XCTAssertFalse(actions.contains { $0.id == "regenerate-title" })
-        XCTAssertTrue(actions.contains { $0.id == "copy-handoff-script" })
+        XCTAssertTrue(
+            actions.first { $0.id == "copy" }?.children.contains { $0.id == "copy-handoff-script" }
+                == true
+        )
     }
 
     func testRegenerationIsDisabledAndRelabelledWhileOneIsAlreadyInFlight() {
@@ -60,7 +111,13 @@ final class ThreadListActionsTests: XCTestCase {
 
         XCTAssertEqual(
             actions.map(\.id),
-            ["rename", "restore", "copy-handoff-script", "regenerate-title", "delete"]
+            ["rename", "regenerate-title", "copy", "restore", "delete"]
+        )
+        // Rename opens a section that has nothing above it on an archived row;
+        // the grouping must not emit an empty leading group for that.
+        XCTAssertEqual(
+            ThreadRowMenu.sections(actions).map { $0.map(\.id) },
+            [["rename", "regenerate-title"], ["copy"], ["restore", "delete"]]
         )
     }
 
@@ -71,7 +128,7 @@ final class ThreadListActionsTests: XCTestCase {
 
         XCTAssertEqual(
             actions.map(\.id),
-            ["rename", "archive", "unpin", "unsettle", "unsnooze", "copy-handoff-script", "delete"]
+            ["unpin", "unsettle", "unsnooze", "rename", "copy", "archive", "delete"]
         )
     }
 
@@ -94,10 +151,7 @@ final class ThreadListActionsTests: XCTestCase {
             ThreadRowMenuContext(settlementSupported: false, snoozeSupported: false)
         )
 
-        XCTAssertEqual(
-            actions.map(\.id),
-            ["rename", "archive", "pin", "copy-handoff-script", "delete"]
-        )
+        XCTAssertEqual(actions.map(\.id), ["pin", "rename", "copy", "archive", "delete"])
     }
 
     func testSnoozeOpensTheSharedPresetSubmenu() {
@@ -125,12 +179,48 @@ final class ThreadListActionsTests: XCTestCase {
         )
     }
 
-    func testHandoffActionAppendsWhenThereIsNoDeleteToAnchorOn() {
-        let actions = ThreadRowMenuActions.withHandoffScriptAction(
-            [ThreadRowMenuAction(id: "archive", title: "Archive")]
-        )
+    // MARK: - Copy targets
 
-        XCTAssertEqual(actions.map(\.id), ["archive", "copy-handoff-script"])
+    func testCopyTargetsReadTheirValueOffTheRow() {
+        let thread = copyableThread()
+
+        XCTAssertEqual(ThreadCopy.value(for: .path, on: thread), "/Users/julius/code/t3code")
+        XCTAssertEqual(ThreadCopy.value(for: .branch, on: thread), "feat/parity")
+        // The wire id is what a server-side lookup expects.
+        XCTAssertEqual(ThreadCopy.value(for: .threadID, on: thread), "wire-1")
+    }
+
+    func testCopyValuesAreTrimmedAndBlanksReadAsNothingToCopy() {
+        let padded = copyableThread(branch: "  feat/parity  ", worktreePath: "   ")
+
+        XCTAssertEqual(ThreadCopy.value(for: .branch, on: padded), "feat/parity")
+        XCTAssertNil(ThreadCopy.value(for: .path, on: padded))
+        XCTAssertNil(ThreadCopy.value(for: .branch, on: copyableThread(branch: nil)))
+    }
+
+    func testThreadIDFallsBackToTheLocalIdentityWhenThereIsNoWireID() {
+        let thread = copyableThread(wireID: nil)
+
+        XCTAssertEqual(ThreadCopy.value(for: .threadID, on: thread), "local-1")
+    }
+
+    func testEveryCopyActionIDMapsBackToItsTarget() {
+        XCTAssertEqual(ThreadCopyTarget(actionID: ThreadRowMenuActions.copyPathActionID), .path)
+        XCTAssertEqual(ThreadCopyTarget(actionID: ThreadRowMenuActions.copyBranchActionID), .branch)
+        XCTAssertEqual(
+            ThreadCopyTarget(actionID: ThreadRowMenuActions.copyThreadIDActionID),
+            .threadID
+        )
+        // The handoff script is a server round trip, not a pasteboard read, and
+        // keeps its own dispatch arm.
+        XCTAssertNil(ThreadCopyTarget(actionID: ThreadRowMenuActions.copyHandoffScriptActionID))
+        XCTAssertNil(ThreadCopyTarget(actionID: "delete"))
+    }
+
+    func testEveryCopyTargetHasItsOwnConfirmation() {
+        let titles = ThreadCopyTarget.allCases.map { ThreadCopy.confirmation(for: $0).title }
+
+        XCTAssertEqual(Set(titles).count, ThreadCopyTarget.allCases.count)
     }
 
     // MARK: - Handoff script

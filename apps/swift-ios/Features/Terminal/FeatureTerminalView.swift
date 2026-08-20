@@ -80,6 +80,9 @@ public struct FeatureTerminalView: View {
     @State private var isLoading = true
     @State private var isOpening = false
     @State private var errorMessage: String?
+    /// Stopping kills the process and drops the scrollback, and the menu offers
+    /// it as one tap with no undo — same confirmation the web clients show.
+    @State private var isConfirmingStop = false
     /// `initialCommand` is run once per presentation. Switching terminals
     /// re-runs `loadAndOpen`, and re-sending the command there would replay it
     /// into a terminal the reader deliberately switched to.
@@ -193,6 +196,28 @@ public struct FeatureTerminalView: View {
                 }
             }
         }
+        .confirmationDialog(
+            TerminalCloseConfirm.title(label: activeTerminalLabel),
+            isPresented: $isConfirmingStop,
+            titleVisibility: .visible
+        ) {
+            Button(TerminalCloseConfirm.confirmActionTitle, role: .destructive) {
+                Task { await stop() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(TerminalCloseConfirm.message)
+        }
+    }
+
+    /// The label the confirmation names, resolved the way the tab strip does:
+    /// the session's own title when the server gave it one, else the id.
+    private var activeTerminalLabel: String {
+        TerminalCloseConfirm.label(
+            terminalID: activeTerminalID,
+            sessionTitle: sessions.first { $0.terminalID == activeTerminalID }?.title
+                ?? terminal?.title
+        )
     }
 
     private var terminalHeader: some View {
@@ -291,7 +316,7 @@ public struct FeatureTerminalView: View {
             Section {
                 if isRunning {
                     Button(role: .destructive) {
-                        Task { await stop() }
+                        isConfirmingStop = true
                     } label: {
                         Label("Stop terminal", systemImage: "stop.fill")
                     }

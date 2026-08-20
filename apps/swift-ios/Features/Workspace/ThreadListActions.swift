@@ -36,6 +36,12 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
     /// The Snooze counterpart of ``settlementSupported``.
     public let snoozeSupported: Bool
     public let handoffScriptSupported: Bool
+    /// Whether the row has a workspace path to copy. Absent on a thread whose
+    /// worktree has not been provisioned, so the entry is omitted rather than
+    /// offered and then reporting nothing to copy.
+    public let hasWorktreePath: Bool
+    /// The ``hasWorktreePath`` counterpart for the branch entry.
+    public let hasBranch: Bool
     /// Version skew: older servers reject `regenerateTitle` outright, so the
     /// action is omitted rather than offered and refused.
     public let titleRegenerationSupported: Bool
@@ -52,6 +58,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         settlementSupported: Bool = true,
         snoozeSupported: Bool = true,
         handoffScriptSupported: Bool = true,
+        hasWorktreePath: Bool = true,
+        hasBranch: Bool = true,
         titleRegenerationSupported: Bool = false,
         isRegeneratingTitle: Bool = false
     ) {
@@ -65,6 +73,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         self.settlementSupported = settlementSupported
         self.snoozeSupported = snoozeSupported
         self.handoffScriptSupported = handoffScriptSupported
+        self.hasWorktreePath = hasWorktreePath
+        self.hasBranch = hasBranch
         self.titleRegenerationSupported = titleRegenerationSupported
         self.isRegeneratingTitle = isRegeneratingTitle
     }
@@ -83,51 +93,71 @@ public enum ThreadRowMenuActions {
     public static let copyHandoffScriptActionID = "copy-handoff-script"
     public static let deleteActionID = "delete"
 
-    /// Adds "Copy handoff script" directly above Delete, the slot every React
-    /// Native row menu puts it in. Anchoring on Delete rather than on "last"
-    /// keeps the destructive item at the bottom as the menu grows.
-    public static func withHandoffScriptAction(
-        _ actions: [ThreadRowMenuAction]
-    ) -> [ThreadRowMenuAction] {
-        let action = ThreadRowMenuAction(
-            id: copyHandoffScriptActionID,
-            title: "Copy handoff script",
-            symbol: "doc.on.doc"
-        )
-        guard let deleteIndex = actions.firstIndex(where: { $0.id == deleteActionID }) else {
-            return actions + [action]
+    public static let copyActionID = "copy"
+    public static let copyPathActionID = "copy-path"
+    public static let copyBranchActionID = "copy-branch"
+    public static let copyThreadIDActionID = "copy-thread-id"
+
+    /// The copy targets, gathered under one submenu.
+    ///
+    /// Four flat "Copy …" rows crowded a menu that already carries lifecycle and
+    /// naming, and none of them is the thing a long press is usually after. The
+    /// child ids are the same ones the row dispatches on, so nesting them costs
+    /// the caller nothing. Entries with nothing to copy are omitted rather than
+    /// offered and then reporting an empty pasteboard.
+    static func copySubmenu(_ context: ThreadRowMenuContext) -> ThreadRowMenuAction {
+        var children: [ThreadRowMenuAction] = []
+        if context.hasWorktreePath {
+            children.append(
+                ThreadRowMenuAction(id: copyPathActionID, title: "Path", symbol: "folder")
+            )
         }
-        var merged = actions
-        merged.insert(action, at: deleteIndex)
-        return merged
+        if context.hasBranch {
+            children.append(
+                ThreadRowMenuAction(
+                    id: copyBranchActionID,
+                    title: "Branch",
+                    symbol: "arrow.triangle.branch"
+                )
+            )
+        }
+        if context.handoffScriptSupported {
+            children.append(
+                ThreadRowMenuAction(
+                    id: copyHandoffScriptActionID,
+                    title: "Handoff script",
+                    symbol: "doc.text"
+                )
+            )
+        }
+        // The thread id is always copyable, so the submenu is never empty and
+        // this branch never collapses the whole section away.
+        children.append(
+            ThreadRowMenuAction(id: copyThreadIDActionID, title: "Thread ID", symbol: "number")
+        )
+        return ThreadRowMenuAction(
+            id: copyActionID,
+            title: "Copy",
+            symbol: "doc.on.doc",
+            separatorBefore: true,
+            children: children
+        )
     }
 
     /// The Home row's long-press menu.
     ///
-    /// Lifecycle first, then the two server-side actions, then Delete. Snooze
-    /// opens the shared preset submenu (``SnoozePresets``), mirroring the web
-    /// sidebar and the React Native rows; `now` anchors the preset wake times
-    /// and their labels.
+    /// Four sections, matching the web sidebar: what the thread is doing
+    /// (pin, settle, snooze), what it is called (rename, regenerate), what you
+    /// can take away from it (the copy submenu), and what removes it. Snooze
+    /// opens the shared preset submenu (``SnoozePresets``); `now` anchors the
+    /// preset wake times and their labels.
     public static func homeRowActions(
         _ context: ThreadRowMenuContext,
         now: Date = .now
     ) -> [ThreadRowMenuAction] {
-        var actions: [ThreadRowMenuAction] = [
-            ThreadRowMenuAction(id: renameActionID, title: "Rename", symbol: "pencil"),
-        ]
+        var actions: [ThreadRowMenuAction] = []
 
-        if context.isArchived {
-            actions.append(
-                ThreadRowMenuAction(
-                    id: restoreActionID,
-                    title: "Restore",
-                    symbol: "arrow.uturn.backward"
-                )
-            )
-        } else {
-            actions.append(
-                ThreadRowMenuAction(id: archiveActionID, title: "Archive", symbol: "archivebox")
-            )
+        if !context.isArchived {
             if context.canTogglePin {
                 actions.append(
                     context.isPinned
@@ -143,7 +173,9 @@ public enum ThreadRowMenuActions {
                         ? ThreadRowMenuAction(
                             id: unsettleActionID, title: "Reopen", symbol: "arrow.counterclockwise"
                         )
-                        : ThreadRowMenuAction(id: settleActionID, title: "Settle", symbol: "checkmark")
+                        : ThreadRowMenuAction(
+                            id: settleActionID, title: "Settle", symbol: "checkmark"
+                        )
                 )
             }
             if context.offersParking, context.snoozeSupported {
@@ -167,6 +199,40 @@ public enum ThreadRowMenuActions {
             }
         }
 
+        // Naming. `separatorBefore` on Rename is inert when the lifecycle
+        // section above it is empty, which is exactly the archived row.
+        actions.append(
+            ThreadRowMenuAction(
+                id: renameActionID,
+                title: "Rename",
+                symbol: "pencil",
+                separatorBefore: true
+            )
+        )
+        actions = ThreadRowMenu.withTitleRegenerationAction(
+            actions,
+            supported: context.titleRegenerationSupported,
+            regenerating: context.isRegeneratingTitle,
+            after: renameActionID
+        )
+
+        actions.append(copySubmenu(context))
+
+        actions.append(
+            context.isArchived
+                ? ThreadRowMenuAction(
+                    id: restoreActionID,
+                    title: "Restore",
+                    symbol: "arrow.uturn.backward",
+                    separatorBefore: true
+                )
+                : ThreadRowMenuAction(
+                    id: archiveActionID,
+                    title: "Archive",
+                    symbol: "archivebox",
+                    separatorBefore: true
+                )
+        )
         actions.append(
             ThreadRowMenuAction(
                 id: deleteActionID,
@@ -175,17 +241,66 @@ public enum ThreadRowMenuActions {
                 destructive: true
             )
         )
+        return actions
+    }
+}
 
-        // Both insert above Delete, so handoff lands first and regeneration
-        // second — the order the React Native menus produce.
-        if context.handoffScriptSupported {
-            actions = withHandoffScriptAction(actions)
+// MARK: - Copy targets
+
+/// A copy entry's payload. Resolved as data so the pasteboard write stays in the
+/// view and the "what does this row actually copy" decision stays testable.
+public enum ThreadCopyTarget: String, Sendable, Equatable, CaseIterable {
+    case path
+    case branch
+    case threadID
+
+    public init?(actionID: String) {
+        switch actionID {
+        case ThreadRowMenuActions.copyPathActionID: self = .path
+        case ThreadRowMenuActions.copyBranchActionID: self = .branch
+        case ThreadRowMenuActions.copyThreadIDActionID: self = .threadID
+        default: return nil
         }
-        return ThreadRowMenu.withTitleRegenerationAction(
-            actions,
-            supported: context.titleRegenerationSupported,
-            regenerating: context.isRegeneratingTitle
-        )
+    }
+}
+
+public enum ThreadCopy {
+    /// The string a copy target puts on the pasteboard, or nil when the thread
+    /// carries nothing for it. The menu omits those entries, so nil here means
+    /// the row changed between the menu opening and the tap.
+    public static func value(for target: ThreadCopyTarget, on thread: FeatureThread) -> String? {
+        let raw: String?
+        switch target {
+        case .path: raw = thread.worktreePath
+        case .branch: raw = thread.branch
+        // The wire id is what a server-side lookup expects; `id` is only the
+        // local identity when the two differ.
+        case .threadID: raw = thread.wireID ?? thread.id
+        }
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !trimmed.isEmpty
+        else { return nil }
+        return trimmed
+    }
+
+    public static func confirmation(for target: ThreadCopyTarget) -> ThreadListActionAlert {
+        switch target {
+        case .path:
+            return ThreadListActionAlert(
+                title: "Path copied",
+                message: "The thread's workspace path is on the clipboard."
+            )
+        case .branch:
+            return ThreadListActionAlert(
+                title: "Branch copied",
+                message: "The thread's branch name is on the clipboard."
+            )
+        case .threadID:
+            return ThreadListActionAlert(
+                title: "Thread ID copied",
+                message: "The thread's identifier is on the clipboard."
+            )
+        }
     }
 }
 
