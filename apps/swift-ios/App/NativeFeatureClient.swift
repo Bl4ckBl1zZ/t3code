@@ -2635,9 +2635,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     self.lastShellEventAt = .now
                     self.emitConnection(.connected)
                     switch item {
-                    case let .snapshot(shell):
+                    case let .snapshot(shell, resolvedRepositoryIdentityRoots):
                         await self.consume(
                             shell: shell,
+                            resolvedRepositoryIdentityRoots: resolvedRepositoryIdentityRoots,
                             client: activeClient,
                             refreshActiveThread: true
                         )
@@ -2858,16 +2859,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    /// - Parameter resolvedRepositoryIdentityRoots: present only on an
+    ///   enrichment frame, which patches repository identity onto the shell
+    ///   rather than replacing it. See ``ShellSnapshotMerge``.
     private func consume(
         shell: OrchestrationV2ShellSnapshot,
+        resolvedRepositoryIdentityRoots: [String]? = nil,
         client: T3Client,
         refreshActiveThread: Bool
     ) async {
         guard let currentClient = self.client, currentClient === client else { return }
+        let merged = ShellSnapshotMerge.merge(
+            previous: latestShell,
+            next: shell,
+            resolvedRepositoryIdentityRoots: resolvedRepositoryIdentityRoots
+        )
+        // Most enrichment frames resolve a root this client already knows about
+        // and change nothing. Republishing one repaints Home for no reason.
+        if resolvedRepositoryIdentityRoots != nil, merged == latestShell { return }
         shellPublishTask?.cancel()
         shellPublishTask = nil
-        latestShell = shell
-        await emitSnapshot(shell)
+        latestShell = merged
+        await emitSnapshot(merged)
         if refreshActiveThread, let threadID = activeThreadID {
             scheduleDetailRefresh(threadID: threadID, client: client)
         }
@@ -2884,9 +2897,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard isCurrentSession(client: client, generation: generation) else { return }
         shellPublishTask?.cancel()
         shellPublishTask = nil
-        latestShell = shell
+        // Authoritative, but still merged: enrichment may have resolved an
+        // identity this snapshot was built too early to carry.
+        let merged = ShellSnapshotMerge.merge(
+            previous: latestShell,
+            next: shell,
+            resolvedRepositoryIdentityRoots: nil
+        )
+        latestShell = merged
         await emitSnapshot(
-            shell,
+            merged,
             markSourceConnected: false,
             expectedGeneration: generation
         )
