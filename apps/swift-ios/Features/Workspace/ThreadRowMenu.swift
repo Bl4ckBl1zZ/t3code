@@ -16,6 +16,10 @@ public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
     public let symbol: String?
     public let disabled: Bool
     public let destructive: Bool
+    /// Opens a visual section immediately before this row. Mirrors the
+    /// `separatorBefore` field the web context menu contract carries, so the two
+    /// clients group the same menu the same way.
+    public let separatorBefore: Bool
     /// Non-empty makes this row a submenu; the row itself then never fires.
     public let children: [ThreadRowMenuAction]
 
@@ -26,6 +30,7 @@ public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
         symbol: String? = nil,
         disabled: Bool = false,
         destructive: Bool = false,
+        separatorBefore: Bool = false,
         children: [ThreadRowMenuAction] = []
     ) {
         self.id = id
@@ -34,6 +39,7 @@ public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
         self.symbol = symbol
         self.disabled = disabled
         self.destructive = destructive
+        self.separatorBefore = separatorBefore
         self.children = children
     }
 }
@@ -52,11 +58,14 @@ public enum ThreadRowMenu {
     /// rejected), and disabled while the server-side marker says a regeneration
     /// is already in flight.
     ///
-    /// It sits directly above Delete so the destructive item stays last.
+    /// It sits directly above Delete so the destructive item stays last, unless
+    /// `after` names a row it belongs beside — the Home menu groups it with
+    /// Rename, because both are ways of naming the thread.
     public static func withTitleRegenerationAction(
         _ actions: [ThreadRowMenuAction],
         supported: Bool,
-        regenerating: Bool
+        regenerating: Bool,
+        after: String? = nil
     ) -> [ThreadRowMenuAction] {
         guard supported else { return actions }
         let action = ThreadRowMenuAction(
@@ -65,11 +74,34 @@ public enum ThreadRowMenu {
             symbol: "sparkles",
             disabled: regenerating
         )
+        if let after, let anchorIndex = actions.firstIndex(where: { $0.id == after }) {
+            var merged = actions
+            merged.insert(action, at: actions.index(after: anchorIndex))
+            return merged
+        }
         guard let deleteIndex = actions.firstIndex(where: { $0.id == deleteActionID }) else {
             return actions + [action]
         }
         var merged = actions
         merged.insert(action, at: deleteIndex)
         return merged
+    }
+
+    /// Splits a flat action list into the runs `separatorBefore` describes.
+    ///
+    /// Kept here rather than in the view so the grouping is testable without
+    /// UIKit, and so a leading `separatorBefore` — which happens whenever the
+    /// section above it is empty on this row — cannot produce an empty leading
+    /// group the menu would render as a stray rule.
+    public static func sections(_ actions: [ThreadRowMenuAction]) -> [[ThreadRowMenuAction]] {
+        var sections: [[ThreadRowMenuAction]] = []
+        for action in actions {
+            if action.separatorBefore || sections.isEmpty {
+                sections.append([action])
+            } else {
+                sections[sections.count - 1].append(action)
+            }
+        }
+        return sections
     }
 }

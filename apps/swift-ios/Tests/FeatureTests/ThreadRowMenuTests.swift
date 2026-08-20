@@ -53,6 +53,67 @@ final class ThreadRowMenuTests: XCTestCase {
         XCTAssertEqual(actions.map(\.id), ["archive", "regenerate-title"])
     }
 
+    /// The Home menu groups regeneration with Rename rather than parking it
+    /// above Delete: both are ways of naming the thread.
+    func testAnExplicitAnchorPlacesTheActionDirectlyAfterIt() {
+        let actions = ThreadRowMenu.withTitleRegenerationAction(
+            [
+                ThreadRowMenuAction(id: "rename", title: "Rename"),
+                ThreadRowMenuAction(id: "copy", title: "Copy"),
+                ThreadRowMenuAction(id: "delete", title: "Delete", destructive: true),
+            ],
+            supported: true,
+            regenerating: false,
+            after: "rename"
+        )
+        XCTAssertEqual(actions.map(\.id), ["rename", "regenerate-title", "copy", "delete"])
+    }
+
+    /// A menu that never grew the anchor still gets the action, in the slot the
+    /// delete-anchored callers expect.
+    func testAMissingAnchorFallsBackToTheDeleteSlot() {
+        let actions = ThreadRowMenu.withTitleRegenerationAction(
+            [
+                ThreadRowMenuAction(id: "copy", title: "Copy"),
+                ThreadRowMenuAction(id: "delete", title: "Delete", destructive: true),
+            ],
+            supported: true,
+            regenerating: false,
+            after: "rename"
+        )
+        XCTAssertEqual(actions.map(\.id), ["copy", "regenerate-title", "delete"])
+    }
+
+    // MARK: - Sections
+
+    func testSectionsSplitOnTheSeparatorFlag() {
+        let sections = ThreadRowMenu.sections([
+            ThreadRowMenuAction(id: "pin", title: "Pin"),
+            ThreadRowMenuAction(id: "settle", title: "Settle"),
+            ThreadRowMenuAction(id: "rename", title: "Rename", separatorBefore: true),
+            ThreadRowMenuAction(id: "delete", title: "Delete", separatorBefore: true),
+        ])
+
+        XCTAssertEqual(sections.map { $0.map(\.id) }, [["pin", "settle"], ["rename"], ["delete"]])
+    }
+
+    /// A row whose first item opens a section — an archived thread, whose
+    /// lifecycle group is empty — must not produce an empty leading group the
+    /// menu would draw as a stray rule.
+    func testALeadingSeparatorDoesNotOpenAnEmptySection() {
+        let sections = ThreadRowMenu.sections([
+            ThreadRowMenuAction(id: "rename", title: "Rename", separatorBefore: true),
+            ThreadRowMenuAction(id: "delete", title: "Delete", separatorBefore: true),
+        ])
+
+        XCTAssertEqual(sections.map { $0.map(\.id) }, [["rename"], ["delete"]])
+        XCTAssertFalse(sections.contains(where: \.isEmpty))
+    }
+
+    func testSectionsOfAnEmptyMenuAreEmpty() {
+        XCTAssertTrue(ThreadRowMenu.sections([]).isEmpty)
+    }
+
     /// Value semantics give the TS "never mutates the source array" guarantee
     /// for free; asserted anyway so a future reference-typed menu model cannot
     /// quietly reintroduce the shared-mutation bug.

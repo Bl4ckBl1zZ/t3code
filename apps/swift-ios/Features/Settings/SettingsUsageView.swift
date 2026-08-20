@@ -162,14 +162,21 @@ public struct SettingsUsageView: View {
                     Text(providerLabel(provider.provider))
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textPrimary)
+                        .lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(Self.tokens(provider.totalTokens))
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textTertiary)
-                    Text(Self.cost(provider.costUsd))
-                        .font(T3Typography.supporting.weight(.medium))
-                        .foregroundStyle(T3Colors.textSecondary)
-                        .monospacedDigit()
+                    // Cost leads and the volume behind it sits underneath:
+                    // three metrics on one line stop fitting at 320pt.
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(Self.cost(provider.costUsd))
+                            .font(T3Typography.supporting.weight(.medium))
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .monospacedDigit()
+                        Text(Self.providerVolume(provider))
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textTertiary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
                 }
             }
         }
@@ -357,5 +364,15 @@ public struct SettingsUsageView: View {
     /// eight-digit numbers wreck the card layout.
     private static func tokens(_ value: Int) -> String {
         Double(value).formatted(.number.notation(.compactName).precision(.significantDigits(3)))
+    }
+
+    /// The volume line under a provider's cost. Sessions are dropped rather
+    /// than printed as "0 sessions" when the provider's transcripts claimed
+    /// none — priced buckets with no owned directory behind them.
+    static func providerVolume(_ provider: FeatureUsageProviderTotals) -> String {
+        let volume = "\(tokens(provider.totalTokens)) tokens"
+        guard provider.sessions > 0 else { return volume }
+        let noun = provider.sessions == 1 ? "session" : "sessions"
+        return "\(volume) · \(provider.sessions) \(noun)"
     }
 }
