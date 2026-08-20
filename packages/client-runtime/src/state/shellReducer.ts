@@ -29,8 +29,8 @@ function retainRepositoryIdentity(
 
 export interface MergeShellSnapshotOptions {
   /**
-   * Enrichment refresh: structure and sequence must not roll back when at or
-   * below cache; listed roots accept identity exactly (including null).
+   * Metadata-only enrichment refresh: structure and sequence never change;
+   * listed roots accept identity exactly (including null).
    * Omit this options object for authoritative HTTP/initial WebSocket snapshots.
    */
   readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
@@ -43,9 +43,9 @@ export interface MergeShellSnapshotOptions {
  * lower than cache, while retaining a prior non-null identity when the candidate
  * is still unresolved/null for the same root.
  *
- * Enrichment snapshots (options present) never resurrect or roll back
- * projects/threads/archives/sequence when at or below cache; they only patch
- * repository identity for matching current projects.
+ * Enrichment snapshots (options present) only patch repository identity for
+ * matching current projects. They never replace projects, threads, archives,
+ * or sequence, regardless of the incoming snapshot sequence.
  */
 export function mergeShellSnapshotProjects(
   previous: OrchestrationV2ShellSnapshot | null | undefined,
@@ -59,7 +59,7 @@ export function mergeShellSnapshotProjects(
   const isEnrichment = options !== undefined;
   const resolvedRootSet = isEnrichment ? new Set(options.resolvedRepositoryIdentityRoots) : null;
 
-  if (isEnrichment && next.snapshotSequence <= previous.snapshotSequence) {
+  if (isEnrichment) {
     const nextById = new Map(next.projects.map((project) => [project.id, project] as const));
     return {
       ...previous,
@@ -131,10 +131,10 @@ export function applyShellStreamEvent(
           event.location === "active"
             ? upsertById(withoutThread(snapshot.threads), event.thread)
             : withoutThread(snapshot.threads),
-        archivedThreads:
-          event.location === "archive"
-            ? upsertById(withoutThread(snapshot.archivedThreads), event.thread)
-            : withoutThread(snapshot.archivedThreads),
+        // The archive has its own bounded query/subscription. Older servers may
+        // still send archive-located deltas here; remove them from the normal
+        // shell instead of growing its persisted cache again.
+        archivedThreads: withoutThread(snapshot.archivedThreads),
         snapshotSequence: event.sequence,
       };
     }

@@ -214,6 +214,30 @@ describe("applyShellStreamEvent", () => {
     expect(next.projects[0]?.repositoryIdentity).toEqual(repositoryIdentity);
   });
 
+  it("treats higher-sequence compact enrichment as metadata-only", () => {
+    const previous = {
+      ...v2ShellSnapshot,
+      snapshotSequence: 5,
+      projects: [{ ...v2Project, repositoryIdentity: null }],
+      threads: [{ ...v2ThreadShell, title: "Newest title" }],
+    };
+    const next = mergeShellSnapshotProjects(
+      previous,
+      {
+        ...v2ShellSnapshot,
+        snapshotSequence: 8,
+        projects: [{ ...v2Project, repositoryIdentity }],
+        threads: [],
+        archivedThreads: [],
+      },
+      { resolvedRepositoryIdentityRoots: [v2Project.workspaceRoot] },
+    );
+
+    expect(next.snapshotSequence).toBe(5);
+    expect(next.threads[0]?.title).toBe("Newest title");
+    expect(next.projects[0]?.repositoryIdentity).toEqual(repositoryIdentity);
+  });
+
   it("lower-sequence enrichment cannot resurrect empty structural state", () => {
     const previous = {
       ...v2ShellSnapshot,
@@ -366,7 +390,9 @@ describe("applyShellStreamEvent", () => {
     expect(next.projects[0]?.repositoryIdentity).toEqual(liveIdentity);
   });
 
-  it("moves a thread between active and archive without duplicating it", () => {
+  it("keeps archive-located deltas out of the active shell cache", () => {
+    // The archive has its own subscription; a server that still sends
+    // archive-located updates must not grow the normal shell with them.
     const archived = applyShellStreamEvent(v2ShellSnapshot, {
       kind: "thread.updated",
       sequence: 3,
@@ -374,7 +400,7 @@ describe("applyShellStreamEvent", () => {
       thread: { ...v2ThreadShell, archivedAt: v2ThreadShell.updatedAt },
     });
     expect(archived.threads).toEqual([]);
-    expect(archived.archivedThreads).toHaveLength(1);
+    expect(archived.archivedThreads).toEqual([]);
 
     const active = applyShellStreamEvent(archived, {
       kind: "thread.updated",

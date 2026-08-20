@@ -87,13 +87,24 @@ import * as HermesSkills from "./hermes/HermesSkills.ts";
 import * as HermesSessionImport from "./hermes/HermesSessionImportService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
+  buildActiveShellSnapshot,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
+  shellStreamItemsFromResumeSnapshot,
 } from "./orchestration-v2/ShellStream.ts";
+import {
+  decideThreadResume,
+  threadReplayEncodedBytes,
+  THREAD_RESUME_MAX_REPLAY_EVENTS,
+} from "./orchestration-v2/ThreadStream.ts";
+import {
+  projectDomainEventForWire,
+  projectThreadProjectionForWire,
+} from "./orchestration-v2/WireProjection.ts";
 import { coalesceThreadStreamFrames } from "./orchestration-v2/ThreadStreamFrames.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadSearchQuery from "./orchestration-v2/ThreadSearchQuery.ts";
@@ -733,7 +744,7 @@ const makeWsRpcLayer = (
                 Stream.map((stored) => ({
                   kind: "event" as const,
                   sequence: stored.sequence,
-                  event: stored.event,
+                  event: projectDomainEventForWire(stored.event),
                 })),
                 coalesceThreadStreamFrames,
                 Stream.mapError(
@@ -746,21 +757,23 @@ const makeWsRpcLayer = (
                 ),
               );
 
-          const replayThrough = (afterSequence: number, throughSequence: number) =>
+          const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
             applicationEvents
               .readAgentEvents({
                 threadId: input.threadId,
                 afterSequence,
                 throughSequence,
+                limit: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
               })
               .pipe(
                 Stream.map((stored) => ({
                   kind: "event" as const,
                   sequence: stored.sequence,
-                  event: stored.event,
+                  event: projectDomainEventForWire(stored.event),
                 })),
-                coalesceThreadStreamFrames,
-                Stream.mapError(
+                Stream.runCollect,
+                Effect.map((items) => Array.from(items)),
+                Effect.mapError(
                   (cause) =>
                     new OrchestrationV2GetThreadProjectionError({
                       threadId: input.threadId,
@@ -774,6 +787,41 @@ const makeWsRpcLayer = (
             input.requestCompletionMarker === true
               ? Stream.make({ kind: "synchronized" as const })
               : Stream.empty;
+
+          const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(
+            function* () {
+              const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetThreadProjectionError({
+                      threadId: input.threadId,
+                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                      cause,
+                    }),
+                ),
+              );
+              const { snapshotSequence } = snapshot;
+              const windowed =
+                input.snapshotMaxVisibleItems === undefined
+                  ? snapshot.projection
+                  : windowOrchestrationV2ThreadProjection(
+                      snapshot.projection,
+                      input.snapshotMaxVisibleItems,
+                    );
+              const projection = projectThreadProjectionForWire(windowed);
+              return Stream.concat(
+                Stream.concat(
+                  Stream.make({
+                    kind: "snapshot" as const,
+                    snapshotSequence,
+                    projection,
+                  }),
+                  completionMarker,
+                ),
+                eventStreamFrom(snapshotSequence),
+              );
+            },
+          );
 
           // When the client already holds the projection (cached, or loaded over
           // HTTP) it passes that snapshot's sequence, and we resume by replaying
@@ -793,47 +841,35 @@ const makeWsRpcLayer = (
                   }),
               ),
             );
+            // Cheap pre-check: a hopelessly stale cursor (or one from a rebuilt
+            // event log) is answered with a snapshot without reading the gap.
             const replayGap = highWater - input.afterSequence;
             if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
-              return Stream.concat(
-                Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
-                eventStreamFrom(highWater),
-              );
+              const replay = yield* loadReplayThrough(input.afterSequence, highWater);
+              // A short gap can still be enormous — a handful of tool outputs
+              // outweighs a thousand small status updates — so the byte budget
+              // decides too.
+              const plan = decideThreadResume({
+                afterSequence: input.afterSequence,
+                highWater,
+                replayEventCount: replay.length,
+                replayEncodedBytes: threadReplayEncodedBytes(replay),
+              });
+              if (plan.mode === "replay") {
+                return Stream.concat(
+                  Stream.concat(
+                    coalesceThreadStreamFrames(Stream.fromIterable(replay)),
+                    completionMarker,
+                  ),
+                  eventStreamFrom(highWater),
+                );
+              }
             }
-            // Too far behind (or a cursor from a rebuilt event log): fall
-            // through to the snapshot path below.
+            // Too far behind, too many events, or too many bytes: fall through
+            // to the snapshot path below.
           }
 
-          const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2GetThreadProjectionError({
-                  threadId: input.threadId,
-                  message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                  cause,
-                }),
-            ),
-          );
-          const { snapshotSequence } = snapshot;
-          const projection =
-            input.snapshotMaxVisibleItems === undefined
-              ? snapshot.projection
-              : windowOrchestrationV2ThreadProjection(
-                  snapshot.projection,
-                  input.snapshotMaxVisibleItems,
-                );
-
-          return Stream.concat(
-            Stream.concat(
-              Stream.make({
-                kind: "snapshot" as const,
-                snapshotSequence,
-                projection,
-              }),
-              completionMarker,
-            ),
-            eventStreamFrom(snapshotSequence),
-          );
+          return yield* snapshotThenLive();
         },
       );
 
@@ -847,14 +883,12 @@ const makeWsRpcLayer = (
             const base = yield* sql.withTransaction(
               Effect.gen(function* () {
                 const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-                const threads = yield* threadManagement.getShellSnapshot();
-                return {
-                  schemaVersion: threads.schemaVersion,
-                  snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+                const threads = yield* threadManagement.getShellSnapshot({ location: "active" });
+                return buildActiveShellSnapshot({
                   projects,
-                  threads: threads.threads,
-                  archivedThreads: threads.archivedThreads,
-                } as const;
+                  threads,
+                  snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+                });
               }),
             );
             const enriched = yield* enrichProjectShells(base.projects);
@@ -966,6 +1000,19 @@ const makeWsRpcLayer = (
                 resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
               }),
             );
+          // A resuming client already holds the shell body, so its prefix is the
+          // metadata-only enrichment frame — never a second full projects and
+          // threads snapshot.
+          const initialEnrichmentItems = (loaded: {
+            readonly snapshot: OrchestrationV2ShellSnapshot;
+            readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+          }) =>
+            Stream.fromIterable(
+              shellStreamItemsFromResumeSnapshot({
+                snapshot: loaded.snapshot,
+                resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+              }),
+            );
           // Initial unmarked (+ optional same-load marked) always drains first.
           // Enrichment merges only with the post-prefix tail so a ready marked
           // refresh cannot interleave before the authoritative initial frame.
@@ -1000,7 +1047,7 @@ const makeWsRpcLayer = (
               }),
             );
             return composeShellStreamWithEnrichment({
-              initial,
+              initial: initialEnrichmentItems(loaded),
               tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
               enrichment: enrichmentRefreshes,
             });
@@ -1030,7 +1077,7 @@ const makeWsRpcLayer = (
         .withTransaction(
           Effect.gen(function* () {
             const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-            const threads = yield* threadManagement.getShellSnapshot();
+            const threads = yield* threadManagement.getShellSnapshot({ location: "archive" });
             return {
               schemaVersion: threads.schemaVersion,
               snapshotSequence: yield* applicationEvents.latestApplicationSequence,
@@ -1186,6 +1233,8 @@ const makeWsRpcLayer = (
                   ? command.targetThreadId
                   : command.type === "delegated_task.request" ||
                       command.type === "delegated_task.wake-policy" ||
+                      command.type === "delegated_task.completion-delivery.acknowledge" ||
+                      command.type === "delegated_task.completion-delivery.dispose" ||
                       command.type === "thread.created.record"
                     ? command.parentThreadId
                     : command.threadId,
@@ -1246,6 +1295,7 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
             threadManagement.getThreadProjection(input.threadId).pipe(
+              Effect.map(projectThreadProjectionForWire),
               Effect.mapError(
                 (cause) =>
                   new OrchestrationV2GetThreadProjectionError({
@@ -1296,6 +1346,10 @@ const makeWsRpcLayer = (
                 }),
               )
               .pipe(
+                Effect.map((result) => ({
+                  ...result,
+                  projection: projectThreadProjectionForWire(result.projection),
+                })),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationV2ThreadLaunchError({

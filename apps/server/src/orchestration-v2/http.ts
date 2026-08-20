@@ -19,6 +19,8 @@ import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSn
 import * as OrchestrationEventStore from "../persistence/Services/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import { buildActiveShellSnapshot } from "./ShellStream.ts";
+import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
 function isThreadNotFound(error: unknown): boolean {
   return (
@@ -67,14 +69,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
       const base = yield* sql.withTransaction(
         Effect.gen(function* () {
           const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
-          const threads = yield* threadManagement.getShellSnapshot();
-          return {
-            schemaVersion: threads.schemaVersion,
-            snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+          const threads = yield* threadManagement.getShellSnapshot({ location: "active" });
+          return buildActiveShellSnapshot({
             projects,
-            threads: threads.threads,
-            archivedThreads: threads.archivedThreads,
-          } as const;
+            threads,
+            snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+          });
         }),
       );
       const projects = yield* enrichProjectShells(base.projects);
@@ -113,12 +113,13 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             ),
           );
           const maxVisibleItems = args.query.maxVisibleItems;
+          const windowed =
+            maxVisibleItems === undefined
+              ? snapshot.projection
+              : windowOrchestrationV2ThreadProjection(snapshot.projection, maxVisibleItems);
           return {
             snapshotSequence: snapshot.snapshotSequence,
-            projection:
-              maxVisibleItems === undefined
-                ? snapshot.projection
-                : windowOrchestrationV2ThreadProjection(snapshot.projection, maxVisibleItems),
+            projection: projectThreadProjectionForWire(windowed),
           };
         }),
       );

@@ -1,12 +1,29 @@
 import type {
   ApplicationStoredEvent,
+  OrchestrationProjectShell,
   OrchestrationV2ArchivedShellStreamItem,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadShell,
+  OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellStreamItem,
   OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
 import * as Stream from "effect/Stream";
+
+/** Build the regular navigation shell without duplicating the archive dataset. */
+export function buildActiveShellSnapshot(input: {
+  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
+  readonly threads: OrchestrationV2ThreadShellSnapshot;
+  readonly snapshotSequence: number;
+}): OrchestrationV2ShellSnapshot {
+  return {
+    schemaVersion: input.threads.schemaVersion,
+    snapshotSequence: input.snapshotSequence,
+    projects: input.projects,
+    threads: input.threads.threads,
+    archivedThreads: [],
+  };
+}
 
 /** Keep only the newest shell-relevant event per project/thread aggregate. */
 export function coalesceShellApplicationEvents(
@@ -43,12 +60,20 @@ export function shellStreamItemFromEnrichmentRefresh(input: {
   readonly snapshot: OrchestrationV2ShellSnapshot;
   readonly changes: ReadonlyArray<{ readonly workspaceRoot: string }>;
 }): Extract<OrchestrationV2ShellStreamItem, { readonly kind: "snapshot" }> {
+  const resolvedRepositoryIdentityRoots = [
+    ...new Set(input.changes.map((change) => change.workspaceRoot)),
+  ];
   return {
     kind: "snapshot",
-    snapshot: input.snapshot,
-    resolvedRepositoryIdentityRoots: [
-      ...new Set(input.changes.map((change) => change.workspaceRoot)),
-    ],
+    snapshot: {
+      ...input.snapshot,
+      projects: input.snapshot.projects.filter((project) =>
+        resolvedRepositoryIdentityRoots.includes(project.workspaceRoot),
+      ),
+      threads: [],
+      archivedThreads: [],
+    },
+    resolvedRepositoryIdentityRoots,
   };
 }
 
@@ -71,10 +96,27 @@ export function shellStreamItemsFromInitialSnapshot(input: {
     authoritative,
     {
       kind: "snapshot" as const,
-      snapshot: input.snapshot,
+      snapshot: {
+        ...input.snapshot,
+        projects: input.snapshot.projects.filter((project) =>
+          input.resolvedRepositoryIdentityRoots.includes(project.workspaceRoot),
+        ),
+        threads: [],
+        archivedThreads: [],
+      },
       resolvedRepositoryIdentityRoots: [...new Set(input.resolvedRepositoryIdentityRoots)],
     },
   ];
+}
+
+/** Resume after HTTP/cache hydration with metadata only, never another full shell body. */
+export function shellStreamItemsFromResumeSnapshot(input: {
+  readonly snapshot: OrchestrationV2ShellSnapshot;
+  readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
+}): ReadonlyArray<Extract<OrchestrationV2ShellStreamItem, { readonly kind: "snapshot" }>> {
+  return shellStreamItemsFromInitialSnapshot(input).filter(
+    (item) => item.resolvedRepositoryIdentityRoots !== undefined,
+  );
 }
 
 /** Keep only the newest stored event per thread within a coalescing window. */
@@ -99,10 +141,20 @@ export function shellStreamItemFromThreadShell(input: {
   readonly shell: OrchestrationV2ThreadShell | null;
 }): Exclude<OrchestrationV2ShellStreamItem, { readonly kind: "snapshot" }> {
   if (input.shell !== null) {
+    // The archive has its own subscription. An archived thread leaves the
+    // active shell rather than being mirrored into it.
+    if (input.shell.archivedAt !== null) {
+      return {
+        kind: "thread.removed",
+        sequence: input.stored.sequence,
+        location: "active",
+        threadId: input.shell.id,
+      };
+    }
     return {
       kind: "thread.updated",
       sequence: input.stored.sequence,
-      location: input.shell.archivedAt === null ? "active" : "archive",
+      location: "active",
       thread: input.shell,
     };
   }
@@ -110,10 +162,7 @@ export function shellStreamItemFromThreadShell(input: {
   return {
     kind: "thread.removed",
     sequence: input.stored.sequence,
-    location:
-      input.stored.event.type === "thread.deleted" && input.stored.event.payload.archivedAt !== null
-        ? "archive"
-        : "active",
+    location: "active",
     threadId: input.stored.event.threadId,
   };
 }

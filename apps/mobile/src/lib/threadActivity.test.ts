@@ -227,6 +227,63 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("presents provider retries as visible work-log activity", () => {
+    const retryBase = {
+      ...base("item-provider-retry", "2026-06-20T00:00:02.000Z", 1),
+      type: "error" as const,
+      failure: {
+        class: "transport_error" as const,
+        message: "The response stream disconnected.",
+        code: "responseStreamDisconnected",
+        retryable: true,
+      },
+      retry: {
+        attempt: 2,
+        maxAttempts: 5,
+        retryDelayMs: null,
+      },
+    };
+    const runningFeed = buildThreadFeed([
+      projected(
+        {
+          ...retryBase,
+          status: "running",
+          title: "Provider retry",
+          completedAt: null,
+        },
+        0,
+      ),
+    ]);
+    const recoveredFeed = buildThreadFeed([
+      projected(
+        {
+          ...retryBase,
+          status: "completed",
+          title: "Provider recovered",
+        },
+        0,
+      ),
+    ]);
+    const runningActivity = runningFeed.find((entry) => entry.type === "activity-group")
+      ?.activities[0];
+    const recoveredActivity = recoveredFeed.find((entry) => entry.type === "activity-group")
+      ?.activities[0];
+    if (runningActivity === undefined || recoveredActivity === undefined) {
+      throw new Error("Expected provider retry work-log activities.");
+    }
+
+    expect(runningActivity).toMatchObject({
+      summary: "Provider retry",
+      status: "neutral",
+      toolLike: false,
+    });
+    expect(recoveredActivity).toMatchObject({
+      summary: "Provider recovered",
+      status: "success",
+      toolLike: false,
+    });
+  });
+
   it("does not treat a queued-only run as live feed activity", () => {
     expect(
       threadFeedRunIsUnsettled({

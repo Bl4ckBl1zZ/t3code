@@ -90,8 +90,17 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
     projection.providerTurns.some(
       (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
     );
+  // Automatic delegated-completion deliveries are the agent's own follow-up,
+  // not something the user queued, so they stay out of the queue controls.
+  const automaticCompletionMessageIds = new Set(
+    projection.messages
+      .filter((message) => message.delegatedCompletion !== undefined)
+      .map((message) => message.id),
+  );
   const queuedRuns = copySorted(
-    projection.runs.filter((run) => run.status === "queued"),
+    projection.runs.filter(
+      (run) => run.status === "queued" && !automaticCompletionMessageIds.has(run.userMessageId),
+    ),
     (left, right) =>
       (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
       left.ordinal - right.ordinal,

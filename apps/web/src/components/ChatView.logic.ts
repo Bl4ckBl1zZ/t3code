@@ -255,16 +255,17 @@ export function resolveSendEnvMode(input: {
 }
 
 export function shouldShowComposerContextStrip(input: {
-  routeKind: "draft" | "server";
+  isDraftHeroState: boolean;
   isGitRepo: boolean;
   hasActiveProject: boolean;
   isProjectlessConversation: boolean;
+  persistInActiveThreads: boolean;
 }): boolean {
   return (
     !input.isProjectlessConversation &&
-    input.routeKind === "draft" &&
     input.isGitRepo &&
-    input.hasActiveProject
+    input.hasActiveProject &&
+    (input.isDraftHeroState || input.persistInActiveThreads)
   );
 }
 
