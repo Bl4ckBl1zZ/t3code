@@ -101,6 +101,33 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `ServerSettingsService` in `orchestration-v2/runtimeLayer.ts`, keeping the manager's layer
   requirements narrow. The prompt half rides `CodexAdapterV2`'s existing `hasT3Mcp` plumbing as a
   companion `hasBrowserTools`, read off the credential's own capability list.
+- Does not yet carry upstream's two web composer/timeline rewrites, because both read state the
+  fork's orchestration V2 does not project. Upstream `792a1404f6` ("attach composer state
+  drawers") moves the approval / pending-input / plan banners out of the composer surface into an
+  attached drawer and adds a tasks badge fed by the V1 thread shell's `planProgress`; upstream
+  `4a9edff4c1` ("collapse tool activity into one line") groups tool rows through
+  `session-logic`'s V1 `DerivedWorkLogEntry` (`activityKind`, `turnId`, `toolCallId`), which the
+  fork replaced with V2 projected turn items carrying `toolLifecycleStatus`. Their server
+  companion `b2e2ccfdb4` targets the retired V1 `ActivityPayloadProjection` /
+  `ProviderRuntimeIngestion` and is dropped outright. The standalone pieces of `792a1404f6` are
+  carried: `@t3tools/client-runtime/providerSkills` (shared skill display name + source kind, used
+  by web and the Expo client), the inline chip geometry refactor in `composerInlineChip.ts`, and
+  the `micro` button size. Porting the drawer layout onto the fork's composer (voice input, its
+  own attachment menu, the plan-sidebar toggle) and deriving tasks progress from the fork's
+  `activePlan.steps` is follow-up work, not a merge.
+- Ports upstream's thread context-menu refinement (`3c0665543f`: per-item icons,
+  `separatorBefore`, and the four copy targets nested under one "Copy" entry) into the fork's
+  `Sidebar.tsx` menu rather than upstream's retired `threadActionMenu.logic.ts`. The fork's extra
+  `copy-handoff-script` target joins the same submenu, and the leaf ids are unchanged so the
+  existing dispatch keeps working.
+- Keeps its idle auto-install watcher alive across an update check. Upstream `a354dd9ddc` stopped
+  skipping the periodic check while an update is downloaded and made check failure / no-update
+  settle back to `downloaded`, which would otherwise have torn down the fork's
+  `autoInstallWhenIdle` fiber the moment the status went transiently `checking` and left
+  auto-install silently dead. `desktopUpdateHoldsDownloadedUpdate` is the shared predicate: the
+  watcher rides through `checking`, `autoInstallPending` survives the round trip, and the install
+  itself still waits for `downloaded` because a check in flight holds the single update-action
+  lock.
 - Serves one Settings -> Integrations page from `apps/web/src/components/settings/`
   `IntegrationsSettings.tsx` holding both halves: upstream's Browser defaults section
   (`949feb61e`) first, then the fork's OpenRouter credential row and its

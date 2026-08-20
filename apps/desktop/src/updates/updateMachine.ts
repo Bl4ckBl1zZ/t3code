@@ -45,14 +45,17 @@ export function reduceDesktopUpdateStateOnCheckStart(
   state: DesktopUpdateState,
   checkedAt: string,
 ): DesktopUpdateState {
+  const hasDownloadedUpdate = state.downloadedVersion !== null;
   return {
     ...state,
     status: "checking",
-    autoInstallPending: false,
+    // A check that runs on top of a downloaded update no longer discards it,
+    // so the armed idle install survives the round trip too.
+    autoInstallPending: hasDownloadedUpdate ? state.autoInstallPending : false,
     checkedAt,
-    releaseNotes: [],
+    releaseNotes: hasDownloadedUpdate ? state.releaseNotes : [],
     message: null,
-    downloadPercent: null,
+    downloadPercent: hasDownloadedUpdate ? 100 : null,
     errorContext: null,
     canRetry: false,
   };
@@ -63,6 +66,18 @@ export function reduceDesktopUpdateStateOnCheckFailure(
   message: string,
   checkedAt: string,
 ): DesktopUpdateState {
+  if (state.downloadedVersion !== null) {
+    return {
+      ...state,
+      status: "downloaded",
+      message: null,
+      checkedAt,
+      downloadPercent: 100,
+      errorContext: null,
+      canRetry: true,
+    };
+  }
+
   return {
     ...state,
     status: "error",
@@ -80,18 +95,23 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   checkedAt: string,
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote> = [],
 ): DesktopUpdateState {
+  const isDownloadedVersion = state.downloadedVersion === version;
+  const nextReleaseNotes =
+    isDownloadedVersion && releaseNotes.length === 0 ? state.releaseNotes : releaseNotes;
   return {
     ...state,
-    status: "available",
-    autoInstallPending: false,
+    status: isDownloadedVersion ? "downloaded" : "available",
+    // A re-announced download keeps whatever the idle watcher had armed; a
+    // genuinely new version starts over.
+    autoInstallPending: isDownloadedVersion ? state.autoInstallPending : false,
     availableVersion: version,
-    downloadedVersion: null,
-    releaseNotes,
-    downloadPercent: null,
+    downloadedVersion: isDownloadedVersion ? version : null,
+    releaseNotes: nextReleaseNotes,
+    downloadPercent: isDownloadedVersion ? 100 : null,
     checkedAt,
     message: null,
     errorContext: null,
-    canRetry: false,
+    canRetry: isDownloadedVersion,
   };
 }
 
@@ -99,6 +119,19 @@ export function reduceDesktopUpdateStateOnNoUpdate(
   state: DesktopUpdateState,
   checkedAt: string,
 ): DesktopUpdateState {
+  if (state.downloadedVersion !== null) {
+    return {
+      ...state,
+      status: "downloaded",
+      availableVersion: state.downloadedVersion,
+      downloadPercent: 100,
+      checkedAt,
+      message: null,
+      errorContext: null,
+      canRetry: true,
+    };
+  }
+
   return {
     ...state,
     status: "up-to-date",
@@ -199,9 +232,21 @@ export function reduceDesktopUpdateStateOnAutoUpdatePreferenceChange(
   };
 }
 
+/**
+ * True while a downloaded update is still the thing the idle watcher is waiting
+ * on. A periodic check now runs on top of a downloaded update instead of
+ * discarding it, so "checking" is a transient the watcher rides through.
+ */
+export function desktopUpdateHoldsDownloadedUpdate(state: DesktopUpdateState): boolean {
+  return (
+    state.downloadedVersion !== null &&
+    (state.status === "downloaded" || state.status === "checking")
+  );
+}
+
 export function reduceDesktopUpdateStateOnAutoInstallWait(
   state: DesktopUpdateState,
   autoInstallPending: boolean,
 ): DesktopUpdateState {
-  return state.status === "downloaded" ? { ...state, autoInstallPending } : state;
+  return desktopUpdateHoldsDownloadedUpdate(state) ? { ...state, autoInstallPending } : state;
 }
