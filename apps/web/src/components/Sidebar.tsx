@@ -136,6 +136,7 @@ import {
 } from "../workEnvironmentScope";
 import { cn } from "~/lib/utils";
 import {
+  animatePinnedLayoutChanges,
   applyManualThreadOrderForSidebarV2,
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
@@ -1508,7 +1509,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           isWokeStatus
             ? "pointer-events-auto"
             : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0",
-          "self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
+          "flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
           snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
         )}
       >
@@ -1834,6 +1835,7 @@ function SortableSidebarThreadRow(
   const { sortableId, ...rowProps } = props;
   const { isDragging, listeners, setNodeRef, transform, transition } = useSortable({
     id: sortableId,
+    animateLayoutChanges: animatePinnedLayoutChanges,
   });
   const sortable = useMemo<SidebarThreadRowSortable>(
     () => ({
@@ -3465,23 +3467,25 @@ export default function Sidebar() {
                     {
                       id: "new-thread-on-branch",
                       label: `New thread on ${thread.branch}`,
+                      icon: "message-square-plus",
                     },
                   ]
                 : []),
               ...(supportsSettlement
                 ? [
                     isSettled
-                      ? { id: "unsettle", label: "Un-settle thread" }
-                      : { id: "settle", label: "Settle thread" },
+                      ? { id: "unsettle", label: "Un-settle thread", icon: "circle-check" }
+                      : { id: "settle", label: "Settle thread", icon: "circle-check" },
                   ]
                 : []),
               ...(supportsSnooze
                 ? [
                     isSnoozed
-                      ? { id: "unsnooze", label: "Wake thread" }
+                      ? { id: "unsnooze", label: "Wake thread", icon: "clock" }
                       : {
                           id: "snooze",
                           label: "Snooze",
+                          icon: "clock",
                           disabled: !canSnooze(thread, { now: new Date().toISOString() }),
                           children: snoozePresets.map((preset) => ({
                             id: `snooze:${preset.id}`,
@@ -3495,28 +3499,48 @@ export default function Sidebar() {
                     {
                       id: isPinned ? "unpin" : "pin",
                       label: isPinned ? "Unpin thread" : "Pin thread",
+                      icon: isPinned ? "pin-off" : "pin",
                     },
                   ]
                 : []),
-              { id: "rename", label: "Rename thread" },
+              { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
               ...(supportsTitleRegeneration
                 ? [
                     {
                       id: "regenerate-title",
                       label: isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
+                      icon: "refresh-cw",
                       disabled: isRegeneratingTitle,
                     },
                   ]
                 : []),
-              { id: "mark-unread", label: "Mark unread" },
-              { id: "copy-path", label: "Copy path", icon: "copy" },
-              ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
-              { id: "copy-handoff-script", label: "Copy handoff script", icon: "copy" },
-              { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
+              { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+              // One "Copy" entry with a submenu, instead of four sibling rows
+              // that each said "Copy ...".
+              {
+                id: "copy",
+                label: "Copy",
+                icon: "copy",
+                separatorBefore: true,
+                children: [
+                  { id: "copy-path", label: "Path", icon: "folder" },
+                  ...(thread.branch
+                    ? [{ id: "copy-branch", label: "Branch", icon: "git-branch" }]
+                    : []),
+                  { id: "copy-handoff-script", label: "Handoff script", icon: "file-text" },
+                  { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
+                ],
+              },
               // A running thread cannot be archived (the action would fail in
               // useThreadActions), so the entry is present but disabled rather
               // than silently missing.
-              { id: "archive", label: "Archive", disabled: isThreadRunning },
+              {
+                id: "archive",
+                label: "Archive",
+                icon: "archive",
+                disabled: isThreadRunning,
+                separatorBefore: true,
+              },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
             position,
@@ -4472,7 +4496,7 @@ export default function Sidebar() {
                   <button
                     type="button"
                     onClick={openAddProjectCommandPalette}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project

@@ -32,12 +32,42 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   sidebar deliberately does not adopt upstream's pinned-block drag: it keeps the fork's
   client-local whole-list manual order (`applyManualThreadOrderForSidebarV2`), which already lets
   users arrange pinned threads and would otherwise fight upstream's DnD over the same
-  `DndContext`.
+  `DndContext`. Upstream's `animatePinnedLayoutChanges` (which stops dnd-kit replaying the
+  committed layout move after the pointer is released) is carried and applied to the fork's
+  whole-list `SortableSidebarThreadRow` instead of upstream's pinned-block row.
 - Replaces upstream's web thread context menu stack (`threadActionMenu.logic.ts`,
   `useThreadActionMenu.ts`) with the fork's `apps/web/src/hooks/useThreadActions.ts` plus menu
   items built inline in `Sidebar.tsx`. Upstream changes to those retired modules resolve to the
   fork: port the menu feature itself (new items, handlers) into `Sidebar.tsx`/`useThreadActions.ts`
   instead of merging the files.
+- Does not carry upstream's two large web-client redesigns that are written against the V1
+  activity model: "collapse tool activity into one line" (`4a9edff4c1`, the `work-toggle` row,
+  `deriveToolLifecycleCollapseKey`, and the `live-activity-focus` CSS) and "attach composer state
+  drawers" (`792a1404f6`, the shoulder tabs, `ComposerTasksBadge`, `chat-composer-*-drawer`
+  surfaces, and the micro approval actions). The fork's timeline renders orchestration V2
+  `timelineEntries` and already collapses work rows through its own `work` group and
+  `collapseWorkEntriesKeepingLiveBackground`; its composer has diverged in the same places.
+  Follow-on upstream work on those files resolves to the fork, and upstream's companion fixes
+  (`490f48ed98`'s `AgentSpawnCtaRow` inset, `68966c1e66`'s shoulder-tab spacing) have no fork
+  counterpart. Carried out of those commits: `deriveActiveWorkStartedAt`'s
+  `latestUserMessageAt` fallback, ported onto the V2 run shell.
+- Does not carry upstream's "retry failed thread bootstraps with a fresh id" (`8824f8f24f`).
+  It reports a deleted bootstrap thread through the V1 `OrchestrationDispatchCommandError`, which
+  the fork does not define; the fork launches threads through V2 `launchThread`, which keeps the
+  thread and explicitly permits relaunching an empty one, so there is no dead id to recycle.
+- Does not carry upstream's startup `reconcileProviderSessions` (`0929907ff9`) or its V1 tool
+  lifecycle identity fix (`b2e2ccfdb4`). Both read `ProviderService`/`ProviderSessionDirectory`
+  and the V1 activity projection; orchestration V2's `ProviderRuntimeRecoveryService.recover`
+  already settles runs orphaned by a restart from the `orchestration-v2.recovery` startup phase.
+- Relocates `formatProviderSkillDisplayName` to upstream's
+  `@t3tools/client-runtime/providerSkills` and keeps the fork's `formatProviderSkillInstallSource`
+  there beside upstream's `resolveProviderSkillSourceKind`; the fork's composer command menu
+  labels a skill's install source instead of drawing an icon for it.
+- Carries a desktop "automatic updates" preference upstream does not have
+  (`autoUpdateEnabled`, `autoInstallPending`, `autoInstallWhenIdle`). Because a queued
+  auto-install only waits for the machine to go idle, `checkForUpdates` skips a check while
+  `autoInstallPending` is set — upstream's `a354dd9ddc` otherwise re-checks from the `downloaded`
+  state and the status change cancels the wait.
 - Keeps upstream's `EnvironmentProviderSettings` inline in
   `apps/web/src/components/settings/SettingsPanels.tsx`; the fork carries no
   `ProviderSettingsPanel.tsx`. Upstream changes to that file resolve to the fork: port the behavior
