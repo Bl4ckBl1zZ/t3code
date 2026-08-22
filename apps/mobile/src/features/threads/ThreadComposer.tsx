@@ -80,6 +80,7 @@ import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { QueuedMessageStrip } from "./QueuedMessageStrip";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { AnimatedSymbolSwap, SymbolView } from "../../components/AppSymbol";
+import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
 import {
   voiceComboButtonProps,
   VoiceComboBadge,
@@ -482,7 +483,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         });
       }
 
-      return [...builtIn, ...providerCommands];
+      const skillItems = (selectedProviderStatus?.skills ?? [])
+        .filter((skill) => matchesSlashSkillQuery(skill, q))
+        .map((skill) => ({
+          id: `skill:${skill.name}`,
+          type: "skill" as const,
+          skill,
+          label: `skill:${skill.name}`,
+          description: skill.shortDescription ?? skill.description ?? "",
+        }));
+
+      return [...builtIn, ...providerCommands, ...skillItems];
     }
 
     if (composerTrigger.kind === "skill") {
