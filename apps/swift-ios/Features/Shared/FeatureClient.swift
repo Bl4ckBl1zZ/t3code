@@ -140,6 +140,10 @@ public protocol FeatureClient: AnyObject {
         limit: Int
     ) async throws -> [FeatureFileEntry]
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent
+    /// Hands the thread to the provider as feedback, answering with the id it
+    /// filed the report under. Only providers that advertise a feedback
+    /// command support it, and only while a session is live.
+    func uploadThreadFeedback(threadID: String, reason: String?) async throws -> String
     /// The thread's working tree as it stands now.
     func loadReview(threadID: String) async throws -> FeatureReview
     /// The diff one checkpoint captured, which is a different question from
@@ -427,6 +431,10 @@ public extension FeatureClient {
 
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {
         throw FeatureCapabilityUnavailable("File preview")
+    }
+
+    func uploadThreadFeedback(threadID _: String, reason _: String?) async throws -> String {
+        throw FeatureCapabilityUnavailable("Provider feedback")
     }
 
     func loadReview(threadID: String) async throws -> FeatureReview {
