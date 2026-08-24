@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, ClientSurface, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * Declares the server's overall authentication posture.
@@ -169,8 +169,21 @@ export const AuthClientPresentationMetadata = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   deviceType: Schema.optionalKey(AuthClientMetadataDeviceType),
   os: Schema.optionalKey(TrimmedNonEmptyString),
+  surface: Schema.optionalKey(ClientSurface),
+  appVersion: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientPresentationMetadata = typeof AuthClientPresentationMetadata.Type;
+
+/**
+ * Which client connection dispatched a command. Announced on the /ws upgrade
+ * URL and recorded on the auth session; absent on server- and
+ * provider-originated work, and on clients too old to report it.
+ */
+export const OrchestrationClientOrigin = Schema.Struct({
+  surface: Schema.optional(ClientSurface),
+  appVersion: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationClientOrigin = typeof OrchestrationClientOrigin.Type;
 
 export const AuthTokenExchangeRequest = Schema.Struct({
   grant_type: Schema.Literal(AuthTokenExchangeGrantType),

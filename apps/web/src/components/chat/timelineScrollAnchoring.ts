@@ -19,6 +19,22 @@ export interface AnchoredTurnMetrics {
   readonly scrollDeltaToRevealEnd: number;
 }
 
+export function keepTimelineEndVisibleAfterOverlayGrowth({
+  timeline,
+  previousOverlayHeight,
+  overlayHeight,
+  followingEnd,
+}: {
+  readonly timeline: { scrollToEnd: (options: { animated: boolean }) => unknown } | null;
+  readonly previousOverlayHeight: number;
+  readonly overlayHeight: number;
+  readonly followingEnd: boolean;
+}): void {
+  if (timeline && followingEnd && overlayHeight > previousOverlayHeight) {
+    void timeline.scrollToEnd({ animated: false });
+  }
+}
+
 export interface TimelineScrollSample {
   readonly scrollTop: number;
   readonly contentHeight: number;

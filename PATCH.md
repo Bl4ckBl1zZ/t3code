@@ -90,7 +90,56 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   aggregate the fork keeps, so it is carried but renumbered to
   `052_ProjectionProjectsDefaultThreadEnvMode`. Upstream's
   `040_ProjectionProjectFaviconPath` likewise targets the project aggregate and is carried as
-  `053_ProjectionProjectFaviconPath`.
+  `053_ProjectionProjectFaviconPath`. Upstream's `041_AuthSessionClientConnection` targets
+  `auth_sessions`, which the fork shares, and is carried as
+  `058_AuthSessionClientConnection`.
+- Records the connecting client's surface and app version on its auth session and on the
+  `client.connected` / `client.thread.started` / `client.turn.requested` analytics events
+  (upstream `11f051373`), but does not stamp `metadata.origin` onto persisted events. Upstream
+  stamps it in the V1 engine, which the fork keeps only for the project aggregate; orchestration
+  V2's domain events carry no metadata bag, and a thread already records its own `createdBy` /
+  `creationSource` provenance. The V2 dispatch handler maps `thread.create` and `message.dispatch`
+  (and `launchThread`) onto upstream's analytics event names.
+- Implements upstream's "submit thread feedback to OpenAI" (`3db38b881`) on orchestration V2.
+  Upstream routes `provider.uploadFeedback` through the retired V1 `ProviderService`; the fork adds
+  an optional `uploadFeedback` to `ProviderAdapterV2SessionRuntime`, implements it in
+  `CodexAdapterV2` against the app-server's `feedback/upload` request, and resolves a thread to its
+  live session through a new `orchestration-v2/ThreadFeedbackService.ts` (same shape as
+  `RuntimeRequestServiceV2`). The web client carries the whole feature; the Expo client does not —
+  upstream's mobile half rewrites `use-thread-composer-state.ts` around V1 thread details, and
+  `apps/mobile` is being retired. `codexFeedbackMessage` returns a structural
+  `CodexFeedbackMessage` rather than upstream's V1 `OrchestrationMessage`, and the fork's web
+  timeline renders the pair through its optimistic-message slot.
+- Carries upstream's signed attachment upload path (`e9f50c3ef`) alongside the fork's existing
+  `assets.persistChatAttachments` RPC, which the SwiftUI client uses. Upstream claims pending
+  uploads into the thread inside the V1 `Normalizer`; the fork claims them in `ws.ts` on the V2
+  `dispatchCommand` (`message.dispatch`) and `launchThread` handlers, releasing the claimed copies
+  when the dispatch fails. `launchThread` can only claim when the caller named the thread id — a
+  server-allocated id has nothing to claim into yet. The upload contract accepts image mime types
+  only, so the composer's file/pdf/video attachments still ride the inline base64 path, and the
+  fork does not carry upstream's per-chip upload progress UI (it belongs to the composer drawer
+  redesign the fork already declined).
+- Does not carry upstream's Codex MCP-elicitation approvals end to end (`7c6163c67`). The contract
+  widening (`ProviderRequestKind`'s `mcp-elicitation`, `ProviderApprovalDecision`'s `acceptAlways`,
+  `ProviderApprovalOption`) lives in the fork's `providerPolicy.ts` rather than upstream's
+  `orchestration.ts`, and `CodexSessionRuntime` carries upstream's handler — but that module is
+  V1 leftovers the fork's V2 stack does not run, and `CodexAdapterV2` registers no
+  `mcpServer/elicitation/request` handler. Codex app-access prompts therefore do not reach the
+  fork's clients yet; the approval panels only label the kind. `acceptAlways` collapses to
+  `acceptForSession` on the wire, which is the widest grant Codex's command/file-change approval
+  responses can carry.
+- Keeps the fork's `MarkdownMedia` path for chat markdown images instead of upstream's
+  `classifyMarkdownImageSource` renderer (`77c9d1eb5`, `5a7a7cf29`, `55c909334`). The fork's path
+  already resolves workspace files through signed asset URLs and additionally handles browser
+  artifacts and video, which upstream's image-only renderer does not.
+- Does not carry upstream's `useThreadActionMenu`-based "double-click chat header title to rename"
+  (`837f6b871`): the fork replaced that module with `useThreadActions.ts` plus inline menu items,
+  and its `ChatHeader.tsx` is a presentational breadcrumb with no menu of its own.
+- Runs CI as one self-hosted `verify` job, so upstream's test sharding, split Rust job, and
+  macOS-gated `apps/mobile` native lint (`d7b9a689f`, `8f7da3b99`) have no fork counterpart. The
+  PR-assets guard from `9f12eab38` is carried. `release.yml` adopts upstream's split
+  `quality` job (`25dcee00a`) on the fork's runner and its resource-monitor cache, but keeps the
+  fork's full `run-install` in the build matrix.
 - Does not carry upstream's "nest mobile task settings in bottom sheets" restructure of the Expo
   client (upstream `85389b988`: `ExistingThreadSettingsRouteScreen`, `thread-settings-options`,
   `NewTaskContextPickerScreens`, `legacy-plan-mode`, the `ComposerToolbarTrigger` ->

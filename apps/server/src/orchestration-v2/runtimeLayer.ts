@@ -42,6 +42,7 @@ import { layer as runFinalizationServiceLayer } from "./RunFinalizationService.t
 import { layerFromProjectRepository as runtimePolicyLayerFromProjectRepository } from "./RuntimePolicy.ts";
 import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts";
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
+import { layer as threadFeedbackServiceLayer } from "./ThreadFeedbackService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadSearchQueryLayer } from "./ThreadSearchQuery.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
@@ -179,6 +180,9 @@ const providerTurnControlServiceProvided = providerTurnControlServiceLayer.pipe(
   ),
 );
 const runtimeRequestServiceProvided = runtimeRequestServiceLayer.pipe(
+  Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),
+);
+const threadFeedbackServiceProvided = threadFeedbackServiceLayer.pipe(
   Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),
 );
 const checkpointRollbackServiceProvided = checkpointRollbackServiceLayer.pipe(
@@ -325,6 +329,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   projectionMaintenanceProvided,
   legacyV1ThreadImporterProvided,
   threadSearchQueryLayer,
+  threadFeedbackServiceProvided,
 );
 
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(

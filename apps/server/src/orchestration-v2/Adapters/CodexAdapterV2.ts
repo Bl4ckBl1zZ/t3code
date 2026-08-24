@@ -91,6 +91,7 @@ import {
   ProviderAdapterRuntimeRequestResponseError,
   ProviderAdapterSteerRunError,
   ProviderAdapterTurnStartError,
+  ProviderAdapterUploadFeedbackError,
   ProviderAdapterV2,
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2Event,
@@ -447,7 +448,11 @@ function approvalDecisionToLegacyReviewDecision(
   switch (decision) {
     case "accept":
       return "approved";
+    // Codex's own protocol has no always-allow tier here: an elicitation's
+    // "always" collapses to session-scoped acceptance, which is the widest
+    // grant the wire can carry.
     case "acceptForSession":
+    case "acceptAlways":
       return "approved_for_session";
     case "decline":
       return "denied";
@@ -4083,7 +4088,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
             );
             return {
-              decision: resolved,
+              decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
             } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
           }).pipe(Effect.orDie),
         );
@@ -4143,7 +4148,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
             );
             return {
-              decision: resolved,
+              decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
             } satisfies CodexSchema.FileChangeRequestApprovalResponse;
           }).pipe(Effect.orDie),
         );
@@ -5380,6 +5385,33 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   new ProviderAdapterRollbackThreadError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: threadInput.providerThread.id,
+                    cause: normalizeCodexCause(cause),
+                  }),
+              ),
+            ),
+          // Codex files a thread with OpenAI and answers with the id it filed
+          // it under; the app-server chooses what to attach, so the request
+          // carries only the classification and the user's optional note.
+          uploadFeedback: (feedbackInput) =>
+            Effect.gen(function* () {
+              const threadId = yield* getNativeThreadId(feedbackInput.providerThread);
+              const response = yield* ensureInitialized.pipe(
+                Effect.andThen(
+                  client.request("feedback/upload", {
+                    classification: "bug",
+                    includeLogs: true,
+                    ...(feedbackInput.reason ? { reason: feedbackInput.reason } : {}),
+                    threadId,
+                  }),
+                ),
+              );
+              return { feedbackId: response.threadId };
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterUploadFeedbackError({
+                    driver: CODEX_PROVIDER,
+                    providerThreadId: feedbackInput.providerThread.id,
                     cause: normalizeCodexCause(cause),
                   }),
               ),

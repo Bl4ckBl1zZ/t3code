@@ -72,6 +72,7 @@ import Migration0054 from "./Migrations/054_WorktreeRetentionRegistry.ts";
 import Migration0055 from "./Migrations/055_WorktreeRetentionLifecycle.ts";
 import Migration0056 from "./Migrations/056_HermesCronRunOutcome.ts";
 import Migration0057 from "./Migrations/057_ProjectionTurnItemsThreadRunIndex.ts";
+import Migration0058 from "./Migrations/058_AuthSessionClientConnection.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -141,6 +142,7 @@ export const migrationEntries = [
   [55, "WorktreeRetentionLifecycle", Migration0055],
   [56, "HermesCronRunOutcome", Migration0056],
   [57, "ProjectionTurnItemsThreadRunIndex", Migration0057],
+  [58, "AuthSessionClientConnection", Migration0058],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -227,6 +229,7 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [55, { kind: "index", index: "idx_worktree_retention_registry_claim" }],
   [56, { kind: "column", table: "hermes_cron_run_watermarks", column: "last_status" }],
   [57, { kind: "index", index: "orchestration_v2_projection_turn_items_thread_run_idx" }],
+  [58, { kind: "column", table: "auth_sessions", column: "client_surface" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {

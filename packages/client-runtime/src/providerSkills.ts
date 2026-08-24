@@ -1,4 +1,4 @@
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { ServerProviderSkill, ServerProviderSlashCommand } from "@t3tools/contracts";
 
 export type ProviderSkillSourceKind = "app" | "repo" | "project" | "personal" | "system" | "other";
 
@@ -38,6 +38,21 @@ export function formatProviderSkillInstallSource(
     return normalizedScope ? titleCaseWords(normalizedScope) : null;
   }
   return titleCaseWords(kind);
+}
+
+export function getProviderSkillsForSlashMenu(
+  skills: ReadonlyArray<ServerProviderSkill>,
+  showSkillsInSlashMenu: boolean,
+): ServerProviderSkill[] {
+  return showSkillsInSlashMenu ? skills.filter((skill) => skill.enabled) : [];
+}
+
+export function getProviderSlashCommandsForSlashMenu(
+  slashCommands: ReadonlyArray<ServerProviderSlashCommand>,
+  visibleSkills: ReadonlyArray<ServerProviderSkill>,
+): ServerProviderSlashCommand[] {
+  const skillNames = new Set(visibleSkills.map((skill) => skill.name.trim().toLowerCase()));
+  return slashCommands.filter((command) => !skillNames.has(command.name.trim().toLowerCase()));
 }
 
 export function resolveProviderSkillSourceKind(

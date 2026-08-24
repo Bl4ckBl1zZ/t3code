@@ -206,9 +206,14 @@ export function useNewThreadHandler() {
         : null;
       const storedDraftThreadWasPromoted =
         storedDraftThreadRef !== null && readThreadShell(storedDraftThreadRef) !== null;
+      // A draft the store has already recorded a promotion for is spent even
+      // when its server thread has not arrived in the shell yet — reusing it
+      // would send the next turn into the thread it was promoted into.
+      const storedDraftThreadSpent =
+        storedDraftThreadWasPromoted || storedDraftThread?.promotedTo != null;
       const reusableStoredDraftThread =
-        options?.fresh === true ? null : storedDraftThreadWasPromoted ? null : storedDraftThread;
-      if (storedDraftThreadRef && storedDraftThreadWasPromoted) {
+        options?.fresh === true ? null : storedDraftThreadSpent ? null : storedDraftThread;
+      if (storedDraftThreadRef && storedDraftThreadSpent) {
         markPromotedDraftThreadByRef(storedDraftThreadRef);
       }
       // New-thread surfaces (button, hotkeys, "/" landing, palette) only

@@ -81,6 +81,7 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
+import { keepTimelineEndVisibleAfterOverlayGrowth } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
   collapseWorkEntriesKeepingLiveBackground,
@@ -310,6 +311,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     new Set(),
   );
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
+  const previousContentInsetEndAdjustmentRef = useRef(contentInsetEndAdjustment);
+  // Read by the overlay-growth effect below, which runs before the next scroll
+  // tick would tell the parent. Upstream reads a liveFollowEnabled prop; the
+  // fork's timeline owns at-end detection itself and reports it upward.
+  const isAtEndRef = useRef(true);
+
+  // A banner appearing over the composer shrinks the visible timeline. Nudge
+  // the list back to the end so the newest message does not slide under it.
+  useLayoutEffect(() => {
+    keepTimelineEndVisibleAfterOverlayGrowth({
+      timeline: listRef.current,
+      previousOverlayHeight: previousContentInsetEndAdjustmentRef.current,
+      overlayHeight: contentInsetEndAdjustment,
+      followingEnd: isAtEndRef.current && anchorMessageId === null,
+    });
+    previousContentInsetEndAdjustmentRef.current = contentInsetEndAdjustment;
+  }, [anchorMessageId, contentInsetEndAdjustment, listRef]);
 
   const onToggleTurnFold = useCallback((runId: RunId) => {
     setExpandedRunIds((existing) => {
@@ -418,7 +436,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const anchoredEndSpace = useMemo(() => {
     const config = resolveChatListAnchoredEndSpace(rows, anchorMessageId, (row) =>
-      row.kind === "message" ? row.message.id : null,
+      row.kind === "message" && row.message.role === "user" ? row.message.id : null,
     );
     return config
       ? { ...config, onReady: handleAnchorReady, onSizeChanged: handleAnchorSizeChanged }
@@ -436,6 +454,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const state = listRef.current?.getState?.();
     const isAtEnd = resolveTimelineIsAtEnd(state, contentInsetEndAdjustment);
     if (isAtEnd !== undefined) {
+      isAtEndRef.current = isAtEnd;
       onIsAtEndChange(isAtEnd);
     }
     if (!state || minimapItems.length === 0) {

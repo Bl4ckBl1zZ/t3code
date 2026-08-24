@@ -1,5 +1,6 @@
 import * as DateTime from "effect/DateTime";
 import * as Clock from "effect/Clock";
+import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
 import * as Effect from "effect/Effect";
@@ -10,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -18,9 +20,12 @@ import {
   type ApplicationStoredEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  ClientSurface,
   CommandId,
   GitCommandError,
   type DiscoveredLocalServerList,
+  type OrchestrationClientOrigin,
+  type OrchestrationV2Command,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -45,6 +50,7 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProjectMutationError,
+  ProviderUploadFeedbackError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
@@ -54,6 +60,7 @@ import {
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   AssetWorkspacePurgedError,
+  type ChatAttachment,
   ChatAttachmentId,
   PersistChatAttachmentsError,
   RpcClientId,
@@ -78,6 +85,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as ThreadFeedbackService from "./orchestration-v2/ThreadFeedbackService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as HermesCron from "./hermes/HermesCron.ts";
@@ -126,8 +134,16 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
-import { attachmentRelativePath, createDeterministicAttachmentId } from "./attachmentStore.ts";
+import {
+  attachmentRelativePath,
+  createDeterministicAttachmentId,
+  parseThreadSegmentFromAttachmentId,
+  planAttachmentClaim,
+  resolveAttachmentPath,
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+} from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
+import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -155,6 +171,7 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
@@ -256,6 +273,122 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
       return persisted;
     }),
     { concurrency: 2 },
+  );
+});
+
+class PendingAttachmentClaimError extends Data.TaggedError("PendingAttachmentClaimError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+const isPendingAttachmentId = (attachment: ChatAttachment) =>
+  parseThreadSegmentFromAttachmentId(attachment.id) === PENDING_ATTACHMENT_THREAD_SEGMENT;
+
+/**
+ * Move attachments the client uploaded ahead of the turn out of the shared
+ * pending area and into the thread that is about to reference them, rewriting
+ * each id to its claimed one.
+ *
+ * The pending copy is left in place: a dispatch that fails after this point
+ * calls `releaseClaimedAttachments`, and the client can retry the same upload
+ * against a different thread.
+ */
+const claimPendingAttachments = Effect.fn("ws.attachments.claimPending")(function* (input: {
+  readonly threadId: ThreadId;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+}) {
+  if (!input.attachments.some(isPendingAttachmentId)) {
+    return { attachments: input.attachments, claimedPaths: [] as ReadonlyArray<string> };
+  }
+
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const claimedPaths: Array<string> = [];
+
+  const attachments = yield* Effect.forEach(
+    input.attachments,
+    Effect.fn("ws.attachments.claimPendingAttachment")(function* (attachment) {
+      if (!isPendingAttachmentId(attachment)) return attachment;
+
+      const claim = planAttachmentClaim({
+        attachmentsDir: config.attachmentsDir,
+        threadId: input.threadId,
+        attachmentId: attachment.id,
+      });
+      if (!claim.ok) {
+        return yield* new PendingAttachmentClaimError({
+          message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
+        });
+      }
+
+      const info = yield* fileSystem.stat(claim.currentPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PendingAttachmentClaimError({
+              message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+              cause,
+            }),
+        ),
+      );
+      if (Number(info.size) !== attachment.sizeBytes) {
+        return yield* new PendingAttachmentClaimError({
+          message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
+        });
+      }
+
+      const claimed = {
+        ...attachment,
+        id: ChatAttachmentId.make(claim.finalId),
+        mimeType: attachment.mimeType.toLowerCase(),
+      };
+      // The claimed path is derived from the id alone; the type/mime decide the
+      // extension, so a mismatch here means the declared type does not describe
+      // what was uploaded.
+      if (
+        resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment: claimed }) !==
+        claim.finalPath
+      ) {
+        return yield* new PendingAttachmentClaimError({
+          message: `Attachment '${attachment.name}' cannot be sent: file type does not match the upload.`,
+        });
+      }
+
+      yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PendingAttachmentClaimError({
+              message: `Failed to claim attachment '${attachment.name}' for this thread.`,
+              cause,
+            }),
+        ),
+      );
+      claimedPaths.push(claim.finalPath);
+      return claimed;
+    }),
+    { concurrency: 1 },
+  ).pipe(Effect.tapError(() => releaseClaimedAttachments(claimedPaths)));
+
+  return { attachments, claimedPaths: claimedPaths as ReadonlyArray<string> };
+});
+
+const releaseClaimedAttachments = Effect.fn("ws.attachments.releaseClaimed")(function* (
+  claimedPaths: ReadonlyArray<string>,
+) {
+  if (claimedPaths.length === 0) return;
+  const fileSystem = yield* FileSystem.FileSystem;
+  yield* Effect.forEach(
+    claimedPaths,
+    (claimedPath) =>
+      fileSystem.remove(claimedPath, { force: true }).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Failed to remove an unclaimed attachment copy.", {
+            claimedPath,
+            cause,
+          }),
+        ),
+        Effect.orElseSucceed(() => undefined),
+      ),
+    { concurrency: 1 },
   );
 });
 
@@ -420,8 +553,37 @@ function toAuthAccessStreamEvent(
   }
 }
 
+const isClientSurface = Schema.is(ClientSurface);
+const MAX_CLIENT_APP_VERSION_LENGTH = 64;
+
+// Optional client identity announced on the /ws upgrade URL next to wsTicket.
+// Lenient by design: absent or malformed values degrade to {} so a connection
+// never fails over attribution metadata.
+function readClientConnectionOrigin(
+  request: HttpServerRequest.HttpServerRequest,
+): OrchestrationClientOrigin {
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return {};
+  }
+  const surface = url.value.searchParams.get("clientSurface");
+  const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
+  return {
+    ...(isClientSurface(surface) ? { surface } : {}),
+    ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
+      ? { appVersion }
+      : {}),
+  };
+}
+
+const clientOriginAnalyticsProps = (origin: OrchestrationClientOrigin) => ({
+  ...(origin.surface !== undefined ? { surface: origin.surface } : {}),
+  ...(origin.appVersion !== undefined ? { appVersion: origin.appVersion } : {}),
+});
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
+  clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
 ) =>
   ServerWsRpcGroup.toLayer(
@@ -432,6 +594,23 @@ const makeWsRpcLayer = (
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const threadSearchQuery = yield* ThreadSearchQuery.ThreadSearchQuery;
+      const analytics = yield* AnalyticsService.AnalyticsService;
+      const threadFeedback = yield* ThreadFeedbackService.ThreadFeedbackServiceV2;
+      // Attribution for work this connection started. V2 domain events carry no
+      // metadata bag to stamp, and the thread already records its own
+      // creationSource provenance, so origin rides the analytics events here
+      // and the auth session row rather than every persisted event.
+      const originProps = clientOriginAnalyticsProps(clientOrigin);
+      const recordClientCommandAnalytics = (command: OrchestrationV2Command) => {
+        switch (command.type) {
+          case "thread.create":
+            return analytics.record("client.thread.started", originProps);
+          case "message.dispatch":
+            return analytics.record("client.turn.requested", originProps);
+          default:
+            return Effect.void;
+        }
+      };
       const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
       const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
         (projects: ReadonlyArray<OrchestrationProjectShell>) =>
@@ -1202,28 +1381,43 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
-            startup
-              .enqueueCommand(
-                threadManagement.dispatch(
-                  ThreadManagementService.withCreationProvenance(command, {
-                    createdBy: "user",
-                    creationSource: "creationSource" in command ? command.creationSource : "web",
-                  }),
-                ),
-              )
-              .pipe(
-                Effect.map((result) => ({ sequence: result.sequence })),
-                Effect.mapError((cause) => {
-                  const detail = userFacingDispatchErrorMessage(cause);
-                  return new OrchestrationV2DispatchCommandError({
-                    commandId: command.commandId,
-                    commandType: command.type,
-                    message: detail ?? "Failed to dispatch orchestration V2 command",
-                    ...(detail === undefined ? {} : { detail }),
-                    cause,
-                  });
-                }),
-              ),
+            Effect.gen(function* () {
+              // A message may reference attachments the client streamed up
+              // before sending; those live outside any thread until now.
+              const claim =
+                command.type === "message.dispatch"
+                  ? yield* claimPendingAttachments({
+                      threadId: command.threadId,
+                      attachments: command.attachments,
+                    })
+                  : null;
+              const claimedCommand =
+                claim === null ? command : { ...command, attachments: claim.attachments };
+              return yield* startup
+                .enqueueCommand(
+                  threadManagement.dispatch(
+                    ThreadManagementService.withCreationProvenance(claimedCommand, {
+                      createdBy: "user",
+                      creationSource:
+                        "creationSource" in claimedCommand ? claimedCommand.creationSource : "web",
+                    }),
+                  ),
+                )
+                .pipe(Effect.tapError(() => releaseClaimedAttachments(claim?.claimedPaths ?? [])));
+            }).pipe(
+              Effect.tap(() => recordClientCommandAnalytics(command)),
+              Effect.map((result) => ({ sequence: result.sequence })),
+              Effect.mapError((cause) => {
+                const detail = userFacingDispatchErrorMessage(cause);
+                return new OrchestrationV2DispatchCommandError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  message: detail ?? "Failed to dispatch orchestration V2 command",
+                  ...(detail === undefined ? {} : { detail }),
+                  cause,
+                });
+              }),
+            ),
             {
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.command_id": command.commandId,
@@ -1313,53 +1507,74 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.launchThread,
-            startup
-              .enqueueCommand(
-                threadLaunch.launch({
-                  commandId: input.commandId,
-                  ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
-                  ...(input.reuseExistingThread === undefined
-                    ? {}
-                    : { reuseExistingThread: input.reuseExistingThread }),
-                  projectId: input.projectId,
-                  title: input.title,
-                  modelSelection: input.modelSelection,
-                  runtimeMode: input.runtimeMode,
-                  interactionMode: input.interactionMode,
-                  workspaceStrategy: input.workspaceStrategy,
-                  ...(input.prepareWorkspace === undefined
-                    ? {}
-                    : { prepareWorkspace: input.prepareWorkspace }),
-                  ...(input.initialMessage === undefined
-                    ? {}
-                    : {
-                        initialMessage: {
-                          ...(input.initialMessage.messageId === undefined
-                            ? {}
-                            : { messageId: input.initialMessage.messageId }),
-                          text: input.initialMessage.text,
-                          attachments: input.initialMessage.attachments,
-                        },
-                      }),
-                  createdBy: "user",
-                  creationSource: input.creationSource ?? "web",
-                }),
-              )
-              .pipe(
-                Effect.map((result) => ({
-                  ...result,
-                  projection: projectThreadProjectionForWire(result.projection),
-                })),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationV2ThreadLaunchError({
-                      commandId: input.commandId,
-                      projectId: input.projectId,
-                      message: "Failed to launch thread",
-                      cause,
-                    }),
-                ),
+            Effect.gen(function* () {
+              // launch allocates the thread id, so a pending upload can only be
+              // claimed once the caller has named one. Callers that let the
+              // server pick the id must send the attachment with the follow-up
+              // message instead.
+              const claim =
+                input.threadId === undefined || input.initialMessage === undefined
+                  ? null
+                  : yield* claimPendingAttachments({
+                      threadId: input.threadId,
+                      attachments: input.initialMessage.attachments,
+                    });
+              return yield* startup
+                .enqueueCommand(
+                  threadLaunch.launch({
+                    commandId: input.commandId,
+                    ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                    ...(input.reuseExistingThread === undefined
+                      ? {}
+                      : { reuseExistingThread: input.reuseExistingThread }),
+                    projectId: input.projectId,
+                    title: input.title,
+                    modelSelection: input.modelSelection,
+                    runtimeMode: input.runtimeMode,
+                    interactionMode: input.interactionMode,
+                    workspaceStrategy: input.workspaceStrategy,
+                    ...(input.prepareWorkspace === undefined
+                      ? {}
+                      : { prepareWorkspace: input.prepareWorkspace }),
+                    ...(input.initialMessage === undefined
+                      ? {}
+                      : {
+                          initialMessage: {
+                            ...(input.initialMessage.messageId === undefined
+                              ? {}
+                              : { messageId: input.initialMessage.messageId }),
+                            text: input.initialMessage.text,
+                            attachments: claim?.attachments ?? input.initialMessage.attachments,
+                          },
+                        }),
+                    createdBy: "user",
+                    creationSource: input.creationSource ?? "web",
+                  }),
+                )
+                .pipe(Effect.tapError(() => releaseClaimedAttachments(claim?.claimedPaths ?? [])));
+            }).pipe(
+              Effect.tap(() =>
+                input.initialMessage === undefined
+                  ? analytics.record("client.thread.started", originProps)
+                  : Effect.andThen(
+                      analytics.record("client.thread.started", originProps),
+                      analytics.record("client.turn.requested", originProps),
+                    ),
               ),
+              Effect.map((result) => ({
+                ...result,
+                projection: projectThreadProjectionForWire(result.projection),
+              })),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2ThreadLaunchError({
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    message: "Failed to launch thread",
+                    cause,
+                  }),
+              ),
+            ),
             {
               "rpc.aggregate": "orchestration",
               "orchestration_v2.command_id": input.commandId,
@@ -1557,6 +1772,25 @@ const makeWsRpcLayer = (
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.providerUploadFeedback]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerUploadFeedback,
+            threadFeedback
+              .upload({
+                threadId: input.threadId,
+                ...(input.reason === undefined ? {} : { reason: input.reason }),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderUploadFeedbackError({
+                      threadId: input.threadId,
+                      cause,
+                    }),
+                ),
+              ),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
@@ -1972,6 +2206,16 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.attachmentsCreateUploadUrl]: (input) =>
+          observeRpcEffect(WS_METHODS.attachmentsCreateUploadUrl, issueAttachmentUploadUrl(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.attachmentsDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.attachmentsDelete,
+            deletePendingAttachment(input.attachmentId),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.assetsCreateUrl]: (input) =>
@@ -2528,6 +2772,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const request = yield* HttpServerRequest.HttpServerRequest;
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
+        const analytics = yield* AnalyticsService.AnalyticsService;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
@@ -2536,11 +2781,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
+        const clientOrigin = readClientConnectionOrigin(request);
+        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+        yield* analytics.record("client.connected", clientOriginAnalyticsProps(clientOrigin));
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(ServerWsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
