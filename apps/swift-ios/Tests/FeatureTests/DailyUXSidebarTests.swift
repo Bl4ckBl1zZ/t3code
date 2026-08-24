@@ -169,7 +169,7 @@ struct DailyUXSidebarTests {
     }
 
     @Test
-    func pinPromotesSettledThreadsButSnoozeStillWins() {
+    func settlementAndSnoozeBothOutrankAPin() {
         var pinnedSettled = thread(
             id: "pinned-settled",
             created: -100,
@@ -179,6 +179,13 @@ struct DailyUXSidebarTests {
         )
         pinnedSettled.pinnedAt = now.addingTimeInterval(-20)
 
+        var pinnedActive = thread(
+            id: "pinned-active",
+            created: -80,
+            updated: -30
+        )
+        pinnedActive.pinnedAt = now.addingTimeInterval(-15)
+
         var pinnedSnoozed = thread(
             id: "pinned-snoozed",
             created: -50,
@@ -187,12 +194,15 @@ struct DailyUXSidebarTests {
         pinnedSnoozed.pinnedAt = now.addingTimeInterval(-10)
         pinnedSnoozed.snoozedUntil = now.addingTimeInterval(3_600)
 
-        let index = makeIndex([pinnedSettled, pinnedSnoozed])
+        let index = makeIndex([pinnedSettled, pinnedActive, pinnedSnoozed])
 
-        #expect(index.pinned.map(\.id) == ["pinned-settled"])
+        // The pin survives on the row (the glyph and the unpin action read
+        // pinnedAt directly), but it no longer holds finished work on top.
+        #expect(index.settled.map(\.id) == ["pinned-settled"])
+        #expect(index.settled.first?.pinnedAt != nil)
+        #expect(index.pinned.map(\.id) == ["pinned-active"])
         #expect(index.snoozed.map(\.id) == ["pinned-snoozed"])
         #expect(index.active.isEmpty)
-        #expect(index.settled.isEmpty)
         #expect(DailyUXSidebarRefresh.nextBoundary(for: [pinnedSettled], after: now) == nil)
     }
 
