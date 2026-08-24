@@ -1718,6 +1718,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return result.entries.map(Self.mapSearchEntry)
     }
 
+    func uploadThreadFeedback(threadID: String, reason: String?) async throws -> String {
+        let route = try threadRoute(for: threadID)
+        return try await route.client.uploadProviderFeedback(
+            threadID: route.wireID,
+            reason: reason
+        )
+    }
+
     private static func mapSearchEntry(_ entry: ProjectEntry) -> FeatureFileEntry {
         let name = URL(fileURLWithPath: entry.path).lastPathComponent
         return FeatureFileEntry(

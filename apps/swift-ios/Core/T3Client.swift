@@ -291,6 +291,31 @@ public actor T3Client {
         return persisted
     }
 
+    /// Hands the thread to the provider as feedback and returns the identifier
+    /// it filed the report under, which the reader is shown so they can quote
+    /// it. Needs a live provider session: the upload is the running agent's own
+    /// report, not something the server can rebuild from the transcript.
+    public func uploadProviderFeedback(
+        threadID: String,
+        reason: String? = nil
+    ) async throws -> String {
+        var payload: [String: JSONValue] = ["threadId": .string(threadID)]
+        if let reason, !reason.isEmpty {
+            payload["reason"] = .string(reason)
+        }
+        let result = try await rpc.request(
+            RPCMethod.providerUploadFeedback.rawValue,
+            payload: .object(payload),
+            as: JSONValue.self
+        )
+        guard case let .string(feedbackID)? = result["feedbackId"] else {
+            throw RPCError.protocolViolation(
+                "provider.uploadFeedback did not return a feedback id."
+            )
+        }
+        return feedbackID
+    }
+
     @discardableResult
     public func createThread(
         threadID: String = UUID().uuidString,
@@ -1711,6 +1736,7 @@ public enum RPCMethod: String, Sendable {
     case assetsCreateURL = "assets.createUrl"
     case serverGetUsageSummary = "server.getUsageSummary"
     case assetsPersistChatAttachments = "assets.persistChatAttachments"
+    case providerUploadFeedback = "provider.uploadFeedback"
     case subscribeServerConfig
     case serverDiscoverSourceControl = "server.discoverSourceControl"
     case subscribeVCSStatus = "subscribeVcsStatus"

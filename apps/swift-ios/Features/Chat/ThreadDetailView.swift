@@ -30,6 +30,10 @@ public struct ThreadDetailView: View {
     @State private var isSending = false
     @State private var isLoading = true
     @State private var sendFailed = false
+    /// The provider's answer to `/feedback`: the id it filed the report under,
+    /// which is the only handle the reader has for quoting it later.
+    @State private var feedbackReceipt: String?
+    @State private var feedbackFailure: String?
     @State private var didRestoreDraft = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var toolSurface: FeatureThreadToolSurface?
@@ -210,6 +214,32 @@ public struct ThreadDetailView: View {
             Button("OK") {}
         } message: {
             Text("Your draft is still here. Check your connection and try again.")
+        }
+        .alert(
+            "Feedback sent",
+            isPresented: Binding(
+                get: { feedbackReceipt != nil },
+                set: { if !$0 { feedbackReceipt = nil } }
+            )
+        ) {
+            Button("Copy ID") {
+                UIPasteboard.general.string = feedbackReceipt
+                feedbackReceipt = nil
+            }
+            Button("Done", role: .cancel) { feedbackReceipt = nil }
+        } message: {
+            Text(feedbackReceipt.map { "Thread ID: \($0)" } ?? "")
+        }
+        .alert(
+            "Feedback not sent",
+            isPresented: Binding(
+                get: { feedbackFailure != nil },
+                set: { if !$0 { feedbackFailure = nil } }
+            )
+        ) {
+            Button("OK") { feedbackFailure = nil }
+        } message: {
+            Text(feedbackFailure ?? "")
         }
         .simultaneousGesture(edgeBackGesture)
     }
@@ -946,11 +976,45 @@ public struct ThreadDetailView: View {
         return augmented
     }
 
+    /// Uploads the thread as provider feedback, restoring the composer text if
+    /// the provider refuses — the reader typed a report and should not lose it.
+    private func submitProviderFeedback(reason: String?, restoring message: String) {
+        draftSaveTask?.cancel()
+        isSending = true
+        draft = ""
+        composerFocused = false
+        Task {
+            do {
+                feedbackReceipt = try await model.client.uploadThreadFeedback(
+                    threadID: thread.id,
+                    reason: reason
+                )
+                try? await draftStore.removeDraft(for: draftKey)
+            } catch {
+                feedbackFailure = error.localizedDescription
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    draft = message
+                }
+                composerFocused = true
+            }
+            isSending = false
+        }
+    }
+
     private func send() {
         let message = draft
         let pendingAttachments = attachments
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingAttachments.isEmpty else {
+            return
+        }
+        // `/feedback` goes to the provider, not the agent. Only when the thread
+        // actually offers it, and only on its own: attachments make it a real
+        // message the reader meant to send.
+        if pendingAttachments.isEmpty,
+           ProviderFeedbackCommand.isSupported(by: composerPowerFeatures.slashCommands),
+           let command = ProviderFeedbackCommand.parse(message) {
+            submitProviderFeedback(reason: command.reason, restoring: message)
             return
         }
         draftSaveTask?.cancel()
