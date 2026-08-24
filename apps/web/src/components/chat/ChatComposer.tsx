@@ -39,12 +39,13 @@ import {
 import { createPortal } from "react-dom";
 import {
   clampCollapsedComposerCursor,
+  type ComposerSubmissionIntent,
   type ComposerTrigger,
   collapseExpandedComposerCursor,
+  composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
-  shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
@@ -71,6 +72,16 @@ import {
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
 import { compressImageForStash, compressImageToByteLimit } from "../../lib/imageCompression";
+import {
+  releaseAttachmentUpload,
+  retryAttachmentUpload,
+  startAttachmentUpload,
+  useAttachmentUploadStore,
+} from "../../lib/attachmentUploadQueue";
+import {
+  attachmentUploadBlockReason,
+  formatAttachmentUploadProgress,
+} from "../../lib/attachmentUploadState";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
 import { resolveShortcutCommand } from "../../keybindings";
@@ -243,10 +254,18 @@ import type {
   PendingApproval,
   PendingUserInput,
 } from "../../session-logic";
-import { resolveComposerDispatchMode, type ComposerDispatchMode } from "./composerDispatch";
+import {
+  resolveComposerDispatchMode,
+  type ComposerDispatchMode,
+  type ComposerSubmitOptions,
+} from "./composerDispatch";
 import { resolveRuntimeModePicker } from "./composerRuntimeModes";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
-import { formatProviderSkillDisplayName } from "@t3tools/client-runtime/providerSkills";
+import {
+  formatProviderSkillDisplayName,
+  getProviderSlashCommandsForSlashMenu,
+  getProviderSkillsForSlashMenu,
+} from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -541,6 +560,8 @@ export interface ChatComposerHandle {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  attachmentUploadsCapabilityKnown: boolean;
+  supportsAttachmentUploads: boolean;
   routeKind: "server" | "draft";
   draftId: DraftId | null;
 
@@ -635,7 +656,13 @@ export interface ChatComposerProps {
   scheduleStickToBottom: () => void;
 
   // Callbacks
-  onSend: (e?: { preventDefault: () => void }, dispatchMode?: ComposerDispatchMode) => void;
+  /**
+   * Why sending is unavailable right now, when the reason lives outside the
+   * composer (a feedback upload in flight, for example). Null means the
+   * composer's own preflight decides.
+   */
+  sendDisabledReason?: string | null;
+  onSend: (e?: { preventDefault: () => void }, options?: ComposerSubmitOptions) => void;
   onStartFreshChat: () => void;
   onClearChat: () => void;
   onInterrupt: () => void;
@@ -676,6 +703,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     composerDraftTarget,
     environmentId,
+    attachmentUploadsCapabilityKnown,
+    supportsAttachmentUploads,
     routeKind,
     draftId,
     activeThreadId,
@@ -690,6 +719,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     phase,
     isConnecting,
     isSendBusy,
+    sendDisabledReason: externalSendDisabledReason,
     isPreparingWorktree,
     environmentUnavailable,
     activePendingApproval,
@@ -761,6 +791,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
+  const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
+  const attachmentBlockReason = supportsAttachmentUploads
+    ? attachmentUploadBlockReason({
+        imageIds: composerImages.map((image) => image.id),
+        uploadsByImageId,
+        environmentId,
+      })
+    : null;
+  const sendDisabledReason =
+    externalSendDisabledReason ?? (activePendingProgress ? null : attachmentBlockReason);
+  const isSendDisabled = sendDisabledReason !== null;
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
@@ -794,6 +835,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (store) => store.syncPersistedAttachments,
   );
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
+
+  useEffect(() => {
+    if (!attachmentUploadsCapabilityKnown) {
+      return;
+    }
+    if (!supportsAttachmentUploads) {
+      for (const image of composerImages) {
+        releaseAttachmentUpload(image.id);
+      }
+      return;
+    }
+    // Image-only: the signed-upload contract accepts image mime types alone,
+    // so the composer's file/pdf/video attachments still ride the send path's
+    // inline encoding.
+    for (const image of composerImages) {
+      if (image.type !== "image") continue;
+      startAttachmentUpload({ environmentId, image });
+    }
+  }, [attachmentUploadsCapabilityKnown, composerImages, environmentId, supportsAttachmentUploads]);
 
   // ------------------------------------------------------------------
   // Model state
@@ -1182,30 +1242,33 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: "Switch this thread back to normal build mode",
         },
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const providerSlashCommandItems = (selectedProviderStatus?.slashCommands ?? []).map(
-        (command) => ({
-          id: `provider-slash-command:${selectedProvider}:${command.name}`,
-          type: "provider-slash-command" as const,
-          provider: selectedProvider,
-          command,
-          label: `/${command.name}`,
-          description: command.description ?? command.input?.hint ?? "Run provider command",
-        }),
+      const slashMenuSkills = getProviderSkillsForSlashMenu(
+        selectedProviderStatus?.skills ?? [],
+        settings.showSkillsInSlashMenu,
       );
+      const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
+        selectedProviderStatus?.slashCommands ?? [],
+        slashMenuSkills,
+      ).map((command) => ({
+        id: `provider-slash-command:${selectedProvider}:${command.name}`,
+        type: "provider-slash-command" as const,
+        provider: selectedProvider,
+        command,
+        label: `/${command.name}`,
+        description: command.description ?? command.input?.hint ?? "Run provider command",
+      }));
       const query = composerTrigger.query.trim().toLowerCase();
-      const skillItems = (selectedProviderStatus?.skills ?? [])
-        .filter((skill) => skill.enabled)
-        .map((skill) => ({
-          id: `skill:${selectedProvider}:${skill.name}`,
-          type: "skill" as const,
-          provider: selectedProvider,
-          skill,
-          label: `skill:${skill.name}`,
-          description:
-            skill.shortDescription ??
-            skill.description ??
-            (skill.scope ? `${skill.scope} skill` : ""),
-        }));
+      const skillItems = slashMenuSkills.map((skill) => ({
+        id: `skill:${selectedProvider}:${skill.name}`,
+        type: "skill" as const,
+        provider: selectedProvider,
+        skill,
+        label: `/skill:${skill.name}`,
+        description:
+          skill.shortDescription ??
+          skill.description ??
+          (skill.scope ? `${skill.scope} skill` : ""),
+      }));
       const slashCommandItems = [
         ...builtInSlashCommandItems,
         ...providerSlashCommandItems,
@@ -1229,7 +1292,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     }
     return [];
-  }, [composerTrigger, selectedProvider, selectedProviderStatus, workspaceEntries.entries]);
+  }, [
+    composerTrigger,
+    selectedProvider,
+    selectedProviderStatus,
+    settings.showSkillsInSlashMenu,
+    workspaceEntries.entries,
+  ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
@@ -1542,6 +1611,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const removeComposerImageFromDraft = useCallback(
     (imageId: string) => {
+      releaseAttachmentUpload(imageId);
       removeComposerDraftImage(composerDraftTarget, imageId);
     },
     [composerDraftTarget, removeComposerDraftImage],
@@ -2114,8 +2184,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const submitComposer = useCallback(
-    (event?: { preventDefault: () => void }, dispatchMode?: ComposerDispatchMode) => {
-      if (noProviderAvailable) {
+    (event?: { preventDefault: () => void }, options?: ComposerSubmitOptions) => {
+      if (noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return;
       }
@@ -2140,10 +2210,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           // ChatView reports its final composed-input preflight through the
           // composer handle before its first asynchronous send step.
           providerInputRejectedRef.current = false;
-          onSend(
-            sendEvent,
-            dispatchMode ?? resolveComposerDispatchMode({ phase, steerModifier: false }),
-          );
+          onSend(sendEvent, {
+            dispatchMode:
+              options?.dispatchMode ?? resolveComposerDispatchMode({ phase, steerModifier: false }),
+            ...(options?.submissionIntent === undefined
+              ? {}
+              : { submissionIntent: options.submissionIntent }),
+          });
           return !providerInputRejectedRef.current;
         },
       });
@@ -2216,17 +2289,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return true;
       }
     }
-    if (
-      key === "Enter" &&
-      shouldSubmitComposerOnEnter({ isMobileViewport, shiftKey: event.shiftKey })
-    ) {
-      submitComposer(
-        undefined,
-        resolveComposerDispatchMode({
+    // Mod+Enter means two things depending on where the composer is: on a
+    // draft it starts the thread in the background, and on a live thread it
+    // steers the running turn. A draft has no run to steer, so the two never
+    // apply at once.
+    const submissionIntent =
+      key === "Enter"
+        ? composerSubmissionIntentForEnter({
+            isMobileViewport,
+            shiftKey: event.shiftKey,
+            modifierKey: event.metaKey || event.ctrlKey,
+            isDraftThread: routeKind === "draft",
+          })
+        : null;
+    if (submissionIntent) {
+      submitComposer(undefined, {
+        dispatchMode: resolveComposerDispatchMode({
           phase,
           steerModifier: event.metaKey || event.ctrlKey,
         }),
-      );
+        submissionIntent,
+      });
       return true;
     }
     return false;
@@ -2465,6 +2548,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // destroying them here would be unrecoverable.
       promptRef.current = "";
       clearComposerDraftPromptAndImages(stashTarget);
+      for (const image of images) {
+        releaseAttachmentUpload(image.id);
+      }
       setComposerCursor(0);
       setComposerTrigger(null);
       pulseStashBadge();

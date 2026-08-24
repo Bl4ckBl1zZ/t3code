@@ -8,7 +8,6 @@ function renderRow(props?: Partial<Parameters<typeof PreviewChromeRow>[0]>): str
     <PreviewChromeRow
       url="http://localhost:3000"
       loading={false}
-      loadProgress={0}
       canGoBack={false}
       canGoForward={false}
       refreshDisabled={false}

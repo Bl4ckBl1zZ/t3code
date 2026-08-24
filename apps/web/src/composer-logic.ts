@@ -3,6 +3,7 @@ import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 export type ComposerTriggerKind = "path" | "slash-command" | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
+export type ComposerSubmissionIntent = "foreground" | "background";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -12,15 +13,22 @@ export interface ComposerTrigger {
 }
 
 /**
- * Whether Enter submits. Mobile keeps Enter as a newline (its send button is the
- * only submit path) and Shift+Enter is the way to type one on desktop. What the
- * submit then *does* — send, queue, or steer — is `resolveComposerDispatchMode`.
+ * Whether Enter submits, and where the result lands. Mobile keeps Enter as a
+ * newline (its send button is the only submit path) and Shift+Enter is the way
+ * to type one on desktop; Mod+Enter starts a new thread in the background. What
+ * the submit then *does* — send, queue, or steer — is
+ * `resolveComposerDispatchMode`.
  */
-export function shouldSubmitComposerOnEnter(input: {
+export function composerSubmissionIntentForEnter(input: {
   isMobileViewport: boolean;
   shiftKey: boolean;
-}): boolean {
-  return !input.isMobileViewport && !input.shiftKey;
+  modifierKey: boolean;
+  isDraftThread: boolean;
+}): ComposerSubmissionIntent | null {
+  if (input.isMobileViewport || input.shiftKey) {
+    return null;
+  }
+  return input.modifierKey && input.isDraftThread ? "background" : "foreground";
 }
 
 const isInlineTokenSegment = (

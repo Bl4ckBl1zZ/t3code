@@ -610,7 +610,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("folds settled-turn commentary and work behind a Worked-for row", () => {
+  it("keeps the first and terminal assistant messages visible around settled work", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -627,11 +627,11 @@ describe("deriveMessagesTimelineRows", () => {
         },
       },
       {
-        id: "assistant-thought-entry",
+        id: "assistant-first-entry",
         kind: "message" as const,
         createdAt: "2026-01-01T00:00:05Z",
         message: {
-          id: "assistant-thought" as never,
+          id: "assistant-first" as never,
           role: "assistant" as const,
           text: "Looking around first.",
           runId: "turn-1" as never,
@@ -696,6 +696,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(foldRow?.label).toBe("Worked for 22s");
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
+      "assistant-first-entry",
       "turn-fold:turn-1",
       "thread-created-entry",
       "assistant-final-entry",
@@ -712,8 +713,8 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(expandedRows.map((row) => row.id)).toEqual([
       "user-entry",
+      "assistant-first-entry",
       "turn-fold:turn-1",
-      "assistant-thought-entry",
       "work-entry-1",
       "thread-created-entry",
       "assistant-final-entry",
@@ -801,6 +802,18 @@ describe("deriveMessagesTimelineRows", () => {
         },
       },
       {
+        id: "work-entry-1",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "work-1",
+          createdAt: "2026-01-01T00:00:02Z",
+          runId: "turn-1" as never,
+          label: "Ran command",
+          tone: "tool" as const,
+        },
+      },
+      {
         id: "subagent-card-entry",
         kind: "event" as const,
         createdAt: "2026-01-01T00:00:03Z",
@@ -853,6 +866,7 @@ describe("deriveMessagesTimelineRows", () => {
       "user-entry",
       "turn-fold:turn-1",
       "subagent-card-entry",
+      "assistant-commentary-entry",
       "assistant-final-entry",
     ]);
   });
@@ -1394,6 +1408,73 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
     const finalRow = rows.find((row) => row.id === "assistant-final-entry");
     expect(finalRow?.kind === "message" && finalRow.showAssistantMeta).toBe(true);
+  });
+
+  it("folds assistant messages between the first and terminal messages", () => {
+    // A short follow-up must not hide a substantive opening response: both ends
+    // of a settled turn stay visible and only the middle folds.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-first-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:01Z",
+          message: {
+            id: "assistant-first" as never,
+            role: "assistant",
+            text: "The main result is ready.",
+            runId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:01Z",
+            updatedAt: "2026-01-01T00:00:02Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-middle-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:03Z",
+          message: {
+            id: "assistant-middle" as never,
+            role: "assistant",
+            text: "I am checking one more detail.",
+            runId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:03Z",
+            updatedAt: "2026-01-01T00:00:04Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "Verification finished.",
+            runId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:06Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestRun: {
+        runId: "turn-1" as never,
+        status: "completed",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:06Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "assistant-first-entry",
+      "turn-fold:turn-1",
+      "assistant-final-entry",
+    ]);
   });
 
   it("does not fold the active in-progress turn", () => {

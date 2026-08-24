@@ -358,6 +358,19 @@ export class ProviderAdapterProtocolError extends Schema.TaggedErrorClass<Provid
   }
 }
 
+export class ProviderAdapterUploadFeedbackError extends Schema.TaggedErrorClass<ProviderAdapterUploadFeedbackError>()(
+  "ProviderAdapterUploadFeedbackError",
+  {
+    driver: ProviderDriverKind,
+    providerThreadId: ProviderThreadId,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to upload ${this.driver} thread ${this.providerThreadId} as feedback.`;
+  }
+}
+
 export const ProviderAdapterV2Error = Schema.Union([
   ProviderAdapterCapabilitiesError,
   ProviderAdapterOpenSessionError,
@@ -367,6 +380,7 @@ export const ProviderAdapterV2Error = Schema.Union([
   ProviderAdapterReadThreadSnapshotError,
   ProviderAdapterRollbackThreadError,
   ProviderAdapterForkThreadError,
+  ProviderAdapterUploadFeedbackError,
   ProviderAdapterTurnStartError,
   ProviderAdapterSteerRunUnsupportedError,
   ProviderAdapterSteerRunError,
@@ -445,6 +459,15 @@ export interface ProviderAdapterV2ThreadSnapshot {
 
 export interface ProviderAdapterV2ReadThreadSnapshotInput {
   readonly providerThread: OrchestrationV2ProviderThread;
+}
+
+export interface ProviderAdapterV2UploadFeedbackInput {
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly reason?: string;
+}
+
+export interface ProviderAdapterV2UploadFeedbackResult {
+  readonly feedbackId: string;
 }
 
 export type ProviderAdapterV2RollbackTarget =
@@ -529,6 +552,14 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly forkThread: (
     input: ProviderAdapterV2ForkThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
+  /**
+   * Hand this thread to the provider as feedback and return the identifier it
+   * files it under. Absent on providers with no feedback channel; a caller must
+   * treat that as unsupported rather than as a failure.
+   */
+  readonly uploadFeedback?: (
+    input: ProviderAdapterV2UploadFeedbackInput,
+  ) => Effect.Effect<ProviderAdapterV2UploadFeedbackResult, ProviderAdapterV2Error>;
 }
 
 export interface ProviderAdapterV2Shape {

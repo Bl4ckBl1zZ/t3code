@@ -396,16 +396,13 @@ describe("MessagesTimeline", () => {
     expect(resolveTimelineMinimapInteractiveWidth(40, true)).toBe("22rem");
   });
 
-  it("anchors a sent attachment message using its measured height", () => {
+  it("anchors the first user message using its measured height", () => {
     const onAnchorReady = vi.fn();
     const onAnchorSizeChanged = vi.fn();
-    const firstEntry = buildUserTimelineEntry("First prompt.");
-    const secondEntry = {
-      ...buildUserTimelineEntry("Newest prompt."),
-      id: "entry-2",
+    const firstEntry = {
+      ...buildUserTimelineEntry("First prompt."),
       message: {
-        ...buildUserTimelineEntry("Newest prompt.").message,
-        id: MessageId.make("message-2"),
+        ...buildUserTimelineEntry("First prompt.").message,
         attachments: [
           {
             type: "image" as const,
@@ -421,15 +418,15 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        anchorMessageId={secondEntry.message.id}
+        anchorMessageId={firstEntry.message.id}
         onAnchorReady={onAnchorReady}
         onAnchorSizeChanged={onAnchorSizeChanged}
         contentInsetEndAdjustment={144}
-        timelineEntries={[firstEntry, secondEntry]}
+        timelineEntries={[firstEntry]}
       />,
     );
 
-    expect(markup).toContain('data-anchor-index="1"');
+    expect(markup).toContain('data-anchor-index="0"');
     expect(markup).toContain('data-anchor-offset="16"');
     expect(markup).toContain('data-anchor-on-ready="true"');
     expect(markup).not.toContain("data-anchor-max-size=");
@@ -438,10 +435,36 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
     expect(markup).toContain('data-maintain-visible-content-position="object"');
     expect(markup).toContain('data-maintain-visible-content-position-data="true"');
-    expect(markup).toContain('data-maintain-visible-content-position-size="false"');
     expect(onAnchorReady).toHaveBeenCalledOnce();
-    expect(onAnchorReady).toHaveBeenCalledWith(secondEntry.message.id, 1);
-    expect(onAnchorSizeChanged).toHaveBeenCalledWith(secondEntry.message.id, 240);
+    expect(onAnchorReady).toHaveBeenCalledWith(firstEntry.message.id, 0);
+    expect(onAnchorSizeChanged).toHaveBeenCalledWith(firstEntry.message.id, 240);
+  });
+
+  it("does not reserve end space for a follow-up user message", () => {
+    const onAnchorReady = vi.fn();
+    const firstEntry = buildUserTimelineEntry("First prompt.");
+    const secondEntry = {
+      ...buildUserTimelineEntry("Newest prompt."),
+      id: "entry-2",
+      message: {
+        ...buildUserTimelineEntry("Newest prompt.").message,
+        id: MessageId.make("message-2"),
+      },
+    };
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={secondEntry.message.id}
+        onAnchorReady={onAnchorReady}
+        timelineEntries={[firstEntry, secondEntry]}
+      />,
+    );
+
+    expect(markup).not.toContain("data-anchor-index=");
+    // The fork never hands LegendList maintainScrollAtEnd — it races post-mount
+    // measurement — so following the end is the timeline's own job here.
+    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+    expect(onAnchorReady).not.toHaveBeenCalled();
   });
 
   it("renders collapse controls for long user messages", () => {
