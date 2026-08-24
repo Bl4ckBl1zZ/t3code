@@ -24,7 +24,7 @@ struct FeatureComposerCommandPopover: View {
                             Button {
                                 onSelect(item)
                             } label: {
-                                FeatureComposerCommandRow(item: item)
+                                FeatureComposerCommandRow(item: item, triggerKind: triggerKind)
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("composer-suggestion-\(item.id)")
@@ -87,6 +87,17 @@ struct FeatureComposerCommandPopover: View {
 
 private struct FeatureComposerCommandRow: View {
     let item: FeatureComposerMenuItem
+    let triggerKind: FeatureComposerTriggerKind
+
+    /// Under `/` a skill is one command among the provider's own, so it reads
+    /// with the same leading slash. Under `$` the menu is nothing but skills
+    /// and the sigil is already on screen.
+    private var label: String {
+        guard triggerKind == .slashCommand, case let .skill(skill) = item else {
+            return item.label
+        }
+        return "/\(skill.name)"
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -95,7 +106,7 @@ private struct FeatureComposerCommandRow: View {
                 .foregroundStyle(T3Colors.textTertiary)
                 .frame(width: 17)
 
-            Text(item.label)
+            Text(label)
                 .font(T3Typography.control)
                 .foregroundStyle(T3Colors.textPrimary)
                 .lineLimit(1)

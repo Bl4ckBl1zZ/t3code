@@ -83,6 +83,51 @@ struct FeatureComposerPowerTests {
     }
 
     @Test
+    func slashMenuListsSkillsBehindTheSettingAndNeverTwice() throws {
+        let trigger = try #require(FeatureComposerTriggerParser.detect(in: "/"))
+        let skills = [
+            FeatureProviderSkill(name: "code-review", shortDescription: "Review the diff"),
+            FeatureProviderSkill(name: "retired", shortDescription: "Off", isEnabled: false),
+        ]
+        let slashCommands = [
+            FeatureProviderSlashCommand(name: "compact", description: "Compact"),
+            // Same name as an enabled skill: the provider is offering one thing
+            // through two doors, and only the skill row says where it came from.
+            FeatureProviderSlashCommand(name: "code-review", description: "Review changes"),
+        ]
+
+        let shown = FeatureComposerMenuBuilder.items(
+            trigger: trigger,
+            providers: [],
+            currentSelection: nil,
+            threadSelection: nil,
+            powerFeatures: FeatureComposerPowerFeatures(
+                slashCommands: slashCommands,
+                skills: skills,
+                showSkillsInSlashMenu: true
+            ),
+            pathEntries: []
+        )
+        #expect(shown.map(\.id) == ["command:model", "command:compact", "skill:code-review"])
+
+        let hidden = FeatureComposerMenuBuilder.items(
+            trigger: trigger,
+            providers: [],
+            currentSelection: nil,
+            threadSelection: nil,
+            powerFeatures: FeatureComposerPowerFeatures(
+                slashCommands: slashCommands,
+                skills: skills,
+                showSkillsInSlashMenu: false
+            ),
+            pathEntries: []
+        )
+        // With skills out of the slash menu the provider command comes back:
+        // it is the only way left to reach that behaviour from `/`.
+        #expect(hidden.map(\.id) == ["command:model", "command:code-review", "command:compact"])
+    }
+
+    @Test
     func modelAndSkillMenusFilterTheirCatalogs() throws {
         let provider = FeatureProvider(
             id: "claude",

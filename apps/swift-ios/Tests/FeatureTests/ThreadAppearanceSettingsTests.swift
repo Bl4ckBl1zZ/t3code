@@ -11,6 +11,12 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
         XCTAssertFalse(FeatureSettings().alwaysExpandActivity)
     }
 
+    /// Matches the server's client-settings default, so a reader who never
+    /// opens Settings sees the same slash menu the web client shows.
+    func testSkillsInTheSlashMenuAreOnByDefault() {
+        XCTAssertTrue(FeatureSettings().showSkillsInSlashMenu)
+    }
+
     /// Settings written by a build that never knew the key must still decode,
     /// landing on the default rather than throwing the whole blob away.
     func testSettingsWrittenBeforeTheKeyExistedStillDecode() throws {
@@ -26,6 +32,7 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
         )
         let settings = try JSONDecoder().decode(FeatureSettings.self, from: legacy)
         XCTAssertFalse(settings.alwaysExpandActivity)
+        XCTAssertTrue(settings.showSkillsInSlashMenu)
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertFalse(settings.hapticsEnabled)
     }
@@ -49,12 +56,14 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
     func testThePreferenceSurvivesAnEncodeDecodeRoundTrip() throws {
         var settings = FeatureSettings()
         settings.alwaysExpandActivity = true
+        settings.showSkillsInSlashMenu = false
         settings.appearance = .light
 
         let data = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(FeatureSettings.self, from: data)
         XCTAssertEqual(decoded, settings)
         XCTAssertTrue(decoded.alwaysExpandActivity)
+        XCTAssertFalse(decoded.showSkillsInSlashMenu)
     }
 
     /// The settings sheet enables Save by comparing against the saved snapshot,
@@ -64,5 +73,9 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
         var changed = FeatureSettings()
         changed.alwaysExpandActivity = true
         XCTAssertNotEqual(changed, FeatureSettings())
+
+        var slashMenu = FeatureSettings()
+        slashMenu.showSkillsInSlashMenu = false
+        XCTAssertNotEqual(slashMenu, FeatureSettings())
     }
 }

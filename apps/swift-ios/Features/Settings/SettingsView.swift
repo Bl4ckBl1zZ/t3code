@@ -44,7 +44,8 @@ public struct SettingsView: View {
                             darkThemeID: $settings.darkThemeID
                         )
                         ThreadAppearanceSection(
-                            alwaysExpandActivity: $settings.alwaysExpandActivity
+                            alwaysExpandActivity: $settings.alwaysExpandActivity,
+                            showSkillsInSlashMenu: $settings.showSkillsInSlashMenu
                         )
                         preferencesSection
                         configurationSection
