@@ -453,12 +453,14 @@ public struct NewThreadView: View {
         guard let project = selectedProject else {
             return FeatureComposerPowerFeatures(
                 slashCommands: provider?.slashCommands ?? [],
-                skills: provider?.skills ?? []
+                skills: provider?.skills ?? [],
+                showSkillsInSlashMenu: model.snapshot.settings.showSkillsInSlashMenu
             )
         }
         return FeatureComposerPowerFeatures(
             slashCommands: provider?.slashCommands ?? [],
             skills: provider?.skills ?? [],
+            showSkillsInSlashMenu: model.snapshot.settings.showSkillsInSlashMenu,
             pathSearchScopeID: project.id,
             searchPaths: { query in
                 try await model.client.searchProjectFiles(
