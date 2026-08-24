@@ -8,6 +8,9 @@ struct FeatureComposerPowerFeatures {
 
     var slashCommands: [FeatureProviderSlashCommand]
     var skills: [FeatureProviderSkill]
+    /// Whether the `/` menu lists skills alongside the provider's own commands.
+    /// `$` always lists them; this is the reader's answer to "and in `/` too?".
+    var showSkillsInSlashMenu: Bool
     var pathSearchScopeID: String
     var searchPaths: PathSearch?
     /// Overrides the app-wide Voice Input capability. Left nil in production —
@@ -18,12 +21,14 @@ struct FeatureComposerPowerFeatures {
     init(
         slashCommands: [FeatureProviderSlashCommand] = [],
         skills: [FeatureProviderSkill] = [],
+        showSkillsInSlashMenu: Bool = true,
         pathSearchScopeID: String = "",
         searchPaths: PathSearch? = nil,
         voice: (any FeatureVoiceTranscribing)? = nil
     ) {
         self.slashCommands = slashCommands
         self.skills = skills
+        self.showSkillsInSlashMenu = showSkillsInSlashMenu
         self.pathSearchScopeID = pathSearchScopeID
         self.searchPaths = searchPaths
         self.voice = voice
@@ -280,11 +285,20 @@ enum FeatureComposerMenuBuilder {
             if query.isEmpty || "model".contains(query) {
                 items.append(.modelCommand)
             }
+            let menuSkills = powerFeatures.showSkillsInSlashMenu
+                ? matchingSkills(powerFeatures.skills, query: trigger.query)
+                : []
+            // A provider that advertises a command *and* a skill under one name
+            // is offering the same thing twice; the skill row is the one that
+            // says where it came from, so it wins.
+            let skillNames = Set(menuSkills.map { $0.name.lowercased() })
             let commands = powerFeatures.slashCommands
                 .filter { !["model", "plan", "default"].contains($0.name.lowercased()) }
+                .filter { !skillNames.contains($0.name.lowercased()) }
                 .filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             items.append(contentsOf: commands.prefix(19).map(FeatureComposerMenuItem.providerCommand))
+            items.append(contentsOf: menuSkills.prefix(20).map(FeatureComposerMenuItem.skill))
             return items
 
         case .model:
@@ -327,19 +341,7 @@ enum FeatureComposerMenuBuilder {
                 .map(\.item)
 
         case .skill:
-            let query = trigger.query.trimmingCharacters(in: .whitespacesAndNewlines)
-            return powerFeatures.skills
-                .filter(\.isEnabled)
-                .filter { skill in
-                    guard !query.isEmpty else { return true }
-                    return [skill.name, skill.displayName, skill.shortDescription, skill.description]
-                        .compactMap { $0 }
-                        .contains { $0.localizedCaseInsensitiveContains(query) }
-                }
-                .sorted {
-                    ($0.displayName ?? $0.name).localizedStandardCompare($1.displayName ?? $1.name)
-                        == .orderedAscending
-                }
+            return matchingSkills(powerFeatures.skills, query: trigger.query)
                 .prefix(20)
                 .map(FeatureComposerMenuItem.skill)
 
@@ -349,6 +351,26 @@ enum FeatureComposerMenuBuilder {
                 .prefix(20)
                 .map(FeatureComposerMenuItem.path)
         }
+    }
+
+    /// Enabled skills matching `query`, in the display order both triggers use.
+    private static func matchingSkills(
+        _ skills: [FeatureProviderSkill],
+        query rawQuery: String
+    ) -> [FeatureProviderSkill] {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return skills
+            .filter(\.isEnabled)
+            .filter { skill in
+                guard !query.isEmpty else { return true }
+                return [skill.name, skill.displayName, skill.shortDescription, skill.description]
+                    .compactMap { $0 }
+                    .contains { $0.localizedCaseInsensitiveContains(query) }
+            }
+            .sorted {
+                ($0.displayName ?? $0.name).localizedStandardCompare($1.displayName ?? $1.name)
+                    == .orderedAscending
+            }
     }
 }
 

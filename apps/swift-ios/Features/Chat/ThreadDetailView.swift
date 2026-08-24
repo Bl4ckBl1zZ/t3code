@@ -608,6 +608,7 @@ public struct ThreadDetailView: View {
         return FeatureComposerPowerFeatures(
             slashCommands: provider?.slashCommands ?? [],
             skills: provider?.skills ?? [],
+            showSkillsInSlashMenu: model.snapshot.settings.showSkillsInSlashMenu,
             pathSearchScopeID: currentThread.id,
             searchPaths: { query in
                 try await model.client.searchThreadFiles(

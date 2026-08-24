@@ -1066,6 +1066,10 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     /// reasoning steps expanded instead of folding them away. Off by default so
     /// the transcript stays scannable unless the reader asks for the detail.
     public var alwaysExpandActivity: Bool
+    /// Web's "Show skills in slash menu": skills are always reachable from `$`;
+    /// this decides whether they also appear under `/` alongside the provider's
+    /// own commands. On by default, matching the server's client settings.
+    public var showSkillsInSlashMenu: Bool
     /// Built-in palette ids, one per appearance, so a reader can run one theme
     /// by day and another by night. `appearance` still decides which is on
     /// screen; these only decide what that appearance is painted with.
@@ -1079,6 +1083,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         notificationsEnabled: Bool = true,
         liveActivitiesEnabled: Bool = true,
         alwaysExpandActivity: Bool = false,
+        showSkillsInSlashMenu: Bool = true,
         lightThemeID: String = T3ThemeDefaults.paletteID,
         darkThemeID: String = T3ThemeDefaults.paletteID,
         defaultSelection: FeatureSelection? = nil
@@ -1088,6 +1093,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         self.notificationsEnabled = notificationsEnabled
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.alwaysExpandActivity = alwaysExpandActivity
+        self.showSkillsInSlashMenu = showSkillsInSlashMenu
         self.lightThemeID = lightThemeID
         self.darkThemeID = darkThemeID
         self.defaultSelection = defaultSelection
@@ -1099,6 +1105,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         case notificationsEnabled
         case liveActivitiesEnabled
         case alwaysExpandActivity
+        case showSkillsInSlashMenu
         case lightThemeID
         case darkThemeID
         case defaultSelection
@@ -1126,6 +1133,10 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
             Bool.self,
             forKey: .alwaysExpandActivity
         ) ?? false
+        showSkillsInSlashMenu = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .showSkillsInSlashMenu
+        ) ?? true
         // Absent for anyone upgrading from a build without themes, which has to
         // land on the default palette rather than fail the whole settings decode.
         lightThemeID = try container.decodeIfPresent(
@@ -1149,6 +1160,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
         try container.encode(liveActivitiesEnabled, forKey: .liveActivitiesEnabled)
         try container.encode(alwaysExpandActivity, forKey: .alwaysExpandActivity)
+        try container.encode(showSkillsInSlashMenu, forKey: .showSkillsInSlashMenu)
         try container.encode(lightThemeID, forKey: .lightThemeID)
         try container.encode(darkThemeID, forKey: .darkThemeID)
         try container.encodeIfPresent(defaultSelection, forKey: .defaultSelection)
