@@ -257,8 +257,12 @@ struct DailyUXSidebarIndex {
             )
         }
 
+        // A pin keeps a thread on top while it still has life in it; it does not
+        // exempt it from settling. A settled pinned thread belongs in the
+        // Settled shelf, keeping its pin for when it wakes — otherwise finished
+        // work sits at the top of the inbox indefinitely.
         pinned = available
-            .filter { $0.pinnedAt != nil }
+            .filter { $0.pinnedAt != nil && !isSettled($0) }
             .sorted(by: Self.creationOrder)
 
         active = available
@@ -277,7 +281,7 @@ struct DailyUXSidebarIndex {
             }
 
         settled = available
-            .filter { $0.pinnedAt == nil && isSettled($0) }
+            .filter(isSettled)
             .sorted { lhs, rhs in
                 if lhs.settledSortDate != rhs.settledSortDate {
                     return lhs.settledSortDate > rhs.settledSortDate
