@@ -21,12 +21,25 @@ const ProviderOptionDescriptorBase = {
   description: Schema.optional(TrimmedNonEmptyString),
 } as const;
 
+/**
+ * How a client should draw a select whose options are an ordered scale.
+ *
+ * Deliberately a hint on the existing `select` type rather than a third
+ * descriptor kind: every client already switches on `type`, and the SwiftUI
+ * client mirrors these contracts by hand, so a new union member would decode
+ * clean and fail at runtime. A client that does not know the hint renders the
+ * same radio list it always did.
+ */
+export const ProviderOptionPresentation = Schema.Literals(["slider"]);
+export type ProviderOptionPresentation = typeof ProviderOptionPresentation.Type;
+
 export const SelectProviderOptionDescriptor = Schema.Struct({
   ...ProviderOptionDescriptorBase,
   type: Schema.Literal("select"),
   options: Schema.Array(ProviderOptionChoice),
   currentValue: Schema.optional(TrimmedNonEmptyString),
   promptInjectedValues: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  presentation: Schema.optional(ProviderOptionPresentation),
 });
 export type SelectProviderOptionDescriptor = typeof SelectProviderOptionDescriptor.Type;
 

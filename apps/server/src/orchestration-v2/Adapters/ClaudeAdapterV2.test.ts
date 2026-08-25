@@ -572,39 +572,45 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     }
   });
 
-  it("sends the provider's auto-compact window as a Claude Code setting", () => {
-    const options = makeClaudeQueryOptions({
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-opus-5",
-      },
-      nativeThreadId: "native-thread-auto-compact",
-      resume: false,
-      cwd: "/workspace",
-      settings: Schema.decodeSync(ClaudeSettings)({ autoCompactWindow: "300000" }),
-    });
+  it("caps compaction at the tighter of the thread slider and the provider setting", () => {
+    const claudeSettings = (autoCompactWindow: string) =>
+      Schema.decodeSync(ClaudeSettings)({ autoCompactWindow });
+    const query = (input: { readonly slider?: string; readonly setting?: string }) =>
+      makeClaudeQueryOptions({
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-5",
+          ...(input.slider === undefined
+            ? {}
+            : { options: [{ id: "autoCompactWindow", value: input.slider }] }),
+        },
+        nativeThreadId: "native-thread-auto-compact",
+        resume: false,
+        cwd: "/workspace",
+        ...(input.setting === undefined ? {} : { settings: claudeSettings(input.setting) }),
+      });
 
-    // `autoCompactWindow` is typed on the SDK's `Settings`, not on its query
-    // options, and an unknown top-level key is dropped without complaint - so
-    // asserting where it landed is the only thing that catches the mistake.
-    assert.notProperty(options, "autoCompactWindow");
-    assert.isObject(options.settings);
-    assert.equal(
-      (options.settings as { readonly autoCompactWindow?: number }).autoCompactWindow,
-      300_000,
-    );
+    // `autoCompactWindow` is a Claude Code setting, so it has to land in the
+    // settings bag; a top-level query option of the same name is dropped.
+    const window = (input: { readonly slider?: string; readonly setting?: string }) => {
+      const options = query(input);
+      assert.notProperty(options, "autoCompactWindow");
+      const settings = options.settings;
+      return typeof settings === "object" && settings !== null
+        ? (settings as { readonly autoCompactWindow?: number }).autoCompactWindow
+        : undefined;
+    };
 
-    // Absent setting leaves the bag alone rather than writing a NaN.
-    const untouched = makeClaudeQueryOptions({
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-opus-5",
-      },
-      nativeThreadId: "native-thread-auto-compact-absent",
-      resume: false,
-      cwd: "/workspace",
-    });
-    assert.notProperty(untouched, "autoCompactWindow");
+    // Neither knob set: no cap of ours, so Claude runs to the model's window.
+    assert.equal(window({}), undefined);
+    // Either one alone applies.
+    assert.equal(window({ slider: "250k" }), 250_000);
+    assert.equal(window({ setting: "300000" }), 300_000);
+    // Both set: the narrower wins, whichever it is.
+    assert.equal(window({ slider: "750k", setting: "300000" }), 300_000);
+    assert.equal(window({ slider: "250k", setting: "900000" }), 250_000);
+    // The top stop is not a cap, so the server-wide setting still governs.
+    assert.equal(window({ slider: "1m", setting: "300000" }), 300_000);
   });
 
   it.effect("writes Claude Agent SDK protocol frames to the native provider log", () =>

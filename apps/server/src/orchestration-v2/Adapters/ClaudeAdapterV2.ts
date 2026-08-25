@@ -81,7 +81,10 @@ import {
   parseMonitorResult,
 } from "./backgroundCommand.ts";
 import { readBackgroundOutputTail } from "./backgroundTail.ts";
-import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
+import {
+  compileClaudeModelSelection,
+  type CompiledClaudeModelSelection,
+} from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
@@ -657,6 +660,23 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
   }),
 );
 
+/**
+ * The narrower of the thread's Context slider and the provider's server-wide
+ * "Auto-compact after" setting; undefined when neither caps anything, which
+ * leaves Claude at the model's own window.
+ */
+export function claudeAutoCompactWindow(
+  compiledSelection: Pick<CompiledClaudeModelSelection, "autoCompactWindow">,
+  settings: ClaudeSettings | undefined,
+): number | undefined {
+  // The settings schema constrains this to a 100k-1m integer or empty.
+  const configured = settings?.autoCompactWindow ? Number(settings.autoCompactWindow) : undefined;
+  const candidates = [compiledSelection.autoCompactWindow, configured].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return candidates.length === 0 ? undefined : Math.min(...candidates);
+}
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -685,17 +705,17 @@ export function makeClaudeQueryOptions(input: {
     Object.keys(compiledSelection.settings).length === 0
       ? undefined
       : (compiledSelection.settings as ClaudeSdkSettings);
-  // "Auto-compact after" from the provider settings: Claude summarizes the
-  // conversation once it passes this many tokens, which is what keeps a
-  // long-lived thread from burning usage on full history. The schema already
-  // constrains the string to a 100k-1m integer or empty.
+  // Where Claude compacts the conversation. Two knobs feed this and the tighter
+  // one wins, which is the same composition Claude Code applies between the
+  // setting and the model's own window: the thread's Context slider is the
+  // per-conversation choice, and the provider's "Auto-compact after" is a
+  // server-wide ceiling over every thread on it.
   //
-  // It belongs in `settings`, the same bag as `alwaysThinkingEnabled` and
-  // `fastMode`, not in the top-level query options — the SDK types it on
-  // `Settings` and silently drops an unknown top-level key.
-  const autoCompactWindow = input.settings?.autoCompactWindow
-    ? Number(input.settings.autoCompactWindow)
-    : undefined;
+  // It rides `settings`, not the top-level query options: `autoCompactWindow`
+  // is a Claude Code *setting* (the same bag as `alwaysThinkingEnabled`,
+  // `fastMode` and `ultracode`), and the SDK silently ignores an unknown
+  // top-level key.
+  const autoCompactWindow = claudeAutoCompactWindow(compiledSelection, input.settings);
   const resolvedSelectionSettings =
     autoCompactWindow === undefined
       ? selectionSettings

@@ -31,6 +31,7 @@ import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
+import { StepSlider } from "../ui/slider";
 import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
@@ -112,8 +113,6 @@ function getSelectedTraits(
       descriptor.type === "boolean",
   );
   const primarySelectDescriptor = selectDescriptors[0] ?? null;
-  const contextWindowDescriptor =
-    selectDescriptors.find((descriptor) => descriptor.id === "contextWindow") ?? null;
   const agentDescriptor = selectDescriptors.find((descriptor) => descriptor.id === "agent") ?? null;
   const fastModeDescriptor =
     booleanDescriptors.find((descriptor) => descriptor.id === "fastMode") ?? null;
@@ -135,7 +134,6 @@ function getSelectedTraits(
       : getDescriptorStringValue(primarySelectDescriptor)) ?? null;
   const thinkingEnabled =
     typeof thinkingDescriptor?.currentValue === "boolean" ? thinkingDescriptor.currentValue : null;
-  const contextWindow = getDescriptorStringValue(contextWindowDescriptor);
   const selectedAgent = getDescriptorStringValue(agentDescriptor);
   const selectedAgentLabel = agentDescriptor
     ? getProviderOptionCurrentLabel(agentDescriptor)
@@ -147,13 +145,11 @@ function getSelectedTraits(
     selectDescriptors,
     booleanDescriptors,
     primarySelectDescriptor,
-    contextWindowDescriptor,
     agentDescriptor,
     fastModeDescriptor,
     thinkingDescriptor,
     effort,
     thinkingEnabled,
-    contextWindow,
     ultrathinkPromptControlled,
     ultrathinkInBodyText,
     selectedAgent,
@@ -180,20 +176,13 @@ function getTraitsSectionVisibility(input: {
     input.planModeEnabled,
   );
 
-  const showEffort = selected.primarySelectDescriptor !== null;
-  const showThinking = selected.thinkingDescriptor !== null;
-  const showFastMode = selected.fastModeDescriptor !== null;
-  const showContextWindow = selected.contextWindowDescriptor !== null;
-  const showAgent = selected.agentDescriptor !== null;
-
   return {
     ...selected,
-    showEffort,
-    showThinking,
-    showFastMode,
-    showContextWindow,
-    showAgent,
-    hasAnyControls: showEffort || showThinking || showFastMode || showContextWindow || showAgent,
+    // Counted generically rather than per known id: the menu renders every
+    // descriptor a provider reports, so a new one must not leave the trigger
+    // hidden until someone remembers to add it here. The per-id `show*` flags
+    // this replaced had no other reader.
+    hasAnyControls: selected.descriptors.length > 0,
   };
 }
 
@@ -307,6 +296,33 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id
             ? "ultrathink"
             : (getDescriptorStringValue(descriptor) ?? "");
+
+        // An ordered scale reads as a slider rather than a radio list. The
+        // descriptor still carries discrete options, so the slider steps
+        // between them and writes back the same option ids.
+        if (descriptor.presentation === "slider") {
+          return (
+            <div key={descriptor.id}>
+              {index > 0 ? <MenuDivider /> : null}
+              <MenuGroup>
+                <div className="px-2 pt-1.5 pb-0.5 font-medium text-muted-foreground text-xs">
+                  {descriptor.label}
+                </div>
+                <StepSlider
+                  label={descriptor.label}
+                  stops={descriptor.options}
+                  value={selectedValue}
+                  onValueChange={(value) => handleSelectChange(descriptor, value)}
+                />
+                {descriptor.description ? (
+                  <div className="max-w-64 text-pretty px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                    {descriptor.description}
+                  </div>
+                ) : null}
+              </MenuGroup>
+            </div>
+          );
+        }
 
         return (
           <div key={descriptor.id}>
