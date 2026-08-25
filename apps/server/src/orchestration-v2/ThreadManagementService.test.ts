@@ -609,7 +609,10 @@ it.effect("reprovisions when the worktree directory vanished behind the registry
           getRemovedForThreadPath: () => Effect.succeed(Option.none()),
           register: () => Effect.succeed(undefined as never),
         }),
-        Layer.mock(FileSystem.FileSystem)({
+        // layerNoop rather than Layer.mock: FileSystem carries required members
+        // (its brand, `sink`) that a partial mock cannot satisfy, and the noop
+        // layer fills every method this test never calls.
+        FileSystem.layerNoop({
           exists: () => Effect.succeed(false),
         }),
       ),

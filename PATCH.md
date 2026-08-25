@@ -114,6 +114,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   shared by that adapter and web) would be dead code. Its `autoCompactThreshold` reporting is
   likewise dropped: `ThreadTokenUsageSnapshot` gains the field for wire compatibility, but the
   fork's `deriveLatestContextWindowSnapshot` reads V2 `compaction` turn items and never sees it.
+  `autoCompactWindow` rides the SDK's `settings` bag (the same bag as `alwaysThinkingEnabled` and
+  `fastMode`), not the top-level query options: the SDK types it on `Settings` and drops an unknown
+  top-level key without complaint, so a misplaced one compiles and does nothing.
 - Does not carry upstream's V1 `ProviderCommandReactor` interrupt recovery (`17822fab70`). It stops
   the session and writes `thread.session.status = "stopped"` plus a `provider.turn.interrupt.failed`
   activity, none of which orchestration V2 models. V2 covers the same ground its own way:

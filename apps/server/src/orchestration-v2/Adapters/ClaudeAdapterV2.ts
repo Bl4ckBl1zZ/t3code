@@ -685,12 +685,27 @@ export function makeClaudeQueryOptions(input: {
     Object.keys(compiledSelection.settings).length === 0
       ? undefined
       : (compiledSelection.settings as ClaudeSdkSettings);
+  // "Auto-compact after" from the provider settings: Claude summarizes the
+  // conversation once it passes this many tokens, which is what keeps a
+  // long-lived thread from burning usage on full history. The schema already
+  // constrains the string to a 100k-1m integer or empty.
+  //
+  // It belongs in `settings`, the same bag as `alwaysThinkingEnabled` and
+  // `fastMode`, not in the top-level query options — the SDK types it on
+  // `Settings` and silently drops an unknown top-level key.
+  const autoCompactWindow = input.settings?.autoCompactWindow
+    ? Number(input.settings.autoCompactWindow)
+    : undefined;
+  const resolvedSelectionSettings =
+    autoCompactWindow === undefined
+      ? selectionSettings
+      : ({ ...(selectionSettings ?? {}), autoCompactWindow } as ClaudeSdkSettings);
   const querySettings =
-    selectionSettings === undefined
+    resolvedSelectionSettings === undefined
       ? input.sdkSettings
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
-        ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
-        : selectionSettings;
+        ? ({ ...input.sdkSettings, ...resolvedSelectionSettings } as ClaudeSdkSettings)
+        : resolvedSelectionSettings;
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     tools: claudeAgentSdkQueryToolsForSdk(selectedTools),
@@ -724,13 +739,6 @@ export function makeClaudeQueryOptions(input: {
             append: T3_CODE_ORCHESTRATION_INSTRUCTIONS,
           },
         }),
-    // "Auto-compact after" from the provider settings: Claude summarizes the
-    // conversation once it passes this many tokens, which is the only way to
-    // keep a long-lived thread from burning usage on full history. The schema
-    // already constrains the string to a 100k-1m integer or empty.
-    ...(input.settings?.autoCompactWindow
-      ? { autoCompactWindow: Number(input.settings.autoCompactWindow) }
-      : {}),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
   return input.cwd === null ? options : { ...options, cwd: input.cwd };
