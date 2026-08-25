@@ -1244,6 +1244,58 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    @discardableResult
+    func setThreadLinkedPullRequest(
+        threadID: String,
+        number: Int?
+    ) async throws -> FeatureLinkedPullRequest? {
+        let route = try threadRoute(for: threadID)
+        guard let number else {
+            _ = try await route.client.setLinkedPullRequest(
+                threadID: route.wireID,
+                pullRequest: nil
+            )
+            try? await refresh(client: route.client)
+            return nil
+        }
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }) else {
+            throw NativeFeatureClientError.workspaceNotFound
+        }
+        guard let repository = project.repositoryIdentity?.displayName,
+              !repository.isEmpty else {
+            throw NativeFeatureClientError.repositoryIdentityUnavailable
+        }
+        // Read it before pointing the thread at it: a typo'd number would
+        // otherwise persist as a link whose badge never resolves, and the
+        // request's canonical URL comes from the same read.
+        let detail = try await route.client.pullRequestDetail(
+            projectID: project.id,
+            repository: repository,
+            number: number
+        )
+        _ = try await route.client.setLinkedPullRequest(
+            threadID: route.wireID,
+            pullRequest: OrchestrationV2ThreadLinkedPullRequest(
+                projectId: project.id,
+                repository: repository,
+                number: detail.number,
+                url: detail.url
+            )
+        )
+        try? await refresh(client: route.client)
+        return FeatureLinkedPullRequest(
+            projectID: FeatureScopedID.project(
+                environmentID: route.environmentID,
+                wireID: project.id
+            ),
+            repository: repository,
+            number: detail.number,
+            url: detail.url
+        )
+    }
+
     func setWorkInboxRole(threadID: String, role: String?) async throws {
         let route = try threadRoute(for: threadID)
         _ = try await route.client.setWorkInboxRole(threadID: route.wireID, role: role)
@@ -1944,11 +1996,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) async {
         var branchesByThreadID: [String: String] = [:]
         var threadIDsBySubscription: [ChangeRequestSubscription: [String]] = [:]
+        // A linked pull request is the thread's own answer and outranks whatever
+        // its worktree's branch happens to point at: the same branch can back
+        // several requests, and a thread whose worktree is gone still has one.
+        var linkedByThreadID: [String: LinkedChangeRequestSubscription] = [:]
         for threadID in threadIDs {
             guard let route = try? threadRoute(for: threadID),
-                  let context = try? workspaceContext(route: route),
                   let shell = shellsByEnvironmentID[route.environmentID],
-                  let thread = shell.threads.first(where: { $0.id == route.wireID }),
+                  let thread = shell.threads.first(where: { $0.id == route.wireID })
+            else { continue }
+            if let linked = thread.linkedPullRequest {
+                linkedByThreadID[threadID] = LinkedChangeRequestSubscription(
+                    environmentID: route.environmentID,
+                    projectWireID: linked.projectId,
+                    repository: linked.repository,
+                    number: linked.number
+                )
+                continue
+            }
+            guard let context = try? workspaceContext(route: route),
                   let branch = thread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !branch.isEmpty else { continue }
             branchesByThreadID[threadID] = branch
@@ -1958,15 +2024,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             )
             threadIDsBySubscription[subscription, default: []].append(threadID)
         }
-        guard !threadIDsBySubscription.isEmpty else { return }
+        guard !threadIDsBySubscription.isEmpty || !linkedByThreadID.isEmpty else { return }
 
-        // Threads that lost their route (or their branch) since the seed was
-        // captured have no subscription to correct a stale entry, so they are
-        // dropped rather than carried forward indefinitely.
+        // Threads that lost their route (or their branch, or their link) since
+        // the seed was captured have no subscription to correct a stale entry,
+        // so they are dropped rather than carried forward indefinitely.
         let accumulator = ChangeRequestAccumulator(
-            seed: seed.filter { branchesByThreadID[$0.key] != nil }
+            seed: seed.filter {
+                branchesByThreadID[$0.key] != nil || linkedByThreadID[$0.key] != nil
+            }
         )
         await withTaskGroup(of: Void.self) { group in
+            for (threadID, linked) in linkedByThreadID {
+                group.addTask { @MainActor [weak self] in
+                    await self?.pollLinkedChangeRequest(
+                        threadID: threadID,
+                        subscription: linked,
+                        accumulator: accumulator,
+                        into: continuation
+                    )
+                }
+            }
             for (subscription, subscribedThreadIDs) in threadIDsBySubscription {
                 guard let client = environmentClients[subscription.environmentID] else { continue }
                 group.addTask { @MainActor in
@@ -2002,6 +2080,43 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 }
             }
             await group.waitForAll()
+        }
+    }
+
+    /// Keeps a linked pull request current for as long as its thread is on
+    /// screen.
+    ///
+    /// There is no push channel for change requests — the branch-derived path
+    /// only gets updates because it rides the workspace's VCS status
+    /// subscription, and a linked request may belong to a repository no open
+    /// worktree points at. Polling is therefore the mechanism, at web's cadence
+    /// (`createLinkedPullRequestDetailAtomFamily`), so a merge settles the row
+    /// within half a minute instead of at the next app launch.
+    private func pollLinkedChangeRequest(
+        threadID: String,
+        subscription: LinkedChangeRequestSubscription,
+        accumulator: ChangeRequestAccumulator,
+        into continuation: AsyncStream<[String: FeaturePullRequest]>.Continuation
+    ) async {
+        while !Task.isCancelled {
+            guard let client = environmentClients[subscription.environmentID] else { return }
+            let detail = try? await client.pullRequestDetail(
+                projectID: subscription.projectWireID,
+                repository: subscription.repository,
+                number: subscription.number
+            )
+            if Task.isCancelled { return }
+            // A failed read leaves the previous answer in place. The host is
+            // reached through the `gh` CLI, so a flaky read is ordinary; blanking
+            // the badge on one would make a merged row bounce back to Active.
+            if let detail,
+               let merged = accumulator.applyLinked(
+                   threadID: threadID,
+                   pullRequest: NativeWorkspaceMapper.pullRequest(detail)
+               ) {
+                continuation.yield(merged)
+            }
+            try? await Task.sleep(for: .seconds(30))
         }
     }
 
@@ -3916,7 +4031,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             preferences[environment.id] = FeatureEnvironmentPreferences(
                 defaultWorkspaceMode: defaultWorkspaceMode,
                 newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin,
-                enableAgentBrowserAccess: serverSettings.enableAgentBrowserAccess
+                enableAgentBrowserAccess: serverSettings.enableAgentBrowserAccess,
+                claudeAutoCompactWindow: serverSettings.claudeAutoCompactWindow
             )
         }
         return FeatureSnapshot(
@@ -4414,6 +4530,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
                 .threadTitleRegeneration,
+            linkedPullRequest: mapLinkedPullRequest(
+                thread.linkedPullRequest,
+                environment: environment
+            ),
+            supportsPullRequestLinking: environment.descriptor?.capabilities
+                .threadPullRequestLinking,
             attentionAt: latestRun?.status == "failed"
                 ? parseDate(latestRun?.completedAt ?? thread.updatedAt)
                 : nil,
@@ -4423,6 +4545,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             latestTurnCompletedAt: latestRun?.completedAt.map(parseDate),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
+        )
+    }
+
+    /// The wire's project id is environment-local; every other project
+    /// reference in this client is scoped, so the link is scoped here rather
+    /// than at each of the three places that read it back.
+    private func mapLinkedPullRequest(
+        _ linked: OrchestrationV2ThreadLinkedPullRequest?,
+        environment: Environment
+    ) -> FeatureLinkedPullRequest? {
+        guard let linked else { return nil }
+        return FeatureLinkedPullRequest(
+            projectID: FeatureScopedID.project(
+                environmentID: environment.id,
+                wireID: linked.projectId
+            ),
+            repository: linked.repository,
+            number: linked.number,
+            url: linked.url
         )
     }
 
@@ -4515,6 +4656,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
                 .threadTitleRegeneration,
+            linkedPullRequest: mapLinkedPullRequest(
+                thread.linkedPullRequest,
+                environment: environment
+            ),
+            supportsPullRequestLinking: environment.descriptor?.capabilities
+                .threadPullRequestLinking,
             // A failed run is the only thing that earns an attention marker; a
             // `lastError` on a run that recovered is history, not a call to act.
             attentionAt: thread.status == "failed"
@@ -5519,6 +5666,27 @@ private final class ChangeRequestAccumulator {
         }
         return changed ? pullRequestsByThreadID : nil
     }
+
+    /// The linked path's equivalent. No branch check: the thread named this
+    /// pull request, so whatever the host says about it is the answer.
+    func applyLinked(
+        threadID: String,
+        pullRequest: FeaturePullRequest
+    ) -> [String: FeaturePullRequest]? {
+        guard pullRequestsByThreadID[threadID] != pullRequest else { return nil }
+        pullRequestsByThreadID[threadID] = pullRequest
+        return pullRequestsByThreadID
+    }
+}
+
+/// A thread's own pull request, addressed the way `pullRequests.detail` wants
+/// it. The project id is the environment-local one, not the scoped id, because
+/// that is what goes over the wire.
+private struct LinkedChangeRequestSubscription: Hashable {
+    let environmentID: String
+    let projectWireID: String
+    let repository: String
+    let number: Int
 }
 
 private struct ProvisionalThreadRoute {
@@ -5985,7 +6153,8 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         return FeatureEnvironmentPreferences(
             defaultWorkspaceMode: settings.defaultThreadEnvMode == .worktree ? .worktree : .local,
             newWorktreesStartFromOrigin: settings.newWorktreesStartFromOrigin,
-            enableAgentBrowserAccess: settings.enableAgentBrowserAccess
+            enableAgentBrowserAccess: settings.enableAgentBrowserAccess,
+            claudeAutoCompactWindow: settings.claudeAutoCompactWindow
         )
     }
 }

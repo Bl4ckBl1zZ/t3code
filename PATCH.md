@@ -280,6 +280,27 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   contracts onto the fork's orchestration V2, so upstream edits to its transport, `Core/Models.swift`,
   or `App/NativeFeatureClient.swift` resolve to the fork. Once `apps/mobile` is deleted, upstream
   changes under that path resolve to deletion.
+- Gives the SwiftUI client three features upstream only built for web and the Expo client, because
+  it is the fork's primary client and upstream has no SwiftUI half to merge:
+  - **Linked pull requests.** Web links one from a right-click on a transcript link, which has no
+    gesture equivalent over rendered inline text on a phone, so the entry point is Thread Details ->
+    Version Control -> "Linked pull request" and the sheet accepts a number or a pasted host URL
+    (`ThreadLinkedPullRequestInput`). Only the number travels: `NativeFeatureClient` resolves the
+    repository from the project's identity and reads `pullRequests.detail` before pointing the
+    thread at it. A linked thread leaves the workspace VCS-status subscription and is polled every
+    30s instead (`pollLinkedChangeRequest`), which is what makes settle-on-merge work for a request
+    no open worktree points at. Gated on `threadPullRequestLinking`.
+  - **Claude's "Auto-compact after".** `Settings -> Agents`, the client's first provider-settings
+    screen. Web renders the whole provider tree from the settings schema; almost none of it is
+    reachable from a phone, so this carries the one field that is. Read from
+    `providers.claudeAgent.autoCompactWindow` on the server-config subscription and written as that
+    single leaf so the deep merge leaves Claude's other settings alone.
+  - **Connection identity.** `ClientConnectionIdentity` puts `clientSurface`, `clientAppVersion`,
+    `clientOs`, `clientOsMajorVersion` and `clientDeviceModel` on the `/ws` upgrade URL, so SwiftUI
+    sessions stop being unlabeled rows in Settings -> Connections and anonymous `client.connected`
+    events. Deliberate difference from the Expo client: the device model is the raw hardware
+    identifier (`iPhone17,2`) rather than `expo-device`'s marketing name, which needs a lookup table
+    that goes stale every release.
 - Uses the fork's iOS identifiers: `com.t3code.dev`, `com.t3code.dev.widgets`,
   `com.t3code.dev.sharing`, and `group.com.bl4ckbl1zz.t3code.dev`, supplied through the fork's iOS
   build variables. Local development signing uses the APNs sandbox; TestFlight exports use

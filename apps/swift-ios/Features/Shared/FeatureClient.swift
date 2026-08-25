@@ -59,6 +59,18 @@ public protocol FeatureClient: AnyObject {
     func setThreadSettled(id: String, settled: Bool) async throws
     func setThreadSnoozed(id: String, until: Date?) async throws
     func setThreadPinned(id: String, pinned: Bool) async throws
+    /// Pins a pull request to the thread by number, replacing the
+    /// branch-derived one, or clears the pin with `nil`.
+    ///
+    /// Takes a number rather than a whole reference because the repository and
+    /// the request's URL are the server's to resolve: reading the request also
+    /// proves it exists before the thread points at it. Only offered where the
+    /// environment reports `threadPullRequestLinking`.
+    @discardableResult
+    func setThreadLinkedPullRequest(
+        threadID: String,
+        number: Int?
+    ) async throws -> FeatureLinkedPullRequest?
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws
     /// Persists the model and its options (effort, context window) on the
@@ -230,6 +242,13 @@ public extension FeatureClient {
     func setThreadSettled(id: String, settled: Bool) async throws {}
     func setThreadSnoozed(id: String, until: Date?) async throws {}
     func setThreadPinned(id: String, pinned: Bool) async throws {}
+    @discardableResult
+    func setThreadLinkedPullRequest(
+        threadID _: String,
+        number _: Int?
+    ) async throws -> FeatureLinkedPullRequest? {
+        throw FeatureCapabilityUnavailable("Pull request linking")
+    }
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
     func setModelSelection(id: String, selection: FeatureSelection) async throws {}

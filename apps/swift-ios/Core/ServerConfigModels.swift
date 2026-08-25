@@ -224,6 +224,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// access drops the `preview` capability from the MCP credential a provider
     /// session is given, so it is the server's answer and not this device's.
     public let enableAgentBrowserAccess: Bool
+    /// Claude's auto-compaction threshold in tokens, as the string the server
+    /// stores (`providers.claudeAgent.autoCompactWindow`). Empty is Claude's
+    /// own default, which is also what a server predating the setting reports.
+    public let claudeAutoCompactWindow: String
 
     public init(
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
@@ -234,7 +238,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             .defaultSidebarAutoSettleOnMerge,
         providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:],
         enableAgentBrowserAccess: Bool = ServerSettingsSnapshot
-            .defaultEnableAgentBrowserAccess
+            .defaultEnableAgentBrowserAccess,
+        claudeAutoCompactWindow: String = ""
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
@@ -242,6 +247,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.providerModelPreferences = providerModelPreferences
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
+        self.claudeAutoCompactWindow = claudeAutoCompactWindow
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -251,6 +257,18 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case sidebarAutoSettleOnMerge
         case providerModelPreferences
         case enableAgentBrowserAccess
+        case providers
+    }
+
+    /// The slice of `providers` this client reads. Deliberately not the whole
+    /// provider settings tree: everything else there is desktop-only, and
+    /// decoding it would break this snapshot every time upstream adds a field.
+    private struct ProvidersContainer: Codable {
+        struct Claude: Codable {
+            let autoCompactWindow: String?
+        }
+
+        let claudeAgent: Claude?
     }
 
     public init(from decoder: any Decoder) throws {
@@ -278,6 +296,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .enableAgentBrowserAccess
         ) ?? Self.defaultEnableAgentBrowserAccess
+        claudeAutoCompactWindow = try container.decodeIfPresent(
+            ProvidersContainer.self,
+            forKey: .providers
+        )?.claudeAgent?.autoCompactWindow ?? ""
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -290,6 +312,12 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(sidebarAutoSettleOnMerge, forKey: .sidebarAutoSettleOnMerge)
         try container.encode(providerModelPreferences, forKey: .providerModelPreferences)
         try container.encode(enableAgentBrowserAccess, forKey: .enableAgentBrowserAccess)
+        // Round-tripped under the same nested key the server sends, so an
+        // encoded snapshot decodes back to itself.
+        try container.encode(
+            ProvidersContainer(claudeAgent: .init(autoCompactWindow: claudeAutoCompactWindow)),
+            forKey: .providers
+        )
     }
 }
 
@@ -302,15 +330,32 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var enableAgentBrowserAccess: Bool?
+    /// Claude's auto-compaction threshold, as the string the server validates:
+    /// an integer from 100000 to 1000000, or empty to fall back to Claude's own
+    /// default. Empty is a meaningful value here, so it is not the same as nil.
+    public var claudeAutoCompactWindow: String?
 
-    public init(enableAgentBrowserAccess: Bool? = nil) {
+    public init(
+        enableAgentBrowserAccess: Bool? = nil,
+        claudeAutoCompactWindow: String? = nil
+    ) {
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
+        self.claudeAutoCompactWindow = claudeAutoCompactWindow
     }
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
         if let enableAgentBrowserAccess {
             fields["enableAgentBrowserAccess"] = .bool(enableAgentBrowserAccess)
+        }
+        if let claudeAutoCompactWindow {
+            // The server deep-merges, so naming only this leaf leaves Claude's
+            // other provider settings — and every other provider — untouched.
+            fields["providers"] = .object([
+                "claudeAgent": .object([
+                    "autoCompactWindow": .string(claudeAutoCompactWindow),
+                ]),
+            ])
         }
         return .object(fields)
     }

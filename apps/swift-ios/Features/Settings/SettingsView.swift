@@ -10,6 +10,7 @@ public struct SettingsView: View {
     @State private var showingDevices = false
     @State private var showingT3Connect = false
     @State private var showingIntegrations = false
+    @State private var showingAgents = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
@@ -134,6 +135,21 @@ public struct SettingsView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { showingIntegrations = false }
+                            }
+                        }
+                }
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showingAgents) {
+                NavigationStack {
+                    SettingsAgentsView(
+                        serverSettings: serverSettingsManager,
+                        environmentID: activeEnvironmentID,
+                        preferences: activeEnvironmentPreferences
+                    )
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingAgents = false }
                             }
                         }
                 }
@@ -414,6 +430,18 @@ public struct SettingsView: View {
     private var configurationSection: some View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
+                Button {
+                    showingAgents = true
+                } label: {
+                    SettingsNavigationRow(
+                        title: "Agents",
+                        systemImage: "sparkles"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                settingsDivider
+
                 Button {
                     showingIntegrations = true
                 } label: {

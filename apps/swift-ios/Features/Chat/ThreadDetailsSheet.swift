@@ -64,6 +64,7 @@ struct ThreadDetailsSheet: View {
     @State private var pendingDefaultBranchAction: GitStackedAction?
     @State private var portAlert: ThreadDetailsPortsSection.OpenRefusal?
     @State private var presentedPullRequest: ThreadDetailsPullRequest?
+    @State private var isEditingLinkedPullRequest = false
     @SwiftUI.Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -135,6 +136,17 @@ struct ThreadDetailsSheet: View {
                 "This publishes straight to \(gitStatus?.refName ?? "the default branch"), "
                     + "which has no undo on the other side."
             )
+        }
+        .sheet(isPresented: $isEditingLinkedPullRequest) {
+            NavigationStack {
+                ThreadLinkedPullRequestSheet(
+                    thread: thread,
+                    branchPullRequest: gitStatus?.pullRequest,
+                    client: client,
+                    onFinished: { isEditingLinkedPullRequest = false }
+                )
+            }
+            .presentationDragIndicator(.visible)
         }
         .sheet(item: $presentedPullRequest) { pullRequest in
             NavigationStack {
@@ -445,13 +457,32 @@ struct ThreadDetailsSheet: View {
                     }
                 )
 
-                if let pullRequest = gitStatus?.pullRequest {
+                if let pullRequest = displayedPullRequest {
                     ThreadDetailsDivider()
                     ThreadDetailsRow(
                         systemImage: "arrow.triangle.pull",
                         title: "Pull Request #\(pullRequest.number)",
-                        subtitle: pullRequest.state.capitalized,
-                        action: { open(pullRequest) }
+                        subtitle: displayedPullRequestSubtitle,
+                        action: { open(pullRequest) },
+                        detail: {
+                            if thread.linkedPullRequest != nil {
+                                // Says why this row survives a branch that moved
+                                // on, and where the change came from.
+                                ThreadDetailsRowBadge(text: "Linked")
+                            }
+                        }
+                    )
+                }
+
+                if thread.supportsPullRequestLinking == true {
+                    ThreadDetailsDivider()
+                    ThreadDetailsRow(
+                        systemImage: "link",
+                        title: "Linked pull request",
+                        subtitle: ThreadDetailsGit.linkedPullRequestSubtitle(
+                            thread.linkedPullRequest
+                        ),
+                        action: { isEditingLinkedPullRequest = true }
                     )
                 }
 
@@ -546,6 +577,38 @@ struct ThreadDetailsSheet: View {
     /// The native sheet where the server can answer for it; the host's own
     /// page everywhere else, exactly as this row behaved before the sheet
     /// existed.
+    /// A linked request outranks the branch's: it is the thread's own answer,
+    /// and it is what the sidebar badge and the merge settle rule already
+    /// follow.
+    private var displayedPullRequest: ThreadDetailsPullRequest? {
+        guard let linked = thread.linkedPullRequest else { return gitStatus?.pullRequest }
+        return ThreadDetailsPullRequest(
+            number: linked.number,
+            state: branchPullRequestState(matching: linked) ?? "",
+            url: linked.url
+        )
+    }
+
+    /// State when the branch happens to resolve to the linked request, and the
+    /// repository otherwise. The git status only speaks for the branch, so a
+    /// linked request from elsewhere has no state to report here — naming the
+    /// repository is more use than an empty line or a guessed "Open".
+    private var displayedPullRequestSubtitle: String {
+        guard let linked = thread.linkedPullRequest else {
+            return gitStatus?.pullRequest?.state.capitalized ?? ""
+        }
+        return branchPullRequestState(matching: linked)?.capitalized ?? linked.repository
+    }
+
+    private func branchPullRequestState(
+        matching linked: FeatureLinkedPullRequest
+    ) -> String? {
+        guard let branch = gitStatus?.pullRequest, branch.number == linked.number else {
+            return nil
+        }
+        return branch.state
+    }
+
     private func open(_ pullRequest: ThreadDetailsPullRequest) {
         if environment?.supportsPullRequests == true {
             presentedPullRequest = pullRequest

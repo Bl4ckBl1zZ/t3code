@@ -174,6 +174,23 @@ public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
     public var mobileNormalized: FeatureInteractionMode { self }
 }
 
+/// The pull request a user pinned to a thread, in the shape the client needs to
+/// read it back: `pullRequests.detail` is addressed by project, repository and
+/// number, and the URL is what recognises the same request in a chat link.
+public struct FeatureLinkedPullRequest: Sendable, Equatable, Hashable, Codable {
+    public var projectID: String
+    public var repository: String
+    public var number: Int
+    public var url: String
+
+    public init(projectID: String, repository: String, number: Int, url: String) {
+        self.projectID = projectID
+        self.repository = repository
+        self.number = number
+        self.url = url
+    }
+}
+
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     /// The environment-local identifier sent over the wire.
@@ -241,6 +258,14 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// Whether the environment can regenerate a title at all. `nil` means an
     /// older cached descriptor that never reported the capability.
     public var supportsTitleRegeneration: Bool?
+    /// A pull request pinned to this thread. When set it replaces the
+    /// branch-derived one: the row shows it, and it is what the merge settle
+    /// rule watches.
+    public var linkedPullRequest: FeatureLinkedPullRequest?
+    /// Whether this thread's server persists a pull-request link. Resolved from
+    /// the environment's capabilities at map time, so the action is hidden
+    /// rather than offered and refused.
+    public var supportsPullRequestLinking: Bool?
     public var attentionAt: Date?
     public var workingStartedAt: Date?
     public var latestTurnCompletedAt: Date?
@@ -288,6 +313,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         relationshipToParent: String? = nil,
         isRegeneratingTitle: Bool = false,
         supportsTitleRegeneration: Bool? = nil,
+        linkedPullRequest: FeatureLinkedPullRequest? = nil,
+        supportsPullRequestLinking: Bool? = nil,
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
@@ -330,6 +357,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.relationshipToParent = relationshipToParent
         self.isRegeneratingTitle = isRegeneratingTitle
         self.supportsTitleRegeneration = supportsTitleRegeneration
+        self.linkedPullRequest = linkedPullRequest
+        self.supportsPullRequestLinking = supportsPullRequestLinking
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
@@ -1175,15 +1204,22 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// `settingsUpdated` events keep the row honest when another client flips
     /// it.
     public var enableAgentBrowserAccess: Bool
+    /// Claude's auto-compaction threshold as the server stores it: an integer
+    /// string, or empty for Claude's own default. Read from the same
+    /// subscription as the rest of this struct so the row stays honest when
+    /// another client changes it.
+    public var claudeAutoCompactWindow: String
 
     public init(
         defaultWorkspaceMode: FeatureWorkspaceMode = .local,
         newWorktreesStartFromOrigin: Bool = true,
-        enableAgentBrowserAccess: Bool = true
+        enableAgentBrowserAccess: Bool = true,
+        claudeAutoCompactWindow: String = ""
     ) {
         self.defaultWorkspaceMode = defaultWorkspaceMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
+        self.claudeAutoCompactWindow = claudeAutoCompactWindow
     }
 }
 

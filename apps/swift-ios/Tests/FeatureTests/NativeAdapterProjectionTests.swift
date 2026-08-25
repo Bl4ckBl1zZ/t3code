@@ -320,6 +320,7 @@ private func adapterProjection() -> OrchestrationV2ThreadProjection {
         interactionMode: .default,
         branch: nil,
         worktreePath: nil,
+        linkedPullRequest: nil,
         activeProviderThreadId: "provider-thread-1",
         historyOrigin: nil,
         lineage: OrchestrationV2AppThreadLineage(

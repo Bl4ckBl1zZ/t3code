@@ -37,6 +37,7 @@ enum V2Fixture {
             interactionMode: .default,
             branch: branch,
             worktreePath: worktreePath,
+            linkedPullRequest: nil,
             activeProviderThreadId: nil,
             historyOrigin: nil,
             lineage: OrchestrationV2AppThreadLineage(

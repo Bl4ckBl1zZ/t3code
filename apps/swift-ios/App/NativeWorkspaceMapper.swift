@@ -114,6 +114,20 @@ enum NativeWorkspaceMapper {
         )
     }
 
+    /// The linked-pull-request path reads `pullRequests.detail` rather than the
+    /// workspace's VCS status, so the same row shape is built from the richer
+    /// payload. Only the fields a row shows are carried across; the rest is what
+    /// the detail sheet opens for.
+    static func pullRequest(_ detail: PullRequestDetail) -> FeaturePullRequest {
+        FeaturePullRequest(
+            number: detail.number,
+            title: detail.title,
+            state: detail.state.rawValue,
+            url: URL(string: detail.url),
+            updatedAt: isoDate(detail.updatedAt)
+        )
+    }
+
     /// Servers stamp with and without fractional seconds depending on the
     /// provider, so both spellings are tried before giving up. An unparseable
     /// stamp reads as absent, which the settle rules treat as "server does not
