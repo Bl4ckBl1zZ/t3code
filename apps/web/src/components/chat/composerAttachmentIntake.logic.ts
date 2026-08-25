@@ -5,7 +5,7 @@
  * pinning down with tests, and because a `DataTransfer` is awkward to reach
  * inside a 3400-line component.
  */
-import { validateComposerAttachment } from "@t3tools/shared/composerAttachments";
+import { validateComposerAttachment } from "./composerAttachmentValidation";
 
 export type ComposerPastePolicy = "attach-and-keep-text" | "attach-only" | "ignore";
 
@@ -24,11 +24,9 @@ export function resolvePastePolicy(input: {
   readonly types: ReadonlyArray<string>;
   readonly files: ReadonlyArray<FileLike>;
 }): ComposerPastePolicy {
-  const hasAttachable = input.files.some(
-    (file) =>
-      validateComposerAttachment({ name: file.name, sizeBytes: file.size, mimeType: file.type })
-        .accepted,
-  );
+  // Web's adapter, not the shared validator: it is what normalizes HEIC photos
+  // into the JPEG they are converted to, so a pasted iPhone photo is attachable.
+  const hasAttachable = input.files.some((file) => validateComposerAttachment(file).accepted);
   if (!hasAttachable) return "ignore";
   // Only plain text is worth preserving. `text/html` alongside an image is the
   // screenshot case, where the markup is the image and pasting it as text would

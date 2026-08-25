@@ -22,6 +22,7 @@ import {
   type RuntimeRequestId,
   type ThreadEnvMode,
   type ThreadId,
+  type ThreadLinkedPullRequest,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -120,6 +121,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly pinned?: boolean;
   readonly workInboxRole?: "main" | "chat" | null;
   readonly clearTimeline?: true;
+  /** Absent leaves the link alone; null unlinks. */
+  readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -521,7 +524,8 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.regenerateTitle !== undefined ||
       input.pinned !== undefined ||
       input.workInboxRole !== undefined ||
-      input.clearTimeline !== undefined
+      input.clearTimeline !== undefined ||
+      input.linkedPullRequest !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
@@ -534,6 +538,9 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
         ...(input.workInboxRole === undefined ? {} : { workInboxRole: input.workInboxRole }),
         ...(input.clearTimeline === undefined ? {} : { clearTimeline: input.clearTimeline }),
+        ...(input.linkedPullRequest === undefined
+          ? {}
+          : { linkedPullRequest: input.linkedPullRequest }),
       });
     }
     if (input.modelSelection !== undefined) {

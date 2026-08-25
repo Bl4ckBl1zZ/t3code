@@ -3,11 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import {
-  canSnooze,
-  resolveSnoozePresets,
-  type ChangeRequestSettleSource,
-} from "@t3tools/client-runtime/state/thread-settled";
+import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Platform, Pressable, useWindowDimensions, View } from "react-native";
@@ -29,12 +25,14 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { REGENERATE_TITLE_MENU_ACTION_ID } from "./threadRowMenu";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
+  resolveThreadListV2ChangeRequestState,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
   resolveWorkInboxBadge,
   threadHasUnseenCompletion,
+  type ThreadListV2ChangeRequestState,
   type ThreadListV2Status,
   type WorkInboxBadge,
 } from "./threadListV2";
@@ -451,7 +449,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       merge and close rules. Mirrors web's onChangeRequestState. */
   readonly onChangeRequestState?: (
     threadKey: string,
-    changeRequest: ChangeRequestSettleSource | null,
+    changeRequest: ThreadListV2ChangeRequestState | null,
   ) => void;
   readonly projectCwd?: string | null;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
@@ -485,11 +483,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const prUpdatedAt = pr?.updatedAt ?? null;
   const threadKey = `${thread.environmentId}:${thread.id}`;
   useEffect(() => {
-    onChangeRequestState?.(
-      threadKey,
-      prState === null ? null : { state: prState, updatedAt: prUpdatedAt },
-    );
-  }, [onChangeRequestState, prState, prUpdatedAt, threadKey]);
+    const changeRequest = resolveThreadListV2ChangeRequestState({
+      linkedPullRequest: thread.linkedPullRequest,
+      state: prState,
+      updatedAt: prUpdatedAt,
+    });
+    if (changeRequest === undefined) return;
+    onChangeRequestState?.(threadKey, changeRequest);
+  }, [onChangeRequestState, prState, prUpdatedAt, thread.linkedPullRequest, threadKey]);
 
   const screenColor = useThemeColor("--color-screen");
   const drawerColor = useThemeColor("--color-drawer");

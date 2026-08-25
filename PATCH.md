@@ -92,7 +92,57 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `040_ProjectionProjectFaviconPath` likewise targets the project aggregate and is carried as
   `053_ProjectionProjectFaviconPath`. Upstream's `041_AuthSessionClientConnection` targets
   `auth_sessions`, which the fork shares, and is carried as
-  `058_AuthSessionClientConnection`.
+  `058_AuthSessionClientConnection`. Upstream's `042_ProjectionThreadLinkedPullRequest` is dropped:
+  it adds a column to the retired V1 `projection_threads`, and the fork carries linked pull
+  requests on the orchestration V2 thread JSON projection instead (see below).
+- Implements upstream's "link pull requests to threads" (`3c75eb1132`) on orchestration V2.
+  `ThreadLinkedPullRequest` lives in `contracts/orchestrationV2.ts` rather than upstream's
+  `orchestration.ts` (which the fork keeps for the project aggregate only), and `linkedPullRequest`
+  rides the fork's single `thread.metadata.update` command onto `OrchestrationV2AppThread` and
+  `OrchestrationV2ThreadShell` — the same shape as `pinOrderKey`. Absent leaves the link alone,
+  null unlinks. The server keeps advertising the `threadPullRequestLinking` capability, and the
+  whole client half (web sidebar, chat markdown context menu, Expo thread list) is carried. Two
+  upstream call sites have no fork counterpart: `ChatMarkdown`'s components are built by
+  `createChatMarkdownComponents`, so the link/unlink handlers are threaded through its context
+  object, and upstream's `openProjectPullRequest` split is dropped because the fork's
+  `ChatHeader.tsx` is a presentational breadcrumb with no pull-request menu.
+- Carries the Claude "Auto-compact after" setting (upstream `c7222ca4df`) onto orchestration V2:
+  `autoCompactWindow` reaches Claude through `ClaudeAdapterV2`'s `makeClaudeQueryOptions`, and the
+  shared `/compact` slash command comes with it. The commit's resume-compaction dialog is not
+  carried — it is written against the retired V1 `ClaudeAdapter`'s `onUserDialog`/ask-user-question
+  path, which `ClaudeAdapterV2` does not have, so `@t3tools/shared/claudeCompaction` (question copy
+  shared by that adapter and web) would be dead code. Its `autoCompactThreshold` reporting is
+  likewise dropped: `ThreadTokenUsageSnapshot` gains the field for wire compatibility, but the
+  fork's `deriveLatestContextWindowSnapshot` reads V2 `compaction` turn items and never sees it.
+- Does not carry upstream's V1 `ProviderCommandReactor` interrupt recovery (`17822fab70`). It stops
+  the session and writes `thread.session.status = "stopped"` plus a `provider.turn.interrupt.failed`
+  activity, none of which orchestration V2 models. V2 covers the same ground its own way:
+  `ProviderTurnControlService.load` treats a missing or dead session as already stopped,
+  `isNonRetryableProviderTurnControlFailure` succeeds the outbox item on "not active" races,
+  `ProviderSessionManager.detach` tolerates a failing `interruptTurn`, and
+  `ProviderRuntimeRecoveryService.recover` settles runs orphaned by a dead runtime.
+- Does not carry upstream's V1 subagent-model buffering (`6a2608292d`) or its routine-event
+  projection skip (`c034f51bb7`). Both edit modules the fork deleted with the V1 thread runtime
+  (`provider/Layers/ClaudeAdapter.ts`, the thread half of
+  `orchestration/Layers/ProjectionPipeline.ts`); `ClaudeAdapterV2` seeds a subagent's model from the
+  parent selection and never refines it from assistant snapshots, so there is no race to fix.
+- Ports upstream's "recreate a thread's worktree before starting a turn" (`01fc7d228d`) onto
+  `orchestration-v2/ThreadWorktreeService.ts`. Upstream recreates the exact path from the V1
+  reactor; the fork's `ensureWorktreeForThread` already runs ahead of every send, so a
+  `worktreeExists` probe (injected from `ThreadManagementService`, so the factory keeps returning
+  context-free effects) now treats "registry says present, directory is gone" like a removed
+  registration and reprovisions at a fresh path after `git worktree prune`. The
+  `GitWorkflowService.pruneWorktrees` / `GitVcsDriver.pruneWorktrees` halves are carried as-is, and
+  `GitVcsDriverCore`'s existing best-effort prune helper is renamed `pruneWorktreesQuietly` to make
+  room for the service method.
+- Carries upstream's HEIC composer support (`bd9ed2b4bb`) through the fork's shared attachment
+  validator instead of upstream's inline image loop. `apps/web`'s `composerFileDescriptor` reports
+  a HEIC/HEIF file as the `image/jpeg` it is converted to, so
+  `@t3tools/shared/composerAttachments` (which mobile and the SwiftUI client also read, and which
+  rejects `image/heic` on purpose) is left alone, and `composerAttachmentIntake.logic.ts` moves onto
+  web's adapter so a pasted iPhone photo is recognised as attachable.
+- Carries upstream's macOS PR preview workflow (`c6b8bb8257`) on `macos-15`; the fork has no
+  Blacksmith macOS pool.
 - Records the connecting client's surface and app version on its auth session and on the
   `client.connected` / `client.thread.started` / `client.turn.requested` analytics events
   (upstream `11f051373`), but does not stamp `metadata.origin` onto persisted events. Upstream

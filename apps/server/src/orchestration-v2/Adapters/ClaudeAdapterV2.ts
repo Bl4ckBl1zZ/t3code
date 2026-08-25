@@ -724,6 +724,13 @@ export function makeClaudeQueryOptions(input: {
             append: T3_CODE_ORCHESTRATION_INSTRUCTIONS,
           },
         }),
+    // "Auto-compact after" from the provider settings: Claude summarizes the
+    // conversation once it passes this many tokens, which is the only way to
+    // keep a long-lived thread from burning usage on full history. The schema
+    // already constrains the string to a 100k-1m integer or empty.
+    ...(input.settings?.autoCompactWindow
+      ? { autoCompactWindow: Number(input.settings.autoCompactWindow) }
+      : {}),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
   return input.cwd === null ? options : { ...options, cwd: input.cwd };

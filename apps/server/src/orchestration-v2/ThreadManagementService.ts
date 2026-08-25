@@ -21,6 +21,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -505,6 +506,11 @@ const make = Effect.gen(function* () {
       WorktreeOperationCoordinator.WorktreeOperationCoordinator,
     ),
     worktreeRegistry,
+    worktreeExists: Option.map(
+      yield* Effect.serviceOption(FileSystem.FileSystem),
+      (fileSystem) => (path: string) =>
+        fileSystem.exists(path).pipe(Effect.orElseSucceed(() => true)),
+    ),
   });
   const ensureWorktreeForThread = threadWorktree.ensureWorktreeForThread;
   const withEnsuredWorktreeForThread = threadWorktree.withEnsuredWorktreeForThread;

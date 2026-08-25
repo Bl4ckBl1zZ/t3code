@@ -1712,6 +1712,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : { pinOrderKey: null }),
                 }),
             ...(command.pinOrderKey === undefined ? {} : { pinOrderKey: command.pinOrderKey }),
+            // Absent leaves the link alone; null unlinks.
+            ...(command.linkedPullRequest === undefined
+              ? {}
+              : { linkedPullRequest: command.linkedPullRequest }),
             ...(command.workInboxRole === undefined
               ? {}
               : {

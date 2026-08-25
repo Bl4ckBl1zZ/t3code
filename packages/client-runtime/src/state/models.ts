@@ -11,6 +11,7 @@ import type {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -77,6 +78,8 @@ export interface EnvironmentThreadShell {
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** Pull request a user pinned to this thread; null when nothing is linked. */
+  readonly linkedPullRequest: ThreadLinkedPullRequest | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
@@ -223,6 +226,7 @@ export function presentThreadShell(
     interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    linkedPullRequest: thread.linkedPullRequest ?? null,
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,
