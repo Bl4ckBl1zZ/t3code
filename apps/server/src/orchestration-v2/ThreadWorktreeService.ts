@@ -65,6 +65,12 @@ export interface ThreadWorktreeServiceDependencies<ThreadError, DispatchError> {
     WorktreeOperationCoordinator.WorktreeOperationCoordinator["Service"]
   >;
   readonly worktreeRegistry: Option.Option<WorktreeRegistry.WorktreeRegistry["Service"]>;
+  /**
+   * Whether a worktree directory is still on disk. Injected rather than taken
+   * from `FileSystem` so this factory keeps returning effects with no context
+   * requirement. Absent means "assume it is there".
+   */
+  readonly worktreeExists: Option.Option<(path: string) => Effect.Effect<boolean>>;
 }
 
 export interface ThreadWorktreeServiceShape<ThreadError> {
@@ -96,6 +102,7 @@ export const makeThreadWorktreeService = <ThreadError, DispatchError>(
     worktreeInventory,
     worktreeProvisioning,
     worktreeRegistry,
+    worktreeExists,
   } = dependencies;
 
   const withThreadRepositoryLock = <A, E>(
@@ -185,14 +192,26 @@ export const makeThreadWorktreeService = <ThreadError, DispatchError>(
       return yield* reprovisionError("removal-in-progress");
     }
     const registryRemoved = Option.isSome(registryEntry) && registryEntry.value.state === "removed";
-    if (!isPurged && !registryRemoved) return target;
+    // A worktree directory deleted outside the app (`rm -rf`, a cleanup script,
+    // a `git worktree remove` run by hand) leaves the registry saying "present"
+    // while the provider resumes into a cwd that no longer exists — every later
+    // turn then fails as a bogus "session not found". Treat it like a removed
+    // registration and reprovision instead.
+    const missingOnDisk =
+      !isPurged &&
+      !registryRemoved &&
+      target.thread.worktreePath !== null &&
+      Option.isSome(worktreeExists)
+        ? !(yield* worktreeExists.value(target.thread.worktreePath))
+        : false;
+    if (!isPurged && !registryRemoved && !missingOnDisk) return target;
 
     if (branch === null) return yield* reprovisionError("missing-branch");
     if (Option.isNone(gitWorkflow) || Option.isNone(projectService)) {
       return yield* reprovisionError("worktree-service-unavailable");
     }
 
-    if ((isPurged || registryRemoved) && target.thread.worktreePath !== null) {
+    if ((isPurged || registryRemoved || missingOnDisk) && target.thread.worktreePath !== null) {
       yield* dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make(
@@ -212,6 +231,20 @@ export const makeThreadWorktreeService = <ThreadError, DispatchError>(
     if (Option.isNone(projectOption)) return yield* reprovisionError("project-not-found");
 
     const project = projectOption.value;
+    if (missingOnDisk) {
+      // The vanished directory still has a `.git/worktrees` admin entry, which
+      // keeps `git worktree add` from reusing its path. Best-effort: a failed
+      // prune must not stop the reprovision that follows.
+      yield* gitWorkflow.value.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("thread worktree service failed to prune stale worktrees", {
+            threadId: input.threadId,
+            worktreePath: target.thread.worktreePath,
+            cause,
+          }),
+        ),
+      );
+    }
     const listLocalBranchNames = gitWorkflow.value.listLocalBranchNames;
     if (typeof listLocalBranchNames === "function") {
       const branchNames = yield* listLocalBranchNames(project.workspaceRoot).pipe(

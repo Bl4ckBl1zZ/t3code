@@ -974,6 +974,7 @@ export function threadShellFromProjection(
     ...(projection.thread.worktreeStatus === undefined
       ? {}
       : { worktreeStatus: projection.thread.worktreeStatus }),
+    linkedPullRequest: projection.thread.linkedPullRequest ?? null,
     lineage: projection.thread.lineage,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
@@ -1158,6 +1159,7 @@ function shellFromState(input: {
     ...(input.state.thread.worktreeStatus === undefined
       ? {}
       : { worktreeStatus: input.state.thread.worktreeStatus }),
+    linkedPullRequest: input.state.thread.linkedPullRequest ?? null,
     lineage: input.state.thread.lineage,
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,

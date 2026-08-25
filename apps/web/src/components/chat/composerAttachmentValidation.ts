@@ -17,13 +17,22 @@ import {
   validateComposerAttachment as validateShared,
 } from "@t3tools/shared/composerAttachments";
 
+import { isHeicImageFile } from "../../lib/imageCompression";
+
 export type { ComposerAttachmentKind, ComposerAttachmentValidation };
 export type { PartitionedComposerAttachments };
 
 type FileLike = Pick<File, "name" | "size" | "type">;
 
+/**
+ * HEIC/HEIF photos are decoded to JPEG before they leave the composer
+ * (`prepareImageForAttachment`), so web validates them as the JPEG they become.
+ * The shared rules reject `image/heic` on purpose: mobile has no such decoder,
+ * and no provider can read the original bytes.
+ */
 export function composerFileDescriptor(file: FileLike): ComposerAttachmentDescriptor {
-  return { name: file.name, sizeBytes: file.size, mimeType: file.type };
+  const mimeType = isHeicImageFile(file) ? "image/jpeg" : file.type;
+  return { name: file.name, sizeBytes: file.size, mimeType };
 }
 
 export function validateComposerAttachment(file: FileLike): ComposerAttachmentValidation {

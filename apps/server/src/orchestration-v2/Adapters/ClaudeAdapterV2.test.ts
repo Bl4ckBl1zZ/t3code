@@ -572,6 +572,41 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     }
   });
 
+  it("sends the provider's auto-compact window as a Claude Code setting", () => {
+    const options = makeClaudeQueryOptions({
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5",
+      },
+      nativeThreadId: "native-thread-auto-compact",
+      resume: false,
+      cwd: "/workspace",
+      settings: Schema.decodeSync(ClaudeSettings)({ autoCompactWindow: "300000" }),
+    });
+
+    // `autoCompactWindow` is typed on the SDK's `Settings`, not on its query
+    // options, and an unknown top-level key is dropped without complaint - so
+    // asserting where it landed is the only thing that catches the mistake.
+    assert.notProperty(options, "autoCompactWindow");
+    assert.isObject(options.settings);
+    assert.equal(
+      (options.settings as { readonly autoCompactWindow?: number }).autoCompactWindow,
+      300_000,
+    );
+
+    // Absent setting leaves the bag alone rather than writing a NaN.
+    const untouched = makeClaudeQueryOptions({
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5",
+      },
+      nativeThreadId: "native-thread-auto-compact-absent",
+      resume: false,
+      cwd: "/workspace",
+    });
+    assert.notProperty(untouched, "autoCompactWindow");
+  });
+
   it.effect("writes Claude Agent SDK protocol frames to the native provider log", () =>
     Effect.gen(function* () {
       const writes: Array<{

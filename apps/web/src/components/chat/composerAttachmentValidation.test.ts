@@ -66,6 +66,29 @@ describe("validateComposerAttachment", () => {
   });
 });
 
+describe("HEIC photos", () => {
+  // Web converts HEIC/HEIF to JPEG on the way into the composer, so the shared
+  // rules see the JPEG it becomes rather than the bytes the picker handed over.
+  it.each([
+    { name: "IMG_0001.heic", type: "image/heic" },
+    { name: "IMG_0002.HEIF", type: "" },
+    { name: "IMG_0003.heic", type: "application/octet-stream" },
+  ])("validates $name as the JPEG it is converted to", (file) => {
+    expect(composerFileDescriptor({ ...file, size: 2_000_000 }).mimeType).toBe("image/jpeg");
+    expect(validateComposerAttachment({ ...file, size: 2_000_000 })).toMatchObject({
+      accepted: true,
+      type: "image",
+      mimeType: "image/jpeg",
+    });
+  });
+
+  it("still rejects image types no provider can read", () => {
+    expect(
+      validateComposerAttachment({ name: "logo.svg", size: 12, type: "image/svg+xml" }),
+    ).toMatchObject({ accepted: false });
+  });
+});
+
 describe("partitionComposerAttachments", () => {
   it("reports every rejection instead of stopping at the first", () => {
     const result = partitionComposerAttachments(

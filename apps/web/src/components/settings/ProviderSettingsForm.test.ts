@@ -37,6 +37,18 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("shows the auto-compaction threshold for Claude providers", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    expect(claude).toBeDefined();
+
+    expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "homePath",
+      "autoCompactWindow",
+      "launchArgs",
+    ]);
+  });
+
   it("uses a dedicated environment field instead of legacy Cursor CLI settings", () => {
     const cursor = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("cursor")];
 

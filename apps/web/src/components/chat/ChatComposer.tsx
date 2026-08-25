@@ -71,7 +71,7 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
-import { compressImageForStash, compressImageToByteLimit } from "../../lib/imageCompression";
+import { compressImageForStash, prepareImageForAttachment } from "../../lib/imageCompression";
 import {
   releaseAttachmentUpload,
   retryAttachmentUpload,
@@ -2754,7 +2754,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       for (const file of acceptedFiles) {
         // Images over the wire cap are downscaled to fit rather than
         // refused; files already within it pass through byte-for-byte.
-        const compressed = await compressImageToByteLimit(file, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+        // HEIC/HEIF photos are decoded to JPEG on the way through.
+        const compressed = await prepareImageForAttachment(
+          file,
+          PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+        );
         if (!compressed.ok) {
           compressionError =
             compressed.reason === "unreadable"

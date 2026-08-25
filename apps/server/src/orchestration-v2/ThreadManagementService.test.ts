@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -547,6 +548,91 @@ it.effect("recovers when the registry records a removed path before its purge ev
       }),
     );
     expect(projection.thread.worktreePath).toBe("/server/worktrees/registry-recovery");
+  }).pipe(Effect.provide(reprovisionLayer));
+});
+
+it.effect("reprovisions when the worktree directory vanished behind the registry", () => {
+  let worktreePath: string | null = "/server/worktrees/deleted-by-hand";
+  let worktreeStatus: "present" | "purged" = "present";
+  const makeProjection = (): OrchestrationV2ThreadProjection =>
+    ({
+      thread: {
+        id: ThreadId.make("thread:missing-on-disk"),
+        projectId: ProjectId.make("project:missing-on-disk"),
+        branch: "feature/missing-on-disk",
+        worktreePath,
+        worktreeStatus,
+        deletedAt: null,
+        archivedAt: null,
+      },
+    }) as unknown as OrchestrationV2ThreadProjection;
+  const dispatch = vi.fn((command: OrchestrationV2Command) => {
+    if (command.type === "thread.metadata.update") {
+      worktreePath = command.worktreePath ?? null;
+      worktreeStatus = command.worktreeStatus === "present" ? "present" : "purged";
+    }
+    return Effect.succeed({ sequence: 4, storedEvents: [] });
+  });
+  const pruneWorktrees = vi.fn(() => Effect.void);
+  const createWorktree = vi.fn(() =>
+    Effect.succeed({
+      worktree: {
+        path: "/server/worktrees/missing-on-disk",
+        refName: "feature/missing-on-disk",
+      },
+    }),
+  );
+  const reprovisionLayer = layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () => Effect.succeed(makeProjection()),
+          dispatch,
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({
+                id: ProjectId.make("project:missing-on-disk"),
+                workspaceRoot: "/repo",
+              } as never),
+            ),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          listLocalBranchNames: () => Effect.succeed(["feature/missing-on-disk"]),
+          pruneWorktrees,
+          createWorktree,
+          removeWorktree: () => Effect.void,
+        }),
+        // The registry still says "present": only the filesystem knows.
+        Layer.mock(WorktreeRegistry.WorktreeRegistry)({
+          getRemovedForThreadPath: () => Effect.succeed(Option.none()),
+          register: () => Effect.succeed(undefined as never),
+        }),
+        // layerNoop rather than Layer.mock: FileSystem carries required members
+        // (its brand, `sink`) that a partial mock cannot satisfy, and the noop
+        // layer fills every method this test never calls.
+        FileSystem.layerNoop({
+          exists: () => Effect.succeed(false),
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const projection = yield* service.ensureWorktreeForThread({
+      projectId: ProjectId.make("project:missing-on-disk"),
+      threadId: ThreadId.make("thread:missing-on-disk"),
+    });
+
+    expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/repo" });
+    expect(createWorktree).toHaveBeenCalledWith({
+      cwd: "/repo",
+      refName: "feature/missing-on-disk",
+      path: null,
+    });
+    expect(projection.thread.worktreePath).toBe("/server/worktrees/missing-on-disk");
   }).pipe(Effect.provide(reprovisionLayer));
 });
 

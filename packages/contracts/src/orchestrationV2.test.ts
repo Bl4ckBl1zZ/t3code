@@ -62,6 +62,35 @@ describe("orchestration V2 contracts", () => {
     }
   });
 
+  it("carries a linked pull request on thread.metadata.update, and null to unlink", () => {
+    const linkedPullRequest = {
+      projectId: "project-1",
+      repository: "pingdotgg/t3code",
+      number: 42,
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+    };
+    const linked = decodeOrchestrationV2Command({
+      type: "thread.metadata.update",
+      commandId: "command:link-pull-request",
+      threadId: "thread:link-pull-request",
+      linkedPullRequest,
+    });
+    expect(linked.type).toBe("thread.metadata.update");
+    if (linked.type === "thread.metadata.update") {
+      expect(linked.linkedPullRequest).toEqual(linkedPullRequest);
+    }
+
+    const unlinked = decodeOrchestrationV2Command({
+      type: "thread.metadata.update",
+      commandId: "command:unlink-pull-request",
+      threadId: "thread:link-pull-request",
+      linkedPullRequest: null,
+    });
+    if (unlinked.type === "thread.metadata.update") {
+      expect(unlinked.linkedPullRequest).toBeNull();
+    }
+  });
+
   it("lets legacy snapshot decoders ignore enrichment metadata", () => {
     const decoded = decodeLegacyShellStreamItem({
       kind: "snapshot",

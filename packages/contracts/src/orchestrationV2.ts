@@ -298,6 +298,19 @@ export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2Provider
 export const OrchestrationV2ThreadWorktreeStatus = Schema.Literals(["none", "present", "purged"]);
 export type OrchestrationV2ThreadWorktreeStatus = typeof OrchestrationV2ThreadWorktreeStatus.Type;
 
+/**
+ * A pull request a user pinned to this thread. Kept on the thread rather than
+ * derived from the branch: the same branch can back several PRs, and a thread
+ * whose worktree is gone still has a PR worth showing.
+ */
+export const ThreadLinkedPullRequest = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: TrimmedNonEmptyString,
+});
+export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -312,6 +325,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -1611,6 +1625,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2405,6 +2420,8 @@ export const OrchestrationV2Command = Schema.Union([
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    /** Absent leaves the link alone; null unlinks. */
+    linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
     pinned: Schema.optional(Schema.Boolean),
     /** Fractional key placing this thread within the pinned run. Sent alone to
         reorder, or alongside `pinned: true` to place a fresh pin. */
