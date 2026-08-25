@@ -44,6 +44,10 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let threadSnooze: Bool?
         public let threadPinning: Bool?
         public let threadTitleRegeneration: Bool?
+        /// Whether `thread.metadata.update` persists a pull request reference.
+        /// Absent on older servers, so the link action stays hidden rather than
+        /// sending a command the server will reject.
+        public let threadPullRequestLinking: Bool?
         public let pullRequests: Bool?
         public let serverSelfUpdate: String?
         public let serverSelfUpdateProgress: Bool?
@@ -55,6 +59,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadSnooze
             case threadPinning
             case threadTitleRegeneration
+            case threadPullRequestLinking
             case pullRequests
             case serverSelfUpdate
             case serverSelfUpdateProgress
@@ -71,6 +76,10 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             threadTitleRegeneration = try container.decodeIfPresent(
                 Bool.self,
                 forKey: .threadTitleRegeneration
+            )
+            threadPullRequestLinking = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .threadPullRequestLinking
             )
             pullRequests = try container.decodeIfPresent(Bool.self, forKey: .pullRequests)
             serverSelfUpdate = try container.decodeIfPresent(String.self, forKey: .serverSelfUpdate)

@@ -582,6 +582,7 @@ private func windowedProjectionFixture(
             interactionMode: .default,
             branch: "main",
             worktreePath: nil,
+            linkedPullRequest: nil,
             activeProviderThreadId: nil,
             historyOrigin: nil,
             lineage: OrchestrationV2AppThreadLineage(

@@ -11,7 +11,8 @@ public actor T3Client {
         httpTransport: any HTTPTransport = URLSessionHTTPTransport(),
         webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector(),
         managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil,
-        rpcConnectionWaitTimeout: Duration = .seconds(4)
+        rpcConnectionWaitTimeout: Duration = .seconds(4),
+        connectionIdentity: ClientConnectionIdentity = .current
     ) {
         self.environment = environment
         let api = EnvironmentAPI(
@@ -48,6 +49,11 @@ public actor T3Client {
             var query = components.queryItems ?? []
             query.removeAll { $0.name == "wsTicket" }
             query.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
+            // Announce who is connecting so the session is attributable in
+            // Settings -> Connections and in analytics. Stale values are dropped
+            // first: the base URL is user-supplied and a reconnect reuses it.
+            query.removeAll { ClientConnectionIdentity.queryItemNames.contains($0.name) }
+            query.append(contentsOf: connectionIdentity.queryItems)
             components.queryItems = query
             guard let url = components.url else { throw PairingURLError.invalidURL }
             return url
@@ -662,6 +668,19 @@ public actor T3Client {
     @discardableResult
     public func pin(threadID: String, pinned: Bool) async throws -> DispatchResult {
         try await dispatch(OrchestrationCommands.pin(threadID: threadID, pinned: pinned))
+    }
+
+    /// Pins a pull request to the thread, or clears the pin with `nil`.
+    public func setLinkedPullRequest(
+        threadID: String,
+        pullRequest: OrchestrationV2ThreadLinkedPullRequest?
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.setLinkedPullRequest(
+                threadID: threadID,
+                pullRequest: pullRequest
+            )
+        )
     }
 
     public func setWorkInboxRole(threadID: String, role: String?) async throws -> DispatchResult {
@@ -2301,6 +2320,25 @@ public enum OrchestrationCommands {
         ]
         for (key, field) in fields { value[key] = field }
         return .object(value)
+    }
+
+    /// Pins a pull request to the thread, or clears the pin with `nil`.
+    ///
+    /// Explicit null is what unlinks: `thread.metadata.update` leaves absent
+    /// keys alone, so omitting the field would be "no change" rather than
+    /// "remove the link".
+    public static func setLinkedPullRequest(
+        threadID: String,
+        pullRequest: OrchestrationV2ThreadLinkedPullRequest?,
+        commandID: String = UUID().uuidString
+    ) throws -> JSONValue {
+        updateMetadata(
+            threadID: threadID,
+            commandID: commandID,
+            fields: [
+                "linkedPullRequest": try pullRequest.map { try JSONValue.encode($0) } ?? .null,
+            ]
+        )
     }
 
     /// Model and effort belong to the thread, so a pick here reaches every

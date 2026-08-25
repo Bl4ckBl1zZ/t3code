@@ -63,6 +63,33 @@ public struct ThreadDetailsPullRequest: Equatable, Sendable {
     public var isOpen: Bool { state == "open" }
 }
 
+/// What a person may type to name a pull request they want pinned to a thread.
+///
+/// Web links one by right-clicking its link in the transcript; a phone has no
+/// equivalent gesture over rendered inline text, so the sheet accepts what a
+/// reader can reach instead — the number, or the URL they copied from the host.
+/// Only the number travels: the repository is the project's, which the client
+/// resolves rather than trusting the pasted host to agree about.
+public enum ThreadLinkedPullRequestInput {
+    public static func parse(_ raw: String) -> Int? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // "#123" and "123" are the same request; a URL is matched on its
+        // /pull/<n> or /merge_requests/<n> segment so GitHub and GitLab links
+        // both work, and any trailing /files or #discussion is ignored.
+        if let match = trimmed.firstMatch(
+            of: /(?:pull|pulls|merge_requests)\/(\d+)/
+        ), let number = Int(match.1) {
+            return number > 0 ? number : nil
+        }
+        let digits = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard digits.allSatisfy(\.isNumber), let number = Int(digits), number > 0 else {
+            return nil
+        }
+        return number
+    }
+}
+
 /// The git facts the sheet reads, in the shape
 /// packages/contracts' `VcsStatusResult` reports them.
 ///
@@ -209,6 +236,16 @@ public struct ThreadDetailsGitQuickAction: Equatable, Sendable {
 public enum ThreadDetailsGit {
     /// One-line branch state: what changed, how far it has drifted, and whether
     /// a PR is already open.
+    /// What the "Linked pull request" row reads on its right-hand side.
+    /// "Follows the branch" is the default state, and saying so is what makes
+    /// the row worth having when nothing is linked.
+    public static func linkedPullRequestSubtitle(
+        _ linked: FeatureLinkedPullRequest?
+    ) -> String {
+        guard let linked else { return "Follows the branch" }
+        return "#\(linked.number) · \(linked.repository)"
+    }
+
     public static func statusSummary(_ status: ThreadDetailsGitStatus?) -> String {
         guard let status else { return "Loading branch status…" }
         guard status.isRepo else { return "Not a git repository" }

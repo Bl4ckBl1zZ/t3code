@@ -1185,6 +1185,7 @@ private func v2Projection(
             interactionMode: .default,
             branch: "main",
             worktreePath: "/native",
+            linkedPullRequest: nil,
             activeProviderThreadId: nil,
             historyOrigin: nil,
             lineage: OrchestrationV2AppThreadLineage(

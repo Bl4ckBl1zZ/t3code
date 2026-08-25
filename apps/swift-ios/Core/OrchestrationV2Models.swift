@@ -878,6 +878,8 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let interactionMode: InteractionMode
     public let branch: String?
     public let worktreePath: String?
+    /// See `OrchestrationV2ThreadShell.linkedPullRequest`.
+    public let linkedPullRequest: OrchestrationV2ThreadLinkedPullRequest?
     public let activeProviderThreadId: String?
     public let historyOrigin: String?
     public let lineage: OrchestrationV2AppThreadLineage
@@ -1256,6 +1258,26 @@ public struct OrchestrationV2LatestVisibleMessageSummary: Codable, Equatable, Se
 /// The home list's per-thread row. V2 replaced V1's `latestTurn` / `session` /
 /// `hasPendingApprovals` / `hasPendingUserInput` with a run status, a single
 /// pending runtime request, and precomputed counts.
+/// A pull request a user pinned to a thread.
+///
+/// Kept on the thread rather than derived from its branch: the same branch can
+/// back several pull requests, and a thread whose worktree is gone still has a
+/// pull request worth showing. Mirrors `ThreadLinkedPullRequest` in
+/// `packages/contracts/src/orchestrationV2.ts`.
+public struct OrchestrationV2ThreadLinkedPullRequest: Codable, Equatable, Sendable {
+    public var projectId: String
+    public var repository: String
+    public var number: Int
+    public var url: String
+
+    public init(projectId: String, repository: String, number: Int, url: String) {
+        self.projectId = projectId
+        self.repository = repository
+        self.number = number
+        self.url = url
+    }
+}
+
 public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var projectId: String
@@ -1270,6 +1292,9 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var interactionMode: InteractionMode
     public var branch: String?
     public var worktreePath: String?
+    /// Absent on servers that predate pull-request linking, and on threads with
+    /// nothing linked. Nil means "resolve the pull request from the branch".
+    public var linkedPullRequest: OrchestrationV2ThreadLinkedPullRequest?
     public var lineage: OrchestrationV2AppThreadLineage
     public var forkedFrom: OrchestrationV2ForkSource?
     public var activeProviderThreadId: String?

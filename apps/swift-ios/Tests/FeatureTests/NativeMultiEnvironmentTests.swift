@@ -777,6 +777,7 @@ private func multiEnvironmentDetail(
                 interactionMode: .default,
                 branch: "feat/multi-device",
                 worktreePath: nil,
+                linkedPullRequest: nil,
                 activeProviderThreadId: nil,
                 historyOrigin: nil,
                 lineage: OrchestrationV2AppThreadLineage(
