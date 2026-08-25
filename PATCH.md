@@ -117,6 +117,23 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `autoCompactWindow` rides the SDK's `settings` bag (the same bag as `alwaysThinkingEnabled` and
   `fastMode`), not the top-level query options: the SDK types it on `Settings` and drops an unknown
   top-level key without complaint, so a misplaced one compiles and does nothing.
+- Replaces the Claude 200k/1M "Context Window" model option with an auto-compaction slider, and
+  always runs Claude at the model's largest window. Upstream keeps the picker; on this fork it is
+  gone. The picker could not work as labelled: Claude Code's model registry marks Fable 5, Opus
+  5/4.8/4.7 and Sonnet 5 `context.native_1m`, so the bare model id already carried a 1M window and
+  selecting "200k" changed nothing — 496 recorded sessions on a bare `claude-opus-5` all report
+  `contextWindow: 1000000`. `resolveClaudeApiModelId` now appends `[1m]` only for the models that
+  need the suffix to reach 1M (Opus 4.6, Sonnet 4.6 — the genuinely-200k Opus 4.5 and Haiku 4.5
+  have no 1M form and stay bare), and the replay fixtures' outbound frames were re-pinned to
+  `claude-sonnet-4-6[1m]` to match. In its place every 1M-capable model carries an
+  `autoCompactWindow` select (250K/500K/750K/1M, default 1M) that the composer draws as a slider —
+  Claude Code resolves the compaction threshold as `min(model window, autoCompactWindow)`, so a
+  stop below 1M is a real cap. The slider composes with the provider-wide "Auto-compact after"
+  setting by taking the smaller of the two. Two contract notes: `autoCompactWindow` rides the SDK's
+  `settings` bag, not the top-level query options (the SDK drops an unknown top-level key, which is
+  how the first port of upstream `c7222ca4df` silently did nothing), and the slider is a `select`
+  carrying an optional `presentation: "slider"` hint rather than a third descriptor kind, so the
+  SwiftUI and Expo clients keep rendering their radio lists instead of failing to decode.
 - Does not carry upstream's V1 `ProviderCommandReactor` interrupt recovery (`17822fab70`). It stops
   the session and writes `thread.session.status = "stopped"` plus a `provider.turn.interrupt.failed`
   activity, none of which orchestration V2 models. V2 covers the same ground its own way:

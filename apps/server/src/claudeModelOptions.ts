@@ -11,6 +11,7 @@ import {
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
+  resolveClaudeAutoCompactTokens,
   resolveClaudeEffort,
 } from "./provider/Layers/ClaudeProvider.ts";
 
@@ -18,6 +19,11 @@ export interface CompiledClaudeModelSelection {
   readonly apiModelId: string;
   readonly effort: string | undefined;
   readonly promptEffort: string | undefined;
+  /**
+   * Compaction threshold in tokens, or undefined to let the model run to its
+   * own ceiling. Claude Code takes `min(model window, this)`.
+   */
+  readonly autoCompactWindow: number | undefined;
   readonly settings: Readonly<Record<string, boolean>>;
   readonly queryIdentity: string;
 }
@@ -46,11 +52,20 @@ export function compileClaudeModelSelection(
   };
   const apiModelId = resolveClaudeApiModelId(selection);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;
+  const autoCompactWindow = resolveClaudeAutoCompactTokens(selection);
   return {
     apiModelId,
     effort,
     promptEffort,
+    autoCompactWindow,
     settings,
-    queryIdentity: JSON.stringify({ apiModelId, effort: effort ?? null, settings }),
+    // Part of the query identity: changing the threshold has to reopen the
+    // query, the same as changing the model or effort would.
+    queryIdentity: JSON.stringify({
+      apiModelId,
+      effort: effort ?? null,
+      autoCompactWindow: autoCompactWindow ?? null,
+      settings,
+    }),
   };
 }

@@ -58,6 +58,76 @@ const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";
 
 const CURRENT_CLAUDE_MODELS = new Set(["claude-fable-5", "claude-opus-5", "claude-sonnet-5"]);
 
+/**
+ * Models whose context window only reaches 1M with the `[1m]` model-id suffix.
+ *
+ * The rest of the catalogue is either natively 1M — Fable 5, Opus 5/4.8/4.7 and
+ * Sonnet 5, where the suffix is redundant — or genuinely 200k with no 1M form
+ * worth offering (Opus 4.5, Haiku 4.5). Claude Code's own model registry is the
+ * source of truth for the split: `context.native_1m` and
+ * `context.supports_1m_suffix`.
+ */
+const CLAUDE_MODELS_NEEDING_1M_SUFFIX: ReadonlySet<string> = new Set([
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+]);
+
+/**
+ * Where Claude compacts the conversation, in tokens.
+ *
+ * This replaced a 200k/1M "Context Window" picker that could not work: on a
+ * natively-1M model, sending the bare model id instead of `model[1m]` left the
+ * window at 1M anyway, so picking 200k changed nothing. Every model now runs at
+ * its largest window and this is the real control — Claude Code resolves the
+ * compaction threshold as `min(model window, autoCompactWindow)`, so a stop
+ * below 1M genuinely caps the working set.
+ */
+const CLAUDE_AUTO_COMPACT_CHOICES = [
+  { value: "250k", label: "250K", tokens: 250_000, isDefault: false },
+  { value: "500k", label: "500K", tokens: 500_000, isDefault: false },
+  { value: "750k", label: "750K", tokens: 750_000, isDefault: false },
+  { value: "1m", label: "1M", tokens: 1_000_000, isDefault: true },
+] as const;
+
+export const CLAUDE_AUTO_COMPACT_OPTION_ID = "autoCompactWindow";
+
+/** The top stop means "no cap of ours"; the adapter sends nothing for it. */
+const CLAUDE_AUTO_COMPACT_UNCAPPED_TOKENS = 1_000_000;
+
+function buildClaudeAutoCompactDescriptor() {
+  return buildSelectOptionDescriptor({
+    id: CLAUDE_AUTO_COMPACT_OPTION_ID,
+    label: "Context",
+    description:
+      "Claude summarizes the conversation once it passes this much context. The model's own window stays at 1M.",
+    presentation: "slider",
+    options: CLAUDE_AUTO_COMPACT_CHOICES.map((choice) => ({
+      value: choice.value,
+      label: choice.label,
+      ...(choice.isDefault ? { isDefault: true } : {}),
+    })),
+  });
+}
+
+/**
+ * The compaction threshold a selection asks for, or undefined when it asks for
+ * none — an unknown value, or the top stop, which is the model's own ceiling.
+ */
+export function resolveClaudeAutoCompactTokens(modelSelection: ModelSelection): number | undefined {
+  const raw = getModelSelectionStringOptionValue(modelSelection, CLAUDE_AUTO_COMPACT_OPTION_ID);
+  const descriptors = getProviderOptionDescriptors({
+    caps: getClaudeModelCapabilities(modelSelection.model),
+    ...(raw ? { selections: [{ id: CLAUDE_AUTO_COMPACT_OPTION_ID, value: raw }] } : {}),
+  });
+  const descriptor = descriptors.find(
+    (candidate) => candidate.id === CLAUDE_AUTO_COMPACT_OPTION_ID,
+  );
+  const value = getProviderOptionCurrentValue(descriptor);
+  if (typeof value !== "string") return undefined;
+  const tokens = CLAUDE_AUTO_COMPACT_CHOICES.find((choice) => choice.value === value)?.tokens;
+  return tokens === undefined || tokens >= CLAUDE_AUTO_COMPACT_UNCAPPED_TOKENS ? undefined : tokens;
+}
+
 export function isLegacyClaudeModel(model: string): boolean {
   return !CURRENT_CLAUDE_MODELS.has(model);
 }
@@ -87,14 +157,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           ],
           promptInjectedValues: ["ultrathink"],
         }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          options: [
-            { value: "200k", label: "200k" },
-            { value: "1m", label: "1M", isDefault: true },
-          ],
-        }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -126,15 +189,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           id: "fastMode",
           label: "Fast Mode",
         }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          // Claude Code selects the 1M variant explicitly (`claude-opus-5[1m]`).
-          options: [
-            { value: "200k", label: "200k" },
-            { value: "1m", label: "1M", isDefault: true },
-          ],
-        }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -166,6 +221,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           id: "fastMode",
           label: "Fast Mode",
         }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -192,6 +248,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           id: "fastMode",
           label: "Fast Mode",
         }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -217,14 +274,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           id: "fastMode",
           label: "Fast Mode",
         }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          options: [
-            { value: "200k", label: "200k" },
-            { value: "1m", label: "1M", isDefault: true },
-          ],
-        }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -270,15 +320,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           ],
           promptInjectedValues: ["ultrathink"],
         }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          // Sonnet is 200k-default in Claude Code (1M is opt-in there too).
-          options: [
-            { value: "200k", label: "200k", isDefault: true },
-            { value: "1m", label: "1M" },
-          ],
-        }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -300,15 +342,7 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
           ],
           promptInjectedValues: ["ultrathink"],
         }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          // Sonnet is 200k-default in Claude Code (1M is opt-in there too).
-          options: [
-            { value: "200k", label: "200k", isDefault: true },
-            { value: "1m", label: "1M" },
-          ],
-        }),
+        buildClaudeAutoCompactDescriptor(),
       ],
     }),
   },
@@ -447,27 +481,20 @@ export function isClaudeUltracodeEffort(effort: string | null | undefined): bool
   return effort === "ultracode";
 }
 
-export function resolveClaudeContextWindow(
-  modelSelection: ModelSelection | undefined,
-): string | undefined {
-  const caps = getClaudeModelCapabilities(modelSelection?.model);
-  const raw = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
-  const descriptors = getProviderOptionDescriptors({
-    caps,
-    ...(raw ? { selections: [{ id: "contextWindow", value: raw }] } : {}),
-  });
-  const descriptor = descriptors.find((candidate) => candidate.id === "contextWindow");
-  const value = getProviderOptionCurrentValue(descriptor);
-  return typeof value === "string" ? value : undefined;
-}
-
+/**
+ * The model id to send, always at the model's largest context window.
+ *
+ * The window stopped being a user choice: Claude Code's registry marks Fable 5,
+ * Opus 5/4.8/4.7 and Sonnet 5 as natively 1M, so the bare id already carried a
+ * 1M window and the old "200k" option changed nothing. Only the models that
+ * need the `[1m]` suffix to get there take one; everything else — including the
+ * genuinely-200k Opus 4.5 and Haiku 4.5, which have no 1M form — is sent bare.
+ * Capping the working set is `autoCompactWindow`'s job now.
+ */
 export function resolveClaudeApiModelId(modelSelection: ModelSelection): string {
-  switch (resolveClaudeContextWindow(modelSelection)) {
-    case "1m":
-      return `${modelSelection.model}[1m]`;
-    default:
-      return modelSelection.model;
-  }
+  return CLAUDE_MODELS_NEEDING_1M_SUFFIX.has(modelSelection.model)
+    ? `${modelSelection.model}[1m]`
+    : modelSelection.model;
 }
 
 function toTitleCaseWords(value: string): string {

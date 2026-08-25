@@ -36,10 +36,15 @@ the rest of your environment stay as they are.
 
 ## Reduce Context Usage
 
-In Settings, open your Claude provider and set **Auto-compact after** to a token count between
-`100000` and `1000000`. For example, `300000` compacts the conversation into a summary once it
-reaches about 300,000 tokens, without changing the model's context window. Leave the field
-empty to keep Claude Code's default behavior.
+Claude threads run at the model's largest context window. To keep a long thread from filling it,
+use the **Context** slider next to the model picker: pick 250K, 500K, 750K, or 1M. Below 1M,
+Claude summarizes the conversation once it passes that much context. 1M means no limit beyond the
+model's own.
+
+For a limit that covers every thread on a server, open that server's Claude provider in Settings
+and set **Auto-compact after** to a token count between `100000` and `1000000`. When a thread's
+slider and this setting disagree, the smaller one applies. Leave the field empty to let each
+thread's slider decide.
 
 You can also enter `/compact` in the message composer at any time to summarize the conversation
 so far.

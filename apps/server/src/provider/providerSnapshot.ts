@@ -177,6 +177,9 @@ export function buildSelectOptionDescriptor(input: {
     | undefined;
   readonly description?: string;
   readonly promptInjectedValues?: ReadonlyArray<string>;
+  /** Ordered scales ask for a slider; clients that do not know the hint keep
+      rendering the radio list. */
+  readonly presentation?: "slider";
 }) {
   const options = (input.options ?? []).map((option) => ({
     id: option.value,
@@ -195,6 +198,7 @@ export function buildSelectOptionDescriptor(input: {
     ...(input.promptInjectedValues && input.promptInjectedValues.length > 0
       ? { promptInjectedValues: [...input.promptInjectedValues] }
       : {}),
+    ...(input.presentation ? { presentation: input.presentation } : {}),
   };
 }
 

@@ -40,10 +40,10 @@ const EFFORT = selectDescriptor(
   ],
   "high",
 );
-const CONTEXT_WINDOW = selectDescriptor(
-  "contextWindow",
+const AUTO_COMPACT = selectDescriptor(
+  "autoCompactWindow",
   [
-    { id: "200k", label: "200k" },
+    { id: "250k", label: "250K" },
     { id: "1m", label: "1M" },
   ],
   "1m",
@@ -62,14 +62,14 @@ function display(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
 
 describe("buildTraitsTriggerDisplay", () => {
   it("omits fast mode from the label entirely when it is off", () => {
-    expect(display([EFFORT, fastModeDescriptor(false), CONTEXT_WINDOW])).toEqual({
+    expect(display([EFFORT, fastModeDescriptor(false), AUTO_COMPACT])).toEqual({
       label: "High · 1M",
       showFastModeIcon: false,
     });
   });
 
   it("shows the bolt instead of a text label when fast mode is on", () => {
-    expect(display([EFFORT, fastModeDescriptor(true), CONTEXT_WINDOW])).toEqual({
+    expect(display([EFFORT, fastModeDescriptor(true), AUTO_COMPACT])).toEqual({
       label: "High · 1M",
       showFastModeIcon: true,
     });
