@@ -20,6 +20,17 @@ on:
         required: false
         type: string
 
+# Serialize nightlies (manual dispatch on this fork, which has no scheduled
+# release) so overlapping runs cannot build the same commit twice or publish
+# out of order. Stable tag releases get their own group so a nightly never
+# blocks them. Running publishers are never canceled, and queue: max keeps
+# every pending run instead of the default newest-wins single slot, so a
+# queued stable tag can never be silently dropped.
+concurrency:
+  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
+  cancel-in-progress: false
+  queue: max
+
 permissions:
   contents: read
   id-token: none
@@ -196,8 +207,16 @@ jobs:
 
   relay_public_config:
     name: Resolve T3 Connect public config
-    needs: preflight
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
+    # Consumes only the commit SHA, not preflight's resolved version, so it runs
+    # alongside preflight instead of after it. The condition restates preflight's
+    # own gating, including the repository guard it would otherwise inherit
+    # transitively: check_changes is skipped on non-schedule events (skipped is
+    # neither failure nor success, so success() would be wrong here).
+    needs: [check_changes]
+    if: |
+      github.repository == 'pingdotgg/t3code' &&
+      !failure() && !cancelled() &&
+      (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
     runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
     timeout-minutes: 5
     environment:
@@ -219,7 +238,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preflight.outputs.ref }}
+          ref: ${{ github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -296,8 +315,13 @@ jobs:
   # would be staged as linux-arm64 and fail to load in the distro.
   build_wsl_node_pty:
     name: Build WSL node-pty (linux-${{ matrix.arch }})
-    needs: [preflight]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
+    # Same gating as relay_public_config: only the commit SHA is needed, so this
+    # runs alongside preflight. See the condition comment there.
+    needs: [check_changes]
+    if: |
+      github.repository == 'pingdotgg/t3code' &&
+      !failure() && !cancelled() &&
+      (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
@@ -312,7 +336,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preflight.outputs.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Setup Python
@@ -773,9 +797,8 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
-      - name: Build web package
-        run: vp run --filter @t3tools/web build
-
+      # The t3 build task depends on @t3tools/web#build, so the web client is
+      # built (once) as part of this step.
       - name: Build CLI package
         run: vp run --filter t3 build
 

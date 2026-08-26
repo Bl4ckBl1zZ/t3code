@@ -116,6 +116,10 @@ export interface EnvironmentThreadShell {
   readonly archivedAt: string | null;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
+  /** When the thread last re-entered the active list; anchors the active-list
+      sort so an un-settled thread surfaces at the top. Null when it has never
+      been un-settled, or when the environment's server predates the stamp. */
+  readonly unsettledAt: string | null;
   readonly pinnedAt: string | null;
   /** Fractional sort key for the user-arranged pinned run; null on threads
       pinned before reordering existed (they sort below arranged ones). */
@@ -255,6 +259,7 @@ export function presentThreadShell(
     archivedAt: nullableIso(thread.archivedAt),
     settledOverride: thread.settledOverride,
     settledAt: nullableIso(thread.settledAt),
+    unsettledAt: nullableIso(thread.unsettledAt ?? null),
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,
     workInboxRole: thread.workInboxRole ?? null,

@@ -1396,6 +1396,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       archivedAt: null,
       settledOverride: null,
       settledAt: null,
+      unsettledAt: null,
       pinnedAt: null,
       workInboxRole: null,
       snoozedUntil: null,
@@ -1626,6 +1627,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : settledAt,
+            unsettledAt: null,
             pinnedAt: null,
             updatedAt: alreadySettled ? thread.updatedAt : settledAt,
           };
@@ -1636,6 +1638,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "active",
             settledAt: null,
+            // Re-entry stamp for active-list ordering. A thread already pinned
+            // active keeps its stamp: re-running the same un-settle is not a
+            // fresh re-entry and must not reorder the list.
+            unsettledAt: alreadyPinnedActive ? (thread.unsettledAt ?? null) : now,
             updatedAt: alreadyPinnedActive ? thread.updatedAt : now,
           };
         }
@@ -2902,6 +2908,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...projection.thread,
           settledOverride: null,
           settledAt: null,
+          // A thread already pinned active keeps its re-entry stamp: the
+          // activity reset that clears the pin is not a re-entry and must not
+          // reorder the list.
+          unsettledAt:
+            projection.thread.settledOverride === "active"
+              ? (projection.thread.unsettledAt ?? null)
+              : now,
           updatedAt: now,
         };
         yield* emit(

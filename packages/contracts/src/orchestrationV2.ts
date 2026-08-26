@@ -349,6 +349,12 @@ export const OrchestrationV2AppThread = Schema.Struct({
   settledAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // When the thread last re-entered the active list (an explicit un-settle, or
+  // a settled thread waking on a dispatched message). Anchors the active-list
+  // sort so an un-settled thread surfaces at the top instead of sinking back
+  // to its creation-order slot. Cleared on settle. Optional so threads
+  // projected before the field existed still decode.
+  unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   // Fractional sort key for the user-arranged pinned run. Absent on threads
   // pinned before reordering existed; those sort below arranged ones.
@@ -1662,6 +1668,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(Schema.DateTimeUtc),
+  // See OrchestrationV2AppThread.unsettledAt: last re-entry into the active list.
+  unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   // Fractional sort key for the user-arranged pinned run. Absent on threads
   // pinned before reordering existed; those sort below arranged ones.
@@ -1756,6 +1764,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   settledAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2152,6 +2161,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   updatedAt: Schema.DateTimeUtcFromString,
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   settledAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),

@@ -92,9 +92,21 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `040_ProjectionProjectFaviconPath` likewise targets the project aggregate and is carried as
   `053_ProjectionProjectFaviconPath`. Upstream's `041_AuthSessionClientConnection` targets
   `auth_sessions`, which the fork shares, and is carried as
-  `058_AuthSessionClientConnection`. Upstream's `042_ProjectionThreadLinkedPullRequest` is dropped:
-  it adds a column to the retired V1 `projection_threads`, and the fork carries linked pull
-  requests on the orchestration V2 thread JSON projection instead (see below).
+  `058_AuthSessionClientConnection`. Upstream's `042_ProjectionThreadLinkedPullRequest` and
+  `043_ProjectionThreadsUnsettledAt` are dropped: they add columns to the retired V1
+  `projection_threads`, and the fork carries linked pull requests and the un-settle re-entry stamp
+  on the orchestration V2 thread JSON projection instead (see below).
+- Implements upstream's "un-settled threads return to the top of the list" (`3b86ef941c`) on
+  orchestration V2. `unsettledAt` is an optional field on `OrchestrationV2AppThread` and
+  `OrchestrationV2ThreadShell` (same shape as `pinOrderKey`, so no migration), stamped in
+  `orchestration-v2/Orchestrator.ts` rather than upstream's V1 projector: the `thread.unsettle`
+  mutation and `dispatchMessage`'s wake-a-settled-thread branch both stamp it, `thread.settle`
+  clears it. V2 has no `reason` on the event, so upstream's "reason === user" test becomes V2's
+  own distinction — the user path sets `settledOverride: "active"`, the activity path clears the
+  override — and the "already pinned active keeps its stamp" rule is expressed against that.
+  Upstream's `packages/client-runtime/src/state/threadReducer.ts` half has no fork counterpart:
+  it applies V1 thread detail events, and the fork's shells come from the V2 server projection.
+  The shared sort anchor (`activeThreadAnchorTimestampMs`) and both client halves are carried.
 - Implements upstream's "link pull requests to threads" (`3c75eb1132`) on orchestration V2.
   `ThreadLinkedPullRequest` lives in `contracts/orchestrationV2.ts` rather than upstream's
   `orchestration.ts` (which the fork keeps for the project aggregate only), and `linkedPullRequest`
@@ -209,7 +221,18 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   macOS-gated `apps/mobile` native lint (`d7b9a689f`, `8f7da3b99`) have no fork counterpart. The
   PR-assets guard from `9f12eab38` is carried. `release.yml` adopts upstream's split
   `quality` job (`25dcee00a`) on the fork's runner and its resource-monitor cache, but keeps the
-  fork's full `run-install` in the build matrix.
+  fork's full `run-install` in the build matrix. Upstream's release parallelization (`a3a8cbd605`)
+  is carried without its cron shift — the fork has no `schedule:` trigger — and its move of
+  `relay_public_config` / `build_wsl_node_pty` off `preflight` restates the
+  `github.repository == 'pingdotgg/t3code'` guard those jobs would otherwise inherit through
+  `preflight`, so they stay inert on the fork instead of reaching for production secrets.
+- Has no `apps/server/src/server.test.ts`; the fork's server-router seam tests live beside the
+  modules they cover, and `apps/server/src/ws.test.ts` holds the `server.getConfig`
+  discovery-timeout cases. Upstream additions to `server.test.ts` need rehoming rather than
+  merging, and its `Layer.mock(ExternalLauncher)` fixtures have no fork counterpart to update.
+- Fetches the provider model manifest (upstream `badae6a5cc`) from **upstream's** `main`
+  (`pingdotgg/t3code`), not the fork's. The fork adds no models of its own, so pointing at the
+  source of the catalog keeps legacy classification current without a fork release.
 - Does not carry upstream's "nest mobile task settings in bottom sheets" restructure of the Expo
   client (upstream `85389b988`: `ExistingThreadSettingsRouteScreen`, `thread-settings-options`,
   `NewTaskContextPickerScreens`, `legacy-plan-mode`, the `ComposerToolbarTrigger` ->
