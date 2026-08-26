@@ -45,6 +45,63 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func reopeningAThreadStampsTheReEntryTimeSoTheRowHoistsImmediately() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(
+            threads: [
+                FeatureThread(
+                    id: "thread-1",
+                    projectID: "project-1",
+                    title: "Thread",
+                    isSettled: true,
+                    settledAt: .now
+                ),
+            ]
+        )
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        await model.setSettled("thread-1", settled: false)
+
+        let reopened = model.snapshot.threads.first { $0.id == "thread-1" }
+        #expect(reopened?.isSettled == false)
+        #expect(reopened?.settledAt == nil)
+        #expect(reopened?.unsettledAt != nil)
+
+        // Settling again clears the stamp, so the row returns to creation
+        // order the next time it comes back without a reopen.
+        await model.setSettled("thread-1", settled: true)
+
+        #expect(model.snapshot.threads.first { $0.id == "thread-1" }?.unsettledAt == nil)
+    }
+
+    @Test
+    func reopeningAThreadThatIsAlreadyActiveKeepsItsOriginalStamp() async {
+        let originalStamp = Date(timeIntervalSince1970: 1_000_000)
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(
+            threads: [
+                FeatureThread(
+                    id: "thread-1",
+                    projectID: "project-1",
+                    title: "Thread",
+                    isSettled: false,
+                    keepsActive: true,
+                    unsettledAt: originalStamp
+                ),
+            ]
+        )
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        await model.setSettled("thread-1", settled: false)
+
+        // Not a fresh re-entry: the row must hold its position rather than
+        // jumping to the top a second time.
+        #expect(model.snapshot.threads.first { $0.id == "thread-1" }?.unsettledAt == originalStamp)
+    }
+
+    @Test
     func disconnectEndsConnectionManagement() async {
         let client = FeatureClientStub()
         client.snapshot = FeatureSnapshot(
@@ -1199,6 +1256,7 @@ private func v2Projection(
             archivedAt: nil,
             settledOverride: nil,
             settledAt: nil,
+            unsettledAt: nil,
             pinnedAt: nil,
             workInboxRole: nil,
             timelineClearedAt: nil,

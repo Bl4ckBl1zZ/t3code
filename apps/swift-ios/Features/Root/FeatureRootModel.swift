@@ -317,11 +317,18 @@ public final class FeatureRootModel {
         await perform {
             try await client.setThreadSettled(id: id, settled: settled)
             guard currentEnvironmentIdentity == environment else { return }
-            let settledAt = settled ? Date.now : nil
+            let now = Date.now
             mutateThread(id: id) {
+                // Mirror the server's re-entry stamp so a reopened row hoists
+                // on the tap instead of waiting for the shell stream to land.
+                // A thread already pinned active keeps its stamp: reopening it
+                // again is not a fresh re-entry and must not reorder the list.
+                // Read before `keepsActive` is overwritten below.
+                let wasPinnedActive = $0.keepsActive
                 $0.isSettled = settled
                 $0.keepsActive = !settled
-                $0.settledAt = settledAt
+                $0.settledAt = settled ? now : nil
+                $0.unsettledAt = settled ? nil : (wasPinnedActive ? $0.unsettledAt : now)
                 if settled {
                     $0.pinnedAt = nil
                 }

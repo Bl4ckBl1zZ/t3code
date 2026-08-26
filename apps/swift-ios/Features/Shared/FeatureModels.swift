@@ -219,6 +219,12 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var isSettled: Bool
     public var keepsActive: Bool
     public var settledAt: Date?
+    /// When the thread last re-entered the active list. ``DailyUXSidebarIndex``
+    /// anchors the active and pinned shelves on the later of this and
+    /// ``createdAt``, so a reopened thread surfaces at the top rather than
+    /// sinking back to its creation slot. Nil on servers that predate the
+    /// stamp, and on threads that have never been reopened.
+    public var unsettledAt: Date?
     /// Days of inactivity before the row auto-settles, resolved from the
     /// thread's environment settings at map time (web's
     /// `sidebarAutoSettleAfterDays`). `nil` means the user chose "never".
@@ -299,6 +305,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         isSettled: Bool = false,
         keepsActive: Bool = false,
         settledAt: Date? = nil,
+        unsettledAt: Date? = nil,
         autoSettleAfterDays: Double? = 3,
         autoSettleOnMerge: Bool = true,
         lastActivityAt: Date? = nil,
@@ -343,6 +350,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.isSettled = isSettled
         self.keepsActive = keepsActive
         self.settledAt = settledAt
+        self.unsettledAt = unsettledAt
         self.autoSettleAfterDays = autoSettleAfterDays
         self.autoSettleOnMerge = autoSettleOnMerge
         self.lastActivityAt = lastActivityAt

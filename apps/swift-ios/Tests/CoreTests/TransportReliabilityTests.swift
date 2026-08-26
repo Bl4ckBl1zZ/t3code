@@ -596,6 +596,7 @@ private func windowedProjectionFixture(
             archivedAt: nil,
             settledOverride: nil,
             settledAt: nil,
+            unsettledAt: nil,
             pinnedAt: nil,
             workInboxRole: nil,
             timelineClearedAt: nil,

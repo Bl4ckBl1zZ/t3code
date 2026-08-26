@@ -27,6 +27,37 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func reopenedThreadSurfacesAtTheTopOfTheActiveShelf() {
+        let reopened = thread(id: "reopened", created: -500, updated: -5, unsettled: -1)
+        let newest = thread(id: "newest", created: -100, updated: -80)
+        let middle = thread(id: "middle", created: -300, updated: -200)
+
+        let index = makeIndex([newest, middle, reopened])
+
+        #expect(index.active.map(\.id) == ["reopened", "newest", "middle"])
+    }
+
+    @Test
+    func aReEntryStampOlderThanCreationLeavesTheOrderAlone() {
+        let staleStamp = thread(id: "stale", created: -100, updated: -50, unsettled: -400)
+        let newest = thread(id: "newest", created: -10, updated: -10)
+
+        let index = makeIndex([staleStamp, newest])
+
+        #expect(index.active.map(\.id) == ["newest", "stale"])
+    }
+
+    @Test
+    func activityStillNeverReordersAThreadThatWasNeverReopened() {
+        let olderCreationRecentActivity = thread(id: "old", created: -500, updated: -1)
+        let newerCreationOlderActivity = thread(id: "new", created: -100, updated: -90)
+
+        let index = makeIndex([olderCreationRecentActivity, newerCreationOlderActivity])
+
+        #expect(index.active.map(\.id) == ["new", "old"])
+    }
+
+    @Test
     func settledUsesExplicitStateOrThreeDayRestingAge() {
         let explicitlySettled = thread(
             id: "explicit",
@@ -768,6 +799,7 @@ struct DailyUXSidebarTests {
         updated: TimeInterval,
         state: FeatureThreadState = .idle,
         isSettled: Bool = false,
+        unsettled: TimeInterval? = nil,
         userActivity: TimeInterval? = nil,
         supportsSettlement: Bool? = true,
         supportsSnooze: Bool? = true,
@@ -781,6 +813,7 @@ struct DailyUXSidebarTests {
             updatedAt: now.addingTimeInterval(updated),
             state: state,
             isSettled: isSettled,
+            unsettledAt: unsettled.map(now.addingTimeInterval),
             lastActivityAt: now.addingTimeInterval(updated),
             latestUserActivityAt: userActivity.map(now.addingTimeInterval),
             supportsSettlement: supportsSettlement,

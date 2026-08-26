@@ -263,11 +263,11 @@ struct DailyUXSidebarIndex {
         // work sits at the top of the inbox indefinitely.
         pinned = available
             .filter { $0.pinnedAt != nil && !isSettled($0) }
-            .sorted(by: Self.creationOrder)
+            .sorted(by: Self.activeOrder)
 
         active = available
             .filter { $0.pinnedAt == nil && !isSettled($0) }
-            .sorted(by: Self.creationOrder)
+            .sorted(by: Self.activeOrder)
 
         snoozed = visible
             .filter(isShelfSnoozed)
@@ -296,9 +296,27 @@ struct DailyUXSidebarIndex {
         )
     }
 
-    private static func creationOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
-        if lhs.createdAt != rhs.createdAt {
-            return lhs.createdAt > rhs.createdAt
+    /// Sort anchor for the active shelves: creation time, re-anchored to
+    /// `unsettledAt` when the thread last re-entered the active list. Mirrors
+    /// web and Expo's shared `activeThreadAnchorTimestampMs`, so every client
+    /// renders the same order. A stamp older than creation cannot happen on a
+    /// current server, but taking the later of the two makes a stale one inert
+    /// rather than sinking the row.
+    static func activeAnchor(_ thread: FeatureThread) -> Date {
+        guard let unsettledAt = thread.unsettledAt else { return thread.createdAt }
+        return max(thread.createdAt, unsettledAt)
+    }
+
+    /// Static order, newest anchor on top. Activity never reorders the shelf —
+    /// a row holds its position between lifecycle transitions, and the screen
+    /// only moves when a thread enters or leaves the active list. Reopening is
+    /// such a transition, so the row hoists rather than returning to its
+    /// creation slot where the user would never find it.
+    private static func activeOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
+        let lhsAnchor = activeAnchor(lhs)
+        let rhsAnchor = activeAnchor(rhs)
+        if lhsAnchor != rhsAnchor {
+            return lhsAnchor > rhsAnchor
         }
         return lhs.id < rhs.id
     }

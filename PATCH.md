@@ -318,6 +318,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     reachable from a phone, so this carries the one field that is. Read from
     `providers.claudeAgent.autoCompactWindow` on the server-config subscription and written as that
     single leaf so the deep merge leaves Claude's other settings alone.
+  - **Un-settle ordering.** Upstream's `activeThreadAnchorTimestampMs` has no SwiftUI half, so
+    `DailyUXSidebarIndex.activeAnchor` is the port: the pinned and active shelves sort on the later
+    of `createdAt` and `unsettledAt` instead of `createdAt` alone. `FeatureRootModel.setSettled`
+    also stamps the field optimistically, mirroring the server's "already pinned active keeps its
+    stamp" rule, because the shelves are rebuilt from local state before the shell stream lands and
+    a reopen that only hoists on the round trip reads as a dropped tap. Needs no capability flag:
+    `unsettledAt` is absent on older servers and nil degrades to the previous creation order.
   - **Connection identity.** `ClientConnectionIdentity` puts `clientSurface`, `clientAppVersion`,
     `clientOs`, `clientOsMajorVersion` and `clientDeviceModel` on the `/ws` upgrade URL, so SwiftUI
     sessions stop being unlabeled rows in Settings -> Connections and anonymous `client.connected`
