@@ -23,6 +23,7 @@ import {
   NoOpProviderEventLoggers,
   ProviderEventLoggers,
 } from "../provider/Layers/ProviderEventLoggers.ts";
+import * as ModelManifest from "../provider/ModelManifest.ts";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -63,6 +64,7 @@ const providerInstanceRegistryLayer = ProviderInstanceRegistryHydrationLive.pipe
       FetchHttpClient.layer,
       OpenCodeRuntimeLive.pipe(Layer.provide(NodeServices.layer)),
       Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers),
+      ModelManifest.layerTest,
     ),
   ),
 );
