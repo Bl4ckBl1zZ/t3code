@@ -21,6 +21,7 @@ enum V2Fixture {
         archivedAt: String? = nil,
         settledOverride: String? = nil,
         settledAt: String? = nil,
+        unsettledAt: String? = nil,
         deletedAt: String? = nil
     ) -> OrchestrationV2AppThread {
         OrchestrationV2AppThread(
@@ -51,6 +52,7 @@ enum V2Fixture {
             archivedAt: archivedAt,
             settledOverride: settledOverride,
             settledAt: settledAt,
+            unsettledAt: unsettledAt,
             pinnedAt: nil,
             workInboxRole: nil,
             timelineClearedAt: nil,
@@ -76,6 +78,7 @@ enum V2Fixture {
         archivedAt: String? = nil,
         settledOverride: String? = nil,
         settledAt: String? = nil,
+        unsettledAt: String? = nil,
         updatedAt: String = timestamp
     ) -> OrchestrationV2ThreadShell {
         OrchestrationV2ThreadShell(
@@ -119,6 +122,7 @@ enum V2Fixture {
             archivedAt: archivedAt,
             settledOverride: settledOverride,
             settledAt: settledAt,
+            unsettledAt: unsettledAt,
             pinnedAt: nil,
             workInboxRole: nil,
             timelineClearedAt: nil,

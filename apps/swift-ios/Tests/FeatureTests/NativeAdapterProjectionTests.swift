@@ -334,6 +334,7 @@ private func adapterProjection() -> OrchestrationV2ThreadProjection {
         archivedAt: nil,
         settledOverride: nil,
         settledAt: nil,
+        unsettledAt: nil,
         pinnedAt: nil,
         workInboxRole: nil,
         timelineClearedAt: nil,

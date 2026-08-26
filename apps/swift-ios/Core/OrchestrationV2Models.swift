@@ -889,6 +889,8 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let archivedAt: OrchestrationV2Timestamp?
     public let settledOverride: String?
     public let settledAt: OrchestrationV2Timestamp?
+    /// See `OrchestrationV2ThreadShell.unsettledAt`.
+    public let unsettledAt: OrchestrationV2Timestamp?
     public let pinnedAt: OrchestrationV2Timestamp?
     public let workInboxRole: String?
     public let timelineClearedAt: OrchestrationV2Timestamp?
@@ -1323,6 +1325,12 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var archivedAt: OrchestrationV2Timestamp?
     public var settledOverride: String?
     public var settledAt: OrchestrationV2Timestamp?
+    /// When the thread last re-entered the active list, either through an
+    /// explicit reopen or by a message waking a settled thread. The active
+    /// shelf anchors its order on this so a reopened thread surfaces at the
+    /// top instead of sinking back to its creation slot. Absent on servers
+    /// that predate the stamp, which sorts them by creation as before.
+    public var unsettledAt: OrchestrationV2Timestamp?
     public var pinnedAt: OrchestrationV2Timestamp?
     public var workInboxRole: String?
     public var timelineClearedAt: OrchestrationV2Timestamp?
