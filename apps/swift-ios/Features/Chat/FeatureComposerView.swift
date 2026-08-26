@@ -44,6 +44,9 @@ struct FeatureComposerView: View {
     private let materializesDefaultSelection: Bool
     private let isSending: Bool
     private let isWorking: Bool
+    /// The turn in flight, rendered as a band across the top of the pill. Nil on
+    /// a surface with no thread behind it — a compose sheet has nothing running.
+    private let workingStatus: ThreadWorkingStatus?
     private let focused: FocusState<Bool>.Binding
     private let contextUsage: Double?
     private let forceExpanded: Bool
@@ -66,6 +69,7 @@ struct FeatureComposerView: View {
         materializesDefaultSelection: Bool = true,
         isSending: Bool,
         isWorking: Bool,
+        workingStatus: ThreadWorkingStatus? = nil,
         focused: FocusState<Bool>.Binding,
         onSend: @escaping () -> Void,
         onStop: @escaping () -> Void,
@@ -87,6 +91,7 @@ struct FeatureComposerView: View {
         self.materializesDefaultSelection = materializesDefaultSelection
         self.isSending = isSending
         self.isWorking = isWorking
+        self.workingStatus = workingStatus
         self.focused = focused
         self.onSend = onSend
         self.onStop = onStop
@@ -240,6 +245,12 @@ struct FeatureComposerView: View {
 
     private var composerSurface: some View {
         VStack(spacing: 0) {
+            // Above the swap below on purpose: the status describes the turn,
+            // and the turn keeps running while an approval panel is up.
+            if let workingStatus {
+                ThreadWorkingStatusBar(status: workingStatus)
+            }
+
             if let approval = pendingApprovals.first, let onApprovalDecision {
                 FeatureComposerApprovalPanel(
                     approval: approval,
