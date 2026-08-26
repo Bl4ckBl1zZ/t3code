@@ -265,6 +265,18 @@ public struct ThreadDetailView: View {
         detail?.thread ?? thread
     }
 
+    /// The turn in flight, resolved once for the two surfaces that report it:
+    /// the composer's status band and the header beside the branch.
+    private var workingStatus: ThreadWorkingStatus? {
+        guard let detail else { return nil }
+        return ThreadWorkingStatus.resolve(
+            state: detail.thread.state,
+            workingStartedAt: detail.thread.workingStartedAt,
+            timelineItems: detail.timelineItems,
+            activeRunID: queueState.activeRun?.id
+        )
+    }
+
     private var currentSelection: FeatureSelection? {
         guard let providerID = detail?.thread.providerID ?? thread.providerID,
               let modelID = detail?.thread.modelID ?? thread.modelID else { return nil }
@@ -307,9 +319,11 @@ public struct ThreadDetailView: View {
 
                 // The per-second timeline only exists for the live working
                 // duration; idle threads render a static status instead of
-                // waking every second forever.
+                // waking every second forever. While a turn is in flight the
+                // composer's status band carries that timer, so the header
+                // neither duplicates it nor wakes for it.
                 Group {
-                    if currentThread.homeStatus == .working {
+                    if workingStatus == nil, currentThread.homeStatus == .working {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             headerStatus(at: context.date)
                         }
@@ -333,7 +347,7 @@ public struct ThreadDetailView: View {
             if let icon = headerStatusIcon {
                 Image(systemName: icon)
             }
-            if let duration = currentThread.homeWorkingDuration(at: now) {
+            if workingStatus == nil, let duration = currentThread.homeWorkingDuration(at: now) {
                 Text(duration)
                     .monospaced()
                     .monospacedDigit()
@@ -414,7 +428,6 @@ public struct ThreadDetailView: View {
                     detail: detailWithPendingHandoff(detail),
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
-                    isWorking: isWorking,
                     topContentInset: bannerHeight,
                     bottomContentInset: composerHeight,
                     canLoadEarlier: detail.page?.hasMore == true,
@@ -597,6 +610,7 @@ public struct ThreadDetailView: View {
             materializesDefaultSelection: false,
             isSending: isSending,
             isWorking: detail.thread.state == .working || detail.thread.state == .queued,
+            workingStatus: workingStatus,
             focused: $composerFocused,
             onSend: send,
             onStop: {
@@ -1535,7 +1549,6 @@ private struct ThreadTimelineEntryView: View {
 /// A recycled transcript surface. SwiftUI still owns each entry's rendering,
 /// while UIKit keeps offscreen entries out of the active view hierarchy.
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
-    private static let workingIndicatorID = "__t3-working-indicator__"
     private static let loadEarlierID = "__t3-load-earlier__"
 
     private enum Section: Hashable {
@@ -1553,7 +1566,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let detail: FeatureThreadDetail
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
-    let isWorking: Bool
     /// Keeps the first rows clear of the floating banner while still letting
     /// them scroll underneath it, which is the whole point of the glass.
     let topContentInset: CGFloat
@@ -1617,7 +1629,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             detail: detail,
             renderUpdate: renderUpdate,
             dynamicTypeSize: dynamicTypeSize,
-            isWorking: isWorking,
             canLoadEarlier: canLoadEarlier,
             isLoadingEarlier: isLoadingEarlier,
             alwaysExpandActivity: alwaysExpandActivity,
@@ -1702,7 +1713,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
         private var currentAlwaysExpandActivity = false
-        private var currentIsWorking = false
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
@@ -1729,15 +1739,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .margins(.all, 0)
                     cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
                     cell.accessibilityIdentifier = "load-earlier-turns"
-                    return
-                }
-                if entryID == FeatureTranscriptCollectionView.workingIndicatorID {
-                    cell.contentConfiguration = UIHostingConfiguration {
-                        FeatureThreadWorkingIndicator()
-                    }
-                    .margins(.all, 0)
-                    cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
-                    cell.accessibilityIdentifier = "thread-working-indicator"
                     return
                 }
                 guard let self, let entry = entriesByID[entryID] else {
@@ -1789,7 +1790,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             detail: FeatureThreadDetail,
             renderUpdate: FeatureDetailRenderUpdate?,
             dynamicTypeSize: DynamicTypeSize,
-            isWorking: Bool,
             canLoadEarlier: Bool,
             isLoadingEarlier: Bool,
             alwaysExpandActivity: Bool,
@@ -1811,11 +1811,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let expansionPreferenceChanged =
                 currentAlwaysExpandActivity != alwaysExpandActivity
             let revisionChanged = currentDetailRevision != renderUpdate?.revision
-            let workingChanged = currentIsWorking != isWorking
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             guard threadChanged || typeSizeChanged || expansionPreferenceChanged
-                || revisionChanged || workingChanged || loadEarlierChanged else { return }
+                || revisionChanged || loadEarlierChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
@@ -1832,10 +1831,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentDetailRevision = renderUpdate?.revision
             currentDynamicTypeSize = dynamicTypeSize
             currentAlwaysExpandActivity = alwaysExpandActivity
-            currentIsWorking = isWorking
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier
-            guard threadChanged || idsChanged || !changedIDs.isEmpty || workingChanged
+            guard threadChanged || idsChanged || !changedIDs.isEmpty
                 || loadEarlierChanged else { return }
 
             if threadChanged {
@@ -1849,7 +1847,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
 
             let wasNearBottom = isNearBottom(collectionView)
-            let lastIDChanged = orderedIDs.last != newIDs.last || workingChanged
+            let lastIDChanged = orderedIDs.last != newIDs.last
             let isInitialLoad = currentThreadID == nil || threadChanged
             let previousIDs = orderedIDs
             let prependedMessages = !threadChanged
@@ -1894,15 +1892,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 }
                 snapshot.appendItems(newIDs, toSection: .transcript)
             }
-            if snapshot.indexOfItem(FeatureTranscriptCollectionView.workingIndicatorID) != nil {
-                snapshot.deleteItems([FeatureTranscriptCollectionView.workingIndicatorID])
-            }
-            if isWorking {
-                snapshot.appendItems(
-                    [FeatureTranscriptCollectionView.workingIndicatorID],
-                    toSection: .transcript
-                )
-            }
             let appendedIDSet = Set(state.appendedIDs)
             var reconfiguredIDs = changedIDs.filter { !appendedIDSet.contains($0) }
             if loadEarlierChanged,
@@ -1941,7 +1930,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             for indexPath in collectionView.indexPathsForVisibleItems.sorted() {
                 guard let id = dataSource.itemIdentifier(for: indexPath),
                       id != FeatureTranscriptCollectionView.loadEarlierID,
-                      id != FeatureTranscriptCollectionView.workingIndicatorID,
                       let attributes = collectionView.layoutAttributesForItem(at: indexPath) else {
                     continue
                 }
@@ -2148,30 +2136,6 @@ private struct FeatureLoadEarlierTurnsButton: View {
         .buttonStyle(.plain)
         .disabled(isLoading)
         .accessibilityLabel(isLoading ? "Loading earlier turns" : "Load earlier turns")
-    }
-}
-
-private struct FeatureThreadWorkingIndicator: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "circle.dotted")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(T3Colors.statusRunning)
-                .frame(width: 22, height: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Agent is working")
-                    .font(T3Typography.supportingStrong)
-                    .foregroundStyle(T3Colors.statusRunning)
-                Text("New output will appear here")
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Agent is working. New output will appear here.")
     }
 }
 
