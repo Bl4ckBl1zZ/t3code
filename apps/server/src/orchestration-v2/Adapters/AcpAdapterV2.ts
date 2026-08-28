@@ -24,6 +24,7 @@ import {
   type ProviderRequestKind,
   type ProviderThreadId,
   type ProviderUserInputAnswers,
+  type RuntimeMode,
   type RuntimeRequestId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -97,6 +98,12 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
+  /**
+   * The thread's permission mode. ACP flavors that translate it into CLI spawn
+   * arguments (Grok) read it here; the runtime is respawned on a mode change
+   * because Grok reports `supportsRuntimeModeSwitchInSession: false`.
+   */
+  readonly runtimeMode: RuntimeMode;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
@@ -202,6 +209,22 @@ export interface AcpAdapterV2Flavor {
     Crypto.Crypto | Scope.Scope
   >;
   readonly resolveModelId?: (selection: ModelSelection) => string | undefined;
+  /**
+   * Optional flavor-owned replacement for the plain `session/set_model` switch.
+   * Grok reselects the current model to change reasoning effort, which rides
+   * `session/set_model` `_meta` rather than an ACP config option.
+   */
+  readonly applySessionModel?: (input: {
+    readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
+    readonly sessionSetupResult: AcpSessionRuntimeStartResult["sessionSetupResult"];
+    readonly requestedModelId: string | undefined;
+    readonly modelSelection: ModelSelection;
+  }) => Effect.Effect<void, EffectAcpErrors.AcpError>;
+  /**
+   * Model-option ids `applySessionModel` consumes itself. They never reach
+   * `session/set_config_option`, so the session does not have to expose them.
+   */
+  readonly modelOptionIdsHandledBySessionModel?: ReadonlyArray<string>;
   readonly registerExtensions?: (
     context: AcpAdapterV2ExtensionContext,
   ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -1690,6 +1713,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const nativeLogging = options.nativeLogging?.(input.threadId);
         const makeRuntimeInput = (runtimeGeneration: number): AcpAdapterV2RuntimeInput => ({
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
+          runtimeMode: input.runtimePolicy.runtimeMode,
           mcpServers: acpMcpServers(input.threadId),
           interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
           clientCapabilities: {
@@ -4180,27 +4204,38 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           runtimePolicy: ProviderAdapterV2RuntimePolicy,
         ) {
           const requestedModel = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
-          if (
-            requestedModel.length > 0 &&
-            requestedModel !== "auto" &&
-            requestedModel !== "default"
-          ) {
+          const namedModel =
+            requestedModel.length > 0 && requestedModel !== "auto" && requestedModel !== "default"
+              ? requestedModel
+              : undefined;
+          if (flavor.applySessionModel !== undefined) {
+            yield* flavor.applySessionModel({
+              runtime,
+              sessionSetupResult: startResult.sessionSetupResult,
+              requestedModelId: namedModel,
+              modelSelection,
+            });
+          } else if (namedModel !== undefined) {
             const currentModel = startResult.sessionSetupResult.models?.currentModelId;
-            if (currentModel !== requestedModel) {
+            if (currentModel !== namedModel) {
               if (startResult.sessionSetupResult.models != null) {
-                yield* runtime.setSessionModel(requestedModel);
+                yield* runtime.setSessionModel(namedModel);
               } else if (
                 startResult.sessionSetupResult.configOptions?.some(
                   (option) => option.category === "model",
                 ) === true
               ) {
-                yield* runtime.setModel(requestedModel);
+                yield* runtime.setModel(namedModel);
               }
             }
           }
+          const sessionModelOptionIds = new Set(flavor.modelOptionIdsHandledBySessionModel ?? []);
+          const configSelections = (modelSelection.options ?? []).filter(
+            (selection) => !sessionModelOptionIds.has(selection.id),
+          );
           const configOptions = yield* runtime.getConfigOptions;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
-          const unsupportedConfigIds = (modelSelection.options ?? [])
+          const unsupportedConfigIds = configSelections
             .map((selection) => selection.id)
             .filter((id) => !availableConfigIds.has(id));
           if (unsupportedConfigIds.length > 0) {
@@ -4209,7 +4244,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               detail: `ACP session ${startResult.sessionId} does not expose requested configuration option(s): ${unsupportedConfigIds.join(", ")}`,
             });
           }
-          for (const selection of modelSelection.options ?? []) {
+          for (const selection of configSelections) {
             yield* runtime.setConfigOption(selection.id, selection.value);
           }
           const modeState = yield* runtime.getModeState;

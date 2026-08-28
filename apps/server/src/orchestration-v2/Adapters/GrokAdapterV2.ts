@@ -1,4 +1,5 @@
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   defaultInstanceIdForDriver,
   GrokSettings,
@@ -17,6 +18,9 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import { ServerConfig } from "../../config.ts";
 import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
 import {
+  applyGrokAcpModelSelection,
+  currentGrokModelIdFromSessionSetup,
+  currentGrokReasoningEffortFromSessionSetup,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "../../provider/acp/GrokAcpSupport.ts";
@@ -54,6 +58,9 @@ import {
   type AcpAdapterV2Flavor,
   type AcpAdapterV2RuntimeInput,
 } from "./AcpAdapterV2.ts";
+
+/** Grok's reasoning-effort model option, advertised by `GrokProvider`. */
+const GROK_REASONING_EFFORT_OPTION_ID = "reasoningEffort";
 
 export const GROK_PROVIDER = ProviderDriverKind.make("grok");
 export const GROK_DRIVER_KIND = GROK_PROVIDER;
@@ -179,6 +186,23 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
     // still accepts image content blocks (verified with real screenshots).
     supportsImagePrompts: true,
     resolveModelId: (selection) => resolveGrokAcpBaseModelId(selection.model),
+    // Grok carries reasoning effort on `session/set_model` `_meta`, not as an
+    // ACP config option, and reselects the current model when only the effort
+    // changed. Keep the id out of the config-option path so the session is not
+    // asked for an option it never advertises.
+    modelOptionIdsHandledBySessionModel: [GROK_REASONING_EFFORT_OPTION_ID],
+    applySessionModel: ({ runtime, sessionSetupResult, requestedModelId, modelSelection }) =>
+      applyGrokAcpModelSelection({
+        runtime,
+        currentModelId: currentGrokModelIdFromSessionSetup(sessionSetupResult),
+        currentReasoningEffort: currentGrokReasoningEffortFromSessionSetup(sessionSetupResult),
+        requestedModelId,
+        requestedReasoningEffort: getModelSelectionStringOptionValue(
+          modelSelection,
+          GROK_REASONING_EFFORT_OPTION_ID,
+        ),
+        mapError: (cause) => cause,
+      }).pipe(Effect.asVoid),
     makeRuntime:
       options.makeRuntime ??
       ((input) =>
@@ -188,6 +212,7 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
           grokSettings: options.settings,
           environment: options.environment,
           childProcessSpawner: options.childProcessSpawner,
+          runtimeMode: input.runtimeMode,
         })),
     registerExtensions: registerGrokAcpExtensions,
     extractSubagentUpdate: extractXAiAcpSubagentUpdate,

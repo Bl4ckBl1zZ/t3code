@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   resolveProviderInstanceEnabled,
@@ -203,6 +203,25 @@ function ProviderAuthEmail(props: {
   );
 }
 
+function providerEnvironmentsEqual(
+  left: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  right: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((variable, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        variable.name === other.name &&
+        variable.value === other.value &&
+        variable.sensitive === other.sensitive &&
+        variable.valueRedacted === other.valueRedacted
+      );
+    })
+  );
+}
+
 function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
@@ -210,6 +229,30 @@ function ProviderEnvironmentSection(props: {
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
     props.environment.map(makeEnvironmentDraftRow),
   );
+  const previousEnvironmentRef = useRef(props.environment);
+  const lastPublishedEnvironmentRef = useRef<
+    ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined
+  >(undefined);
+
+  // The card stays mounted while the server rewrites the instance underneath
+  // it, so adopt an environment that changed elsewhere. Echoes of what this
+  // editor just published are ignored: re-seeding on those would drop the
+  // in-progress row the user is still typing.
+  useEffect(() => {
+    const previousEnvironment = previousEnvironmentRef.current;
+    const lastPublishedEnvironment = lastPublishedEnvironmentRef.current;
+    previousEnvironmentRef.current = props.environment;
+    lastPublishedEnvironmentRef.current = undefined;
+    if (
+      previousEnvironment === props.environment ||
+      providerEnvironmentsEqual(previousEnvironment, props.environment) ||
+      (lastPublishedEnvironment !== undefined &&
+        providerEnvironmentsEqual(lastPublishedEnvironment, props.environment))
+    ) {
+      return;
+    }
+    setRows(props.environment.map(makeEnvironmentDraftRow));
+  }, [props.environment]);
 
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published: ProviderInstanceEnvironmentVariable[] = [];
@@ -229,6 +272,7 @@ function ProviderEnvironmentSection(props: {
       const { id: _id, ...rest } = row;
       published.push({ ...rest, name });
     }
+    lastPublishedEnvironmentRef.current = published;
     props.onChange(published);
   };
 
