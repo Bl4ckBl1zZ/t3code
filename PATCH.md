@@ -71,7 +71,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - Keeps upstream's `EnvironmentProviderSettings` inline in
   `apps/web/src/components/settings/SettingsPanels.tsx`; the fork carries no
   `ProviderSettingsPanel.tsx`. Upstream changes to that file resolve to the fork: port the behavior
-  into `SettingsPanels.tsx` instead of restoring the module.
+  into `SettingsPanels.tsx` instead of restoring the module. Upstream's "split provider settings
+  into list and editor" (`e2d4d12a81`) is therefore not carried: it is a master-detail redesign of
+  that panel plus a `mode: "list" | "editor"` rewrite of `ProviderInstanceCard`, written against
+  the module the fork retired, and the fork's stacked collapsible list already reaches every field.
+  Carried out of it: `providerStatus.ts`'s neutral disabled dot (amber read as a warning on a
+  provider the user turned off) and `ProviderEnvironmentSection`'s draft re-sync, which adopts an
+  environment the server changed underneath a mounted card while ignoring echoes of what the
+  editor itself just published. `providerSettingsTabs.ts` has no fork counterpart.
 - Runs the shared settle rules (`packages/client-runtime/src/state/threadSettled.ts`) against the
   fork's orchestration V2 thread shell. Upstream types them on `OrchestrationThreadShell` and reads
   `latestTurn`; the fork uses structural shapes (`QueuedThreadShell`/`SettlementThreadShell`,
@@ -153,6 +160,29 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `isNonRetryableProviderTurnControlFailure` succeeds the outbox item on "not active" races,
   `ProviderSessionManager.detach` tolerates a failing `interruptTurn`, and
   `ProviderRuntimeRecoveryService.recover` settles runs orphaned by a dead runtime.
+- Ports the reachable half of upstream's "improve Grok skills, plans, usage, and turn reliability"
+  (`ead4ce52a1`) onto orchestration V2. Everything that lives in shared modules is carried as-is:
+  Grok skill discovery (`provider/Drivers/GrokSkills.ts`, wired through `checkGrokProviderStatus`,
+  which now takes the server `cwd`), the reasoning-effort model descriptors in `GrokProvider.ts`,
+  the `_meta`-carrying `session/set_model` path in `GrokAcpSupport.ts`, per-runtime-mode Grok spawn
+  arguments (`grokAcpSpawnArgs`), the plan-mode helpers and rate-limit/error prompt settlement in
+  `XAiAcpExtension.ts`, and the whole usage-transcript half. Two V2 seams were added to reach it:
+  `AcpAdapterV2RuntimeInput` now carries `runtimeMode` so Grok spawns with the thread's permission
+  mode, and the flavor gained `applySessionModel` / `modelOptionIdsHandledBySessionModel` so Grok's
+  `reasoningEffort` rides `session/set_model` `_meta` instead of `session/set_config_option` — the
+  fork's `configureSession` would otherwise reject the option the session never advertises. Not
+  carried: the commit's rewrite of the retired V1 `provider/Layers/GrokAdapter.ts` — its turn/active-tool
+  inactivity watchdog, the `enter_plan_mode`/`exit_plan_mode` proposed-plan gate, and
+  `selectGrokPermissionOptionId`'s allow*once fallback for "Always allow this session". The plan and
+  rate-limit helpers those used are present in `XAiAcpExtension.ts` but `GrokAdapterV2` registers no
+  `x.ai/exit_plan_mode` handler yet, so Grok plan mode still reaches the fork's clients as ordinary
+  tool calls. Upstream's mock-agent hooks for the watchdog (`T3_ACP_EMIT*\*\_THEN_HANG`) are carried so
+  a later port has its harness.
+- Does not carry upstream's "recover stale Codex approval callbacks" (`230c5d4a5c`). It widens the
+  V1 `ProviderCommandReactor`'s "unknown pending approval request" matcher, and the fork deleted that
+  reactor with the V1 thread runtime. Orchestration V2 answers approvals through
+  `RuntimeRequestService` against `CodexAdapterV2`'s in-process deferred map rather than the V1
+  `ProviderService` callback registry, so the stale-callback shape has no fork counterpart to match.
 - Does not carry upstream's V1 subagent-model buffering (`6a2608292d`) or its routine-event
   projection skip (`c034f51bb7`). Both edit modules the fork deleted with the V1 thread runtime
   (`provider/Layers/ClaudeAdapter.ts`, the thread half of
@@ -230,6 +260,11 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   modules they cover, and `apps/server/src/ws.test.ts` holds the `server.getConfig`
   discovery-timeout cases. Upstream additions to `server.test.ts` need rehoming rather than
   merging, and its `Layer.mock(ExternalLauncher)` fixtures have no fork counterpart to update.
+- Has no `apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts` either; it went with the
+  V1 thread projectors. The pipeline itself survives for the project aggregate, so upstream fixes to
+  it still apply and their tests get rehomed: upstream's "replay all un-applied events during
+  projection bootstrap" (`a6797b3b97`) is carried, and its backlog test lives in the fork's
+  `ProjectionPipelineBootstrap.test.ts` over `project.created` events alone.
 - Fetches the provider model manifest (upstream `badae6a5cc`) from **upstream's** `main`
   (`pingdotgg/t3code`), not the fork's. The fork adds no models of its own, so pointing at the
   source of the catalog keeps legacy classification current without a fork release.
