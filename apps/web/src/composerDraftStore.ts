@@ -36,8 +36,8 @@ import { resolveAppModelSelection, resolveAppModelSelectionForInstance } from ".
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
-  type ChatAttachment,
   type ChatImageAttachment,
+  type ChatKnownAttachment,
 } from "./types";
 import {
   type TerminalContextDraft,
@@ -99,8 +99,10 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
   file: File;
 }
 
+// Composer attachments are always locally created and validated, so they are
+// drawn from the known set rather than the wire union's open member.
 export interface ComposerFileAttachment extends Omit<
-  Exclude<ChatAttachment, ChatImageAttachment>,
+  Exclude<ChatKnownAttachment, ChatImageAttachment>,
   "id"
 > {
   id: string;
@@ -1038,6 +1040,13 @@ export function deriveEffectiveComposerModelState(input: {
 }): EffectiveComposerModelState {
   const baseModelCandidate =
     input.threadModelSelection?.model ?? input.projectModelSelection?.model ?? null;
+  // An OpenCode model the user picked can vanish from the catalog when the
+  // upstream provider stops advertising it. Keep the saved selection rather
+  // than silently rewriting the thread onto the catalog's first entry.
+  const preserveThreadModel =
+    input.selectedInstanceId !== null &&
+    input.selectedInstanceId !== undefined &&
+    input.threadModelSelection?.instanceId === input.selectedInstanceId;
   const baseModel =
     (input.selectedInstanceId
       ? resolveAppModelSelectionForInstance(
@@ -1045,6 +1054,7 @@ export function deriveEffectiveComposerModelState(input: {
           input.settings,
           input.providers,
           baseModelCandidate,
+          { preserveUnavailableSelection: preserveThreadModel },
         )
       : null) ??
     resolveAppModelSelection(
@@ -1076,6 +1086,7 @@ export function deriveEffectiveComposerModelState(input: {
         input.settings,
         input.providers,
         activeSelection.model,
+        { preserveUnavailableSelection: true },
       ) ??
       resolveAppModelSelection(
         input.selectedProvider,

@@ -74,7 +74,10 @@ const seedBlob = Effect.fn("seedBlob")(function* (attachment: ChatAttachment, co
   const path = yield* Path.Path;
   yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true }).pipe(Effect.orDie);
   yield* fileSystem
-    .writeFileString(path.join(config.attachmentsDir, attachmentRelativePath(attachment)), contents)
+    .writeFileString(
+      path.join(config.attachmentsDir, attachmentRelativePath(attachment) ?? attachment.id),
+      contents,
+    )
     .pipe(Effect.orDie);
 });
 

@@ -100,6 +100,9 @@ function fallbackExtension(input: {
       return ".mp4";
     case "file":
       return "";
+    // Attachment types this build does not know: no extension to infer.
+    default:
+      return "";
   }
 }
 

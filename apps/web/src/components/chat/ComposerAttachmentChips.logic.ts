@@ -46,8 +46,12 @@ export function duplicateAttachmentNames(
   return duplicates;
 }
 
+/**
+ * `type` is the wire union's open discriminator: a kind this build does not
+ * know still gets a readable label from its extension rather than no label.
+ */
 export function attachmentKindLabel(input: {
-  readonly type: "image" | "video" | "pdf" | "file";
+  readonly type: string;
   readonly mimeType: string;
   readonly name: string;
 }): string {

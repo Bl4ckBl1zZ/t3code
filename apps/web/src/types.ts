@@ -19,6 +19,9 @@ import type {
   ThreadRuntimeSummary,
 } from "@t3tools/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import { videoMimeType } from "@t3tools/shared/video";
+
+export { videoMimeType } from "@t3tools/shared/video";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -44,6 +47,44 @@ export type ChatAttachment = ContractChatAttachment extends infer Attachment
     ? ChatImageAttachment
     : Attachment & { readonly previewUrl?: string }
   : never;
+
+/**
+ * The attachment kinds this build renders. The wire union additionally carries
+ * an open member for kinds a newer server introduces, so decoding a message
+ * never fails; anything the UI must switch on narrows to this set first.
+ */
+export type ChatKnownAttachment = Extract<
+  ChatAttachment,
+  { readonly type: "image" | "file" | "pdf" | "video" }
+>;
+
+// The wire union's open member is typed `type: string`, so a literal
+// comparison does not narrow. Use these guards wherever type-specific fields
+// are read.
+export function isKnownAttachment(attachment: ChatAttachment): attachment is ChatKnownAttachment {
+  return (
+    attachment.type === "image" ||
+    attachment.type === "file" ||
+    attachment.type === "pdf" ||
+    attachment.type === "video"
+  );
+}
+
+export function isImageAttachment(
+  attachment: ChatAttachment,
+): attachment is Extract<ChatAttachment, { readonly type: "image" }> {
+  return attachment.type === "image";
+}
+
+export function isFileAttachment(
+  attachment: ChatAttachment,
+): attachment is Extract<ChatAttachment, { readonly type: "file" | "pdf" | "video" }> {
+  return attachment.type === "file" || attachment.type === "pdf" || attachment.type === "video";
+}
+
+export function isVideoAttachment(attachment: ChatAttachment): boolean {
+  return videoMimeType(attachment) !== null;
+}
 
 export interface ChatMessage {
   readonly id: MessageId;

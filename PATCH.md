@@ -40,7 +40,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   items built inline in `Sidebar.tsx`. Upstream changes to those retired modules resolve to the
   fork: port the menu feature itself (new items, handlers) into `Sidebar.tsx`/`useThreadActions.ts`
   instead of merging the files.
-- Does not carry upstream's two large web-client redesigns that are written against the V1
+- Does not carry upstream's three large web-client redesigns that are written against the V1
   activity model: "collapse tool activity into one line" (`4a9edff4c1`, the `work-toggle` row,
   `deriveToolLifecycleCollapseKey`, and the `live-activity-focus` CSS) and "attach composer state
   drawers" (`792a1404f6`, the shoulder tabs, `ComposerTasksBadge`, `chat-composer-*-drawer`
@@ -50,7 +50,51 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Follow-on upstream work on those files resolves to the fork, and upstream's companion fixes
   (`490f48ed98`'s `AgentSpawnCtaRow` inset, `68966c1e66`'s shoulder-tab spacing) have no fork
   counterpart. Carried out of those commits: `deriveActiveWorkStartedAt`'s
-  `latestUserMessageAt` fallback, ported onto the V2 run shell.
+  `latestUserMessageAt` fallback, ported onto the V2 run shell. The third is "unify activity logs
+  and composer banners" (`3d32797f6f`, reverted by `8dcb96314c`, re-landed as `30175a8af0`, then
+  `9842518c9a` and `3f62e6fa65`): it deletes `ThreadSyncStatusPill`, rewrites `ComposerBannerStack`
+  around a new `ComposerBanner`/`ComposerSurface`/`ComposerActivityStatus` trio, and rebuilds
+  `MessagesTimeline` and `session-logic` on the drawer surfaces the fork already declined. The
+  features that landed only inside those files are therefore not carried either: web video
+  attachments in chat (`ac4aae101d`), expanded-preview playback for agent images (`8f525af5af`),
+  the circle-alert treatment for failed tool calls (`8b817cbcaa`/`f1e6f0c9bb`), interim turn folding
+  (`17c48f7fc1`), and the smoothed worktree setup status (`ef84bc9873`). Upstream's separate web
+  file-attachment model (`bcb855a633`: a `files` array beside `images`, `composerFileNeedsReattach`,
+  per-chip upload progress) is likewise not carried — the fork's composer already models
+  image/file/pdf/video in one `images` array with its own upload queue.
+- Does not carry upstream's Codex citations and artifact templates in web chat (`c1e70b5f8c`).
+  The shared halves are carried and exported from `@t3tools/client-runtime`
+  (`codexFileCitations`, `codexArtifactTemplates`, `codexMarkdownDirectives`), but the renderer
+  half is written against upstream's inline `useMemo` component map, while the fork builds its
+  through `createChatMarkdownComponents` and keeps the `MarkdownMedia` image path. The
+  client-runtime modules stay so a later port has them; they have no fork consumer yet.
+- Does not carry upstream's provider-settings list/editor split (`e2d4d12a81`, `f276e632c5`,
+  `5e63aea2df`) or its `ProviderInstanceCard` `mode: "list" | "editor"` restructure. The fork keeps
+  `EnvironmentProviderSettings` inline in `SettingsPanels.tsx` with the card's own expand/collapse.
+- Does not carry upstream's pinned-block drag-to-reorder in the web sidebar (the
+  `optimisticPinnedOrder` / `handlePinnedDragEnd` block) or its searchable project-filter combobox
+  (`48c176b3cf`, `filterSidebarProjectScopeItems`): both are written against upstream's sidebar
+  shell, and the fork keeps its client-local whole-list manual order. Upstream's toggleable unpin
+  confirmation (`22c311ddec`) _is_ carried — the setting, `requestThreadUnpinConfirmation`, and
+  `useThreadActions` come across unchanged, and the fork's `Sidebar.tsx` `toggleThreadPin` gates its
+  `thread.metadata.update` on it rather than upstream's `confirmAndUnpinThread`, which routes
+  through the V1 `thread.unpin` command.
+- Carries upstream's `ChatUnknownAttachment` forward-compatibility catch-all (`8f49132214`) onto the
+  fork's richer `chatAttachment.ts`, whose known kinds are image/file/pdf/video rather than
+  upstream's image/file. Consequences: `attachmentRelativePath` returns `string | null` and every
+  writer skips a kind it cannot place, `uploadPaths`' extension switch gains a default, and web
+  narrows through a new `ChatKnownAttachment`/`isKnownAttachment` pair in `apps/web/src/types.ts`
+  because the union's open member is typed `type: string` and defeats literal narrowing. The
+  composer's own attachment types are drawn from `ChatKnownAttachment`: composer attachments are
+  always locally created and validated, so an unknown kind can never reach them.
+- Keeps `PROVIDER_SEND_TURN_MAX_FILE_BYTES` at 20MB rather than upstream's 50MB (`8f49132214`).
+  Upstream raised the cap alongside a streaming upload path for generic files; on this fork the
+  composer still sends file/pdf/video attachments through the inline base64 path, whose
+  `PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS` cap tops out around 21MB, so advertising 50MB would
+  promise a size the client cannot send. The signed-upload contract widening itself is carried
+  (`assets.ts` accepts `type: "file"` uploads, `AssetAccess` mints download disposition and
+  filename/mime claims, `attachmentStore` encodes the extension in the attachment id, and
+  `http.ts` serves range requests for inline video).
 - Does not carry upstream's "retry failed thread bootstraps with a fresh id" (`8824f8f24f`).
   It reports a deleted bootstrap thread through the V1 `OrchestrationDispatchCommandError`, which
   the fork does not define; the fork launches threads through V2 `launchThread`, which keeps the
@@ -226,6 +270,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `relay_public_config` / `build_wsl_node_pty` off `preflight` restates the
   `github.repository == 'pingdotgg/t3code'` guard those jobs would otherwise inherit through
   `preflight`, so they stay inert on the fork instead of reaching for production secrets.
+- Does not carry upstream's V1 draft-bootstrap retry (`a40aef4ccb`) or the
+  `OrchestrationEventStore.hasEventAfter` probe it added. Its only consumer is the V1
+  `ProjectionPipeline` deletion-cleanup drain, and the fork's V2 `launchThread` already permits
+  relaunching an empty thread, so the method would be dead weight on a shared interface every fake
+  event store has to satisfy. The `metadata.origin` half of `2921050c69` is likewise dropped —
+  the fork's `ApplicationEventMetadata` carries no origin bag — but its `ClientSurface` widening
+  to accept `"cli"` is carried.
 - Has no `apps/server/src/server.test.ts`; the fork's server-router seam tests live beside the
   modules they cover, and `apps/server/src/ws.test.ts` holds the `server.getConfig`
   discovery-timeout cases. Upstream additions to `server.test.ts` need rehoming rather than
@@ -247,6 +298,20 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   status bar) is dropped for exactly this reason: it targets that restructure's
   `ThreadSettingsModelsScreen`/`ThreadSettingsChoiceScreen`, which the fork's `Modal`-based sheet
   does not have, and the fork ships no Android target.
+- Has frozen the Expo client (`apps/mobile`) against upstream as of the 2026-09-01 sync. It stays on
+  Expo SDK 56 and its own theming, and this sync carries none of upstream's mobile work: the SDK 57
+  upgrade (`3e6ab36f6e`, with `react-native` 0.86 and the reshuffled `patchedDependencies` set), the
+  Uniwind semantic-theme compilation (`018d7f2775`, `generated-uniwind-themes.css`,
+  `withUniwind`/`tintColorClassName`, and its `no-mobile-uniwind-theme-escape-hatches` oxlint rule),
+  the file/video composer work (`86c9a9288b`, `e3dcc1615c`, `31c1c5996f`), offline voice input
+  (`352710d497`), the Expo-glass swap (`9b2d04317c`), and the header/tool-summary fixes on top of
+  them. Reason: the fork's Expo client is wired to orchestration V2, so upstream's tree cannot be
+  taken wholesale, and its composer/theming shells have diverged far enough that a hunk-level merge
+  produced a client that neither typechecked nor linted. `apps/swift-ios` is the fork's mobile
+  client and is where mobile parity work belongs; `apps/mobile` is kept building, not evolving.
+  Consequence for every sync: changes under `apps/mobile` resolve to the fork unless the maintainers
+  decide to revive or delete the client. Shared-package changes still reach it — this sync added
+  Grok to `usageProviders` because `UsageProviderKind` gained the kind.
 - Carries upstream's mobile built-in themes (`85389b988`'s successor `d23b181da`:
   `lib/mobileTheme.ts`, `@t3tools/shared/themePalettes`, `ThemeAppearanceSection`,
   `ThemedSwitch`, `useMobileNavigationTheme`) ported onto the fork's own composer, sheet, and

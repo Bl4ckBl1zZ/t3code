@@ -25,6 +25,7 @@ import {
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
   relayProjectFileSchemaRoute,
+  relayDpopFailureReason,
   revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
@@ -115,6 +116,27 @@ describe("relay client authentication", () => {
       ),
     ),
   );
+});
+
+describe("relay DPoP failure mapping", () => {
+  it("maps verifier failures to safe client-facing categories", () => {
+    const mappings = [
+      ["time_window", "time_window"],
+      ["key_mismatch", "key_mismatch"],
+      ["method_mismatch", "request_mismatch"],
+      ["url_mismatch", "request_mismatch"],
+      ["access_token_hash_mismatch", "token_mismatch"],
+      ["replayed", "replay"],
+      ["missing_proof", "invalid_proof"],
+      ["malformed_proof", "invalid_proof"],
+      ["invalid_signature", "invalid_proof"],
+      ["invalid_proof", "invalid_proof"],
+    ] as const;
+
+    for (const [code, expected] of mappings) {
+      expect(relayDpopFailureReason(code)).toBe(expected);
+    }
+  });
 });
 
 describe("relay environment authentication", () => {

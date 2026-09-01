@@ -105,7 +105,11 @@ import {
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { useMarkThreadUnread, useThreadActions } from "../hooks/useThreadActions";
+import {
+  requestThreadUnpinConfirmation,
+  useMarkThreadUnread,
+  useThreadActions,
+} from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -114,7 +118,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { readThreadShell, useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -2054,6 +2058,7 @@ export default function Sidebar() {
   const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
+  const confirmThreadUnpin = useClientSettings((s) => s.confirmThreadUnpin);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -2076,11 +2081,26 @@ export default function Sidebar() {
     (threadRef: ScopedThreadRef) => {
       void (async () => {
         const threadKey = scopedThreadKey(threadRef);
+        const nextPinned = !pinnedThreadKeySet.has(threadKey);
+        if (!nextPinned) {
+          // Unpinning is the destructive half: it drops the thread out of the
+          // pinned section and clears its order key. Gated on the same
+          // `confirmThreadUnpin` preference the thread action menu reads.
+          const localApi = readLocalApi();
+          const confirmation = await requestThreadUnpinConfirmation({
+            enabled: confirmThreadUnpin,
+            title: readThreadShell(threadRef)?.title ?? "this thread",
+            confirm: localApi ? (message) => localApi.dialogs.confirm(message) : null,
+          });
+          if (confirmation._tag === "Failure" || !confirmation.value) {
+            return;
+          }
+        }
         const result = await updateThreadMetadata({
           environmentId: threadRef.environmentId,
           input: {
             threadId: threadRef.threadId,
-            pinned: !pinnedThreadKeySet.has(threadKey),
+            pinned: nextPinned,
           },
         });
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -2095,7 +2115,7 @@ export default function Sidebar() {
         }
       })();
     },
-    [pinnedThreadKeySet, updateThreadMetadata],
+    [confirmThreadUnpin, pinnedThreadKeySet, updateThreadMetadata],
   );
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,

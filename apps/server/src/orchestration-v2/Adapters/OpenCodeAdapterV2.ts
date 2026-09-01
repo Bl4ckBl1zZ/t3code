@@ -797,6 +797,9 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
         const cwd = input.runtimePolicy.cwd ?? serverConfig.cwd;
         const connection = yield* runtime.connectToOpenCodeServer({
           binaryPath: options.settings.binaryPath,
+          // The server is rooted at the turn's workspace: OpenCode grants
+          // `external_directory` access relative to where it was started.
+          directory: cwd,
           serverUrl: options.settings.serverUrl,
           environment: options.environment,
         });

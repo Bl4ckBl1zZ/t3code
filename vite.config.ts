@@ -23,10 +23,10 @@ export default defineConfig({
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
-    // Scoped to the types the formatter handles: apps/swift-ios is a native
-    // tree Xcode owns, and an unscoped glob makes a Swift-only commit fail with
-    // "Expected at least one target file" once those paths are ignored.
-    "*.{ts,tsx,js,jsx,mjs,cjs,mts,cts,json,jsonc,md,mdx,yml,yaml,css,html}": "vp fmt",
+    // `--no-error-on-unmatched-pattern` keeps a commit that only touches
+    // formatter-ignored paths (apps/swift-ios is a native tree Xcode owns)
+    // from failing with "Expected at least one target file".
+    "*": "vp fmt --no-error-on-unmatched-pattern",
   },
   fmt: {
     ignorePatterns: [

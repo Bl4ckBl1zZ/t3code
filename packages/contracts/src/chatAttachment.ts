@@ -151,11 +151,34 @@ export type UploadChatPdfAttachment = typeof UploadChatPdfAttachment.Type;
 export const UploadChatVideoAttachment = uploadChatFileAttachment("video");
 export type UploadChatVideoAttachment = typeof UploadChatVideoAttachment.Type;
 
+/**
+ * Catch-all for attachment types this build does not know. Attachments ride on
+ * persisted events and thread streams, so a newer server or client must be able
+ * to introduce a type without making older readers fail to decode the whole
+ * message. Decoders keep the shared base fields; consumers skip these or render
+ * them as unsupported. The known discriminators are excluded so a malformed
+ * image, file, pdf, or video attachment fails its own schema instead of sliding
+ * through here with its size and mime constraints unchecked.
+ */
+export const ChatUnknownAttachment = Schema.Struct({
+  type: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(50),
+    Schema.isPattern(/^(?!(?:image|file|pdf|video)$)/),
+  ),
+  id: ChatAttachmentId,
+  name: ChatAttachmentName,
+  mimeType: ChatAttachmentMimeType,
+  sizeBytes: NonNegativeInt,
+  ...chatAttachmentPlacementFields,
+});
+export type ChatUnknownAttachment = typeof ChatUnknownAttachment.Type;
+
 export const ChatAttachment = Schema.Union([
   ChatImageAttachment,
   ChatFileAttachment,
   ChatPdfAttachment,
   ChatVideoAttachment,
+  ChatUnknownAttachment,
 ]);
 export type ChatAttachment = typeof ChatAttachment.Type;
 
