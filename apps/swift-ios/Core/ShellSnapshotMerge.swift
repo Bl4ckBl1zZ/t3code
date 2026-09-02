@@ -27,11 +27,14 @@ enum ShellSnapshotMerge {
             let candidates = index(next.projects)
             var merged = previous
             merged.projects = previous.projects.map { project in
-                // A project whose root moved is a different workspace now; its
-                // identity has to come from an authoritative frame.
-                guard let candidate = candidates[project.id],
-                      candidate.workspaceRoot == project.workspaceRoot else {
+                guard let candidate = candidates[project.id] else {
                     return project
+                }
+                // A project whose root moved is a different workspace now; its
+                // identity has to come from an authoritative frame. Clear the
+                // old root's identity while preserving the shell-owned row.
+                guard candidate.workspaceRoot == project.workspaceRoot else {
+                    return project.settingRepositoryIdentity(nil)
                 }
                 // A resolved root is authoritative about its own identity,
                 // including having resolved to none.

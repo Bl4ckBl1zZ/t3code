@@ -164,7 +164,7 @@ final class NativeRetryIdentityTests: XCTestCase {
         // changing a thread's mode is its own command in this fork.
         for command in launchCommands {
             XCTAssertEqual(command["runtimeMode"]?.stringValue, "full-access")
-            XCTAssertEqual(command["interactionMode"]?.stringValue, "default")
+            XCTAssertEqual(command["interactionMode"]?.stringValue, "plan")
         }
         for command in turnCommands {
             XCTAssertNil(command["runtimeMode"])
