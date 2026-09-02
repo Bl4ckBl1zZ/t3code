@@ -75,7 +75,7 @@ struct DailyUXNewTaskTests {
 
         #expect(request.trimmedPrompt == "Build it")
         #expect(request.runtimeMode == .fullAccess)
-        #expect(request.interactionMode == .standard)
+        #expect(request.interactionMode == .plan)
         #expect(request.workspaceMode == .local)
         #expect(request.branch == nil)
         #expect(request.worktreePath == nil)

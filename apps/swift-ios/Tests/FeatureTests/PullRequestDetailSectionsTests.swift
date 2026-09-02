@@ -288,7 +288,7 @@ struct PullRequestDetailSectionsTests {
         #expect(PullRequestDetailSections.isVerdictStale(
             at: "2026-08-05T01:00:00+02:00",
             newestCommitDate: PullRequestDetailSections.parseDate("2026-08-05T00:30:00Z")
-        ) == false)
+        ) == true)
 
         // No commits means nothing to be stale against.
         #expect(PullRequestDetailSections.latestReviewOutcomes(comments: comments)

@@ -59,6 +59,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var environmentConnectionDetails: [String: String] = [:]
     private var latestServerConfig: ServerConfigSnapshot?
     private var serverConfigsByEnvironmentID: [String: ServerConfigSnapshot] = [:]
+    private var environmentThemesByEnvironmentID: [String: [EnvironmentTheme]] = [:]
     private var latestSnapshot: FeatureSnapshot?
     private var activeThreadID: String?
     private var activeThreadEnvironmentID: String?
@@ -300,6 +301,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func removeEnvironment(id: String) async throws {
         let removesActiveEnvironment = activeEnvironment?.id == id
         try await runtime.remove(id: id)
+        environmentThemesByEnvironmentID[id] = nil
         if removesActiveEnvironment {
             await clearActiveEnvironment(disconnectClient: false)
         }
@@ -385,6 +387,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environmentClients.removeAll()
             shellsByEnvironmentID.removeAll()
             serverConfigsByEnvironmentID.removeAll()
+            environmentThemesByEnvironmentID.removeAll()
             providerCatalogCache.removeAll()
             archivedThreadsByEnvironmentID.removeAll()
             archivedShellThreadsByEnvironmentID.removeAll()
@@ -2890,9 +2893,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
+                    case let .environmentThemesUpdated(themes):
+                        self.environmentThemesByEnvironmentID[activeClient.environment.id] = themes
                     case .unrelated:
                         continue
                     }
+                    self.adoptDefaultThemeIfNeeded(environmentID: activeClient.environment.id)
                     if let shell = self.latestShell {
                         await self.emitSnapshot(shell)
                     }
@@ -3810,6 +3816,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         previous.connection == next.connection
             && previous.environments == next.environments
             && previous.providers == next.providers
+            && previous.providersByEnvironment == next.providersByEnvironment
+            && previous.preferencesByEnvironment == next.preferencesByEnvironment
+            && previous.environmentThemesByEnvironment == next.environmentThemesByEnvironment
             && previous.settings == next.settings
             && projectsMatchIgnoringThreadCounts(previous.projects, next.projects)
     }
@@ -4050,6 +4059,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             providers: providersByEnvironment[activeEnvironment.id] ?? [],
             providersByEnvironment: providersByEnvironment,
             preferencesByEnvironment: preferencesByEnvironment,
+            environmentThemesByEnvironment: environmentThemesByEnvironmentID,
             settings: loadSettings()
         )
     }
@@ -5182,7 +5192,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) {
         guard detail.messages.contains(where: { message in
             message.attachments.contains {
-                $0.mimeType.hasPrefix("image/") && $0.url == nil
+                ($0.mimeType.hasPrefix("image/") || $0.mimeType.hasPrefix("video/"))
+                    && $0.url == nil
             }
         }) else {
             return
@@ -5241,15 +5252,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
             return detail
         }
-        let imageIDs = Set(
+        let previewableIDs = Set(
             detail.messages.flatMap(\.attachments)
-                .filter { $0.mimeType.hasPrefix("image/") }
+                .filter {
+                    $0.mimeType.hasPrefix("image/") || $0.mimeType.hasPrefix("video/")
+                }
                 .map(\.id)
         )
         // Text-only threads refresh every couple of seconds; skip the resolve
         // pass and the full message walk when there is nothing to hydrate.
-        guard !imageIDs.isEmpty else { return detail }
-        let missingIDs = Array(imageIDs.filter {
+        guard !previewableIDs.isEmpty else { return detail }
+        let missingIDs = Array(previewableIDs.filter {
             cachedAttachmentURL(for: $0, environmentID: environmentID) == nil
         })
 
@@ -5408,6 +5421,40 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return settings
     }
 
+    /// Applies one `t3 theme set` generation once for this environment. The
+    /// generation marker is separate from FeatureSettings so a later manual
+    /// selection does not make the environment's old default replay.
+    private func adoptDefaultThemeIfNeeded(environmentID: String) {
+        guard let serverSettings = serverConfigsByEnvironmentID[environmentID]?.settings else {
+            return
+        }
+        let themeID = serverSettings.defaultTheme
+        guard !themeID.isEmpty else { return }
+        let generation = serverSettings.defaultThemeSetAt.isEmpty
+            ? themeID
+            : "\(themeID)@\(serverSettings.defaultThemeSetAt)"
+        let markerKey = Self.defaultThemeAppliedKeyPrefix + environmentID
+        guard settingsStore.string(forKey: markerKey) != generation else { return }
+
+        let builtIn = T3Palette.builtIn.first { $0.id == themeID }
+        let published = T3PublishedPalette.resolve(
+            environmentThemesByEnvironmentID[environmentID] ?? []
+        ).first { $0.id == themeID }
+        let hasLight = builtIn != nil || published?.light != nil
+        let hasDark = builtIn != nil || published?.dark != nil
+        guard hasLight || hasDark else { return }
+
+        var settings = loadSettings()
+        if hasLight { settings.lightThemeID = themeID }
+        if hasDark { settings.darkThemeID = themeID }
+        if hasLight != hasDark {
+            settings.appearance = hasDark ? .dark : .light
+        }
+        guard let data = try? JSONEncoder().encode(settings) else { return }
+        settingsStore.set(data, forKey: Self.settingsKey)
+        settingsStore.set(generation, forKey: markerKey)
+    }
+
     private func parseDate(_ value: String) -> Date {
         parseValidDate(value) ?? .distantPast
     }
@@ -5428,6 +5475,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var parsedDates: [String: Date] = [:]
 
     private static let settingsKey = "swift-ios.feature-settings.v1"
+    private static let defaultThemeAppliedKeyPrefix = "swift-ios.default-theme-applied.v1."
     private static let fractionalDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

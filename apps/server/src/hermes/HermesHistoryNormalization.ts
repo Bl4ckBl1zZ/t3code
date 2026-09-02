@@ -581,11 +581,10 @@ export const persistHermesHistoryMedia = Effect.fn("persistHermesHistoryMedia")(
 
       const attachment = attachmentFromBytes(bytes, canonicalSource);
       if (attachment === null) return null;
+      const relativePath = attachmentRelativePath(attachment);
+      if (relativePath === null) return null;
       await NodeFS.promises.mkdir(input.attachmentsDir, { recursive: true });
-      await NodeFS.promises.writeFile(
-        NodePath.join(input.attachmentsDir, attachmentRelativePath(attachment)),
-        bytes,
-      );
+      await NodeFS.promises.writeFile(NodePath.join(input.attachmentsDir, relativePath), bytes);
       return attachment;
     },
     catch: (cause) => new PersistHermesHistoryMediaFailed({ sourcePath: input.sourcePath, cause }),

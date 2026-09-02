@@ -11,6 +11,8 @@ struct ThemeSection: View {
     @Binding var appearance: FeatureAppearance
     @Binding var lightThemeID: String
     @Binding var darkThemeID: String
+    let environmentName: String?
+    let environmentThemes: [EnvironmentTheme]
 
     /// The mode actually rendering, which `.system` resolves into. Read from
     /// the environment rather than from `appearance` so System shows the user
@@ -35,6 +37,12 @@ struct ThemeSection: View {
             : "Applies to light mode. Dark mode keeps its own theme."
     }
 
+    private var publishedPalettes: [T3PublishedPalette] {
+        T3PublishedPalette.resolve(environmentThemes).filter {
+            $0.colors(for: resolvedAppearance) != nil
+        }
+    }
+
     var body: some View {
         SettingsSection(title: "Theme", footer: footer) {
             VStack(spacing: 0) {
@@ -57,21 +65,43 @@ struct ThemeSection: View {
 
                 SettingsRowDivider(isInsetForIcon: false)
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
-                        ForEach(T3Palette.builtIn) { palette in
-                            ThemeOrbButton(
-                                palette: palette,
-                                appearance: resolvedAppearance,
-                                isSelected: palette.id == selectedID,
-                                onSelect: { select(palette.id) }
-                            )
-                        }
+                VStack(alignment: .leading, spacing: 10) {
+                    if !publishedPalettes.isEmpty {
+                        Text(environmentName.map { "Published by \($0)" } ?? "Published themes")
+                            .font(T3Typography.supportingStrong)
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .padding(.horizontal, SettingsMetrics.rowPadding)
+
+                        paletteStrip(publishedPalettes.map { $0.pickerPalette() })
+
+                        SettingsRowDivider(isInsetForIcon: false)
                     }
-                    .padding(.horizontal, SettingsMetrics.rowPadding)
-                    .padding(.vertical, 14)
+
+                    Text("Built-in")
+                        .font(T3Typography.supportingStrong)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .padding(.horizontal, SettingsMetrics.rowPadding)
+
+                    paletteStrip(T3Palette.builtIn)
+                }
+                .padding(.vertical, 12)
+            }
+        }
+    }
+
+    private func paletteStrip(_ palettes: [T3Palette]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(palettes) { palette in
+                    ThemeOrbButton(
+                        palette: palette,
+                        appearance: resolvedAppearance,
+                        isSelected: palette.id == selectedID,
+                        onSelect: { select(palette.id) }
+                    )
                 }
             }
+            .padding(.horizontal, SettingsMetrics.rowPadding)
         }
     }
 

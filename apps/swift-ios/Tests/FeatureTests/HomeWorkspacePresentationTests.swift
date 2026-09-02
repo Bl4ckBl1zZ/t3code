@@ -93,6 +93,7 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             isSettledExpanded: false,
             isArchiveExpanded: false,
             settledLimit: 12,
+            confirmThreadUnpin: false,
             onOpen: { _ in },
             onToggleSnoozed: {},
             onToggleSettled: {},

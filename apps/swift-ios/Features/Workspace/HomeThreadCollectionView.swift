@@ -19,6 +19,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let isSettledExpanded: Bool
     let isArchiveExpanded: Bool
     let settledLimit: Int
+    let confirmThreadUnpin: Bool
     let onOpen: (String) -> Void
     let onToggleSnoozed: () -> Void
     let onToggleSettled: () -> Void
@@ -227,8 +228,15 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             } else if thread.pinnedAt != nil, thread.canTogglePin {
                 primaryAction = UIContextualAction(style: .normal, title: "Unpin") {
                     [weak self] _, _, finish in
-                    self?.parent.onPin(thread, false)
-                    finish(true)
+                    guard let self else {
+                        finish(false)
+                        return
+                    }
+                    self.parent.onPin(thread, false)
+                    // A pending confirmation must close the swipe without
+                    // committing it. Cancelling then restores the row instead
+                    // of leaving the destructive action exposed.
+                    finish(!self.parent.confirmThreadUnpin)
                 }
                 primaryAction.image = UIImage(systemName: "pin.slash")
                 primaryAction.backgroundColor = .systemBlue

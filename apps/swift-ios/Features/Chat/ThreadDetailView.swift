@@ -160,6 +160,7 @@ public struct ThreadDetailView: View {
                                 )
                             }
                         },
+                        confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
                         onReload: {
                             Task { _ = await model.detail(for: thread.id, force: true) }
                         },
@@ -2623,13 +2624,18 @@ private struct FeatureMessageAttachmentsView: View {
                             .frame(maxWidth: .infinity)
                             .background(T3Colors.surfaceRaised)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else if attachment.mimeType.hasPrefix("video/"), let url = attachment.url {
+                            FeatureInlineVideoView(url: url, title: attachment.name)
+                                .background(T3Colors.surfaceRaised)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
 
                         HStack(spacing: 9) {
                             Image(
-                                systemName: attachment.mimeType.hasPrefix("image/")
-                                    ? "photo"
-                                    : "doc"
+                                systemName: FeatureAttachmentGlyph.systemImage(
+                                    mimeType: attachment.mimeType,
+                                    name: attachment.name
+                                )
                             )
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(T3Colors.textSecondary)
@@ -2659,11 +2665,15 @@ private struct FeatureMessageAttachmentsView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(T3Colors.border, lineWidth: 1)
                     }
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(
+                        children: attachment.mimeType.hasPrefix("video/") ? .contain : .combine
+                    )
                     .accessibilityLabel(
                         attachment.mimeType.hasPrefix("image/")
                             ? "Image attachment"
-                            : "File attachment"
+                            : attachment.mimeType.hasPrefix("video/")
+                                ? "Video attachment"
+                                : "File attachment"
                     )
                     .accessibilityValue(attachmentAccessibilityValue(attachment))
                     .accessibilityIdentifier("attachment-\(attachment.id)")
@@ -2713,4 +2723,3 @@ private struct FeatureMessageAttachmentsView: View {
         return "\(attachment.name), \(size)"
     }
 }
-

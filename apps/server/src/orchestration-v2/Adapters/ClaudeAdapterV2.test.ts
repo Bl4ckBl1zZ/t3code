@@ -776,7 +776,7 @@ describe("ClaudeAdapterV2 attachments", () => {
           sizeBytes: 4,
         });
         yield* fileSystem.writeFile(
-          path.join(attachmentsDir, attachmentRelativePath(attachment)),
+          path.join(attachmentsDir, attachmentRelativePath(attachment) ?? attachment.id),
           Uint8Array.from([1, 2, 3, 4]),
         );
         const attemptId = RunAttemptId.make("attempt-claude-attachments");

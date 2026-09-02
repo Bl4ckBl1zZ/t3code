@@ -135,6 +135,7 @@ public actor T3Client {
     {
         await rpc.subscribe(
             RPCMethod.subscribeServerConfig.rawValue,
+            payload: .object(["environmentThemes": .bool(true)]),
             as: ServerConfigStreamEvent.self
         )
     }

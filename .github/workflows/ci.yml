@@ -101,12 +101,14 @@ jobs:
         run: vp run build:desktop
 
       - name: Verify desktop bundle
+        # The preload script's own contract is checked by the verifier below;
+        # this only asserts the server artifacts the desktop build ships with.
         run: |
-          test -f apps/desktop/dist-electron/preload.cjs
           test -f apps/server/dist/bin.mjs
           test -f apps/server/dist/client/index.html
-          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
-          grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
+
+      - name: Verify preload bundle output
+        run: node apps/desktop/scripts/verify-preload-bundle.mjs
 
   swift-ios:
     name: Native iOS

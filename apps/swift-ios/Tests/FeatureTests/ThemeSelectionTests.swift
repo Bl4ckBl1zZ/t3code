@@ -52,6 +52,7 @@ final class ThemeSelectionTests: XCTestCase {
         let settings = FeatureSettings()
         XCTAssertEqual(settings.lightThemeID, "t3-code")
         XCTAssertEqual(settings.darkThemeID, "t3-code")
+        XCTAssertFalse(settings.confirmThreadUnpin)
     }
 
     func testSettingsWrittenBeforeThemesExistedStillDecode() throws {
@@ -70,6 +71,7 @@ final class ThemeSelectionTests: XCTestCase {
         XCTAssertEqual(settings.lightThemeID, "t3-code")
         XCTAssertEqual(settings.darkThemeID, "t3-code")
         XCTAssertEqual(settings.appearance, .dark)
+        XCTAssertFalse(settings.confirmThreadUnpin)
     }
 
     func testEachAppearanceKeepsItsOwnPalette() throws {
@@ -92,6 +94,90 @@ final class ThemeSelectionTests: XCTestCase {
         var changed = FeatureSettings()
         changed.lightThemeID = "ocean"
         XCTAssertNotEqual(changed, FeatureSettings())
+    }
+
+    func testUnpinConfirmationRoundTrips() throws {
+        var settings = FeatureSettings()
+        settings.confirmThreadUnpin = true
+
+        let decoded = try JSONDecoder().decode(
+            FeatureSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertTrue(decoded.confirmThreadUnpin)
+    }
+
+    func testPublishedThemeGeneratesItsSeededHalfAndKeepsOtherHalfAbsent() throws {
+        let theme = EnvironmentTheme(
+            id: "nightfall",
+            name: "Nightfall",
+            appearance: .dark,
+            canvas: "#1a1b26",
+            accent: "#7aa2f7"
+        )
+
+        let palette = try XCTUnwrap(T3PublishedPalette.resolve([theme]).first)
+        XCTAssertNil(palette.light)
+        let dark = try XCTUnwrap(palette.dark)
+        XCTAssertEqual(dark.background.red, 26.0 / 255, accuracy: 0.001)
+        XCTAssertEqual(dark.background.green, 27.0 / 255, accuracy: 0.001)
+        XCTAssertEqual(dark.background.blue, 38.0 / 255, accuracy: 0.001)
+        XCTAssertEqual(dark.primaryAction.blue, 247.0 / 255, accuracy: 0.001)
+    }
+
+    func testPublishedThemeLayersKnownRolesAndParsesOklch() throws {
+        let theme = EnvironmentTheme(
+            id: "paper",
+            name: "Paper",
+            appearance: .light,
+            colors: [
+                "canvas": "oklch(1 0 0)",
+                "text": "#112233",
+                "futureRole": "#ff00ff",
+            ]
+        )
+
+        let light = try XCTUnwrap(T3PublishedPalette.resolve([theme]).first?.light)
+        XCTAssertEqual(light.background.red, 1, accuracy: 0.001)
+        XCTAssertEqual(light.background.green, 1, accuracy: 0.001)
+        XCTAssertEqual(light.background.blue, 1, accuracy: 0.001)
+        XCTAssertEqual(light.textPrimary.red, 17.0 / 255, accuracy: 0.001)
+    }
+
+    func testPublishedThemeWithOnlyFutureRolesStaysHidden() {
+        let theme = EnvironmentTheme(
+            id: "future",
+            name: "Future",
+            appearance: .light,
+            colors: ["roleThisBuildDoesNotKnow": "#ff00ff"]
+        )
+
+        XCTAssertTrue(T3PublishedPalette.resolve([theme]).isEmpty)
+    }
+
+    @MainActor
+    func testThemeStoreResolvesPublishedPalettesOnlyForTheirAvailableHalf() throws {
+        let published = try XCTUnwrap(
+            T3PublishedPalette.resolve([
+                EnvironmentTheme(
+                    id: "nightfall",
+                    name: "Nightfall",
+                    appearance: .dark,
+                    colors: ["canvas": "#101020"]
+                ),
+            ]).first
+        )
+        let store = T3ThemeStore()
+
+        store.apply(
+            lightPaletteID: "nightfall",
+            darkPaletteID: "nightfall",
+            publishedPalettes: [published]
+        )
+
+        XCTAssertEqual(store.lightPaletteID, "t3-code")
+        XCTAssertEqual(store.darkPaletteID, "nightfall")
     }
 
     @MainActor

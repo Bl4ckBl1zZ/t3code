@@ -55,6 +55,7 @@ public struct WorkspaceView: View {
     /// a copied handoff script, a refused regeneration, an unconfigured Hermes.
     /// They cannot overlap: each is the direct result of a single tap.
     @State private var noticeAlert: ThreadListActionAlert?
+    @State private var pendingUnpinThread: FeatureThread?
     @FocusState private var isSearchFocused: Bool
 
     public init(
@@ -194,6 +195,23 @@ public struct WorkspaceView: View {
         } message: { notice in
             Text(notice.message)
         }
+        .confirmationDialog(
+            pendingUnpinThread.map { "Unpin \($0.title)?" } ?? "Unpin thread?",
+            isPresented: Binding(
+                get: { pendingUnpinThread != nil },
+                set: { if !$0 { pendingUnpinThread = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingUnpinThread
+        ) { thread in
+            Button("Unpin", role: .destructive) {
+                pendingUnpinThread = nil
+                Task { await model.setPinned(thread.id, pinned: false) }
+            }
+            Button("Cancel", role: .cancel) { pendingUnpinThread = nil }
+        } message: { _ in
+            Text("This thread will return to its normal place in the list.")
+        }
         .onChange(of: selectedThreadIsAvailable) { _, isAvailable in
             if !isAvailable { closeSelectedThread() }
         }
@@ -287,6 +305,7 @@ public struct WorkspaceView: View {
                 isSettledExpanded: isSettledExpanded,
                 isArchiveExpanded: isArchiveExpanded,
                 settledLimit: settledLimit,
+                confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
                 onOpen: openThread,
                 onToggleSnoozed: { isSnoozedExpanded.toggle() },
                 onToggleSettled: { isSettledExpanded.toggle() },
@@ -306,7 +325,11 @@ public struct WorkspaceView: View {
                     Task { await model.setSnoozed(thread.id, until: until) }
                 },
                 onPin: { thread, pinned in
-                    Task { await model.setPinned(thread.id, pinned: pinned) }
+                    if !pinned, model.snapshot.settings.confirmThreadUnpin {
+                        pendingUnpinThread = thread
+                    } else {
+                        Task { await model.setPinned(thread.id, pinned: pinned) }
+                    }
                 },
                 onDelete: { thread in
                     Task { await model.deleteThread(thread.id) }

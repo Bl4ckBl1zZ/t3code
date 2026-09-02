@@ -151,23 +151,61 @@ final class T3ThemeStore {
     private(set) var lightPaletteID: String = T3Palette.defaultID
     private(set) var darkPaletteID: String = T3Palette.defaultID
     private(set) var resolved: T3ResolvedColors
+    private var appliedLightColors: T3PaletteColors
+    private var appliedDarkColors: T3PaletteColors
 
     init() {
         let palette = T3Palette.named(T3Palette.defaultID)
+        appliedLightColors = palette.light
+        appliedDarkColors = palette.dark
         resolved = T3ResolvedColors(light: palette.light, dark: palette.dark)
     }
 
-    func apply(lightPaletteID: String?, darkPaletteID: String?) {
-        let light = T3Palette.named(lightPaletteID)
-        let dark = T3Palette.named(darkPaletteID)
+    func apply(
+        lightPaletteID: String?,
+        darkPaletteID: String?,
+        publishedPalettes: [T3PublishedPalette] = []
+    ) {
+        let light = selection(
+            id: lightPaletteID,
+            appearance: .light,
+            publishedPalettes: publishedPalettes
+        )
+        let dark = selection(
+            id: darkPaletteID,
+            appearance: .dark,
+            publishedPalettes: publishedPalettes
+        )
         // Settings republish on every change, most of which are not the theme.
         // Bailing keeps those from invalidating every view in the app.
-        guard light.id != self.lightPaletteID || dark.id != self.darkPaletteID else { return }
+        guard light.id != self.lightPaletteID
+                || dark.id != self.darkPaletteID
+                || light.colors != appliedLightColors
+                || dark.colors != appliedDarkColors else { return }
 
         self.lightPaletteID = light.id
         self.darkPaletteID = dark.id
-        resolved = T3ResolvedColors(light: light.light, dark: dark.dark)
+        appliedLightColors = light.colors
+        appliedDarkColors = dark.colors
+        resolved = T3ResolvedColors(light: light.colors, dark: dark.colors)
         NotificationCenter.default.post(name: .t3ThemeDidChange, object: nil)
+    }
+
+    private func selection(
+        id: String?,
+        appearance: T3ThemeAppearance,
+        publishedPalettes: [T3PublishedPalette]
+    ) -> (id: String, colors: T3PaletteColors) {
+        if let id,
+           let published = publishedPalettes.first(where: { $0.id == id }),
+           let colors = published.colors(for: appearance) {
+            return (id, colors)
+        }
+        if let id, let builtIn = T3Palette.builtIn.first(where: { $0.id == id }) {
+            return (id, appearance == .dark ? builtIn.dark : builtIn.light)
+        }
+        let fallback = T3Palette.named(T3Palette.defaultID)
+        return (fallback.id, appearance == .dark ? fallback.dark : fallback.light)
     }
 
     /// The palette shown as selected in the picker for a given appearance.

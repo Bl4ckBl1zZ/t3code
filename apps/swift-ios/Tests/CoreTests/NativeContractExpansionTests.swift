@@ -314,6 +314,60 @@ final class NativeContractExpansionTests: XCTestCase {
         XCTAssertFalse(settings.sidebarAutoSettleOnMerge)
     }
 
+    func testEnvironmentThemeUpdateDecodesOpenColorRolesAndVariants() throws {
+        let event = try JSONDecoder.t3.decode(
+            ServerConfigStreamEvent.self,
+            from: Data(
+                """
+                {
+                  "version": 1,
+                  "type": "environmentThemesUpdated",
+                  "payload": {
+                    "themes": [{
+                      "id": "nightfall",
+                      "name": "Nightfall",
+                      "appearance": "dark",
+                      "canvas": "#1a1b26",
+                      "accent": "#7aa2f7",
+                      "colors": { "terminalSelection": "#292e42" },
+                      "variants": { "light": { "canvas": "oklch(0.98 0.01 250)" } }
+                    }]
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        guard case let .environmentThemesUpdated(themes) = event,
+              let theme = themes.first else {
+            return XCTFail("Expected an environment theme update")
+        }
+        XCTAssertEqual(theme.id, "nightfall")
+        XCTAssertEqual(theme.appearance, .dark)
+        XCTAssertEqual(theme.colors?["terminalSelection"], "#292e42")
+        XCTAssertEqual(theme.variants?.light?["canvas"], "oklch(0.98 0.01 250)")
+    }
+
+    func testEnvironmentDefaultThemeGenerationDecodesWithLegacyDefaults() throws {
+        let current = try JSONDecoder.t3.decode(
+            ServerSettingsSnapshot.self,
+            from: Data(
+                #"{"defaultThreadEnvMode":"local","newWorktreesStartFromOrigin":true,"defaultTheme":"nightfall","defaultThemeSetAt":"2026-09-02T12:00:00.000Z"}"#.utf8
+            )
+        )
+        XCTAssertEqual(current.defaultTheme, "nightfall")
+        XCTAssertEqual(current.defaultThemeSetAt, "2026-09-02T12:00:00.000Z")
+
+        let legacy = try JSONDecoder.t3.decode(
+            ServerSettingsSnapshot.self,
+            from: Data(
+                #"{"defaultThreadEnvMode":"local","newWorktreesStartFromOrigin":true}"#.utf8
+            )
+        )
+        XCTAssertEqual(legacy.defaultTheme, "")
+        XCTAssertEqual(legacy.defaultThemeSetAt, "")
+    }
+
     func testProviderArraysDropOnlyUnknownProviderEntries() throws {
         let providers = """
         [{
