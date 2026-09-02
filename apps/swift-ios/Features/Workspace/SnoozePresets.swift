@@ -82,9 +82,9 @@ public enum SnoozePresets {
         // Calendar-day advance instead of a fixed second offset: fixed offsets
         // land on the wrong local day across DST transitions (a spring-forward
         // day is 23 hours, so 23:30 + 24h skips the whole next day).
-        if let tomorrowDay = calendar.date(byAdding: .day, value: 1, to: now),
-            let tomorrow = atHour(morningHour, of: tomorrowDay, calendar: calendar)
-        {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)
+            .flatMap { atHour(morningHour, of: $0, calendar: calendar) }
+        if let tomorrow {
             presets.append(
                 SnoozePreset(
                     id: "tomorrow",
@@ -101,7 +101,8 @@ public enum SnoozePresets {
         var daysUntilMonday = (2 - weekday + 7) % 7
         if daysUntilMonday == 0 { daysUntilMonday = 7 }
         if let mondayDay = calendar.date(byAdding: .day, value: daysUntilMonday, to: now),
-            let nextWeek = atHour(morningHour, of: mondayDay, calendar: calendar)
+            let nextWeek = atHour(morningHour, of: mondayDay, calendar: calendar),
+            nextWeek != tomorrow
         {
             presets.append(
                 SnoozePreset(

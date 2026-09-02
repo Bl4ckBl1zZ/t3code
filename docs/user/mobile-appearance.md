@@ -19,3 +19,8 @@ preview circle inside a card to change only that appearance.
 
 **System** follows the device appearance automatically. Theme, text, code, and terminal appearance
 preferences are stored on the device.
+
+The native iOS client also lists themes published by the active environment above the built-in
+themes. A published theme may provide only a light or dark palette; it appears only while that
+appearance is selected. If the environment stops publishing a selected palette, iOS falls back to
+T3 Code's standard colors until it is available again.

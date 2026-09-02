@@ -1,5 +1,54 @@
 import Foundation
 
+public enum EnvironmentThemeAppearance: String, Codable, Equatable, Sendable {
+    case light
+    case dark
+}
+
+/// One palette published by the environment's machine. Color roles stay an
+/// open string dictionary so a newer server can add roles without making an
+/// older native client reject the whole theme set.
+public struct EnvironmentTheme: Codable, Identifiable, Equatable, Sendable {
+    public struct Variants: Codable, Equatable, Sendable {
+        public let light: [String: String]?
+        public let dark: [String: String]?
+
+        public init(light: [String: String]? = nil, dark: [String: String]? = nil) {
+            self.light = light
+            self.dark = dark
+        }
+    }
+
+    public let id: String
+    public let version: Int?
+    public let name: String
+    public let appearance: EnvironmentThemeAppearance
+    public let canvas: String?
+    public let accent: String?
+    public let colors: [String: String]?
+    public let variants: Variants?
+
+    public init(
+        id: String,
+        version: Int? = nil,
+        name: String,
+        appearance: EnvironmentThemeAppearance,
+        canvas: String? = nil,
+        accent: String? = nil,
+        colors: [String: String]? = nil,
+        variants: Variants? = nil
+    ) {
+        self.id = id
+        self.version = version
+        self.name = name
+        self.appearance = appearance
+        self.canvas = canvas
+        self.accent = accent
+        self.colors = colors
+        self.variants = variants
+    }
+}
+
 public struct ServerProviderAuthSnapshot: Codable, Equatable, Sendable {
     public let status: String
     public let type: String?
@@ -228,6 +277,10 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// stores (`providers.claudeAgent.autoCompactWindow`). Empty is Claude's
     /// own default, which is also what a server predating the setting reports.
     public let claudeAutoCompactWindow: String
+    /// Environment-selected theme and its set generation. Each client adopts
+    /// a generation once, then leaves later manual choices alone.
+    public let defaultTheme: String
+    public let defaultThemeSetAt: String
 
     public init(
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
@@ -239,7 +292,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:],
         enableAgentBrowserAccess: Bool = ServerSettingsSnapshot
             .defaultEnableAgentBrowserAccess,
-        claudeAutoCompactWindow: String = ""
+        claudeAutoCompactWindow: String = "",
+        defaultTheme: String = "",
+        defaultThemeSetAt: String = ""
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
@@ -248,6 +303,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.providerModelPreferences = providerModelPreferences
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
+        self.defaultTheme = defaultTheme
+        self.defaultThemeSetAt = defaultThemeSetAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -258,6 +315,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case providerModelPreferences
         case enableAgentBrowserAccess
         case providers
+        case defaultTheme
+        case defaultThemeSetAt
     }
 
     /// The slice of `providers` this client reads. Deliberately not the whole
@@ -300,6 +359,11 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             ProvidersContainer.self,
             forKey: .providers
         )?.claudeAgent?.autoCompactWindow ?? ""
+        defaultTheme = try container.decodeIfPresent(String.self, forKey: .defaultTheme) ?? ""
+        defaultThemeSetAt = try container.decodeIfPresent(
+            String.self,
+            forKey: .defaultThemeSetAt
+        ) ?? ""
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -318,6 +382,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             ProvidersContainer(claudeAgent: .init(autoCompactWindow: claudeAutoCompactWindow)),
             forKey: .providers
         )
+        try container.encode(defaultTheme, forKey: .defaultTheme)
+        try container.encode(defaultThemeSetAt, forKey: .defaultThemeSetAt)
     }
 }
 
@@ -456,6 +522,7 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
     case snapshot(ServerConfigSnapshot)
     case providerStatuses([ServerProviderSnapshot])
     case settingsUpdated(ServerSettingsSnapshot)
+    case environmentThemesUpdated([EnvironmentTheme])
     case unrelated(type: String)
 
     private enum CodingKeys: String, CodingKey { case type, config, payload }
@@ -473,6 +540,7 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
         }
     }
     private struct SettingsPayload: Decodable { let settings: ServerSettingsSnapshot }
+    private struct EnvironmentThemesPayload: Decodable { let themes: [EnvironmentTheme] }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -489,6 +557,10 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
         case "settingsUpdated":
             self = .settingsUpdated(
                 try container.decode(SettingsPayload.self, forKey: .payload).settings
+            )
+        case "environmentThemesUpdated":
+            self = .environmentThemesUpdated(
+                try container.decode(EnvironmentThemesPayload.self, forKey: .payload).themes
             )
         default:
             self = .unrelated(type: type)

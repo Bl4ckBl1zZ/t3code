@@ -50,6 +50,7 @@ struct ThreadDetailsSheet: View {
     /// Thread-level actions, folded in here from the old toolbar ••• menu so
     /// the details button is the thread's single secondary surface.
     var onTogglePin: (() -> Void)?
+    var confirmThreadUnpin = false
     var onReload: (() -> Void)?
     var onToggleArchive: (() -> Void)?
     /// Chat conversations subtract the workbench: no workspace tools, ports,
@@ -65,6 +66,7 @@ struct ThreadDetailsSheet: View {
     @State private var portAlert: ThreadDetailsPortsSection.OpenRefusal?
     @State private var presentedPullRequest: ThreadDetailsPullRequest?
     @State private var isEditingLinkedPullRequest = false
+    @State private var showingUnpinConfirmation = false
     @SwiftUI.Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -136,6 +138,16 @@ struct ThreadDetailsSheet: View {
                 "This publishes straight to \(gitStatus?.refName ?? "the default branch"), "
                     + "which has no undo on the other side."
             )
+        }
+        .confirmationDialog(
+            "Unpin \(thread.title)?",
+            isPresented: $showingUnpinConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Unpin", role: .destructive) { onTogglePin?() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This thread will return to its normal place in the list.")
         }
         .sheet(isPresented: $isEditingLinkedPullRequest) {
             NavigationStack {
@@ -318,7 +330,13 @@ struct ThreadDetailsSheet: View {
                         systemImage: thread.pinnedAt == nil ? "pin" : "pin.slash",
                         title: thread.pinnedAt == nil ? "Pin" : "Unpin",
                         showsChevron: false,
-                        action: onTogglePin
+                        action: {
+                            if thread.pinnedAt != nil, confirmThreadUnpin {
+                                showingUnpinConfirmation = true
+                            } else {
+                                onTogglePin()
+                            }
+                        }
                     )
                     ThreadDetailsDivider()
                 }

@@ -100,4 +100,29 @@ final class MarkdownMediaSourceTests: XCTestCase {
         XCTAssertFalse(MarkdownMediaSource.isVideo("./shot.png"))
         XCTAssertFalse(MarkdownMediaSource.isVideo("./demo.mp4.txt"))
     }
+
+    func testVideoPlaybackProbeRequiresAnExactByteRangeResponse() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/clip.mp4?token=signed"))
+        let request = FeatureVideoRangeProbe.request(for: url)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+
+        let supported = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 206,
+            httpVersion: nil,
+            headerFields: [
+                "Accept-Ranges": "bytes",
+                "Content-Range": "bytes 0-0/1024",
+            ]
+        ))
+        XCTAssertTrue(FeatureVideoRangeProbe.supportsPlaybackResponse(supported))
+
+        let legacy = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Length": "1024"]
+        ))
+        XCTAssertFalse(FeatureVideoRangeProbe.supportsPlaybackResponse(legacy))
+    }
 }

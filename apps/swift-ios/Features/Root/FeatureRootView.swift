@@ -52,7 +52,8 @@ public struct FeatureRootView: View {
         .onChange(of: themeSelection, initial: true) { _, selection in
             T3ThemeStore.shared.apply(
                 lightPaletteID: selection.light,
-                darkPaletteID: selection.dark
+                darkPaletteID: selection.dark,
+                publishedPalettes: selection.publishedPalettes
             )
         }
         .alert(
@@ -92,14 +93,27 @@ public struct FeatureRootView: View {
     private var themeSelection: FeatureThemeSelection {
         FeatureThemeSelection(
             light: model.snapshot.settings.lightThemeID,
-            dark: model.snapshot.settings.darkThemeID
+            dark: model.snapshot.settings.darkThemeID,
+            environmentID: activeEnvironmentID,
+            publishedPalettes: T3PublishedPalette.resolve(activeEnvironmentThemes)
         )
+    }
+
+    private var activeEnvironmentID: String? {
+        model.snapshot.environments.first(where: \.isActive)?.id
+    }
+
+    private var activeEnvironmentThemes: [EnvironmentTheme] {
+        guard let activeEnvironmentID else { return [] }
+        return model.snapshot.environmentThemesByEnvironment?[activeEnvironmentID] ?? []
     }
 }
 
 struct FeatureThemeSelection: Equatable {
     let light: String
     let dark: String
+    let environmentID: String?
+    let publishedPalettes: [T3PublishedPalette]
 }
 
 enum FeatureRootPresentation {

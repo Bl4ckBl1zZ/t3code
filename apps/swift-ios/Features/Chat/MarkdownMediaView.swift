@@ -84,6 +84,7 @@ struct MarkdownMediaView: View {
     /// the new one.
     @State private var loadedRequest: Request?
     @State private var loadedImage: UIImage?
+    @State private var loadedVideoURL: URL?
     @State private var failedRequest: Request?
     @State private var isExpanded = false
     /// Minted when the viewer opens rather than reused from the load: a signed
@@ -113,7 +114,9 @@ struct MarkdownMediaView: View {
 
     @ViewBuilder
     private var content: some View {
-        if loadedRequest == request, let loadedImage {
+        if isVideo, loadedRequest == request, let loadedVideoURL {
+            FeatureInlineVideoView(url: loadedVideoURL, title: caption)
+        } else if loadedRequest == request, let loadedImage {
             Button {
                 isExpanded = true
             } label: {
@@ -188,7 +191,25 @@ struct MarkdownMediaView: View {
     }
 
     private func load(_ request: Request) async {
-        guard !isVideo, loadedRequest != request else { return }
+        guard loadedRequest != request else { return }
+
+        if isVideo {
+            do {
+                let url = try await resolveURL(request)
+                try Task.checkCancellation()
+                loadedImage = nil
+                loadedVideoURL = url
+                loadedRequest = request
+                failedRequest = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                loadedVideoURL = nil
+                failedRequest = request
+            }
+            return
+        }
 
         if let cached = FeatureAttachmentThumbnailCache.shared.image(for: cacheKey) {
             loadedImage = cached
@@ -206,6 +227,7 @@ struct MarkdownMediaView: View {
             try Task.checkCancellation()
             FeatureAttachmentThumbnailCache.shared.insert(decoded, for: cacheKey)
             loadedImage = decoded
+            loadedVideoURL = nil
             loadedRequest = request
             failedRequest = nil
         } catch is CancellationError {

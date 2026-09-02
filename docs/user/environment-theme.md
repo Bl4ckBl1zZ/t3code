@@ -20,14 +20,15 @@ The machine can also set the environment's theme:
 t3 theme set nightfall
 ```
 
-Web and desktop clients switch to it — immediately when connected, on their next connect
-otherwise — and a fresh client opens with it. Each client applies a set once, so picking a
+Web, desktop, and the native iOS client switch to it — immediately when connected, on their next
+connect otherwise — and a fresh client opens with it. Each client applies a set once, so picking a
 different theme in Settings afterwards sticks until the next `t3 theme set`, and running the same
 set again is how you bring clients back. `t3 theme clear` removes the setting without changing
 what anyone currently has, and `t3 theme show` prints the current theme and everything the
-machine publishes. Only the environment you are anchored to publishes themes, so a remote client
-follows the machine it is connected to, not the device it runs on. T3 Code Mobile keeps its own
-appearance settings and does not follow environment themes.
+machine publishes. Only the active environment publishes themes into the native iOS picker. Its
+palettes are cached per paired environment, and switching environments never mixes two machines'
+versions of the same theme. The React Native client keeps its own appearance settings and does not
+follow environment themes.
 
 Select **Duplicate** on a published theme's card to keep a copy you can edit. The published theme
 itself cannot be edited or removed, because the environment rewrites it whenever its own theme

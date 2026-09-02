@@ -1107,6 +1107,10 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     /// this decides whether they also appear under `/` alongside the provider's
     /// own commands. On by default, matching the server's client settings.
     public var showSkillsInSlashMenu: Bool
+    /// Requires a second tap before removing a thread from the pinned shelf.
+    /// Client-local because it controls this device's interaction, matching
+    /// the web client's setting rather than server-owned thread metadata.
+    public var confirmThreadUnpin: Bool
     /// Built-in palette ids, one per appearance, so a reader can run one theme
     /// by day and another by night. `appearance` still decides which is on
     /// screen; these only decide what that appearance is painted with.
@@ -1121,6 +1125,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         liveActivitiesEnabled: Bool = true,
         alwaysExpandActivity: Bool = false,
         showSkillsInSlashMenu: Bool = true,
+        confirmThreadUnpin: Bool = false,
         lightThemeID: String = T3ThemeDefaults.paletteID,
         darkThemeID: String = T3ThemeDefaults.paletteID,
         defaultSelection: FeatureSelection? = nil
@@ -1131,6 +1136,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         self.liveActivitiesEnabled = liveActivitiesEnabled
         self.alwaysExpandActivity = alwaysExpandActivity
         self.showSkillsInSlashMenu = showSkillsInSlashMenu
+        self.confirmThreadUnpin = confirmThreadUnpin
         self.lightThemeID = lightThemeID
         self.darkThemeID = darkThemeID
         self.defaultSelection = defaultSelection
@@ -1143,6 +1149,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         case liveActivitiesEnabled
         case alwaysExpandActivity
         case showSkillsInSlashMenu
+        case confirmThreadUnpin
         case lightThemeID
         case darkThemeID
         case defaultSelection
@@ -1174,6 +1181,10 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
             Bool.self,
             forKey: .showSkillsInSlashMenu
         ) ?? true
+        confirmThreadUnpin = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .confirmThreadUnpin
+        ) ?? false
         // Absent for anyone upgrading from a build without themes, which has to
         // land on the default palette rather than fail the whole settings decode.
         lightThemeID = try container.decodeIfPresent(
@@ -1198,6 +1209,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         try container.encode(liveActivitiesEnabled, forKey: .liveActivitiesEnabled)
         try container.encode(alwaysExpandActivity, forKey: .alwaysExpandActivity)
         try container.encode(showSkillsInSlashMenu, forKey: .showSkillsInSlashMenu)
+        try container.encode(confirmThreadUnpin, forKey: .confirmThreadUnpin)
         try container.encode(lightThemeID, forKey: .lightThemeID)
         try container.encode(darkThemeID, forKey: .darkThemeID)
         try container.encodeIfPresent(defaultSelection, forKey: .defaultSelection)
@@ -1242,6 +1254,9 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public var providersByEnvironment: [String: [FeatureProvider]]?
     /// Server-authoritative new-thread defaults keyed by saved environment.
     public var preferencesByEnvironment: [String: FeatureEnvironmentPreferences]?
+    /// Published palettes are environment-scoped. The active environment's
+    /// entries are the only ones eligible to tint the app or appear in Settings.
+    public var environmentThemesByEnvironment: [String: [EnvironmentTheme]]?
     public var settings: FeatureSettings
 
     public init(
@@ -1252,6 +1267,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
         providers: [FeatureProvider] = [],
         providersByEnvironment: [String: [FeatureProvider]]? = nil,
         preferencesByEnvironment: [String: FeatureEnvironmentPreferences]? = nil,
+        environmentThemesByEnvironment: [String: [EnvironmentTheme]]? = nil,
         settings: FeatureSettings = .init()
     ) {
         self.connection = connection
@@ -1261,6 +1277,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
         self.providers = providers
         self.providersByEnvironment = providersByEnvironment
         self.preferencesByEnvironment = preferencesByEnvironment
+        self.environmentThemesByEnvironment = environmentThemesByEnvironment
         self.settings = settings
     }
 }

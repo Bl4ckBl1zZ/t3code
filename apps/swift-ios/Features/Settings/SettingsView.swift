@@ -42,7 +42,9 @@ public struct SettingsView: View {
                         ThemeSection(
                             appearance: $settings.appearance,
                             lightThemeID: $settings.lightThemeID,
-                            darkThemeID: $settings.darkThemeID
+                            darkThemeID: $settings.darkThemeID,
+                            environmentName: activeEnvironment?.name,
+                            environmentThemes: activeEnvironmentThemes
                         )
                         ThreadAppearanceSection(
                             alwaysExpandActivity: $settings.alwaysExpandActivity,
@@ -222,6 +224,12 @@ public struct SettingsView: View {
             }
             .onDisappear {
                 model.setConnectionManagementPresented(false)
+            }
+            .onChange(of: model.snapshot.settings) { previous, next in
+                // A live `t3 theme set` may update the saved client settings
+                // while this sheet is open. Preserve local edits, but keep an
+                // untouched form from becoming a stale overwrite.
+                if settings == previous { settings = next }
             }
             // Follows every environment's Hermes inbox for as long as Settings
             // is open, which is what keeps the row's badge honest before anyone
@@ -418,6 +426,12 @@ public struct SettingsView: View {
                     title: "Live Activities",
                     systemImage: "waveform.path.ecg.rectangle",
                     isOn: $settings.liveActivitiesEnabled
+                )
+                settingsDivider
+                SettingsToggleRow(
+                    title: "Confirm before unpinning",
+                    systemImage: "pin.slash",
+                    isOn: $settings.confirmThreadUnpin
                 )
             }
         }
@@ -665,6 +679,15 @@ public struct SettingsView: View {
     private var activeEnvironmentPreferences: FeatureEnvironmentPreferences? {
         guard let activeEnvironmentID else { return nil }
         return model.snapshot.preferencesByEnvironment?[activeEnvironmentID]
+    }
+
+    private var activeEnvironment: FeatureEnvironment? {
+        model.snapshot.environments.first(where: \.isActive)
+    }
+
+    private var activeEnvironmentThemes: [EnvironmentTheme] {
+        guard let environmentID = activeEnvironment?.id else { return [] }
+        return model.snapshot.environmentThemesByEnvironment?[environmentID] ?? []
     }
 
     private var scheduledTaskManager: any FeatureScheduledTaskManaging {

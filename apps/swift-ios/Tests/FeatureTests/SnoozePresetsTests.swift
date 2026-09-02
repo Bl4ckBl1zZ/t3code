@@ -59,6 +59,17 @@ final class SnoozePresetsTests: XCTestCase {
         )
     }
 
+    func testSundayDoesNotOfferMondayMorningTwice() {
+        // Sunday: both Tomorrow and Next week would otherwise resolve to the
+        // same Monday at 9 AM.
+        let now = date(2026, 8, 9, hour: 10)
+
+        let presets = SnoozePresets.resolve(now: now, calendar: calendar)
+
+        XCTAssertEqual(presets.map(\.id), ["hour", "three-hours", "evening", "tomorrow"])
+        XCTAssertEqual(presets.last?.snoozedUntil, date(2026, 8, 10, hour: 9))
+    }
+
     func testActionIDsRoundTripToTheirWakeTimes() {
         let now = date(2026, 8, 12, hour: 10)
         let presets = SnoozePresets.resolve(now: now, calendar: calendar)
