@@ -346,6 +346,18 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   the fork already registers `/settings/integrations` in `SettingsSidebarNav`, `settingsSearch`,
   and `routeTree.gen.ts` — upstream's registrations of the same path resolve to the fork to avoid
   duplicate keys.
+- The 2026-09-04 sync (`6d15c5bbc3..5f878d2a85`) leaves several new upstream feature stacks for
+  dedicated human-reviewed ports instead of guessing across the fork boundary: Google Antigravity
+  (`06336460c9` and follow-ups) needs an orchestration V2 ACP adapter and capability audit;
+  subscription Limits/reset credits (`19d8ab2ae9`, `1641b4aba5`) depend on upstream's replaced
+  provider-usage surfaces; automatic clean-default-branch pulls (`ba3cb07738`) and customizable
+  project icons (`f6c04c552c`) need project-aggregate ports plus fork-owned migration numbers;
+  desktop browser-profile import (`134d51096e`, `39449e53e3`, `ff5843410d`, `498ab9c399`) conflicts
+  with the fork's desktop/browser shell; and media-preview consolidation (`beae2147a9`, `922bd69225`)
+  crosses the frozen Expo client and the fork's existing `MarkdownMedia` path. The range's V1
+  projection/settlement/performance work and all `apps/mobile` changes remain excluded under the
+  standing rules above. These are intentionally flagged for follow-up, not represented as
+  supported server capabilities.
 - Uses a provider-neutral PostgreSQL database on Dokploy instead of provisioning PlanetScale.
 - Reaches private PostgreSQL through a Cloudflare Workers VPC service and an existing Hyperdrive
   binding while keeping the database's public port closed.

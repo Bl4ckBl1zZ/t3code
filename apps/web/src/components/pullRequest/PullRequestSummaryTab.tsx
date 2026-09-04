@@ -57,17 +57,12 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
+import { pullRequestLabelColor } from "./pullRequestList.logic";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
   return login.toLowerCase();
-}
-
-/** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
-function labelDotColor(color: string | null): string | null {
-  const hex = color?.trim().replace(/^#/, "") ?? "";
-  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
 }
 
 /** The avatar carries the attribution alone; who it is arrives on hover, like the reviewer row. */
@@ -412,6 +407,18 @@ export function PullRequestSummaryTab({
   const hiddenCommentCount = detail.comments.length - recentComments.length;
   const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
   const visibleComments = orderPullRequestComments(recentComments, commentOrder);
+  const showOldestCommentsButton =
+    hiddenCommentCount > 0 ? (
+      <Button
+        size="sm"
+        variant="outline"
+        className="w-full"
+        onClick={() => setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })}
+      >
+        Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} oldest{" "}
+        {hiddenCommentCount === 1 ? "comment" : "comments"}
+      </Button>
+    ) : null;
   // Read from the whole conversation, not the window shown below it: a verdict older than the
   // last thirty comments still stands.
   const reviewOutcomes = latestPullRequestReviewOutcomes(detail.comments, detail.commits);
@@ -619,7 +626,7 @@ export function PullRequestSummaryTab({
             <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.map((label) => {
-                  const dot = labelDotColor(label.color);
+                  const dot = pullRequestLabelColor(label.color);
                   return (
                     <span
                       key={label.name}
@@ -787,22 +794,7 @@ export function PullRequestSummaryTab({
               <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : (
               <div className="space-y-3">
-                {hiddenCommentCount > 0 ? (
-                  // Hundreds of comments are hundreds of markdown renders, and the ones worth
-                  // opening a pull request for are the recent ones. The rest are one press away and
-                  // stay rendered once asked for.
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() =>
-                      setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })
-                    }
-                  >
-                    Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} earlier{" "}
-                    {hiddenCommentCount === 1 ? "comment" : "comments"}
-                  </Button>
-                ) : null}
+                {commentOrder === "oldest" ? showOldestCommentsButton : null}
                 {visibleComments.map((comment) => {
                   const thread = threadByCommentId.get(comment.id);
                   const body = visibleBody(comment.body);
@@ -914,6 +906,7 @@ export function PullRequestSummaryTab({
                     </article>
                   );
                 })}
+                {commentOrder === "newest" ? showOldestCommentsButton : null}
               </div>
             )}
           </>
