@@ -61,7 +61,7 @@ struct PullRequestLinkPreview: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let detail {
                         Text(detail.repository).font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                        Text("#\(detail.number) \(detail.title)").font(T3Typography.threadHeading2)
+                        Text("#\(String(detail.number)) \(detail.title)").font(T3Typography.threadHeading2)
                         Text(PullRequestDetailSections.stateLabel(state: detail.state, isDraft: detail.isDraft))
                             .foregroundStyle(detail.state == .open ? T3Colors.success : T3Colors.accent)
                         if let author = detail.author {

@@ -30,6 +30,7 @@ struct SettingsUsageLimitsView: View {
                 } label: {
                     HStack { Text("\(selectedIDs.count) selected"); Spacer(); Image(systemName: "chevron.up.chevron.down") }
                         .frame(minHeight: T3Metrics.minimumTapTarget)
+                        .padding(.horizontal, 12)
                 }
                 .accessibilityIdentifier("limits-environment-selection")
                 Button("Refresh limits") { reloadID = UUID() }.disabled(isLoading || selectedIDs.isEmpty)
@@ -46,7 +47,7 @@ struct SettingsUsageLimitsView: View {
                             ProgressView(value: pool.usedPercent, total: 100).tint(T3Colors.accent)
                             Text("\(100 - pool.usedPercent, specifier: "%.0f")% remaining · \(pool.accountCount) accounts")
                                 .font(.caption).foregroundStyle(T3Colors.textSecondary)
-                        }.padding(.vertical, 8)
+                        }.padding(12)
                     }
                 }
             }
@@ -85,7 +86,7 @@ struct SettingsUsageLimitsView: View {
                             Text("Limits unavailable. This provider or server does not report them yet.").foregroundStyle(T3Colors.textSecondary)
                         }
                     }
-                    .padding(.vertical, 8)
+                    .padding(12)
                 }
             }
             if !isLoading && accounts.isEmpty && notices.isEmpty && !selectedIDs.isEmpty {
@@ -93,7 +94,6 @@ struct SettingsUsageLimitsView: View {
             }
         }
         .task(id: [reloadID, refreshTrigger]) { await reload() }
-        .accessibilityIdentifier("subscription-limits")
     }
 
     private func reload() async {

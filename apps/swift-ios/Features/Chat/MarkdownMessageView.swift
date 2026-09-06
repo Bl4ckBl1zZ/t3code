@@ -49,7 +49,7 @@ struct MarkdownMessageView: View {
         .contextMenu {
             if pullRequestContext != nil {
                 ForEach(PullRequestLinkTarget.links(in: source)) { target in
-                    Button("Preview pull request #\(target.number)", systemImage: "arrow.triangle.pull") {
+                    Button("Preview pull request #\(String(target.number))", systemImage: "arrow.triangle.pull") {
                         previewTarget = target
                     }
                 }
