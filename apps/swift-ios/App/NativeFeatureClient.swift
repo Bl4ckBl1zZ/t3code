@@ -16,7 +16,7 @@ extension FeatureInputAnswer {
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureProjectCreationClient, FeatureWorkspaceAssetResolving,
-    FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading,
+    FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
@@ -467,6 +467,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.resolvedAssetURL(
             resource: .browserArtifact(fileName: fileName)
         )
+    }
+
+    func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot] {
+        let client = try await environmentClient(id: environmentID)
+        if refresh { return try await client.refreshProviderSnapshots() }
+        return try await client.serverConfig().providers
     }
 
     func usageSummary(
@@ -1934,6 +1940,31 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return NativeWorkspaceMapper.sourceControl(
             try await route.client.refreshVCSStatus(cwd: context.cwd)
         )
+    }
+
+    private var pullRequestPreviewCache: [String: (loadedAt: Date, detail: PullRequestDetail)] = [:]
+
+    func pullRequestPreview(threadID: String, url: URL) async throws -> PullRequestDetail {
+        guard let target = PullRequestLinkTarget(url) else { throw FeatureCapabilityUnavailable("This pull request link") }
+        let route = try threadRoute(for: threadID)
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }),
+              let identity = project.repositoryIdentity,
+              identity.canonicalKey.lowercased() == target.repositoryKey,
+              let repository = identity.displayName else {
+            throw FeatureCapabilityUnavailable("Previewing a pull request outside this thread’s repository; open it in the browser")
+        }
+        let key = "\(route.environmentID):\(target.id)"
+        if let cached = pullRequestPreviewCache[key], Date.now.timeIntervalSince(cached.loadedAt) < 30 {
+            return cached.detail
+        }
+        let detail = try await route.client.pullRequestDetail(projectID: project.id, repository: repository, number: target.number)
+        try Task.checkCancellation()
+        pullRequestPreviewCache = pullRequestPreviewCache.filter { Date.now.timeIntervalSince($0.value.loadedAt) < 30 }
+        if pullRequestPreviewCache.count >= 32 { pullRequestPreviewCache.removeAll(keepingCapacity: true) }
+        pullRequestPreviewCache[key] = (.now, detail)
+        return detail
     }
 
     func pullRequestOverview(threadID: String, number: Int) async throws

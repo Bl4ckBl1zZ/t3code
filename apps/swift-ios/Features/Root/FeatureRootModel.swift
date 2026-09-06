@@ -349,9 +349,10 @@ public final class FeatureRootModel {
         }
     }
 
-    public func setPinned(_ id: String, pinned: Bool) async {
+    @discardableResult
+    public func setPinned(_ id: String, pinned: Bool) async -> Bool {
         let environment = currentEnvironmentIdentity
-        await perform {
+        return await perform {
             try await client.setThreadPinned(id: id, pinned: pinned)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) {
@@ -400,9 +401,10 @@ public final class FeatureRootModel {
         }
     }
 
-    public func deleteThread(_ id: String) async {
+    @discardableResult
+    public func deleteThread(_ id: String) async -> Bool {
         let environment = currentEnvironmentIdentity
-        await perform {
+        return await perform {
             try await client.deleteThread(id: id)
             guard currentEnvironmentIdentity == environment else { return }
             removeThread(id: id)

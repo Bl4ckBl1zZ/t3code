@@ -1,3 +1,8 @@
+import {
+  codexUsageLimits,
+  unavailableUsageLimits,
+  type CodexRateLimitSnapshot,
+} from "../providerUsageLimits.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -45,6 +50,7 @@ const CODEX_PRESENTATION = {
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
+  readonly rateLimits?: CodexRateLimitSnapshot | undefined;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -393,18 +399,25 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models] = yield* Effect.all(
+  const [skillsResponse, models, rateLimits] = yield* Effect.all(
     [
       client.request("skills/list", {
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
+      client.request("account/rateLimits/read", undefined).pipe(
+        Effect.map((response) => response.rateLimits),
+        Effect.timeoutOption(Duration.millis(3_000)),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      ),
     ],
     { concurrency: "unbounded" },
   );
 
   return {
     account: accountResponse,
+    rateLimits,
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -611,6 +624,12 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       version: snapshot.version ?? null,
       status: accountStatus.status,
       auth: accountStatus.auth,
+      usageLimits:
+        snapshot.account.account?.type !== "chatgpt"
+          ? unavailableUsageLimits(checkedAt, "unsupported")
+          : snapshot.rateLimits
+            ? codexUsageLimits(snapshot.rateLimits, checkedAt)
+            : unavailableUsageLimits(checkedAt, "probeFailed"),
       ...(accountStatus.message ? { message: accountStatus.message } : {}),
     },
   });

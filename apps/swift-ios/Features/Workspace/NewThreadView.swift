@@ -33,6 +33,7 @@ public struct NewThreadView: View {
     @State private var submissionFailed = false
     @State private var restoredDraftProjectID: String?
     @State private var draftRestoreContext: NewTaskDraftRestoreContext?
+    @State private var isSwappingDraft = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var immediateDraftSaveTasks: [String: Task<Void, Never>] = [:]
     @State private var submittedSuccessfully = false
@@ -96,7 +97,17 @@ public struct NewThreadView: View {
                         onSend: startTask,
                         onStop: {},
                         forceExpanded: true,
-                        powerFeatures: composerPowerFeatures
+                        powerFeatures: composerPowerFeatures,
+                        historyDraftKey: currentDraftKey,
+                        historyDraftStore: draftStore,
+                        onWillStash: {
+                            isSwappingDraft = true
+                            let pending = draftSaveTask
+                            pending?.cancel()
+                            await pending?.value
+                            if let key = currentDraftKey { await immediateDraftSaveTasks[key]?.value }
+                        },
+                        onDidStash: { isSwappingDraft = false }
                     )
                 }
                 .background(T3Colors.background)
@@ -794,7 +805,7 @@ public struct NewThreadView: View {
     }
 
     private func scheduleDraftSave() {
-        guard restoredDraftProjectID == projectID,
+        guard !isSwappingDraft, restoredDraftProjectID == projectID,
               !isSubmitting,
               !submittedSuccessfully,
               let key = currentDraftKey else {
@@ -819,7 +830,7 @@ public struct NewThreadView: View {
     }
 
     private func persistCurrentDraftImmediately() {
-        guard !submittedSuccessfully,
+        guard !isSwappingDraft, !submittedSuccessfully,
               let key = currentDraftKey else {
             return
         }

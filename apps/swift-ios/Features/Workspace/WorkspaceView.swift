@@ -55,6 +55,13 @@ public struct WorkspaceView: View {
     /// a copied handoff script, a refused regeneration, an unconfigured Hermes.
     /// They cannot overlap: each is the direct result of a single tap.
     @State private var noticeAlert: ThreadListActionAlert?
+    @State private var draftKeys: Set<String> = []
+    @State private var batchSelection: Set<String> = []
+    @State private var isSelecting = false
+    @State private var isBatchRunning = false
+    @State private var confirmsBatchDelete = false
+    @State private var confirmsBatchUnpin = false
+    @State private var draftToDiscard: FeatureThread?
     @State private var pendingUnpinThread: FeatureThread?
     @FocusState private var isSearchFocused: Bool
 
@@ -137,6 +144,29 @@ public struct WorkspaceView: View {
             detail
         }
         .navigationSplitViewStyle(.balanced)
+        .task {
+            do {
+                for await keys in try await FeatureComposerDraftStore.shared.draftPresence() {
+                    draftKeys = keys
+                }
+            } catch { noticeAlert = ThreadListActionAlert(title: "Drafts unavailable", message: error.localizedDescription) }
+        }
+        .confirmationDialog("Delete \(batchSelection.count) selected threads?", isPresented: $confirmsBatchDelete, titleVisibility: .visible) {
+            Button("Delete threads", role: .destructive) { runBatch(delete: true) }
+        } message: { Text("Thread history will be deleted. Worktree files stay on the environment. Failed threads remain selected.") }
+        .confirmationDialog("Unpin selected threads?", isPresented: $confirmsBatchUnpin, titleVisibility: .visible) {
+            Button("Unpin") { runBatch(delete: false) }
+        }
+        .confirmationDialog("Discard unsent draft?", isPresented: Binding(get: { draftToDiscard != nil }, set: { if !$0 { draftToDiscard = nil } }), titleVisibility: .visible) {
+            Button("Discard draft", role: .destructive) {
+                guard let thread = draftToDiscard else { return }
+                draftToDiscard = nil
+                Task {
+                    do { try await FeatureComposerDraftStore.shared.discardDraft(for: FeatureComposerDraftStore.threadKey(thread)) }
+                    catch { noticeAlert = ThreadListActionAlert(title: "Draft not discarded", message: error.localizedDescription) }
+                }
+            }
+        }
         .sheet(isPresented: $showingNewTask) {
             NewThreadView(
                 model: model,
@@ -294,6 +324,7 @@ public struct WorkspaceView: View {
             if WorkspaceSwitcher.showsProjectFilter(workspace) {
                 projectFilter
             }
+            if isSelecting { batchBar }
             HomeThreadCollectionView(
                 presentation: presentation,
                 changeRequests: model.changeRequestsByThreadID,
@@ -336,7 +367,16 @@ public struct WorkspaceView: View {
                 },
                 onCopyHandoffScript: copyHandoffScript,
                 onCopy: copyThreadDetail,
-                onRegenerateTitle: regenerateTitle
+                onRegenerateTitle: regenerateTitle,
+                draftKeys: draftKeys,
+                isSelecting: isSelecting,
+                batchSelection: batchSelection,
+                onToggleSelection: { id in
+                    guard !isBatchRunning else { return }
+                    isSelecting = true
+                    if !batchSelection.insert(id).inserted { batchSelection.remove(id) }
+                },
+                onDiscardDraft: { draftToDiscard = $0 }
             )
         }
         .background(T3Colors.background)
@@ -411,8 +451,47 @@ public struct WorkspaceView: View {
         }
     }
 
+    private var batchBar: some View {
+        HStack {
+            Text("\(batchSelection.count) selected").font(.caption)
+            Spacer()
+            Button("Unpin") {
+                if model.snapshot.settings.confirmThreadUnpin { confirmsBatchUnpin = true }
+                else { runBatch(delete: false) }
+            }.disabled(batchSelection.isEmpty || isBatchRunning)
+            Button("Delete", role: .destructive) { confirmsBatchDelete = true }
+                .disabled(batchSelection.isEmpty || isBatchRunning)
+            Button("Done") { isSelecting = false; batchSelection.removeAll() }.disabled(isBatchRunning)
+        }
+        .font(.subheadline)
+        .padding(12)
+        .background(T3Colors.background)
+        .accessibilityIdentifier("workspace-batch-actions")
+    }
+
+    private func runBatch(delete: Bool) {
+        guard !isBatchRunning else { return }
+        isBatchRunning = true
+        let ids = batchSelection.sorted()
+        Task {
+            for id in ids {
+                let succeeded = delete ? await model.deleteThread(id) : await model.setPinned(id, pinned: false)
+                if succeeded { batchSelection.remove(id) }
+            }
+            isBatchRunning = false
+            if batchSelection.isEmpty { isSelecting = false }
+            else { noticeAlert = ThreadListActionAlert(title: "Some threads could not be updated", message: "Failed threads remain selected. Check the connection and try again.") }
+        }
+    }
+
     private var homeBar: some View {
         HStack(spacing: 2) {
+            Button {
+                isSelecting.toggle()
+                if !isSelecting { batchSelection.removeAll() }
+            } label: { Image(systemName: isSelecting ? "checkmark.circle.fill" : "checkmark.circle").frame(width: 40, height: T3Metrics.minimumTapTarget) }
+                .disabled(isBatchRunning)
+                .accessibilityLabel("Select threads")
             connectionBrand
                 .frame(maxWidth: .infinity, alignment: .leading)
 

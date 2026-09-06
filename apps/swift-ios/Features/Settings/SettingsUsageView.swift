@@ -19,6 +19,8 @@ public struct SettingsUsageView: View {
     @Bindable private var model: FeatureRootModel
 
     @State private var state: LoadState = .loading
+    @State private var showsLimits = false
+    @State private var limitsRefreshID = UUID()
     @State private var windowDays = 30
     @State private var showsCost = true
     /// Environments that answered nothing this refresh (offline, old server):
@@ -33,6 +35,14 @@ public struct SettingsUsageView: View {
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
+                Picker("Usage view", selection: $showsLimits) {
+                    Text("Usage").tag(false)
+                    Text("Limits").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, SettingsMetrics.cardInset)
+                if showsLimits { SettingsUsageLimitsView(model: model, refreshTrigger: limitsRefreshID) }
+                else {
                 windowSection
 
                 switch state {
@@ -52,6 +62,7 @@ public struct SettingsUsageView: View {
                     }
                     coverageSection(merged)
                 }
+                }
             }
             .padding(.vertical, 18)
         }
@@ -59,8 +70,11 @@ public struct SettingsUsageView: View {
         .background(T3Colors.background)
         .navigationTitle("Usage")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: windowDays) { await reload() }
-        .refreshable { await reload() }
+        .task(id: "\(windowDays)-\(showsLimits)") { if !showsLimits { await reload() } }
+        .refreshable {
+            if showsLimits { limitsRefreshID = UUID() }
+            else { await reload() }
+        }
     }
 
     // MARK: - Sections

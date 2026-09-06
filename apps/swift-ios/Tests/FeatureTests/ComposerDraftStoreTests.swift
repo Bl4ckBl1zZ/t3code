@@ -4,6 +4,26 @@ import Testing
 
 @Suite("Composer draft persistence")
 struct ComposerDraftStoreTests {
+    @Test func publishesDraftPresenceAndExplicitDiscardWithoutCountingStashes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FeatureComposerDraftStore(fileURL: directory.appendingPathComponent("drafts.json"))
+        var presence = try await store.draftPresence().makeAsyncIterator()
+        var discards = await store.discardedDrafts().makeAsyncIterator()
+        #expect(await presence.next() == [])
+        let key = "environment:a:thread:b"
+        try await store.setDraft(.init(text: "Unsent"), for: key)
+        #expect(await presence.next() == [key])
+        _ = try await store.swapStash(.init(text: "Unsent"), for: key)
+        #expect(await presence.next() == [])
+        try await store.setDraft(.init(text: "Another draft"), for: key)
+        #expect(await presence.next() == [key])
+        try await store.discardDraft(for: key)
+        #expect(await presence.next() == [])
+        #expect(await discards.next() == key)
+        #expect(try await store.stashedDraft(for: key)?.text == "Unsent")
+    }
+
     @Test func roundTripsThreadTextImagesAndSelection() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

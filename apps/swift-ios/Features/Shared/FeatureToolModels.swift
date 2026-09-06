@@ -1063,3 +1063,8 @@ public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
         self.updatedAt = updatedAt
     }
 }
+
+@MainActor
+public protocol FeatureUsageLimitsReading: AnyObject {
+    func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot]
+}

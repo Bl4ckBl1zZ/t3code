@@ -158,6 +158,48 @@ public actor FeatureComposerDraftStore {
         }
     }
 
+    private var presenceSubscribers: [UUID: AsyncStream<Set<String>>.Continuation] = [:]
+    private var publishedPresence: Set<String> = []
+
+    public func draftPresence() throws -> AsyncStream<Set<String>> {
+        let keys = contentKeys(try loadIfNeeded())
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<Set<String>>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        presenceSubscribers[id] = continuation
+        continuation.yield(keys)
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removePresenceSubscriber(id) }
+        }
+        return stream
+    }
+
+    private func removePresenceSubscriber(_ id: UUID) { presenceSubscribers.removeValue(forKey: id) }
+
+    private func contentKeys(_ drafts: [String: PersistedDraft]) -> Set<String> {
+        Set(drafts.compactMap { key, draft in
+            !key.hasPrefix("stash:") && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty) ? key : nil
+        })
+    }
+
+    public func stashedDraft(for key: String) throws -> FeatureComposerDraft? {
+        try draft(for: "stash:" + key)
+    }
+
+    /// Commits both sides together before the caller clears or restores its composer.
+    public func swapStash(_ current: FeatureComposerDraft, for key: String) throws -> FeatureComposerDraft {
+        var drafts = try loadIfNeeded()
+        let stashKey = "stash:" + key
+        let restored = drafts[stashKey]?.featureValue ?? FeatureComposerDraft()
+        if current.text.isEmpty && current.attachments.isEmpty { drafts.removeValue(forKey: stashKey) }
+        else { drafts[stashKey] = PersistedDraft(current) }
+        var next = PersistedDraft(restored)
+        next.importedShareIDs = drafts[key]?.importedShareIDs
+        drafts[key] = next
+        try persist(drafts)
+        loadedDrafts = drafts
+        return restored
+    }
+
     public func draft(for key: String) throws -> FeatureComposerDraft? {
         guard let draft = try loadIfNeeded()[key]?.featureValue,
               !draft.isEmpty else { return nil }
@@ -228,6 +270,23 @@ public actor FeatureComposerDraftStore {
         return persisted.featureValue
     }
 
+    private var discardSubscribers: [UUID: AsyncStream<String>.Continuation] = [:]
+
+    public func discardedDrafts() -> AsyncStream<String> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<String>.makeStream()
+        discardSubscribers[id] = continuation
+        continuation.onTermination = { _ in Task { await self.removeDiscardSubscriber(id) } }
+        return stream
+    }
+
+    private func removeDiscardSubscriber(_ id: UUID) { discardSubscribers.removeValue(forKey: id) }
+
+    public func discardDraft(for key: String) throws {
+        try setDraft(FeatureComposerDraft(), for: key)
+        for subscriber in discardSubscribers.values { subscriber.yield(key) }
+    }
+
     public func removeDraft(for key: String) throws {
         var drafts = try loadIfNeeded()
         guard drafts.removeValue(forKey: key) != nil else { return }
@@ -238,7 +297,7 @@ public actor FeatureComposerDraftStore {
     public func removeDrafts(environmentID: String) throws {
         var drafts = try loadIfNeeded()
         let environmentPrefix = "environment:\(environmentID):"
-        drafts = drafts.filter { !$0.key.hasPrefix(environmentPrefix) }
+        drafts = drafts.filter { !$0.key.hasPrefix(environmentPrefix) && !$0.key.hasPrefix("stash:" + environmentPrefix) }
         try persist(drafts)
         loadedDrafts = drafts
     }
@@ -289,5 +348,10 @@ public actor FeatureComposerDraftStore {
         )
         let document = Document(version: Self.documentVersion, drafts: drafts)
         try JSONEncoder.t3.encode(document).write(to: fileURL, options: .atomic)
+        let presence = contentKeys(drafts)
+        if presence != publishedPresence {
+            publishedPresence = presence
+            for subscriber in presenceSubscribers.values { subscriber.yield(presence) }
+        }
     }
 }

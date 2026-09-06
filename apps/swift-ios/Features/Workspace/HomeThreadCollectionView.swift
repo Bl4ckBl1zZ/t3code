@@ -39,6 +39,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let onCopy: (FeatureThread, ThreadCopyTarget) -> Void
     let onRegenerateTitle: (FeatureThread) -> Void
 
+    var draftKeys: Set<String> = []
+    var isSelecting = false
+    var batchSelection: Set<String> = []
+    var onToggleSelection: (String) -> Void = { _ in }
+    var onDiscardDraft: (FeatureThread) -> Void = { _ in }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
@@ -126,6 +132,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         func update(parent: HomeThreadCollectionView, collectionView: UICollectionView) {
             let previousItems = itemsByID
             let previousSelection = selectedThreadID
+            let previousParent = self.parent
             self.parent = parent
             selectedThreadID = parent.selectedThreadID
 
@@ -143,7 +150,14 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             let newIdentifiers = items.map(\.id)
 
             if currentIdentifiers == newIdentifiers {
-                let changed = newIdentifiers.filter { previousItems[$0] != itemsByID[$0] }
+                let changed = newIdentifiers.filter { id in
+                    if previousItems[id] != itemsByID[id] { return true }
+                    guard case let .thread(thread, _, _, _, _) = itemsByID[id] else { return false }
+                    let key = FeatureComposerDraftStore.threadKey(thread)
+                    return previousParent.isSelecting != parent.isSelecting
+                        || previousParent.batchSelection.contains(thread.id) != parent.batchSelection.contains(thread.id)
+                        || previousParent.draftKeys.contains(key) != parent.draftKeys.contains(key)
+                }
                 let selectionChanged = [previousSelection, selectedThreadID]
                     .compactMap { $0.map(HomeCollectionItem.ID.thread) }
                     .filter { newIdentifiers.contains($0) }
@@ -172,6 +186,11 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             guard let item = item(at: indexPath) else { return }
             switch item {
             case let .thread(thread, _, _, _, _):
+                if parent.isSelecting {
+                    collectionView.deselectItem(at: indexPath, animated: false)
+                    parent.onToggleSelection(thread.id)
+                    return
+                }
                 let previousSelection = selectedThreadID
                 selectedThreadID = thread.id
                 parent.onOpen(thread.id)
@@ -206,6 +225,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
 
         func trailingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+            guard !parent.isSelecting else { return nil }
             guard case let .thread(thread, _, _, isArchived, _) = item(at: indexPath) else {
                 return nil
             }
@@ -282,7 +302,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 HomeCollectionCellContent(
                     item: item,
                     isSelected: identifier.threadID == selectedThreadID,
-                    now: now
+                    now: now,
+                    hasDraft: hasDraft(item),
+                    isSelecting: parent.isSelecting,
+                    isBatchSelected: identifier.threadID.map { parent.batchSelection.contains($0) } ?? false
                 )
             }
             .margins(.all, 0)
@@ -294,18 +317,27 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             configureAccessibility(cell, item: item)
         }
 
+        private func hasDraft(_ item: HomeCollectionItem) -> Bool {
+            guard case let .thread(thread, _, _, _, _) = item else { return false }
+            return parent.draftKeys.contains(FeatureComposerDraftStore.threadKey(thread))
+        }
+
         private func configureAccessibility(_ cell: HomeCollectionCell, item: HomeCollectionItem) {
             switch item {
             case let .thread(thread, context, _, _, _):
                 cell.isAccessibilityElement = true
-                cell.accessibilityTraits = selectedThreadID == thread.id
+                cell.accessibilityTraits = (parent.isSelecting ? parent.batchSelection.contains(thread.id) : selectedThreadID == thread.id)
                     ? [.button, .selected]
                     : .button
-                cell.accessibilityLabel = thread.title
+                cell.accessibilityLabel = thread.title + (hasDraft(item) ? ", unsent draft" : "")
                 cell.accessibilityValue = threadAccessibilityValue(thread, context: context)
-                cell.accessibilityHint = "Opens task"
+                cell.accessibilityHint = parent.isSelecting ? "Toggles selection" : "Opens task"
                 cell.onAccessibilityActivate = { [weak self] in
                     guard let self else { return }
+                    if self.parent.isSelecting {
+                        self.parent.onToggleSelection(thread.id)
+                        return
+                    }
                     let previousSelection = self.selectedThreadID
                     self.selectedThreadID = thread.id
                     self.parent.onOpen(thread.id)
@@ -443,7 +475,15 @@ struct HomeThreadCollectionView: UIViewRepresentable {
 
             // One inline `UIMenu` per section, so the separators the menu data
             // asks for are the rules UIKit draws between groups.
-            return ThreadRowMenu.sections(ThreadRowMenuActions.homeRowActions(context, now: now))
+            var extras: [UIMenuElement] = [UIAction(title: "Select thread", image: UIImage(systemName: "checkmark.circle")) { [weak self] _ in
+                self?.parent.onToggleSelection(thread.id)
+            }]
+            if parent.draftKeys.contains(FeatureComposerDraftStore.threadKey(thread)) {
+                extras.append(UIAction(title: "Discard draft", image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
+                    self?.parent.onDiscardDraft(thread)
+                })
+            }
+            return extras + ThreadRowMenu.sections(ThreadRowMenuActions.homeRowActions(context, now: now))
                 .map { section in
                     UIMenu(
                         title: "",
@@ -774,12 +814,28 @@ private struct HomeCollectionCellContent: View {
     let item: HomeCollectionItem
     let isSelected: Bool
     let now: Date
+    var hasDraft = false
+    var isSelecting = false
+    var isBatchSelected = false
 
     @ViewBuilder
     var body: some View {
         switch item {
         case let .thread(thread, context, style, _, allowsMultilineTitle):
-            FeatureThreadRow(
+            HStack(spacing: 0) {
+                if isSelecting {
+                    Image(systemName: isBatchSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isBatchSelected ? T3Colors.accent : T3Colors.textTertiary)
+                        .padding(.leading, 12)
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    if hasDraft {
+                        Label("Draft", systemImage: "pencil")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(T3Colors.accent)
+                            .padding(.leading, 34)
+                    }
+                    FeatureThreadRow(
                 thread: thread,
                 context: context,
                 isSelected: isSelected,
@@ -788,6 +844,8 @@ private struct HomeCollectionCellContent: View {
                 allowsMultilineTitle: allowsMultilineTitle
             )
             .equatable()
+                }
+            }
         case let .shelfHeader(shelf, count, isExpanded):
             HomeShelfHeader(
                 title: shelf.title,

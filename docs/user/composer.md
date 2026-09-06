@@ -106,3 +106,21 @@ On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from
 start it in the background. T3 Code opens another new thread and shows an **Open** action for the
 thread that started. The new thread keeps the selected workspace mode and base branch. If **New
 worktree** is selected, each background thread creates its own worktree.
+
+## Drafts and prompt history on native iOS
+
+Use the composer’s history menu to stash an unsent draft, restore it, or swap it with the current
+draft. A stash includes attachments and stays on this device for the same thread or new-task
+project. Recent sent prompts restore text only, excluding context attached automatically at send
+time. Stash edited text first to avoid overwriting it with a recalled prompt.
+
+With a hardware keyboard, Up at the first line recalls older prompts and Down at the last line
+moves forward. Editing a recalled prompt stops history navigation until you clear or stash it.
+Selection, text composition, voice recording, and open command menus keep their usual controls.
+
+Long-press a message containing a pull request link and choose **Preview pull request**. For the
+thread’s repository, the preview shows its title, author, state, and change counts, with links to
+the full review and browser. Other repositories can be opened in the browser.
+
+Long-press an image or video to **Save** it to Photos or **Share original**. These actions use the
+original file. Photos permission is requested only when saving; sharing uses the system share sheet.

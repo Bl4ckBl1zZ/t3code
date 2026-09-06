@@ -90,6 +90,10 @@ struct MarkdownMediaView: View {
     /// Minted when the viewer opens rather than reused from the load: a signed
     /// URL expires, and a transcript can sit on screen for hours.
     @State private var expandedURL: URL?
+    @State private var exportFile: MediaExportFile?
+    @State private var isSharing = false
+    @State private var exportTask: Task<Void, Never>?
+    @State private var exportNotice: String?
 
     var body: some View {
         content
@@ -101,6 +105,30 @@ struct MarkdownMediaView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(T3Colors.border, lineWidth: 1)
             }
+            .contextMenu {
+                Button {
+                    exportMedia(saveToPhotos: true)
+                } label: { Label(isVideo ? "Save video" : "Save image", systemImage: "square.and.arrow.down") }
+                .disabled(exportTask != nil)
+                Button {
+                    exportMedia(saveToPhotos: false)
+                } label: { Label("Share original…", systemImage: "square.and.arrow.up") }
+                .disabled(exportTask != nil)
+            }
+            .overlay(alignment: .topTrailing) {
+                if exportTask != nil { ProgressView().padding(12).background(.regularMaterial, in: Circle()) }
+            }
+            .sheet(isPresented: $isSharing, onDismiss: clearExport) {
+                if let exportFile { MediaShareSheet(url: exportFile.url) }
+            }
+            .alert("Media", isPresented: Binding(
+                get: { exportNotice != nil }, set: { if !$0 { exportNotice = nil } }
+            )) { Button("OK") { exportNotice = nil } } message: { Text(exportNotice ?? "") }
+            .onChange(of: request) { _, _ in
+                exportTask?.cancel()
+                exportTask = nil
+            }
+            .onDisappear { exportTask?.cancel() }
             .task(id: request) {
                 await load(request)
             }
@@ -235,6 +263,43 @@ struct MarkdownMediaView: View {
         } catch {
             guard !Task.isCancelled else { return }
             failedRequest = request
+        }
+    }
+
+    private func clearExport() {
+        exportFile?.remove()
+        exportFile = nil
+    }
+
+    private func exportMedia(saveToPhotos: Bool) {
+        guard exportTask == nil else { return }
+        let captured = request
+        exportTask = Task {
+            defer { if request == captured { exportTask = nil } }
+            do {
+                let url = try await resolveURL(captured)
+                let file = try await MediaExport.download(url)
+                do {
+                    try Task.checkCancellation()
+                    if saveToPhotos {
+                        try await MediaExport.saveToPhotos(file)
+                        file.remove()
+                        exportNotice = "Saved to Photos."
+                    } else {
+                        clearExport()
+                        exportFile = file
+                        isSharing = true
+                    }
+                } catch {
+                    file.remove()
+                    throw error
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                exportNotice = error.localizedDescription
+            }
         }
     }
 

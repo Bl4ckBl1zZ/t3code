@@ -40,3 +40,13 @@ pill** fallback because their colors are not controlled by T3 Code.
 To generate a fresh title from the conversation, open a thread's context menu and choose
 **Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
 be selected again. The option is hidden when the connected environment needs a server update.
+
+## Native iOS draft and batch actions
+
+Threads with unsent text or attachments show a **Draft** badge. Long-press a thread and choose
+**Discard draft** to clear it after confirmation, including when its composer is open.
+
+Tap **Select threads** or choose **Select thread** from a row’s menu, then select rows to unpin
+or delete together. Delete asks for confirmation; unpin follows your confirmation preference.
+Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
+history does not remove worktree files from the environment.

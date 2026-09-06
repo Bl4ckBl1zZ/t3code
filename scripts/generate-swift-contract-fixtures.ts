@@ -15,6 +15,7 @@
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  ServerProviderUsageLimits,
   CheckpointId,
   CheckpointScopeId,
   ContextHandoffId,
@@ -357,4 +358,31 @@ if (process.argv.includes("--check")) {
   NodeFS.mkdirSync(NodePath.dirname(outputPath), { recursive: true });
   NodeFS.writeFileSync(outputPath, serialized);
   console.log(`[swift-fixtures] wrote ${outputPath} (${turnItems.length} turn items)`);
+}
+
+const limitsPath = NodePath.join(NodePath.dirname(outputPath), "providerUsageLimits.json");
+const limits = Schema.encodeSync(ServerProviderUsageLimits)({
+  checkedAt: "2026-09-06T00:00:00.000Z",
+  windows: [
+    {
+      id: "primary",
+      kind: "session",
+      label: "Session",
+      usedPercent: 42,
+      resetsAt: "2026-09-06T05:00:00.000Z",
+      windowDurationMins: 300,
+    },
+  ],
+});
+const limitsSerialized = `${JSON.stringify(limits, null, 2)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(limitsPath) ||
+    NodeFS.readFileSync(limitsPath, "utf8") !== limitsSerialized
+  ) {
+    console.error("[swift-fixtures] providerUsageLimits.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(limitsPath, limitsSerialized);
 }

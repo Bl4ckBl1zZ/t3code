@@ -37,6 +37,14 @@ public final class VoiceComposerCaret {
         return trackedRange
     }
 
+    public func canRecallHistory(backward: Bool) -> Bool {
+        guard let responder, responder.markedTextRange == nil,
+              let range = responder.selectedTextRange, range.isEmpty else { return false }
+        let caret = responder.caretRect(for: range.start)
+        let boundary = responder.caretRect(for: backward ? responder.beginningOfDocument : responder.endOfDocument)
+        return abs(caret.midY - boundary.midY) < 2
+    }
+
     public func startTracking() {
         guard observers.isEmpty else { return }
         let center = NotificationCenter.default

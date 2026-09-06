@@ -54,6 +54,16 @@ struct FeatureComposerView: View {
     private let pendingUserInputs: [FeatureUserInput]
     private let isResolvingRequest: Bool
     private let powerFeatures: FeatureComposerPowerFeatures
+    private let historyMessages: () -> [FeatureMessage]
+    private let historyDraftKey: String?
+    private let historyDraftStore: FeatureComposerDraftStore
+    private let onWillStash: () async -> Void
+    private let onDidStash: () -> Void
+    @State private var historyGeneration = UUID()
+    @State private var promptHistory = ComposerPromptHistory()
+    @State private var stashedDraft: FeatureComposerDraft?
+    @State private var isStashing = false
+    @State private var historyError: String?
     private let onSend: () -> Void
     private let onStop: () -> Void
     private let onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)?
@@ -79,6 +89,11 @@ struct FeatureComposerView: View {
         pendingUserInputs: [FeatureUserInput] = [],
         isResolvingRequest: Bool = false,
         powerFeatures: FeatureComposerPowerFeatures = .disabled,
+        historyMessages: @escaping () -> [FeatureMessage] = { [] },
+        historyDraftKey: String? = nil,
+        historyDraftStore: FeatureComposerDraftStore = .shared,
+        onWillStash: @escaping () async -> Void = {},
+        onDidStash: @escaping () -> Void = {},
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)? = nil
     ) {
@@ -101,12 +116,31 @@ struct FeatureComposerView: View {
         self.pendingUserInputs = pendingUserInputs
         self.isResolvingRequest = isResolvingRequest
         self.powerFeatures = powerFeatures
+        self.historyMessages = historyMessages
+        self.historyDraftKey = historyDraftKey
+        self.historyDraftStore = historyDraftStore
+        self.onWillStash = onWillStash
+        self.onDidStash = onDidStash
         self.onApprovalDecision = onApprovalDecision
         self.onUserInputSubmit = onUserInputSubmit
     }
 
     var body: some View {
         composerSurface
+            .task(id: historyDraftKey) {
+                historyGeneration = UUID()
+                promptHistory = ComposerPromptHistory()
+                guard let historyDraftKey else { stashedDraft = nil; return }
+                do {
+                    let saved = try await historyDraftStore.stashedDraft(for: historyDraftKey)
+                    guard !Task.isCancelled, self.historyDraftKey == historyDraftKey else { return }
+                    stashedDraft = saved
+                }
+                catch { historyError = error.localizedDescription }
+            }
+            .alert("Prompt history", isPresented: Binding(get: { historyError != nil }, set: { if !$0 { historyError = nil } })) {
+                Button("OK") { historyError = nil }
+            } message: { Text(historyError ?? "") }
             .overlay(alignment: .top) {
                 if showsCommandMenu, let trigger = composerTrigger {
                     FeatureComposerCommandPopover(
@@ -478,6 +512,16 @@ struct FeatureComposerView: View {
             text: $text,
             axis: .vertical
         )
+        .disabled(isStashing)
+        .onKeyPress(keys: [.upArrow, .downArrow], phases: .down) { press in
+            guard press.modifiers.isEmpty, historyAvailable,
+                  caret.canRecallHistory(backward: press.key == .upArrow),
+                  let recalled = promptHistory.step(backward: press.key == .upArrow,
+                    entries: ComposerPromptHistory.entries(historyMessages()), current: text) else { return .ignored }
+            text = recalled
+            caret.moveCaret(to: recalled.utf16.count)
+            return .handled
+        }
         .font(T3Typography.composer)
         .lineLimit(1...7)
         // Ideal height, not proposed height: with the attachment strip in the
@@ -565,6 +609,7 @@ struct FeatureComposerView: View {
 
     private var composerFooter: some View {
         HStack(spacing: 6) {
+            historyMenu
             settingsTrigger
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -583,6 +628,53 @@ struct FeatureComposerView: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+    }
+
+    private var historyAvailable: Bool {
+        !isSending && !isStashing && !voice.state.isBusy && !showsCommandMenu
+            && pendingApprovals.isEmpty && pendingUserInputs.isEmpty && !isAttachMenuOpen
+    }
+
+    private var historyMenu: some View {
+        Menu {
+            if let historyDraftKey {
+                Button(stashedDraft == nil ? "Stash draft" : (text.isEmpty && attachments.isEmpty ? "Restore stashed draft" : "Swap with stashed draft")) {
+                    let current = FeatureComposerDraft(text: text, attachments: attachments)
+                    let generation = historyGeneration
+                    isStashing = true
+                    Task {
+                        defer { isStashing = false; onDidStash() }
+                        await onWillStash()
+                        do {
+                            let restored = try await historyDraftStore.swapStash(current, for: historyDraftKey)
+                            guard generation == historyGeneration else { return }
+                            stashedDraft = current.text.isEmpty && current.attachments.isEmpty ? nil : current
+                            text = restored.text
+                            attachments = restored.attachments
+                            promptHistory = ComposerPromptHistory()
+                        } catch { historyError = error.localizedDescription }
+                    }
+                }.disabled(stashedDraft == nil && text.isEmpty && attachments.isEmpty)
+            }
+            let entries = ComposerPromptHistory.entries(historyMessages())
+            if !entries.isEmpty {
+                Section("Recent prompts") {
+                    ForEach(entries.suffix(20).reversed()) { entry in
+                        Button(String(entry.prompt.prefix(100))) {
+                            text = promptHistory.select(entry)
+                            focused.wrappedValue = true
+                            caret.moveCaret(to: text.utf16.count)
+                        }.disabled(!text.isEmpty && text != promptHistory.position?.prompt)
+                    }
+                }
+            } else { Text("No sent prompts in this thread") }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+        }
+        .disabled(!historyAvailable)
+        .accessibilityLabel("Prompt history and stash")
+        .accessibilityIdentifier("composer-history")
     }
 
     /// Plan and Build are one tap apart, in the corner opposite the model.

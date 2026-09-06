@@ -14,6 +14,7 @@ public struct ThreadDetailView: View {
     /// only reports which thread was asked for. `isArchived` routes to the
     /// archive, which is the only place an archived thread can be shown.
     let onOpenRelatedThread: (_ threadID: String, _ isArchived: Bool) -> Void
+    @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
 
     @SwiftUI.Environment(\.openURL) private var openURL
@@ -94,6 +95,13 @@ public struct ThreadDetailView: View {
                 .tint(T3Colors.textPrimary)
                 .accessibilityLabel("Thread details")
                 .accessibilityIdentifier("thread-details-button")
+            }
+        }
+        .task(id: draftKey) {
+            for await key in await draftStore.discardedDrafts() where key == draftKey {
+                draftSaveTask?.cancel()
+                draft = ""
+                attachments = []
             }
         }
         .task(id: thread.id) {
@@ -417,6 +425,7 @@ public struct ThreadDetailView: View {
                         threadID: thread.id,
                         client: model.client
                     ),
+                    pullRequests: threadEnvironment?.supportsPullRequests == true ? MarkdownPullRequestContext(threadID: thread.id, client: model.client) : nil,
                     onRollback: { target in
                         // Preview first, never fire-and-forget: the sheet
                         // shows the computed blast radius, owns progress, and
@@ -621,6 +630,16 @@ public struct ThreadDetailView: View {
             pendingUserInputs: detail.userInputs,
             isResolvingRequest: model.isPerformingAction,
             powerFeatures: composerPowerFeatures,
+            historyMessages: { detail.messages },
+            historyDraftKey: draftKey,
+            historyDraftStore: draftStore,
+            onWillStash: {
+                isSwappingDraft = true
+                let pending = draftSaveTask
+                pending?.cancel()
+                await pending?.value
+            },
+            onDidStash: { isSwappingDraft = false },
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },
@@ -1106,7 +1125,7 @@ public struct ThreadDetailView: View {
     }
 
     private func scheduleDraftSave() {
-        guard didRestoreDraft, !isSending else { return }
+        guard didRestoreDraft, !isSending, !isSwappingDraft else { return }
         draftSaveTask?.cancel()
         let snapshot = composerDraft
         let key = draftKey
@@ -1124,7 +1143,7 @@ public struct ThreadDetailView: View {
     }
 
     private func persistDraftImmediately() {
-        guard didRestoreDraft else { return }
+        guard didRestoreDraft, !isSwappingDraft else { return }
         draftSaveTask?.cancel()
         let snapshot = composerDraft
         let key = draftKey
@@ -1134,7 +1153,7 @@ public struct ThreadDetailView: View {
     }
 
     private func persistDraftBeforeLeaving() {
-        guard didRestoreDraft, !isSending else { return }
+        guard didRestoreDraft, !isSending, !isSwappingDraft else { return }
         persistDraftImmediately()
     }
 
@@ -1560,6 +1579,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let wireThreadID: String
     /// Resolves assistant markdown media against this thread's environment.
     let markdownMedia: MarkdownMediaContext?
+    var pullRequests: MarkdownPullRequestContext? = nil
     let onRollback: (ThreadActivityRollbackTarget) -> Void
     /// The whole detail rather than its rows: building the feed costs O(window),
     /// so it happens inside the coordinator once the revision guard has proved
@@ -1637,6 +1657,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 currentThreadID: threadID,
                 currentWireThreadID: wireThreadID,
                 markdownMedia: markdownMedia,
+                pullRequests: pullRequests,
                 onRollback: onRollback,
                 workspaceRoot: workspaceRoot,
                 alwaysExpandActivity: alwaysExpandActivity,
@@ -1698,6 +1719,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             /// configuration roots its own environment, so nothing an ancestor
             /// puts there reaches these cells.
             var markdownMedia: MarkdownMediaContext?
+            var pullRequests: MarkdownPullRequestContext?
             var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
             var workspaceRoot: String?
             var alwaysExpandActivity = false
@@ -1767,6 +1789,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     // showing it against the wrong one.
                     .id(entryID)
                     .environment(\.markdownMediaContext, context.markdownMedia)
+                    .environment(\.markdownPullRequestContext, context.pullRequests)
                 }
                 .margins(.all, 0)
                 cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
