@@ -2555,3 +2555,94 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
     });
   },
 );
+
+describe("Codex model inventories", () => {
+  const cachedProvider = {
+    instanceId: ProviderInstanceId.make("codex-personal"),
+    driver: ProviderDriverKind.make("codex"),
+    status: "ready",
+    enabled: true,
+    installed: true,
+    auth: { status: "authenticated" },
+    checkedAt: "2026-09-04T19:00:00.000Z",
+    version: "0.153.3",
+    models: ["vega-alpha", "joule-alpha", "kindle-alpha", "ultima-alpha", "solstice-alpha"].map(
+      (slug) => ({ slug, name: slug, isCustom: false, capabilities: null }),
+    ),
+    slashCommands: [],
+    skills: [],
+  } satisfies ServerProvider;
+  const customModel = {
+    slug: "custom-model",
+    name: "Custom model",
+    isCustom: true,
+    capabilities: null,
+  } as const;
+  const refreshedProvider = {
+    ...cachedProvider,
+    checkedAt: "2026-09-04T19:01:00.000Z",
+    models: [
+      { slug: "gpt-6-astra", name: "GPT 6 Astra", isCustom: false, capabilities: null },
+      cachedProvider.models[0]!,
+      customModel,
+    ],
+  } satisfies ServerProvider;
+  const pendingProvider = {
+    ...cachedProvider,
+    status: "warning",
+    installed: false,
+    auth: { status: "unknown" },
+    models: [customModel],
+  } satisfies ServerProvider;
+  const failedProvider = {
+    ...pendingProvider,
+    checkedAt: "2026-09-04T19:02:00.000Z",
+    status: "error",
+    installed: true,
+  } satisfies ServerProvider;
+
+  it("drops retired alpha models after discovery, including without OpenAI authentication", () => {
+    for (const authStatus of ["authenticated", "unknown"] as const) {
+      assert.deepStrictEqual(
+        mergeProviderSnapshot(cachedProvider, {
+          ...refreshedProvider,
+          auth: { status: authStatus },
+        }).models,
+        refreshedProvider.models,
+      );
+    }
+  });
+
+  it("keeps discovered models during startup and failed probes without losing discovered models", () => {
+    for (const provider of [pendingProvider, failedProvider]) {
+      assert.deepStrictEqual(
+        mergeProviderSnapshot(
+          {
+            ...cachedProvider,
+            models: cachedProvider.models,
+          },
+          provider,
+        ).models,
+        [customModel, ...cachedProvider.models],
+      );
+    }
+  });
+
+  it("clears discovered models after sign-out, disable, uninstall, or empty discovery", () => {
+    const emptyProvider = { ...refreshedProvider, models: [customModel] };
+    const clearedProviders = [
+      { ...emptyProvider, status: "error", auth: { status: "unauthenticated" } },
+      { ...emptyProvider, status: "disabled", enabled: false },
+      { ...emptyProvider, status: "error", installed: false, auth: { status: "unknown" } },
+      emptyProvider,
+      { ...emptyProvider, models: [] },
+    ] satisfies ReadonlyArray<ServerProvider>;
+
+    for (const provider of clearedProviders) {
+      assert.deepStrictEqual(
+        mergeProviderSnapshot(cachedProvider, provider).models,
+        provider.models,
+      );
+    }
+  });
+});

@@ -204,7 +204,7 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
 
   return createPortal(
     <div
-      className="pointer-events-auto fixed z-[70]"
+      className="pointer-events-auto fixed z-[70] flex flex-col"
       style={{
         bottom: position.bottom,
         left: position.left,
@@ -2484,7 +2484,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const prompt = promptRef.current.split(INLINE_TERMINAL_CONTEXT_PLACEHOLDER).join("").trim();
     const images = [...composerImagesRef.current];
     if (prompt.length === 0 && images.length === 0) {
-      setIsStashMenuOpen((open) => !open);
+      const entries = usePromptStashStore.getState().entries;
+      const entry = entries.length === 1 ? entries[0] : undefined;
+      if (entry && !entry.pendingImageCount) {
+        await restoreStashEntry(entry);
+      } else {
+        setIsStashMenuOpen((open) => !open);
+      }
       return;
     }
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
@@ -2635,6 +2641,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     finalizeStashEntryImages,
     promptRef,
     pulseStashBadge,
+    restoreStashEntry,
     stashEntryToQueue,
   ]);
 

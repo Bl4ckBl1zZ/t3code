@@ -25,6 +25,7 @@ import {
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { resolveThreadPreview } from "@t3tools/client-runtime/state/models";
 import {
+  parseScopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
@@ -104,7 +105,10 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { useThreadSelectionStore } from "../threadSelectionStore";
+import {
+  getThreadKeysToDeselectAfterDelete,
+  useThreadSelectionStore,
+} from "../threadSelectionStore";
 import {
   requestThreadUnpinConfirmation,
   useMarkThreadUnread,
@@ -142,6 +146,7 @@ import {
 } from "../workEnvironmentScope";
 import { cn } from "~/lib/utils";
 import {
+  deleteSelectedThreadEntries,
   animatePinnedLayoutChanges,
   applyManualThreadOrderForSidebarV2,
   buildBulkTitleRegenerationContextMenuItem,
@@ -217,6 +222,7 @@ import {
   composerDraftHasUserContent,
   DraftId,
   useComposerDraftStore,
+  useThreadHasUnsentDraft,
   type ComposerThreadDraftState,
   type DraftSessionState,
 } from "../composerDraftStore";
@@ -415,7 +421,7 @@ function SidebarThreadTooltip({
       className="max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0"
     >
       <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
-        <div className="min-w-0 truncate text-xs leading-none font-medium text-foreground">
+        <div className="min-w-0 truncate text-xs leading-tight font-medium text-foreground">
           {thread.title}
         </div>
         <div className="grid gap-1.5 pl-0.5 text-xs text-muted-foreground">
@@ -924,6 +930,34 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
+  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isActive;
+  const clearComposerContent = useComposerDraftStore((state) => state.clearComposerContent);
+  const handleDiscardDraftClick = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      releaseComposerDraftUploads(threadRef);
+      clearComposerContent(threadRef);
+    },
+    [clearComposerContent, threadRef],
+  );
+  const draftIndicator = hasUnsentDraft ? (
+    <SquarePenIcon
+      role="img"
+      aria-label="Unsent draft"
+      className="size-3 shrink-0 text-amber-600 dark:text-amber-300/80"
+    />
+  ) : null;
+  const discardDraftButton = hasUnsentDraft ? (
+    <button
+      type="button"
+      aria-label="Discard unsent draft"
+      onClick={handleDiscardDraftClick}
+      className="inline-flex shrink-0 cursor-pointer items-center rounded-md px-1 text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover/sidebar-row:opacity-100"
+    >
+      <XIcon aria-hidden className="size-3.5" />
+    </button>
+  ) : null;
 
   // Same semantics as v1 (never-visited counts as read): flipping the beta
   // flag must not light up every historical thread as unread.
@@ -1254,9 +1288,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
         ? "bg-sidebar-row-selected text-sidebar-foreground"
-        : shouldRecede
-          ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-          : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+        : hasUnsentDraft
+          ? "bg-amber-400/[0.04] text-sidebar-foreground hover:bg-amber-400/[0.08]"
+          : shouldRecede
+            ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
     isInFlight &&
       !props.isActive &&
       !isSelected &&
@@ -1286,11 +1322,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               "truncate",
               isUnread || isWoke
                 ? "text-foreground"
-                : shouldRecede
-                  ? "text-muted-foreground/80"
-                  : status === "failed"
-                    ? "text-foreground/95"
-                    : "text-foreground/90",
+                : hasUnsentDraft
+                  ? "bg-amber-400/[0.04] text-sidebar-foreground hover:bg-amber-400/[0.08]"
+                  : shouldRecede
+                    ? "text-muted-foreground/80"
+                    : status === "failed"
+                      ? "text-foreground/95"
+                      : "text-foreground/90",
             )
           : cn(
               "truncate group-hover/sidebar-row:text-foreground",
@@ -1438,7 +1476,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 />
               )}
             </span>
+            {draftIndicator}
             {title}
+            {discardDraftButton}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -1599,7 +1639,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           threadTimeLabel(thread)
         )}
       </span>
-      {props.settlementSupported || showSnoozeButton || variant === "card" ? (
+      {hasUnsentDraft || props.settlementSupported || showSnoozeButton || variant === "card" ? (
         <span
           className={cn(
             // focus-visible, not focus-within: a mouse click leaves
@@ -1639,6 +1679,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               )}
             </button>
           ) : null}
+          {discardDraftButton}
           {showSnoozeButton ? (
             <SnoozePopoverButton
               open={snoozeMenuOpen}
@@ -1671,6 +1712,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const titleLine = (
     <>
+      {draftIndicator}
       {title}
       {isRegeneratingTitle ? (
         <span role="status" className="sr-only">
@@ -2078,10 +2120,10 @@ export default function Sidebar() {
     reportFailure: false,
   });
   const toggleThreadPin = useCallback(
-    (threadRef: ScopedThreadRef) => {
+    (threadRef: ScopedThreadRef, pinned?: boolean) => {
       void (async () => {
         const threadKey = scopedThreadKey(threadRef);
-        const nextPinned = !pinnedThreadKeySet.has(threadKey);
+        const nextPinned = pinned ?? !pinnedThreadKeySet.has(threadKey);
         if (!nextPinned) {
           // Unpinning is the destructive half: it drops the thread out of the
           // pinned section and clears its order key. Gated on the same
@@ -3326,8 +3368,9 @@ export default function Sidebar() {
       // right now. Selections can outlive their rows (settled-tail paging,
       // thread deletion elsewhere) and the menu labels must count only what
       // the actions will touch.
-      const threadKeys = [...useThreadSelectionStore.getState().selectedThreadKeys].filter(
-        (threadKey) => threadByKeyRef.current.has(threadKey),
+      const selectedThreadKeys = [...useThreadSelectionStore.getState().selectedThreadKeys];
+      const threadKeys = selectedThreadKeys.filter((threadKey) =>
+        threadByKeyRef.current.has(threadKey),
       );
       if (threadKeys.length === 0) return;
       const count = threadKeys.length;
@@ -3355,10 +3398,20 @@ export default function Sidebar() {
         supportedCount: titleRegenerationThreads.length,
         actionableCount: regeneratableTitleThreads.length,
       });
+      const pinnedSelectedThreads = selectedThreads.filter(
+        (thread) =>
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinning ===
+            true &&
+          thread.pinnedAt != null &&
+          thread.workInboxRole !== "main",
+      );
       const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [
+            ...(pinnedSelectedThreads.length > 0
+              ? [{ id: "unpin", label: `Unpin (${pinnedSelectedThreads.length})` }]
+              : []),
             { id: "settle", label: `Settle (${count})` },
             ...(canSnoozeSelection
               ? [
@@ -3395,6 +3448,13 @@ export default function Sidebar() {
           }
           clearSelection();
         }
+        return;
+      }
+      if (clicked.value === "unpin") {
+        for (const thread of pinnedSelectedThreads) {
+          toggleThreadPin(scopeThreadRef(thread.environmentId, thread.id), false);
+        }
+        clearSelection();
         return;
       }
       if (clicked.value === "regenerate-title") {
@@ -3456,37 +3516,38 @@ export default function Sidebar() {
         );
         if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
-      // Grown as deletions actually land, never seeded with the whole batch:
-      // orphaned-worktree detection must only discount threads that are
-      // really gone, or the first delete would treat still-alive batch mates
-      // as deleted and remove a worktree they still point at.
-      const deletedThreadKeys = new Set<string>();
-      for (const threadKey of threadKeys) {
-        const thread = threadByKeyRef.current.get(threadKey);
-        if (!thread) continue;
-        const result = await deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
-          deletedThreadKeys,
-        });
-        if (result._tag === "Failure") {
-          if (!isAtomCommandInterrupted(result)) {
-            const error = squashAtomCommandFailure(result);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to delete threads",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return;
-        }
-        deletedThreadKeys.add(threadKey);
+      const { deletedThreadKeys, firstFailure } = await deleteSelectedThreadEntries({
+        entries: threadKeys.map((threadKey) => ({ threadKey })),
+        delete: async ({ threadKey }, deletedKeys) => {
+          const thread = threadByKeyRef.current.get(threadKey);
+          return thread
+            ? deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
+                deletedThreadKeys: deletedKeys,
+              })
+            : null;
+        },
+      });
+      if (firstFailure) {
+        const error = squashAtomCommandFailure(firstFailure);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to delete threads",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
       }
-      removeFromSelection(threadKeys);
+      removeFromSelection(
+        getThreadKeysToDeselectAfterDelete(selectedThreadKeys, deletedThreadKeys, (key) => {
+          const ref = parseScopedThreadKey(key);
+          return ref !== null && readThreadShell(ref) !== null;
+        }),
+      );
     },
     [
       attemptSettle,
       attemptSnooze,
+      toggleThreadPin,
       clearSelection,
       confirmThreadDelete,
       deleteThread,

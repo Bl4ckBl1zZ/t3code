@@ -63,6 +63,17 @@ describe("makeQuitHoldHandler", () => {
     vi.useRealTimers();
   });
 
+  it("does not count a released tap after another shortcut interrupts it", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.send(makeInput({ type: "keyUp" }));
+    await harness.send(makeInput({ key: "c" }));
+    vi.advanceTimersByTime(100);
+    await harness.send(makeInput({}));
+    expect(harness.quit).not.toHaveBeenCalled();
+    expect(harness.notifications).toEqual(["down", "up", "down"]);
+  });
+
   it("shows the hint on a tap without quitting, even when the release is never seen", async () => {
     // macOS suppresses the letter's keyUp while Cmd is held, so a tap may
     // produce no keyUp at all. Quit must still not fire.

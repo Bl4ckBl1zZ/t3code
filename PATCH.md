@@ -346,6 +346,61 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   the fork already registers `/settings/integrations` in `SettingsSidebarNav`, `settingsSearch`,
   and `routeTree.gen.ts` — upstream's registrations of the same path resolve to the fork to avoid
   duplicate keys.
+- Requests checkpoint summaries through Git numstat on orchestration V2
+  (`c163d502dd`). `orchestration-v2/CheckpointService` asks the shared checkpoint/VCS layer for
+  counts rather than constructing full patches, and numstat fails explicitly if its output limit
+  is exceeded. Opening a diff still requests the full patch. No V1 runtime or migration is needed.
+- Carries unsent-draft markers and discard actions (`f034732244`) in the fork's sidebar row
+  variants using its unified attachment drafts. Bulk unpin (`c7bf3115f2`) uses V2 metadata updates
+  and the existing per-thread confirmation. Both sidebars share sequential bulk deletion
+  (`bd7f7ea093`, `dd64072917`): only successful deletions are excluded from shared-worktree
+  ownership, ordinary failures do not abort the batch, and failed/unprocessed threads stay
+  selected. Navigation and worktree-cleanup failures are reported separately from a completed
+  deletion, including the fork's archived-thread deletion path.
+- The 2026-09-06 sync (`5f878d2a85..223ff4490f`) deliberately leaves the following stacks for
+  dedicated human-reviewed ports. Advancing the squash-sync marker does not mean these features
+  are supported. Do not import their client flags or schemas without implementing the matching
+  V2/server behavior and auditing the hand-maintained Swift contracts:
+  - Custom model names/option descriptors and imported custom-provider selection
+    (`5a433244d0`, `d92dca74eb`) need a V2 provider-option/adapter audit.
+  - Shared project defaults and scoped overrides (`9f40b2f563`) need the retained project
+    aggregate, fork-owned migration numbers, and Swift settings parity. Connection load balancing
+    (`420fd76f60`) needs V2 launch selection and an explicit multi-machine workspace policy.
+  - The welcome wizard (`09aac71563`) depends on upstream's V1 importer/provider setup.
+    Server-side PR discovery (`223ff4490f`) and actual PR terminal timestamps (`050690d1bc`)
+    need a V2 background service and JSON settlement projection. Upstream migration
+    `048_ProjectionThreadBranchPullRequest` is not carried; existing client-driven V2 PR
+    linking remains available through `threadPullRequestLinking`.
+  - Streaming Markdown mounting (`887ece3071`) and recovery (`ce4712d5b0`) cross the fork's
+    `MarkdownMedia` and component map. Only the renderer test dependencies from the former and
+    static HTML cache correctness from the latter are carried. Its V1 stream/Expo changes are
+    excluded; its worker and animation changes remain with their deferred prerequisites.
+  - Lazy diff workers and Pierre editor fixes (`b3e1d88590`, `df8e0eb46b`, `6270a6f88b`,
+    `2fa5ef4c7b`, `6b87ce3a0b`) need integration with the fork's file/media panels and existing
+    dependency patches. Terminal stream cursors, hidden surfaces and keyboard focus
+    (`da7e46d08e`, `5eab021a51`, `896fe82f2f`) need joint adaptation to fork replay/selection
+    handling. The independent bounded server history and terminal metadata cache are carried.
+  - PR hover cards, hydration, project-filter choices and panel precedence (`95103905f5`,
+    `91c66ac43d`, `110bbe6b55`, `a0eb23993a`, `931d41f933`, `e5a87e8b9c`) need adaptation
+    to the fork's PR data and panel stores. Header project settings, keyboard-accessible project
+    actions and navigation motion (`cbe93e8dfb`, `7f8cf30ca4`, `cd713679bb`) likewise need
+    the fork's inline menus/sidebar layout. The fork has no upstream proactive-panels controller,
+    so its empty-diff and manual-choice follow-ups (`d115a96763`, `bccad27046`) are excluded.
+  - Connect HTTP credential refresh and network-blocking diagnosis (`363cde4114`,
+    `2dca7a1edd`) need the fork's auth/reconnect lifecycle. Installer ownership and mise shims
+    (`2fb99a7a66`, `c7dc3cbd06`, `2271a27dad`) need a Cursor SDK/native-updater audit.
+    Resolved executable paths and shell quoting are carried independently.
+  - Prompt recall (`fd773172e7`) needs the fork's unified attachments, injected context and
+    push-to-talk composer. Unified loading/usage refresh (`f12d39359f`) crosses the retained
+    inline settings, timeline and native client. The existing project-scope/settings shell is
+    retained instead of upstream's filter persistence, segmented controls and section-tracking
+    changes (`1963ca0abe`, `5a2f3ebf6e`, `2e61301b13`, `4d3907f63d`).
+  - Public t3.codes marketing redesign/assets (`8e3aa324b5`, `4ee2a9d046`, `010d6bb1b5`,
+    `fc1f543d6c`, `b2e15185ae`, `d924fe2664`, `e5d086c262`) are held for human branding
+    review rather than changing the fork's release surfaces.
+    V1 thread-stream lifecycle and pending-request reconstruction stay excluded. V2 reads request
+    entities with `status: "pending"`, so completed historical requests do not reopen; the fork
+    already has the working-row opacity and accurate editor-picker label from this range.
 - The 2026-09-04 sync (`6d15c5bbc3..5f878d2a85`) leaves several new upstream feature stacks for
   dedicated human-reviewed ports instead of guessing across the fork boundary: Google Antigravity
   (`06336460c9` and follow-ups) needs an orchestration V2 ACP adapter and capability audit;

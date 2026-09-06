@@ -190,6 +190,21 @@ export async function requestThreadUnpinConfirmation(input: {
   );
 }
 
+/** Report navigation separately so a completed deletion can still finish worktree cleanup. */
+export async function navigateAfterThreadDeletion(navigate: () => Promise<void>) {
+  const result = await settlePromise(navigate);
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Thread deleted, but navigation failed",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
+  }
+}
+
 export function useThreadActions() {
   const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const archiveThreadMutation = useAtomCommand(threadEnvironment.archive, {
@@ -380,8 +395,14 @@ export function useThreadActions() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Thread deleted, but worktree removal failed",
-          description: `Could not remove ${formatWorktreePathForDisplay(input.worktreePath)}. ${message}`,
+          title:
+            removeResult._tag === "Failure"
+              ? "Thread deleted, but worktree removal failed"
+              : "Worktree deleted, but Git status refresh failed",
+          description:
+            removeResult._tag === "Failure"
+              ? `Could not remove ${formatWorktreePathForDisplay(input.worktreePath)}. ${message}`
+              : message,
         }),
       );
       return cleanupFailure;
@@ -436,14 +457,11 @@ export function useThreadActions() {
         }
         refreshArchivedThreadsForEnvironment(target.environmentId);
         if (orphaned !== null && archivedProjectCwd !== null && confirmed?.value === true) {
-          const cleanupFailure = await cleanupOrphanedWorktree({
+          await cleanupOrphanedWorktree({
             threadRef: target,
             projectCwd: archivedProjectCwd,
             worktreePath: orphaned,
           });
-          if (cleanupFailure) {
-            return cleanupFailure;
-          }
         }
         return result;
       }
@@ -524,53 +542,31 @@ export function useThreadActions() {
       clearTerminalUiState(threadRef);
 
       if (shouldNavigateToFallback) {
-        if (fallbackThreadId) {
-          const fallbackThread = readThreadShell(
-            scopeThreadRef(threadRef.environmentId, fallbackThreadId),
-          );
-          if (fallbackThread) {
-            const navigationResult = await settlePromise(() =>
-              router.navigate({
+        const fallbackThread = fallbackThreadId
+          ? readThreadShell(scopeThreadRef(threadRef.environmentId, fallbackThreadId))
+          : null;
+        await navigateAfterThreadDeletion(() =>
+          fallbackThread
+            ? router.navigate({
                 to: "/$environmentId/$threadId",
                 params: buildThreadRouteParams(
                   scopeThreadRef(fallbackThread.environmentId, fallbackThread.id),
                 ),
                 replace: true,
-              }),
-            );
-            if (navigationResult._tag === "Failure") {
-              return navigationResult;
-            }
-          } else {
-            const navigationResult = await settlePromise(() =>
-              router.navigate({ to: "/", replace: true }),
-            );
-            if (navigationResult._tag === "Failure") {
-              return navigationResult;
-            }
-          }
-        } else {
-          const navigationResult = await settlePromise(() =>
-            router.navigate({ to: "/", replace: true }),
-          );
-          if (navigationResult._tag === "Failure") {
-            return navigationResult;
-          }
-        }
+              })
+            : router.navigate({ to: "/", replace: true }),
+        );
       }
 
       if (!shouldDeleteWorktree || !orphanedWorktreePath || !threadProject) {
         return deleteResult;
       }
 
-      const cleanupFailure = await cleanupOrphanedWorktree({
+      await cleanupOrphanedWorktree({
         threadRef,
         projectCwd: threadProject.workspaceRoot,
         worktreePath: orphanedWorktreePath,
       });
-      if (cleanupFailure) {
-        return cleanupFailure;
-      }
       return deleteResult;
     },
     [
