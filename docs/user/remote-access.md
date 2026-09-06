@@ -242,3 +242,10 @@ controls remain in **Settings** → **Connections** on web and desktop or **Sett
 - Anyone with a valid pairing credential can create a session until that credential expires or is revoked.
 - Hosted pairing links keep the credential in the URL hash so it is not sent to the hosted app server, but it can still be exposed through browser history, screenshots, logs, or copy/paste.
 - Use `t3 auth` to revoke credentials or sessions you no longer trust.
+
+## Connection guidance on native iOS
+
+If T3 Connect encounters a timeout, DNS failure, or unreachable host, it suggests trying another
+network or checking the VPN. This is a possible cause, not a diagnosis. Offline errors and
+sign-in failures stay distinct. Use **Retry connection** after addressing the problem, or expand
+**Technical details** for the transport error category and code.

@@ -153,6 +153,7 @@ public struct ServerProviderSkillSnapshot: Codable, Equatable, Sendable {
 }
 
 public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable {
+    public var usageLimits: ServerProviderUsageLimits? = nil
     public var id: String { instanceId }
 
     public let instanceId: String

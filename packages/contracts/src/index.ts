@@ -47,3 +47,5 @@ export * from "./hermesGateway.ts";
 export * from "./hermesProactive.ts";
 export * from "./hermesSkills.ts";
 export * from "./hermesSessions.ts";
+
+export * from "./providerUsageLimits.ts";

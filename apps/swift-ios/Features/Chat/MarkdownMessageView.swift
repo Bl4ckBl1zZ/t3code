@@ -14,6 +14,8 @@ struct MarkdownMessageView: View {
     @State private var renderedDocument: MarkdownRenderedDocument?
     @State private var streamingRenderer = StreamingMarkdownRenderer()
     @State private var isSelectingText = false
+    @State private var previewTarget: PullRequestLinkTarget?
+    @SwiftUI.Environment(\.markdownPullRequestContext) private var pullRequestContext
 
     init(_ source: String, isStreaming: Bool = false) {
         self.source = source
@@ -45,6 +47,13 @@ struct MarkdownMessageView: View {
         }
         .modifier(MarkdownTextSelectionModifier(isEnabled: isSelectingText))
         .contextMenu {
+            if pullRequestContext != nil {
+                ForEach(PullRequestLinkTarget.links(in: source)) { target in
+                    Button("Preview pull request #\(target.number)", systemImage: "arrow.triangle.pull") {
+                        previewTarget = target
+                    }
+                }
+            }
             Button {
                 isSelectingText.toggle()
             } label: {
@@ -58,6 +67,9 @@ struct MarkdownMessageView: View {
             } label: {
                 Label("Copy message", systemImage: "doc.on.doc")
             }
+        }
+        .sheet(item: $previewTarget) { target in
+            if let pullRequestContext { PullRequestLinkPreview(target: target, context: pullRequestContext) }
         }
         .accessibilityAction(named: "Copy message") {
             UIPasteboard.general.string = source

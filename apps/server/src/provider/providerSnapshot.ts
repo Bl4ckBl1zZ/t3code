@@ -50,6 +50,7 @@ export interface ProviderProbeResult {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProviderAuth;
   readonly message?: string;
+  readonly usageLimits?: ServerProvider["usageLimits"];
 }
 
 export interface ServerProviderPresentation {
@@ -248,6 +249,7 @@ export function buildServerProvider(input: {
     version: input.probe.version,
     status: input.enabled ? input.probe.status : "disabled",
     auth: input.probe.auth,
+    ...(input.probe.usageLimits ? { usageLimits: input.probe.usageLimits } : {}),
     checkedAt: input.checkedAt,
     ...(input.probe.message ? { message: input.probe.message } : {}),
     models: input.models,

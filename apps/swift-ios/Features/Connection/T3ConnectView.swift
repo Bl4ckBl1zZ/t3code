@@ -7,6 +7,7 @@ public struct T3ConnectView: View {
     @Bindable private var controller: T3ConnectController
     @State private var isAuthPresented = false
     @State private var didFinishInitialRefresh = false
+    @State private var retryEnvironment: T3ConnectRelayEnvironment?
     private let connectEnvironment:
         @MainActor (T3ConnectManagedEnvironmentCredential) async throws -> Void
     private let onConnected: @MainActor () async -> Void
@@ -21,20 +22,34 @@ public struct T3ConnectView: View {
     }
 
     public var body: some View {
-        content
+        VStack(spacing: 12) {
+            if let failure = controller.connectionFailure {
+                ConnectionFailureView(
+                    failure: failure,
+                    isRetrying: controller.isRefreshing || controller.busyEnvironmentID != nil
+                ) {
+                    Task {
+                        if let retryEnvironment { await handleConnect(retryEnvironment) }
+                        else { await controller.refresh() }
+                    }
+                }
+            }
+            content
+        }
             .navigationTitle("T3 Connect")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if controller.account != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Sign out", role: .destructive) {
-                            Task { await controller.signOut() }
+                            Task { retryEnvironment = nil; await controller.signOut() }
                         }
                         .disabled(controller.isRefreshing)
                     }
                 }
             }
             .refreshable {
+                retryEnvironment = nil
                 await controller.refresh()
             }
             .task {
@@ -54,17 +69,7 @@ public struct T3ConnectView: View {
             ) {
                 authenticationView
             }
-            .alert(
-                "T3 Connect",
-                isPresented: Binding(
-                    get: { controller.errorMessage != nil },
-                    set: { if !$0 { controller.errorMessage = nil } }
-                )
-            ) {
-                Button("OK") { controller.errorMessage = nil }
-            } message: {
-                Text(controller.errorMessage ?? "Something went wrong.")
-            }
+
     }
 
     @ViewBuilder
@@ -247,12 +252,14 @@ public struct T3ConnectView: View {
     }
 
     private func handleConnect(_ environment: T3ConnectRelayEnvironment) async {
+        retryEnvironment = environment
+        controller.errorMessage = nil
         do {
             let credential = try await controller.credential(for: environment)
             try await connectEnvironment(credential)
             await onConnected()
         } catch {
-            controller.errorMessage = error.localizedDescription
+            controller.reportConnectionFailure(error)
         }
     }
 

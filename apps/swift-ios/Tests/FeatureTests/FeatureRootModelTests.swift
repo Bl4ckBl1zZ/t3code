@@ -653,6 +653,21 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func failedDeleteReturnsFalseAndKeepsThreadForBatchRetry() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
+        client.createdThread = thread
+        let model = testRootModel(client: client)
+        _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
+        client.deleteError = URLError(.notConnectedToInternet)
+        #expect(await model.deleteThread(thread.id) == false)
+        #expect(model.snapshot.threads.contains(where: { $0.id == thread.id }))
+        client.deleteError = nil
+        #expect(await model.deleteThread(thread.id) == true)
+        #expect(model.snapshot.threads.isEmpty)
+    }
+
+    @Test
     func testArchiveAndDeleteKeepLocalListsConsistent() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
@@ -1420,7 +1435,8 @@ private final class FeatureClientStub: FeatureClient {
 
     func renameThread(id: String, title: String) async throws {}
     func setThreadArchived(id: String, archived: Bool) async throws {}
-    func deleteThread(id: String) async throws {}
+    var deleteError: (any Error)?
+    func deleteThread(id: String) async throws { if let deleteError { throw deleteError } }
 
     func loadThread(id: String) async throws -> FeatureThreadDetail {
         if let loadThreadError {

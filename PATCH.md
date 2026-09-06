@@ -404,8 +404,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - The 2026-09-04 sync (`6d15c5bbc3..5f878d2a85`) leaves several new upstream feature stacks for
   dedicated human-reviewed ports instead of guessing across the fork boundary: Google Antigravity
   (`06336460c9` and follow-ups) needs an orchestration V2 ACP adapter and capability audit;
-  subscription Limits/reset credits (`19d8ab2ae9`, `1641b4aba5`) depend on upstream's replaced
-  provider-usage surfaces; automatic clean-default-branch pulls (`ba3cb07738`) and customizable
+  subscription reset credits (`1641b4aba5`) and CLIProxy usage sources still need dedicated ports.
+  The native parity follow-up ports the read-only part of `19d8ab2ae9` through optional per-instance
+  `usageLimits` snapshots: bounded Codex/Claude probes, explicit failures, and Swift account pooling.
+  It does not restore V1 ingestion or turn-driven quota events; Limits refreshes the existing
+  provider registry and timestamps its reports. No migration is needed. Other clients tolerate
+  the optional snapshot field but do not gain a new Limits UI from this native change;
+  automatic clean-default-branch pulls (`ba3cb07738`) and customizable
   project icons (`f6c04c552c`) need project-aggregate ports plus fork-owned migration numbers;
   desktop browser-profile import (`134d51096e`, `39449e53e3`, `ff5843410d`, `498ab9c399`) conflicts
   with the fork's desktop/browser shell; and media-preview consolidation (`beae2147a9`, `922bd69225`)

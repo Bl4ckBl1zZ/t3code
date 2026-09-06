@@ -51,7 +51,18 @@ public final class T3ConnectController {
     public private(set) var environments: [T3ConnectCloudEnvironment] = []
     public private(set) var isRefreshing = false
     public private(set) var busyEnvironmentID: String?
-    public var errorMessage: String?
+    public var errorMessage: String? {
+        didSet { if errorMessage == nil { connectionFailure = nil } }
+    }
+    public private(set) var connectionFailure: ConnectionFailure?
+
+    public func reportConnectionFailure(_ error: any Error) {
+        let nsError = error as NSError
+        guard !(error is CancellationError), !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else { return }
+        let failure = ConnectionFailure(error: error)
+        connectionFailure = failure
+        errorMessage = failure.message
+    }
 
     private let auth: T3ConnectClerkSession?
     private let relay: T3ConnectRelayClient?
@@ -93,6 +104,7 @@ public final class T3ConnectController {
         refreshGeneration &+= 1
         let generation = refreshGeneration
         isRefreshing = true
+        errorMessage = nil
         defer {
             if refreshGeneration == generation { isRefreshing = false }
         }
@@ -139,7 +151,7 @@ public final class T3ConnectController {
             environments = loaded
         } catch {
             if refreshGeneration == generation {
-                errorMessage = error.localizedDescription
+                reportConnectionFailure(error)
             }
         }
     }
@@ -171,7 +183,7 @@ public final class T3ConnectController {
             environments = []
         } catch {
             if refreshGeneration == generation {
-                errorMessage = error.localizedDescription
+                reportConnectionFailure(error)
             }
         }
     }
@@ -233,7 +245,7 @@ public final class T3ConnectController {
             )
             environments.removeAll { $0.id == environment.environmentId }
         } catch {
-            errorMessage = error.localizedDescription
+            reportConnectionFailure(error)
         }
     }
 

@@ -190,6 +190,7 @@ public protocol FeatureClient: AnyObject {
     /// The host-backed detail (and, where readable, the conversation) for the
     /// change request `number` on the repository this thread's project tracks.
     /// Only offered where the environment reports the `pullRequests` capability.
+    func pullRequestPreview(threadID: String, url: URL) async throws -> PullRequestDetail
     func pullRequestOverview(threadID: String, number: Int) async throws
         -> FeaturePullRequestOverview
     func performSourceControlAction(
@@ -473,6 +474,10 @@ public extension FeatureClient {
         seed _: [String: FeaturePullRequest]
     ) -> AsyncStream<[String: FeaturePullRequest]> {
         AsyncStream { $0.finish() }
+    }
+
+    func pullRequestPreview(threadID _: String, url _: URL) async throws -> PullRequestDetail {
+        throw FeatureCapabilityUnavailable("Pull request previews")
     }
 
     func pullRequestOverview(threadID _: String, number _: Int) async throws

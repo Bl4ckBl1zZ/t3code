@@ -1,3 +1,4 @@
+import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { ExecutionEnvironmentDescriptor, ServerSelfUpdateMethod } from "./environment.ts";
@@ -159,6 +160,7 @@ export const ServerProviderUpdateState = Schema.Struct({
 export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
 export const ServerProvider = Schema.Struct({
+  usageLimits: Schema.optional(ServerProviderUsageLimits),
   // Routing key for the configured instance this snapshot represents. This
   // is the only stable identity consumers may use for provider routing.
   instanceId: ProviderInstanceId,

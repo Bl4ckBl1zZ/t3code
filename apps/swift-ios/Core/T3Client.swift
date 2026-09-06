@@ -102,6 +102,12 @@ public actor T3Client {
         )
     }
 
+    public func refreshProviderSnapshots() async throws -> [ServerProviderSnapshot] {
+        struct Payload: Decodable { let providers: [ServerProviderSnapshot] }
+        let payload = try await rpc.request("server.refreshProviders", as: Payload.self)
+        return payload.providers
+    }
+
     public func serverConfig() async throws -> ServerConfigSnapshot {
         try await rpc.request(
             RPCMethod.serverGetConfig.rawValue,

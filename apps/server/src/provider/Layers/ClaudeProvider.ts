@@ -1,3 +1,5 @@
+import { claudeUsageLimits, unavailableUsageLimits } from "../providerUsageLimits.ts";
+import type { SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import {
   type ClaudeSettings,
   type ModelCapabilities,
@@ -659,6 +661,7 @@ function nonEmptyProbeString(value: string): string | undefined {
 }
 
 type ClaudeCapabilitiesProbe = {
+  readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
   readonly email: string | undefined;
   readonly subscriptionType: string | undefined;
   readonly tokenSource: string | undefined;
@@ -784,6 +787,16 @@ const probeClaudeCapabilities = (
         }),
       });
       const init = await q.initializationResult();
+      // A bounded enrichment on the existing no-prompt probe. A slow usage
+      // request cannot discard the account and commands already discovered.
+      const usage = await Effect.runPromise(
+        Effect.tryPromise(() => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()).pipe(
+          Effect.timeoutOption(2_000),
+          Effect.map(Option.getOrUndefined),
+          Effect.orElseSucceed(() => undefined),
+        ),
+        { signal: abort.signal },
+      );
       const account = init.account as
         | {
             readonly email?: string;
@@ -798,6 +811,7 @@ const probeClaudeCapabilities = (
         tokenSource: account?.tokenSource,
         apiProvider: account?.apiProvider,
         slashCommands: parseClaudeInitializationCommands(init.commands),
+        ...(usage ? { usage } : {}),
       } satisfies ClaudeCapabilitiesProbe;
     });
   }).pipe(
@@ -1003,6 +1017,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
+      usageLimits: capabilities.usage
+        ? claudeUsageLimits(capabilities.usage, checkedAt)
+        : unavailableUsageLimits(checkedAt, "probeFailed"),
     },
   });
 });
