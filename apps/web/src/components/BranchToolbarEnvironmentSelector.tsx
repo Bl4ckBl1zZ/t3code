@@ -133,9 +133,9 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         </span>
       </SelectTrigger>
       <SelectPopup
+        alignItemWithTrigger={false}
         {...(displayMode === "panel"
           ? {
-              alignItemWithTrigger: false,
               popupClassName: THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
             }
           : {})}

@@ -19,7 +19,7 @@ import {
 } from "./CheckpointService.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 
-it.effect("materializes the captured baseline at the requested scope ordinal", () => {
+it.effect("materializes the baseline and summarizes V2 checkpoints with numstat", () => {
   const scope: OrchestrationV2CheckpointScope = {
     id: CheckpointScopeId.make("checkpoint-scope:materialize-baseline"),
     threadId: ThreadId.make("thread:materialize-baseline"),
@@ -36,6 +36,11 @@ it.effect("materializes the captured baseline at the requested scope ordinal", (
   const hasCheckpointRef = vi.fn((_input: CheckpointStore.RestoreCheckpointInput) =>
     Effect.succeed(true),
   );
+  const diffCheckpoints = vi.fn((input: CheckpointStore.DiffCheckpointsInput) =>
+    input.format === "numstat"
+      ? Effect.succeed("20000\t15000\tlarge.txt\0")
+      : Effect.die("V2 summaries must not request a full patch"),
+  );
   const testLayer = checkpointServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -43,6 +48,8 @@ it.effect("materializes the captured baseline at the requested scope ordinal", (
         Layer.mock(CheckpointStore.CheckpointStore)({
           isGitRepository: () => Effect.succeed(true),
           hasCheckpointRef,
+          captureCheckpoint: () => Effect.void,
+          diffCheckpoints,
         }),
       ),
     ),
@@ -68,5 +75,17 @@ it.effect("materializes the captured baseline at the requested scope ordinal", (
       cwd: scope.cwd,
       checkpointRef: baseline.ref,
     });
+    const captured = yield* checkpoints.capture({
+      scope,
+      runId: scope.runId,
+      nodeId: scope.nodeId,
+      ordinalWithinScope: 3,
+      appRunOrdinal: 3,
+      capturedAt: scope.createdAt,
+    });
+    assert.equal(captured.status, "ready");
+    assert.deepEqual(captured.files, [
+      { path: "large.txt", kind: "modified", additions: 20000, deletions: 15000 },
+    ]);
   }).pipe(Effect.provide(testLayer));
 });

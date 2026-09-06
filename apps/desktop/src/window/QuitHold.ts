@@ -61,9 +61,9 @@ export function makeQuitHoldHandler(
   };
 
   const release = () => {
+    generation += 1;
     if (!holding) return;
     const shouldNotify = armed || quitOnRelease;
-    generation += 1;
     holding = false;
     armed = false;
     quitOnRelease = false;
@@ -75,6 +75,7 @@ export function makeQuitHoldHandler(
   // renderer must not be left with a stuck "Hold to Quit" hint.
   const quitNow = () => {
     release();
+    lastPressAt = 0;
     options.quit();
   };
 
@@ -110,7 +111,8 @@ export function makeQuitHoldHandler(
       // interrupted press also stops counting toward a double tap — but only
       // here, not in release(), which runs mid-restart on an unseen-release
       // re-press and must not wipe that press's own tap timestamp.
-      if (holding && !input.isAutoRepeat) {
+      if (key === modifierKey && !input.alt && !input.shift) return;
+      if (!input.isAutoRepeat) {
         lastPressAt = 0;
         release();
       }

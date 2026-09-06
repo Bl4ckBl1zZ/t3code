@@ -170,9 +170,13 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "./ui/sidebar";
-import { useThreadSelectionStore } from "../threadSelectionStore";
+import {
+  getThreadKeysToDeselectAfterDelete,
+  useThreadSelectionStore,
+} from "../threadSelectionStore";
 import { openCommandPalette } from "../commandPaletteBus";
 import {
+  deleteSelectedThreadEntries,
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   getSidebarForkParentThreadId,
@@ -1729,11 +1733,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           };
         };
 
+        actionHandlers.set("project-settings", () => {
+          if (isMobile) setOpenMobile(false);
+          void router.navigate({
+            to: "/projects/$projectKey",
+            params: { projectKey: project.projectKey },
+          });
+        });
+
         const clicked = await api.contextMenu.show(
           [
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
+            { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -1754,10 +1767,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [
       copyPathToClipboard,
       handleRemoveProject,
+      isMobile,
       openProjectGroupingDialog,
       openProjectRenameDialog,
       project.groupedProjectCount,
       project.memberProjects,
+      project.projectKey,
+      router,
+      setOpenMobile,
       suppressProjectClickForContextMenuRef,
     ],
   );
@@ -1917,26 +1934,27 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         if (!confirmed) return;
       }
 
-      const deletedThreadKeys = new Set(threadKeys);
-      for (const { threadRef } of selectedThreadEntries) {
-        const result = await deleteThread(threadRef, {
-          deletedThreadKeys,
-        });
-        if (result._tag === "Failure") {
-          if (!isAtomCommandInterrupted(result)) {
-            const error = squashAtomCommandFailure(result);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to delete threads",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return;
-        }
+      const { deletedThreadKeys, firstFailure } = await deleteSelectedThreadEntries({
+        entries: selectedThreadEntries,
+        delete: ({ threadRef }, deletedKeys) =>
+          deleteThread(threadRef, { deletedThreadKeys: deletedKeys }),
+      });
+      if (firstFailure) {
+        const error = squashAtomCommandFailure(firstFailure);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to delete threads",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
       }
-      removeFromSelection(threadKeys);
+      removeFromSelection(
+        getThreadKeysToDeselectAfterDelete(threadKeys, deletedThreadKeys, (key) => {
+          const ref = parseScopedThreadKey(key);
+          return ref !== null && readThreadShell(ref) !== null;
+        }),
+      );
     },
     [
       appSettingsConfirmThreadArchive,
@@ -3593,11 +3611,9 @@ export default function LegacySidebar() {
     desktopUpdateState && showArm64IntelBuildWarning
       ? getArm64IntelBuildWarningDescription(desktopUpdateState)
       : null;
-  const commandPaletteShortcutLabel = shortcutLabelForCommand(
-    keybindings,
-    "commandPalette.toggle",
-    newThreadShortcutLabelOptions,
-  );
+  const commandPaletteShortcutLabel = isMobile
+    ? null
+    : shortcutLabelForCommand(keybindings, "commandPalette.toggle", newThreadShortcutLabelOptions);
   const handleDesktopUpdateButtonClick = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || !desktopUpdateState) return;
