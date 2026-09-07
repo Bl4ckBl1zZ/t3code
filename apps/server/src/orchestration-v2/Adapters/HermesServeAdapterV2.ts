@@ -99,7 +99,7 @@ import {
   type HermesSessionBinding,
   type HermesSessionBindingRepositoryShape,
 } from "../../hermes/HermesSessionBindingRepository.ts";
-import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
+import { t3OrchestrationPromptForHermesTurn } from "../../provider/T3OrchestrationInstructions.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import {
@@ -4242,11 +4242,10 @@ export function makeHermesServeAdapterV2(
               { concurrency: 1 },
             );
             const promptRefs = attachmentRefs.filter((ref): ref is string => ref !== null);
-            // Hermes has no system/developer context channel, so the first
-            // prompt of a thread carries the T3 orchestration and t3-html
-            // embed instructions inline when the session-scoped MCP lease is
-            // available.
-            const promptBase = t3OrchestrationPromptForFirstRun({
+            // Hermes has no system/developer context channel. Include full
+            // instructions initially and retain presentation guidance on later
+            // turns and imports, independently of session MCP support.
+            const promptBase = t3OrchestrationPromptForHermesTurn({
               prompt: turnInput.message.text,
               runOrdinal: turnInput.runOrdinal,
               hasT3Mcp: mcpAvailable,
