@@ -314,3 +314,19 @@ Raw frames remain private.
 The generated report is evidence, not an H0 acceptance claim. Blocked scenarios need a real
 pinned live capture or an upstream protocol change before later Hermes integration work can rely
 on them.
+
+### Managed scheduler lifecycle
+
+`HermesServeRuntime` starts its owned `hermes serve` child with
+`HERMES_DESKTOP=1`. Hermes's web backend gates its embedded cron ticker on that
+variable; a successful WebSocket handshake alone proves no scheduler liveness.
+The flag also preserves per-profile backend isolation. Existing external
+servers are only attached to and must provide their own scheduler lifecycle.
+Hermes owns cross-process tick locking; T3 does not add a second job executor.
+
+Native cron timestamps can be null (never-run jobs and exhausted schedules).
+The wire decoder must accept those rows without rejecting the entire inventory.
+Reconciliation includes disabled jobs, announces failures on first discovery,
+and does not infer that a resident session witnessed a pre-inference failure.
+Native jobs remain distinct from thread-bound T3 scheduled tasks: subscribing
+to the originating chat cannot route a native cron run into that chat.

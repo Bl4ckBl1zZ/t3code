@@ -261,15 +261,14 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
         });
 
         const seen = previous.get(job.identity);
-        // A job discovered for the first time reports nothing: its last run
-        // predates T3 knowing the job exists, and announcing it would be noise on
-        // every fresh install.
-        if (lastRunAt === null || seen === undefined) continue;
-        if (seen.lastRunAt === lastRunAt && seen.lastStatus === job.lastStatus) continue;
-        const witnessedLive = sessionKey !== null && input.residentSessionKeys.has(sessionKey);
-        if (!firstSweep && witnessedLive) continue;
-
+        // Old successful runs are just a baseline; an existing failure needs
+        // attention even when this is the first time T3 discovers the job.
         const runFailed = job.lastOutcome === "failed";
+        if (lastRunAt === null || (seen === undefined && !runFailed)) continue;
+        if (seen?.lastRunAt === lastRunAt && seen.lastStatus === job.lastStatus) continue;
+        const witnessedLive = sessionKey !== null && input.residentSessionKeys.has(sessionKey);
+        // A pre-inference failure emits no session events, even if subscribed.
+        if (!firstSweep && witnessedLive && !runFailed) continue;
         yield* inbox.witness({
           providerInstanceId: connection.providerInstanceId,
           profileKey: connection.profileKey,
@@ -435,11 +434,12 @@ export const make = Effect.fn("HermesProactiveService.make")(function* (
     }
 
     const runs =
-      enabledJobs.length === 0
+      probe.success.jobs.length === 0
         ? { reported: 0, failures: 0 }
         : yield* reconcileCronRuns({
             connection,
-            jobs: enabledJobs,
+            // Completed one-shot and paused jobs still have outcomes to report.
+            jobs: probe.success.jobs,
             threadBySessionKey,
             residentSessionKeys: new Set(resident.map((thread) => thread.storedSessionKey)),
             now,

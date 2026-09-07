@@ -164,6 +164,9 @@ export const makeHermesServeRuntime = Effect.fn("makeHermesServeRuntime")(functi
               env: {
                 ...options.processEnvironment,
                 HERMES_DASHBOARD_SESSION_TOKEN: input.authToken,
+                // Hermes Serve only starts its embedded cron ticker in app-owned
+                // mode. This also keeps named profiles isolated at this endpoint.
+                HERMES_DESKTOP: "1",
               },
               extendEnv: false,
               detached: false,

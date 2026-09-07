@@ -1,7 +1,12 @@
 # Hermes scheduled runs
 
-Hermes owns its own scheduler. A cron job you create — from a Hermes thread, or
-from **Settings → Hermes cron** — is stored and run by Hermes, not by T3 Code.
+For recurring messages in a T3 conversation, use T3 scheduled tasks. These keep
+an explicit provider and model selection and send each prompt back to the bound
+thread. You can manage them in **Settings → Scheduled tasks**.
+
+Hermes also owns a separate native scheduler. Native cron jobs created with
+Hermes's cron tool or **Settings → Hermes cron** are stored and run by Hermes.
+They do not send prompts back into the T3 conversation.
 
 This page is about what T3 Code does with those runs.
 
@@ -30,10 +35,12 @@ Each entry can be marked read or unread, and dismissed or restored, so nothing
 disappears permanently.
 
 T3 finds these by comparing each job's last run against what it recorded on the
-previous check, which happens on an interval for as long as the server is
+previous check, which happens every ten minutes for as long as the server is
 running — no client has to be connected and no window has to be open. A run
 that Hermes reports at the same time with a different outcome (a retry that
-also failed, say) is reported again rather than swallowed.
+also failed, say) is reported again rather than swallowed. Existing failures
+are reported when first discovered, and completed or paused jobs still have
+their final outcome reported.
 
 ## Reading what a run actually did
 
@@ -57,8 +64,10 @@ Hermes threads only the most recent are held open.
 
 ## Keeping the schedule alive
 
-The schedule runs inside `hermes serve`, so it only fires while that gateway is
-up.
+T3 enables Hermes's embedded scheduler when launching a managed server. Native
+jobs only fire while that process or a separate Hermes scheduler is running.
+A manually launched `hermes serve` alone does not enable the embedded scheduler;
+use `HERMES_DESKTOP=1 hermes serve` or run `hermes gateway run` alongside it.
 
 If you start Hermes yourself, it keeps running after you quit T3 Code and your
 jobs keep firing. If instead you let T3 Code launch it — the **Managed server**
@@ -74,3 +83,15 @@ durable event cursor — the case for every current Hermes build — so T3 canno
 stream back the moment-by-moment events of a run it was not connected for. It
 still reports that the run happened and how it ended, and the transcript is
 still importable.
+
+## When a job fires without starting the agent
+
+Hermes can reject a run before inference begins. In particular, an unpinned job
+may stop running when the global provider or model changes. Pin the intended
+provider and model using Hermes's native job update tools; resuming the job
+alone does not fix that mismatch. Some gateways report only the failed status,
+so inspect the job in Hermes for the detailed error when T3 cannot show it.
+
+Native delivery to `origin` also requires an actual Hermes delivery destination.
+It does not mean the T3 thread where you asked for the schedule. Use a T3
+scheduled task when results should continue that conversation.

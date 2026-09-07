@@ -494,6 +494,85 @@ describe("HermesProactiveService missed runs", () => {
     ),
   );
 
+  it.effect("reports a failure on first discovery even for a disabled job", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        const gateway: MutableGateway = {
+          jobs: [
+            {
+              name: "hourly",
+              enabled: false,
+              last_run_at: "t1",
+              last_status: "error",
+              last_error: "Model configuration drifted",
+            },
+          ],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: false });
+        yield* service.sweep();
+        yield* service.sweep();
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.eventKind, "cron.run.failed");
+        assert.equal(witnessed[0]?.body, "Model configuration drifted");
+      }),
+    ),
+  );
+
+  it.effect("reports pre-inference failures even when the target session is resident", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        yield* seedBinding({ threadId: "thread:b", storedSessionKey: "stored-b" });
+        const gateway: MutableGateway = {
+          jobs: [{ name: "hourly", enabled: true, session_key: "stored-b", last_run_at: null }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: true });
+        yield* service.sweep();
+        gateway.jobs = [
+          {
+            name: "hourly",
+            enabled: true,
+            session_key: "stored-b",
+            last_run_at: "t1",
+            last_status: "error",
+          },
+        ];
+        yield* service.sweep();
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.eventKind, "cron.run.failed");
+      }),
+    ),
+  );
+
+  it.effect("reports the final run after a job disables itself", () =>
+    scenario(
+      Effect.gen(function* () {
+        yield* runMigrations({});
+        const gateway: MutableGateway = {
+          jobs: [{ name: "once", enabled: true, last_run_at: null }],
+        };
+        const { inbox, witnessed } = recordingInbox();
+        const service = yield* sweepWith({ gateway, inbox, resident: false });
+        yield* service.sweep();
+        gateway.jobs = [
+          {
+            name: "once",
+            enabled: false,
+            next_run_at: null,
+            last_run_at: "t1",
+            last_status: "success",
+          },
+        ];
+        yield* service.sweep();
+        assert.equal(witnessed.length, 1);
+        assert.equal(witnessed[0]?.runIdentity, "once:t1:success");
+      }),
+    ),
+  );
+
   it.effect("says nothing about a job it is meeting for the first time", () =>
     scenario(
       Effect.gen(function* () {
