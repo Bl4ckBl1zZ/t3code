@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   DEFAULT_HERMES_SERVE_ENDPOINT,
@@ -16,6 +19,59 @@ describe("HermesServeRuntime", () => {
       "ws://127.0.0.1:19119/api/ws",
     );
   });
+
+  it.effect("launches the managed backend with its cron ticker enabled and stops it on close", () =>
+    Effect.gen(function* () {
+      let ready = false;
+      let kills = 0;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          assert.isTrue(ChildProcess.isStandardCommand(command));
+          if (!ChildProcess.isStandardCommand(command))
+            throw new Error("Expected standard command");
+          assert.equal(command.command, "hermes");
+          assert.deepEqual(command.args, ["serve", "--host", "127.0.0.1", "--port", "19119"]);
+          assert.equal(command.options.env?.HERMES_DESKTOP, "1");
+          assert.equal(command.options.env?.HERMES_HOME, "/isolated/hermes-profile");
+          assert.equal(command.options.env?.HERMES_DASHBOARD_SESSION_TOKEN, "test-token");
+          ready = true;
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.never,
+            isRunning: Effect.succeed(true),
+            kill: () =>
+              Effect.sync(() => {
+                kills += 1;
+              }),
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          });
+        }),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeHermesServeRuntime({
+            endpoint: "ws://127.0.0.1:19119/api/ws",
+            authToken: "test-token",
+            managedServerEnabled: true,
+            processEnvironment: { HERMES_DESKTOP: "0", HERMES_HOME: "/isolated/hermes-profile" },
+            probe: async () => {
+              if (!ready) throw new Error("not ready");
+            },
+            endpointReachable: async () => false,
+          });
+          assert.equal((yield* runtime.ensureReady).ownership, "t3_owned");
+          yield* runtime.ensureReady;
+        }),
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      assert.equal(kills, 1);
+    }),
+  );
 
   it.effect("attaches to an already-running compatible Hermes gateway", () =>
     Effect.scoped(

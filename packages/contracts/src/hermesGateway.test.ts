@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import sanitizedFixture from "./fixtures/hermesGateway.sanitized.json" with { type: "json" };
 import {
+  HermesGatewayCronListResult,
   HermesGatewayEvent,
   HermesGatewayInboundFrame,
   HermesGatewayMutationOutcome,
@@ -12,6 +13,7 @@ import {
   HermesGatewayToolEventPayload,
 } from "./hermesGateway.ts";
 
+const decodeCronList = Schema.decodeUnknownSync(HermesGatewayCronListResult);
 const decodeFrame = Schema.decodeUnknownSync(HermesGatewayInboundFrame);
 const decodeEvent = Schema.decodeUnknownSync(HermesGatewayEvent);
 const decodeMutationOutcome = Schema.decodeUnknownSync(HermesGatewayMutationOutcome);
@@ -21,6 +23,30 @@ const decodeReady = Schema.decodeUnknownSync(HermesGatewayReadyEvent);
 const decodeToolPayload = Schema.decodeUnknownSync(HermesGatewayToolEventPayload);
 
 describe("Hermes gateway contracts", () => {
+  it("accepts native cron inventories containing never-run and finished jobs", () => {
+    const jobs = [
+      {
+        job_id: "new",
+        schedule: "every 60m",
+        enabled: true,
+        next_run_at: "2026-09-07T13:00:00Z",
+        last_run_at: null,
+        last_status: null,
+      },
+      {
+        job_id: "finished",
+        enabled: false,
+        next_run_at: null,
+        last_run_at: "2026-09-07T12:00:00Z",
+        last_status: "error",
+      },
+    ];
+    expect(decodeCronList({ success: true, jobs })).toEqual({
+      success: true,
+      jobs,
+    });
+  });
+
   it("decodes every sanitized H0 golden frame without discarding stable identities", () => {
     const decoded = sanitizedFixture.frames.map((frame) => decodeFrame(frame));
 
