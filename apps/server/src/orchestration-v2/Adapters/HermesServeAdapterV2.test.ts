@@ -1625,9 +1625,10 @@ describe("HermesServeAdapterV2", () => {
         // Staged file/video references are what make the uploads visible to
         // the model, so they must ride along in the submitted prompt text.
         assert.equal(fake.prompts.length, 1);
-        assert.equal(
-          fake.prompts[0]?.params.text,
-          `${input.message.text}\n\n@file:notes.txt\n@file:clip.webm`,
+        assert.isTrue(
+          fake.prompts[0]?.params.text.endsWith(
+            `<user_request>\n${input.message.text}\n</user_request>\n\n@file:notes.txt\n@file:clip.webm`,
+          ),
         );
       }),
     ).pipe(Effect.provide(TestLayer)),
@@ -2415,56 +2416,68 @@ describe("HermesServeAdapterV2", () => {
           event.type === "provider_session.updated" ? [event.providerSession] : [],
         );
 
-        assert.deepEqual(
-          fake.prompts.map((entry) => entry.params.text),
-          ["/model openai/gpt-6 --session", "hello Hermes"],
+        assert.equal(fake.prompts[0]?.params.text, "/model openai/gpt-6 --session");
+        assert.include(
+          fake.prompts[1]?.params.text ?? "",
+          "<user_request>\nhello Hermes\n</user_request>",
         );
         assert.equal(sessionUpdates.at(-1)?.model, "openai/gpt-6");
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("carries the T3 orchestration instructions in the first MCP-leased prompt", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fake = new FakeHermesGatewayClient();
-        fake.compatibility = {
-          ...compatibility,
-          capabilities: [...compatibility.capabilities, "session_mcp"],
-        };
-        McpProviderSession.setMcpProviderSession({
-          credentialId: "credential-hermes-instructions",
-          environmentId: EnvironmentId.make("environment-hermes-test"),
-          threadId,
-          providerSessionId: "mcp-provider-session-hermes-instructions",
-          providerInstanceId: instanceId,
-          endpoint: "http://127.0.0.1:43123/mcp",
-          authorizationHeader: "Bearer scoped-hermes-token",
-          capabilities: ["orchestration"],
-        });
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
-        );
-        const runtime = yield* makeRuntime(fake, true, undefined, true);
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.startTurn(turnInput(providerThread));
-        yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
-        yield* runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runCollect,
-        );
+  for (const hasMcp of [false, true]) {
+    for (const runOrdinal of [1, 5]) {
+      it.effect(`carries chat formatting in Hermes prompt ${runOrdinal}, MCP=${hasMcp}`, () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fake = new FakeHermesGatewayClient();
+            fake.compatibility = {
+              ...compatibility,
+              capabilities: hasMcp
+                ? [...compatibility.capabilities, "session_mcp"]
+                : compatibility.capabilities,
+            };
+            McpProviderSession.setMcpProviderSession({
+              credentialId: "credential-hermes-instructions",
+              environmentId: EnvironmentId.make("environment-hermes-test"),
+              threadId,
+              providerSessionId: "mcp-provider-session-hermes-instructions",
+              providerInstanceId: instanceId,
+              endpoint: "http://127.0.0.1:43123/mcp",
+              authorizationHeader: "Bearer scoped-hermes-token",
+              capabilities: ["orchestration"],
+            });
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+            );
+            const runtime = yield* makeRuntime(fake, true, undefined, hasMcp);
+            const providerThread = yield* runtime.ensureThread({
+              threadId,
+              modelSelection,
+              runtimePolicy,
+            });
+            yield* runtime.startTurn({ ...turnInput(providerThread), runOrdinal });
+            yield* Effect.promise(() => fake.emit("message.complete", { text: "done" }));
+            yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            );
 
-        const promptText = fake.prompts.at(0)?.params.text ?? "";
-        assert.ok(promptText.includes("<t3_code_orchestration_instructions>"));
-        assert.ok(promptText.includes("t3-html"));
-        assert.ok(promptText.includes("<user_request>\nhello Hermes\n</user_request>"));
-      }),
-    ).pipe(Effect.provide(TestLayer)),
-  );
+            const promptText = fake.prompts.at(0)?.params.text ?? "";
+            assert.ok(promptText.includes("Presenting answers in T3 chat"));
+            assert.ok(
+              promptText.includes("[FedEx Pickup.html](</absolute/path/FedEx Pickup.html>)"),
+            );
+            assert.ok(promptText.includes("t3-html"));
+            assert.equal(promptText.includes("schedule_task"), hasMcp);
+            if (!hasMcp) assert.notInclude(promptText, "delegate_task");
+            assert.ok(promptText.includes("<user_request>\nhello Hermes\n</user_request>"));
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+      );
+    }
+  }
 
   it.effect(
     "routes repeated turns through the projected thread id while retaining native identity",

@@ -6,8 +6,11 @@ import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
   T3_HTML_EMBED_INSTRUCTIONS,
   t3OrchestrationPromptForFirstRun,
+  t3OrchestrationPromptForHermesTurn,
   t3OrchestrationSystemPrompt,
 } from "./T3OrchestrationInstructions.ts";
+
+import { T3_CHAT_PRESENTATION_INSTRUCTIONS } from "./T3ChatPresentationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
   it("distinguishes delegated subagents from ordinary top-level threads", () => {
@@ -95,6 +98,21 @@ describe("T3 orchestration provider instructions", () => {
       t3OrchestrationPromptForFirstRun({ prompt, runOrdinal: 1, hasT3Mcp: false }),
       prompt,
     );
+  });
+
+  it("keeps presentation guidance available to existing Work chats without advertising unavailable tools", () => {
+    const prompt = "Create an A4 sign and give me the file.";
+    const withoutMcp = t3OrchestrationPromptForHermesTurn({
+      prompt,
+      runOrdinal: 12,
+      hasT3Mcp: false,
+    });
+    assert.include(withoutMcp, T3_CHAT_PRESENTATION_INSTRUCTIONS.trim());
+    assert.include(withoutMcp, `<user_request>\n${prompt}\n</user_request>`);
+    assert.notInclude(withoutMcp, "schedule_task");
+    assert.notInclude(withoutMcp, "delegate_task");
+    assert.notInclude(withoutMcp, "## Project configuration");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, T3_CHAT_PRESENTATION_INSTRUCTIONS);
   });
 
   it("only exposes the system prompt when the T3 MCP server is attached", () => {

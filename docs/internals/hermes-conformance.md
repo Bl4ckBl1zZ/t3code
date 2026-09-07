@@ -330,3 +330,14 @@ Reconciliation includes disabled jobs, announces failures on first discovery,
 and does not infer that a resident session witnessed a pre-inference failure.
 Native jobs remain distinct from thread-bound T3 scheduled tasks: subscribing
 to the originating chat cannot route a native cron run into that chat.
+
+### Work chat presentation
+
+Work and Code use the same rich-message renderer. Provider presentation
+instructions live in `T3ChatPresentationInstructions.ts` and are independent of
+MCP capabilities. Hermes receives the full embed guide on the first turn and
+compact presentation guidance on subsequent turns, including imported
+conversations. The user request remains separately wrapped and the original
+message is preserved in T3's transcript. Only MCP-capable sessions receive T3
+scheduling/delegation tool instructions. Other providers receive the same
+presentation guide through their existing orchestration instructions.
