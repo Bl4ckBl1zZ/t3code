@@ -26,6 +26,7 @@ interface CodexWindow {
   readonly windowDurationMins?: number | null;
 }
 export interface CodexRateLimitSnapshot {
+  readonly limitId?: string | null;
   readonly planType?: string | null;
   readonly primary?: CodexWindow | null;
   readonly secondary?: CodexWindow | null;
@@ -35,6 +36,7 @@ export function codexUsageLimits(
   snapshot: CodexRateLimitSnapshot,
   checkedAt: string,
 ): ServerProviderUsageLimits {
+  if (snapshot.limitId && snapshot.limitId !== "codex") return { checkedAt, windows: [] };
   const monthly = snapshot.planType === "free" || snapshot.planType === "go";
   const windows: ServerProviderUsageWindow[] = [];
   for (const [id, window, fallback] of [

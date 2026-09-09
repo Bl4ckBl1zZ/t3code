@@ -357,6 +357,58 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   ownership, ordinary failures do not abort the batch, and failed/unprocessed threads stay
   selected. Navigation and worktree-cleanup failures are reported separately from a completed
   deletion, including the fork's archived-thread deletion path.
+- The 2026-09-09 sync (`223ff4490f..e16b8b059c`, 185 upstream commits) manually carries
+  independent correctness fixes while retaining the boundaries above:
+  - `thread.stop` (`09e8de9c65`) uses web/desktop's existing V2 `interruptThreadTurn` path.
+    It has no default binding, appears in Settings, ignores idle threads and key repeats, and
+    honors preview/terminal shortcut context. The existing button still permits cancellation
+    while a request is pending. No V1 thread command or new server capability is added.
+  - Script-ID validation (`d8bc6831cd`) lives in the retained project decider. Newly introduced
+    IDs must fit the project-script shortcut grammar; existing legacy IDs remain editable and
+    the client declines to construct an invalid shortcut. Event replay (`08463e2c40`) releases
+    consumed project-event pages via `Stream.paginate`; V2's application replay is unchanged.
+  - Claude metadata calls disable tools, slash commands, MCP configuration, hooks and permission
+    prompts (`95834d68aa`, server half of `bc4b006662`), and generate titles outside the checkout.
+    JSON/verbose titles (`52b2bf77a9`) retain the fork's model resolver. Shared-settings model
+    selection from `bc4b006662` remains with the previously deferred shared-settings stack.
+  - The Codex protocol accepts policy/rate-limit errors (`95139254ba`). Its subscription probe
+    selects the `codex` quota bucket and rejects model-specific fallback quotas (`1c1d38fcd4`)
+    through the fork's `providerUsageLimits`, without restoring V1 quota ingestion/reset credits.
+    OpenCode inventory commands run sequentially (`9ab0635db6`); its V1 adapter half is excluded.
+  - Provider model bulk toggles (`e16b8b059c`) are in the existing inline models section; remembered
+    Fast mode (`dadba6d95d`) uses the fork's option descriptors and draft store. The fork keeps its
+    custom-model handling and unified attachment model.
+  - Relay notification policy/race fixes (`fdf34c4018`, `3dfc134e6c`, `1862686f9e`) retain the
+    fork's attention throttling and APNs credentials; queued jobs use current registration routing.
+    Android FCM support is not carried. No deployment configuration or relay migration changes.
+- This range leaves the following changes for human-reviewed ports; advancing the sync marker
+  does not advertise them as supported:
+  - Active-thread ordering (`2d645df474` and web drag followers) needs V2 JSON metadata and
+    coordination with the fork's existing local whole-list order. Upstream migration
+    `049_ProjectionThreadsActiveOrderKey`, `activeOrderKey`, `thread.active.reorder` and
+    `threadActiveReorder` are not carried. Existing V2 pinned ordering is unchanged.
+  - Async question dismissal (`7112697e8b`) and question attachments (`7220dfe2c9`,
+    `12f5604442`) need V2 request lifecycle/answer payloads, provider transport support and Swift
+    decoding. Their client commands are not carried, nor is the V1 async-settlement follow-up.
+  - Cross-platform capture (`299404a754`), native feedback follow-ups, remote recording transfer,
+    text-only/saved preview snapshots (`29c5ecd0ee`, `061543e9e5`, `9e37f0c291`), recording
+    encoding (`3941c2a1de`), floating-preview resize and remote media resolution cross the fork's
+    desktop/preview protocols and attachment handling. Windows terminal telemetry
+    (`ea646c0834`) needs the fork's resource-monitor protocol and service fakes adapted together.
+  - Effect rc.112, Alchemy beta.76 and TypeScript 7 upgrades (and their reference trees and native
+    Headers patch) require validation of the fork-only V2/Swift-support/tooling consumers. The
+    current pinned dependency versions and Electron 43 remain; Electron 44's drag-region fix is
+    therefore not applied.
+  - New minimap turn navigation, PR merge defaults/videos/link routing, sidebar file drops,
+    project-icon propagation, composer focus/multiline/footer transitions, usage account layout,
+    and their follow-ups need dedicated adaptation to the fork's timeline, inline settings,
+    unified attachments and panel stores. Previously deferred onboarding, shared settings,
+    auto-balancing, citations, galleries, reset credits and browser-profile import stay deferred.
+    The removed settings section-navigation machinery was never adopted by the fork.
+  - Expo-only UI, outbox, drag handles and Android appearance/notification changes stay excluded
+    under the freeze. Fork release artwork, marketing, review workflows, public security-policy
+    ownership and export-enforcement configuration remain unchanged. The devcontainer fix is
+    carried independently with references adjusted to the fork's available contributor docs.
 - The 2026-09-06 sync (`5f878d2a85..223ff4490f`) deliberately leaves the following stacks for
   dedicated human-reviewed ports. Advancing the squash-sync marker does not mean these features
   are supported. Do not import their client flags or schemas without implementing the matching

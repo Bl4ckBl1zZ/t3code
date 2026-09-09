@@ -39,6 +39,21 @@ const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, strin
   [ProviderDriverKind.make("hermes")]: "model-slug",
 };
 
+export function nextHiddenModelsForBulkToggle(
+  models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
+  hiddenModels: ReadonlyArray<string>,
+): string[] {
+  const builtInSlugs = models.filter((model) => !model.isCustom).map((model) => model.slug);
+  const builtInSlugSet = new Set(builtInSlugs);
+  const allBuiltInModelsHidden = builtInSlugs.every((slug) => hiddenModels.includes(slug));
+
+  if (allBuiltInModelsHidden) {
+    return hiddenModels.filter((slug) => !builtInSlugSet.has(slug));
+  }
+
+  return [...new Set([...hiddenModels, ...builtInSlugs])];
+}
+
 interface ProviderModelsSectionProps {
   /** Identifier used to namespace input ids within the DOM. */
   readonly instanceId: ProviderInstanceId;
@@ -186,9 +201,26 @@ export function ProviderModelsSection({
     onModelOrderChange(next);
   };
 
+  const builtInModels = models.filter((model) => !model.isCustom);
+  const allBuiltInModelsHidden =
+    builtInModels.length > 0 && builtInModels.every((model) => hiddenModelSet.has(model.slug));
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
-      <div className="text-xs font-medium text-foreground">Models</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-medium text-foreground">Models</div>
+        {builtInModels.length > 0 ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost-muted"
+            onClick={() =>
+              onHiddenModelsChange(nextHiddenModelsForBulkToggle(models, hiddenModels))
+            }
+          >
+            {allBuiltInModelsHidden ? "Enable all" : "Disable all"}
+          </Button>
+        ) : null}
+      </div>
       <div className="mt-1 text-xs text-muted-foreground">
         {models.length} model{models.length === 1 ? "" : "s"} available.
       </div>

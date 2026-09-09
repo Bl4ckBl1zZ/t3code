@@ -1,4 +1,4 @@
-import { EventId } from "@t3tools/contracts";
+import { MAX_SCRIPT_ID_LENGTH, SCRIPT_RUN_COMMAND_PATTERN, EventId } from "@t3tools/contracts";
 import {
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -7,9 +7,10 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import type * as PlatformError from "effect/PlatformError";
 
-import type { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   requireActiveProjectWorkspaceRootAbsent,
   requireProject,
@@ -97,11 +98,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.meta.update": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
       });
+      if (command.scripts !== undefined) {
+        const existingIds = new Set(project.scripts.map((script) => script.id));
+        for (const script of command.scripts) {
+          if (
+            !existingIds.has(script.id) &&
+            !Schema.is(SCRIPT_RUN_COMMAND_PATTERN)(`script.${script.id}.run`)
+          ) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Script ID '${script.id}' must be 1-${MAX_SCRIPT_ID_LENGTH} lowercase letters, digits or hyphens, starting with a letter or digit.`,
+            });
+          }
+        }
+      }
       if (command.workspaceRoot !== undefined) {
         yield* requireActiveProjectWorkspaceRootAbsent({
           readModel,

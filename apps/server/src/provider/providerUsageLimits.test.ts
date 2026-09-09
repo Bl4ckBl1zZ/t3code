@@ -53,3 +53,14 @@ describe("provider subscription limits", () => {
     expect(decodeLimits(limits)).toEqual(limits);
   });
 });
+
+it("does not present model-specific Codex quotas as the main allowance", () => {
+  const checkedAt = "2026-09-09T00:00:00.000Z";
+  expect(
+    codexUsageLimits({ limitId: "codex_spark", primary: { usedPercent: 90 } }, checkedAt).windows,
+  ).toEqual([]);
+  expect(
+    codexUsageLimits({ limitId: "codex", primary: { usedPercent: 20 } }, checkedAt).windows[0]
+      ?.usedPercent,
+  ).toBe(20);
+});

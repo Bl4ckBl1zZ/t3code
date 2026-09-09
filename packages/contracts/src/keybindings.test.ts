@@ -295,3 +295,10 @@ it.effect("drops unknown fields in resolved keybinding rules", () =>
     }),
   ),
 );
+
+it.effect("accepts the optional stop-thread keybinding", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(KeybindingRule, { key: "mod+escape", command: "thread.stop" });
+    assert.strictEqual(parsed.command, "thread.stop");
+  }),
+);

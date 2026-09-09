@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import {
   HostProcessEnvironment,
   HostProcessExecutablePath,
@@ -155,17 +156,45 @@ it.layer(testLayer)("OpenCodeRuntime inventory", (it) => {
         yield* fs.chmod(binaryPath, 0o755);
       }
 
-      const runtime = yield* OpenCodeRuntime;
-      const inventory = yield* runtime.loadInventoryFromCli({
-        binaryPath,
-        cwd: tempDir,
-        environment: {
-          ...hostEnvironment,
-          T3_TEST_NODE_BINARY: executablePath,
-          T3_TEST_OPENCODE_SCRIPT: scriptPath,
-        },
-      });
-
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      let activeCommands = 0;
+      let maxActiveCommands = 0;
+      let commandCount = 0;
+      const serialSpawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          activeCommands++;
+          commandCount++;
+          maxActiveCommands = Math.max(maxActiveCommands, activeCommands);
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              activeCommands--;
+            }),
+          );
+          return yield* spawner.spawn(command);
+        }),
+      );
+      const inventory = yield* Effect.gen(function* () {
+        const runtime = yield* OpenCodeRuntime;
+        return yield* runtime.loadInventoryFromCli({
+          binaryPath,
+          cwd: tempDir,
+          environment: {
+            ...hostEnvironment,
+            T3_TEST_NODE_BINARY: executablePath,
+            T3_TEST_OPENCODE_SCRIPT: scriptPath,
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(OpenCodeRuntimeLive).pipe(
+            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, serialSpawner)),
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+      );
+      NodeAssert.equal(maxActiveCommands, 1);
+      NodeAssert.ok(commandCount >= 3);
+      NodeAssert.equal(activeCommands, 0);
       NodeAssert.deepEqual(inventory.providerList.connected, ["openai"]);
       NodeAssert.equal(inventory.skills.length, 0);
     }),
