@@ -35,7 +35,10 @@ function makeFakeClaudeBinary(dir: string) {
     yield* fs.writeFileString(
       stubPath,
       [
-        'const args = process.argv.slice(2).join(" ");',
+        "const argv = process.argv.slice(2);",
+        'const args = argv.join(" ");',
+        'if (argv[argv.indexOf("--tools") + 1] !== "" || !argv.includes("--disable-slash-commands") || !argv.includes("--strict-mcp-config") || argv.includes("--dangerously-skip-permissions") || argv[argv.indexOf("--permission-mode") + 1] !== "dontAsk") process.exit(6);',
+        'if (JSON.parse(argv[argv.indexOf("--settings") + 1]).disableAllHooks !== true) process.exit(7);',
         "",
         "function fail(message, code) {",
         '  process.stderr.write(message + "\\n");',
@@ -234,7 +237,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
             body: "",
           },
         }),
-        argsMustContain: '--settings {"alwaysThinkingEnabled":false}',
+        argsMustContain: '--settings {"disableAllHooks":true,"alwaysThinkingEnabled":false}',
         argsMustNotContain: "--effort",
       },
       (textGeneration) =>
@@ -266,7 +269,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
             body: "Body",
           },
         }),
-        argsMustContain: '--effort max --settings {"fastMode":true}',
+        argsMustContain: '--effort max --settings {"disableAllHooks":true,"fastMode":true}',
       },
       (textGeneration) =>
         Effect.gen(function* () {
@@ -352,6 +355,100 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
       );
     }),
   );
+
+  for (const verbose of [false, true]) {
+    it.effect(`unwraps a JSON title in ${verbose ? "verbose" : "normal"} Claude output`, () => {
+      const result = {
+        type: "result",
+        structured_output: { title: '{"title": "Refresh ev-stg APP ASG instances"}' },
+      };
+      return withFakeClaudeEnv(
+        { output: JSON.stringify(verbose ? [result] : result) },
+        (textGeneration) =>
+          Effect.gen(function* () {
+            const generated = yield* textGeneration.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Refresh ev-stg APP ASG instances",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                model: "claude-sonnet-4-6",
+              },
+            });
+
+            expect(generated.title).toBe("Refresh ev-stg APP ASG instances");
+          }),
+      );
+    });
+  }
+
+  for (const previousTitle of [undefined, "Old thread title"]) {
+    it.effect(
+      `reads the result from verbose Claude output when ${previousTitle ? "regenerating" : "generating"} a title`,
+      () =>
+        withFakeClaudeEnv(
+          {
+            output: JSON.stringify([
+              { type: "system", subtype: "init" },
+              { type: "assistant", message: { content: [] } },
+              { type: "user", message: { content: [] } },
+              { type: "rate_limit_event" },
+              {
+                type: "result",
+                subtype: "success",
+                result: '{"title":"Refresh ev-stg APP ASG Instances"}',
+                structured_output: { title: "Refresh ev-stg APP ASG Instances" },
+              },
+            ]),
+          },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const generated = yield* textGeneration.generateThreadTitle({
+                cwd: process.cwd(),
+                message: "Refresh ev-stg APP ASG instances",
+                previousTitle,
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("claudeAgent"),
+                  model: "claude-sonnet-4-6",
+                },
+              });
+
+              expect(generated.title).toBe("Refresh ev-stg APP ASG Instances");
+            }),
+        ),
+    );
+  }
+
+  for (const [name, output] of [
+    ["empty message array", []],
+    ["missing result", [{ type: "assistant", structured_output: { title: "Not a result" } }]],
+    ["invalid title", [{ type: "result", structured_output: { title: 42 } }]],
+    [
+      "final result without structured output",
+      [
+        { type: "result", structured_output: { title: "Earlier result" } },
+        { type: "result", subtype: "error_max_structured_output_retries" },
+      ],
+    ],
+  ] as const) {
+    it.effect(`rejects verbose Claude output with ${name}`, () =>
+      withFakeClaudeEnv({ output: JSON.stringify(output) }, (textGeneration) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(
+            textGeneration.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Name this thread",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                model: "claude-sonnet-4-6",
+              },
+            }),
+          );
+
+          expect(error._tag).toBe("TextGenerationError");
+        }),
+      ),
+    );
+  }
 
   it.effect("falls back when Claude thread title normalization becomes whitespace-only", () =>
     withFakeClaudeEnv(

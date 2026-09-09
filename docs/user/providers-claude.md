@@ -230,3 +230,8 @@ If the preset needs different Claude files, give it a different `CLAUDE_CONFIG_D
 different API keys, base URLs, or router settings, use Environment variables.
 
 Do not put environment variable assignments in `Launch arguments`.
+
+Claude Code's verbose mode can stay enabled for thread titles, branch names, commit messages,
+and pull request descriptions. Remote connections use Claude on the connected server. Metadata
+generation disables tools, hooks, and permission prompts; title generation uses an empty temporary
+directory so it does not load instructions from your checkout.

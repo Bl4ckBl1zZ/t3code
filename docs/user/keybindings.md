@@ -99,3 +99,6 @@ Examples:
 - For a key event, the last rule where both `key` matches and `when` evaluates to `true` wins.
 - Precedence is across commands, not only within the same command. A later rule for a different
   command can take a key away from an earlier one.
+
+`thread.stop` interrupts the running turn in the focused thread. It has no default
+shortcut; assign one in **Settings → Keybindings**.

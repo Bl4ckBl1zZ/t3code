@@ -406,7 +406,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       }),
       requestAllCodexModels(client),
       client.request("account/rateLimits/read", undefined).pipe(
-        Effect.map((response) => response.rateLimits),
+        Effect.map((response) => response.rateLimitsByLimitId?.codex ?? response.rateLimits),
         Effect.timeoutOption(Duration.millis(3_000)),
         Effect.map(Option.getOrUndefined),
         Effect.orElseSucceed(() => undefined),

@@ -124,3 +124,10 @@ the full review and browser. Other repositories can be opened in the browser.
 
 Long-press an image or video to **Save** it to Photos or **Share original**. These actions use the
 original file. Photos permission is requested only when saving; sharing uses the system share sheet.
+
+Fast mode choices are remembered when you start another chat with the same provider. An explicit
+choice to turn Fast mode off is remembered too.
+
+In web and desktop Settings, a provider's Models section has **Enable all** / **Disable all** controls
+for its built-in models. These leave custom models unchanged, and individual model toggles remain
+available.

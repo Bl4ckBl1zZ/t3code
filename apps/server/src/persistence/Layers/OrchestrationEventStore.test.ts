@@ -1,3 +1,4 @@
+import * as NodeV8 from "node:v8";
 import { CommandId, EventId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -231,3 +232,58 @@ layer("OrchestrationEventStore", (it) => {
     }),
   );
 });
+
+// Exercise multiple SQL pages while the consumer remains active.
+it.effect("releases consumed project replay pages and supports repeatable limited reads", () =>
+  Effect.gen(function* () {
+    const store = yield* OrchestrationEventStore;
+    const now = "2026-01-01T00:00:00.000Z";
+    yield* Effect.forEach(
+      Array.from({ length: 1501 }, (_, index) => index),
+      (index) =>
+        store.append({
+          type: "project.created",
+          eventId: EventId.make(`replay-page-${index}`),
+          aggregateKind: "project",
+          aggregateId: ProjectId.make(`replay-project-${index}`),
+          occurredAt: now,
+          commandId: CommandId.make(`replay-command-${index}`),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            projectId: ProjectId.make(`replay-project-${index}`),
+            title: "Replay",
+            workspaceRoot: `/tmp/replay-${index}`,
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      { discard: true },
+    );
+    // oxlint-disable-next-line typescript/no-extraneous-class -- Identifies page markers for V8's heap query.
+    class ReplayPage {}
+    let count = 0;
+    yield* Stream.runForEach(store.readAll(), (event) =>
+      Effect.sync(() => {
+        assert.equal(event.sequence, count + 1);
+        if (count % 500 === 0) {
+          Object.assign(event, { replayPage: new ReplayPage() });
+          assert.isAtMost(NodeV8.queryObjects(ReplayPage, { format: "count" }), 1);
+        }
+        count++;
+      }),
+    );
+    assert.equal(count, 1501);
+    const limited = store.readFromSequence(1, 501.9);
+    for (let run = 0; run < 2; run++) {
+      const events = yield* Stream.runCollect(limited);
+      assert.equal(events.length, 501);
+      assert.equal(events[0]?.sequence, 2);
+      assert.equal(events.at(-1)?.sequence, 502);
+    }
+    assert.deepEqual(yield* Stream.runCollect(store.readFromSequence(0, -1)), []);
+  }).pipe(Effect.provide(OrchestrationEventStoreLive.pipe(Layer.provide(SqlitePersistenceMemory)))),
+);
