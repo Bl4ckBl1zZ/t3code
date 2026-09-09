@@ -6,6 +6,8 @@ import {
   ContextTransferId,
   EventId,
   MessageId,
+  NodeId,
+  RuntimeRequestId,
   type ModelSelection,
   type OrchestrationV2ProviderThread,
   ProjectId,
@@ -1332,6 +1334,176 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         })
         .pipe(Effect.flip);
       assert.equal(settleError._tag, "OrchestratorDispatchError");
+    }),
+  );
+
+  for (const action of ["answer", "dismiss", "reject-callback-dismiss"] as const) {
+    it.effect(`handles V2 question action ${action} without a live session`, () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* OrchestratorV2;
+        const sink = yield* EventSinkV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make(`question-${action}`);
+        const requestId = RuntimeRequestId.make(`request-${action}`);
+        const nodeId = NodeId.make(`question-node-${action}`);
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "mobile",
+          commandId: CommandId.make(`question-create-${action}`),
+          threadId,
+          projectId: ProjectId.make("questions-project"),
+          title: "Question",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: "/tmp/questions",
+        });
+        yield* sink.write({
+          commandId: CommandId.make(`question-seed-${action}`),
+          events: [
+            {
+              id: EventId.make(`request-event-${action}`),
+              type: "runtime-request.updated",
+              threadId,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: requestId,
+                nodeId,
+                providerTurnId: null,
+                kind: "user_input",
+                status: "pending",
+                responseMode: action === "reject-callback-dismiss" ? "callback" : "message",
+                nativeRequestRef: { driver, nativeId: `async-${action}`, strength: "strong" },
+                responseCapability: {
+                  type: "live",
+                  providerSessionId: ProviderSessionId.make("detached-session"),
+                },
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+            {
+              id: EventId.make(`question-item-event-${action}`),
+              type: "turn-item.updated",
+              threadId,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`question-item-${action}`),
+                threadId,
+                runId: null,
+                nodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "waiting",
+                title: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                type: "user_input_request",
+                requestId,
+                questions: [{ id: "q", header: "Question", question: "Which spec?", options: [] }],
+              },
+            },
+          ],
+        });
+        const command = {
+          type: "runtime-request.respond" as const,
+          commandId: CommandId.make(`question-respond-${action}`),
+          threadId,
+          requestId,
+          ...(action === "answer"
+            ? {
+                answers: { q: "Use this spec" },
+                attachmentsByQuestionId: {
+                  q: [
+                    {
+                      type: "file" as const,
+                      id: "spec_file",
+                      name: "spec.txt",
+                      mimeType: "text/plain",
+                      sizeBytes: 4,
+                    },
+                  ],
+                },
+              }
+            : { dismiss: true }),
+        };
+        if (action === "reject-callback-dismiss") {
+          const error = yield* orchestrator.dispatch(command).pipe(Effect.flip);
+          assert.equal(error._tag, "OrchestratorDispatchError");
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(threadId)).runtimeRequests[0]?.status,
+            "pending",
+          );
+          return;
+        }
+        yield* orchestrator.dispatch(command);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          projection.runtimeRequests[0]?.status,
+          action === "answer" ? "resolved" : "cancelled",
+        );
+        assert.equal(projection.messages.length, action === "answer" ? 1 : 0);
+        if (action === "answer") {
+          assert.include(projection.messages[0]!.text, "Which spec?\nUse this spec");
+          assert.equal(projection.messages[0]!.attachments[0]?.name, "spec.txt");
+          // The same command can be retried after a dropped response without sending twice.
+          yield* orchestrator.dispatch(command);
+          assert.equal((yield* orchestrator.getThreadProjection(threadId)).messages.length, 1);
+        }
+      }),
+    );
+  }
+
+  it.effect("persists active order in shells and clears it on re-entry", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("active-order-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "mobile",
+        commandId: CommandId.make("active-order-create"),
+        threadId,
+        projectId: ProjectId.make("active-order-project"),
+        title: "Order",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("active-order-set"),
+        threadId,
+        activeOrderKey: "n",
+      });
+      assert.equal((yield* orchestrator.getThreadProjection(threadId)).thread.activeOrderKey, "n");
+      assert.equal(
+        (yield* orchestrator.getShellSnapshot()).threads.find((thread) => thread.id === threadId)
+          ?.activeOrderKey,
+        "n",
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("active-order-settle"),
+        threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("active-order-reopen"),
+        threadId,
+        reason: "user",
+      });
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.activeOrderKey);
     }),
   );
 

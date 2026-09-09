@@ -41,6 +41,15 @@ final class OrchestrationV2ContractTests: XCTestCase {
         try JSONDecoder().decode(OrchestrationV2ThreadProjection.self, from: fixtureData())
     }
 
+    func testNativeParityFieldsDecodeFromServerContract() throws {
+        let projection = try projection()
+        XCTAssertEqual(projection.thread.activeOrderKey, "n")
+        XCTAssertEqual(projection.runtimeRequests.first?.responseMode, "message")
+        let dismiss = OrchestrationCommands.respondToUserInput(threadID: "t", requestID: "q", answers: [:], dismiss: true)
+        XCTAssertEqual(dismiss["dismiss"], .bool(true))
+        XCTAssertNil(dismiss["answers"])
+    }
+
     func testContractGeneratedProjectionDecodes() throws {
         let projection = try projection()
         XCTAssertEqual(projection.thread.id, "thread-v2")

@@ -131,3 +131,25 @@ choice to turn Fast mode off is remembered too.
 In web and desktop Settings, a provider's Models section has **Enable all** / **Disable all** controls
 for its built-in models. These leave custom models unchanged, and individual model toggles remain
 available.
+
+## Native iOS drafts and queued tasks
+
+Open **Drafts** above the task list to keep several new tasks in progress. **New draft** starts
+another draft; selecting a saved draft restores its text, model choice and files. Swipe to delete
+a draft you no longer need. Drafts stay on this device.
+
+Sending a new task opens it immediately while its files upload and the environment accepts the
+message. The **Outbox** in Drafts shows queued, uploading, sending and failed submissions.
+Use **Retry queued** after a failure, or remove a queued submission to cancel it before delivery.
+A submission already being sent cannot be cancelled from the outbox.
+
+On supporting environments, agent questions accept files alongside each answer. Files appear
+with the question they answer and are delivered to the agent as a follow-up message. An
+asynchronous question also offers **Dismiss**; questions that block the agent require an answer.
+
+The previous and next controls above the native composer jump between your turns. Going back
+past the loaded history requests earlier turns. Tap an image to browse the images in its message;
+the gallery offers **Share original** and **Save image**.
+
+Native iOS remembers **Fast** on or off separately for each environment and provider account.
+The choice follows new tasks when the selected model supports that option.

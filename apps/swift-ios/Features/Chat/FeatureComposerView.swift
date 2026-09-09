@@ -67,7 +67,7 @@ struct FeatureComposerView: View {
     private let onSend: () -> Void
     private let onStop: () -> Void
     private let onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)?
-    private let onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)?
+    private let onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)?
 
     init(
         text: Binding<String>,
@@ -95,7 +95,7 @@ struct FeatureComposerView: View {
         onWillStash: @escaping () async -> Void = {},
         onDidStash: @escaping () -> Void = {},
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
-        onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)? = nil
+        onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)? = nil
     ) {
         _text = text
         _selection = selection
@@ -300,8 +300,8 @@ struct FeatureComposerView: View {
                 FeatureComposerUserInputPanel(
                     input: input,
                     isResponding: isResolvingRequest,
-                    onSubmit: { answers in
-                        onUserInputSubmit(input.id, answers)
+                    onSubmit: { answers, files, dismiss in
+                        onUserInputSubmit(input.id, answers, files, dismiss)
                     }
                 )
             } else {

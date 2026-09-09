@@ -23,3 +23,12 @@ Accounts without a reported identity stay separate. Pooled bars weight each repo
 equally; they do not claim that different subscription plans have equal token allowances.
 Unavailable environments, unsupported accounts, failed probes, and stale reports are labeled.
 This view does not redeem reset credits or read accounts from external proxy hubs.
+
+## Native iOS account comparison
+
+**Settings → Usage limits** compares accounts from the same provider in aligned columns.
+Each row represents the same quota window; a missing report is shown as **Not reported**.
+Account names appear in the comparison and task list without displaying email addresses.
+
+In **Settings → Agents**, toggle individual models or enable/disable all built-in models for
+an account. These choices are saved to that environment and control its model picker.

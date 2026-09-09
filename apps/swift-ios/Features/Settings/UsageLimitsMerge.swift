@@ -41,7 +41,7 @@ enum FeatureUsageLimitsMerge {
                     }
                     accounts[key] = account
                 } else {
-                    accounts[key] = .init(id: key, provider: provider.displayName ?? provider.driver, driver: provider.driver, plan: provider.auth.label, environments: [environment.label], limits: provider.usageLimits)
+                    accounts[key] = .init(id: key, provider: FeatureAccountLabel.display(provider.displayName, fallback: provider.driver), driver: provider.driver, plan: provider.auth.label.flatMap { $0.contains("@") ? nil : $0 }, environments: [environment.label], limits: provider.usageLimits)
                 }
             }
         }
@@ -73,5 +73,32 @@ extension FeatureUsageLimitsMerge {
             return .init(id: key, label: "\(first.0.driver) · \(first.1.label)", accountCount: members.count,
                          usedPercent: members.reduce(0) { $0 + min(100, max(0, $1.1.usedPercent)) } / Double(members.count))
         }
+    }
+}
+
+
+enum FeatureAccountLabel {
+    static func display(_ name: String?, fallback: String) -> String {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty, !name.contains("@") else { return fallback }
+        return name
+    }
+}
+
+
+extension FeatureUsageLimitsMerge {
+    struct ComparisonWindow: Identifiable {
+        let id: String
+        let windowID: String
+        let duration: Int?
+        let label: String
+    }
+
+    static func comparisonWindows(_ accounts: [FeatureLimitAccount]) -> [ComparisonWindow] {
+        var seen: Set<String> = []
+        return accounts.flatMap { $0.limits?.windows ?? [] }.compactMap { window in
+            let id = "\(window.id):\(window.windowDurationMins.map(String.init) ?? "unknown")"
+            guard seen.insert(id).inserted else { return nil }
+            return ComparisonWindow(id: id, windowID: window.id, duration: window.windowDurationMins, label: window.label)
+        }.sorted { ($0.duration ?? 0, $0.id) < ($1.duration ?? 0, $1.id) }
     }
 }

@@ -158,6 +158,8 @@ export const make = Effect.gen(function* () {
       threadVisitedTracking: true,
       environmentThemes: true,
       threadPinning: true,
+      threadActiveOrderV2: true,
+      threadQuestionActionsV2: true,
       threadPinReorder: true,
       threadTitleRegeneration: true,
       threadPullRequestLinking: true,

@@ -38,6 +38,40 @@ struct SettingsUsageLimitsView: View {
             if isLoading { ProgressView("Reading subscription limits…").frame(maxWidth: .infinity) }
             if selectedIDs.isEmpty { SettingsErrorBanner(message: "Select an environment to see its subscription limits.") }
             ForEach(notices, id: \.self) { SettingsErrorBanner(message: $0) }
+            ForEach(Array(Set(accounts.map(\.driver))).sorted(), id: \.self) { driver in
+                let members = accounts.filter { $0.driver == driver }
+                if members.count > 1 {
+                    SettingsSection(title: "\(driver) accounts", footer: "Each column stays with one account. Missing reports leave a gap.") {
+                        ScrollView(.horizontal) {
+                            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 14) {
+                                GridRow {
+                                    Text("Window")
+                                    ForEach(members) { account in
+                                        Text(account.provider).frame(width: 125, alignment: .leading)
+                                    }
+                                }.font(.caption.bold())
+                                ForEach(FeatureUsageLimitsMerge.comparisonWindows(members)) { row in
+                                    GridRow {
+                                        Text(row.label).font(.caption)
+                                        ForEach(members) { account in
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                if account.limits?.unavailable == nil,
+                                                   let window = account.limits?.windows.first(where: { $0.id == row.windowID && $0.windowDurationMins == row.duration }) {
+                                                    Text("\(window.usedPercent, specifier: "%.0f")% used").monospacedDigit()
+                                                    ProgressView(value: min(100, max(0, window.usedPercent)), total: 100).tint(T3Colors.accent)
+                                                } else {
+                                                    Text("Not reported").foregroundStyle(T3Colors.textTertiary)
+                                                    Rectangle().fill(T3Colors.border).frame(height: 4)
+                                                }
+                                            }.font(.caption).frame(width: 125, alignment: .leading)
+                                        }
+                                    }
+                                }
+                            }.padding(12)
+                        }
+                    }
+                }
+            }
             let pools = FeatureUsageLimitsMerge.pools(accounts)
             if !pools.isEmpty {
                 SettingsSection(title: "Pooled limits", footer: "Equal shares per reporting account, not combined token capacity. Missing accounts are excluded; different plans can have different allowances.") {

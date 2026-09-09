@@ -383,13 +383,17 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     Android FCM support is not carried. No deployment configuration or relay migration changes.
 - This range leaves the following changes for human-reviewed ports; advancing the sync marker
   does not advertise them as supported:
-  - Active-thread ordering (`2d645df474` and web drag followers) needs V2 JSON metadata and
-    coordination with the fork's existing local whole-list order. Upstream migration
-    `049_ProjectionThreadsActiveOrderKey`, `activeOrderKey`, `thread.active.reorder` and
-    `threadActiveReorder` are not carried. Existing V2 pinned ordering is unchanged.
+  - Active-thread ordering (`2d645df474`) is now ported for native iOS through V2 JSON
+    `activeOrderKey` metadata and `threadActiveOrderV2`. Upstream migration
+    `049_ProjectionThreadsActiveOrderKey`, V1 `thread.active.reorder` and `threadActiveReorder`
+    remain excluded. Web's local whole-list arrangement remains independent.
   - Async question dismissal (`7112697e8b`) and question attachments (`7220dfe2c9`,
-    `12f5604442`) need V2 request lifecycle/answer payloads, provider transport support and Swift
-    decoding. Their client commands are not carried, nor is the V1 async-settlement follow-up.
+    `12f5604442`) are now ported through V2 `runtime-request.respond` and native iOS,
+    gated by `threadQuestionActionsV2`. Codex async agent-message questions use `responseMode:
+"message"`, survive callback-session recovery, and resolve through normal queued message
+    admission. Only message-mode questions can be dismissed. Callback answers with files
+    retain their native response and queue the files as a follow-up. The V1 client commands and
+    async-settlement implementation remain excluded; no SQLite migration is added.
   - Cross-platform capture (`299404a754`), native feedback follow-ups, remote recording transfer,
     text-only/saved preview snapshots (`29c5ecd0ee`, `061543e9e5`, `9e37f0c291`), recording
     encoding (`3941c2a1de`), floating-preview resize and remote media resolution cross the fork's
@@ -492,6 +496,15 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   contracts onto the fork's orchestration V2, so upstream edits to its transport, `Core/Models.swift`,
   or `App/NativeFeatureClient.swift` resolve to the fork. Once `apps/mobile` is deleted, upstream
   changes under that path resolve to deletion.
+- Native iOS additionally carries the approved upstream-parity follow-up: independent persistent
+  new-task drafts; durable optimistic task creation with an outbox/retry/cancel list; V2 active
+  arrangement; per-question files and async dismissal; provider model visibility bulk controls;
+  explicit Fast on/off memory per environment/account; account labels without email addresses;
+  quota columns aligned by window; previous/next user-turn navigation over loaded and earlier
+  history; and message image galleries that load only the current page and neighbours. Gallery
+  exports keep original bytes, and workspace media uses freshly signed URLs on presentation/export.
+  These native ports do not unfreeze Expo or adopt the upstream V1 commands. Capability fields,
+  JSON projections and hand-maintained Swift models are covered by the generated contract fixture.
 - Gives the SwiftUI client three features upstream only built for web and the Expo client, because
   it is the fork's primary client and upstream has no SwiftUI half to merge:
   - **Linked pull requests.** Web links one from a right-click on a transcript link, which has no

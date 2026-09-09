@@ -140,11 +140,13 @@ struct FeatureComposerApprovalPanel: View {
 struct FeatureComposerUserInputPanel: View {
     let input: FeatureUserInput
     let isResponding: Bool
-    let onSubmit: ([String: FeatureInputAnswer]) -> Void
+    let onSubmit: ([String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void
 
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var answers: [String: FeatureInputAnswer] = [:]
+    @State private var files: [String: [FeatureDraftAttachment]] = [:]
+    @State private var preparation = FeatureAttachmentPreparationState()
     @State private var questionIndex = 0
     /// The question the reader collapsed, rather than a bare flag: the panel
     /// takes over the whole composer pill, so a tall prompt buries the
@@ -227,6 +229,7 @@ struct FeatureComposerUserInputPanel: View {
         }
         .onChange(of: input.id) {
             answers = [:]
+            files = [:]
             questionIndex = 0
             collapsedQuestionID = nil
         }
@@ -297,7 +300,27 @@ struct FeatureComposerUserInputPanel: View {
             .padding(.horizontal, 10)
             .padding(.top, 7)
 
+            if input.allowsAttachments == true {
+                HStack {
+                    FeatureImageAttachmentPicker(attachments: Binding(
+                        get: { files[question.id] ?? [] }, set: { files[question.id] = $0 }
+                    ), preparationState: $preparation, maximumCount: max(0, 8 - files.filter { $0.key != question.id }.values.reduce(0) { $0 + $1.count }))
+                    ScrollView(.horizontal) {
+                        HStack {
+                            ForEach(files[question.id] ?? []) { file in
+                                Button { files[question.id]?.removeAll { $0.id == file.id } } label: {
+                                    Label(file.filename, systemImage: "xmark.circle")
+                                }.accessibilityLabel("Remove \(file.filename)")
+                            }
+                        }
+                    }
+                }.padding(.horizontal, 10)
+            }
             HStack(spacing: 8) {
+                if input.allowsDismiss == true {
+                    Button("Dismiss") { onSubmit([:], [:], true) }
+                        .disabled(preparation.isPreparing)
+                }
                 if questionIndex > 0 {
                     Button("Back") {
                         questionIndex -= 1
@@ -345,7 +368,7 @@ struct FeatureComposerUserInputPanel: View {
 
     private var canAdvance: Bool {
         guard let activeQuestion else { return false }
-        return normalizedAnswer(for: activeQuestion.id) != nil
+        return !preparation.isPreparing && normalizedAnswer(for: activeQuestion.id) != nil
     }
 
     private var normalizedAnswers: [String: FeatureInputAnswer]? {
@@ -457,7 +480,7 @@ struct FeatureComposerUserInputPanel: View {
         if !isLastQuestion {
             questionIndex += 1
         } else if let normalizedAnswers {
-            onSubmit(normalizedAnswers)
+            onSubmit(normalizedAnswers, files.mapValues { $0.map { FeatureUploadAttachment(data: $0.data, name: $0.filename, mimeType: $0.mimeType) } }, false)
         } else if let unanswered = input.questions.firstIndex(where: {
             normalizedAnswer(for: $0.id) == nil
         }) {
@@ -466,7 +489,7 @@ struct FeatureComposerUserInputPanel: View {
     }
 
     private func normalizedAnswer(for questionID: String) -> FeatureInputAnswer? {
-        answers[questionID]?.normalized
+        answers[questionID]?.normalized ?? ((files[questionID]?.isEmpty == false) ? .text("See attached files.") : nil)
     }
 
     private func isOptionSelected(_ label: String, for question: FeatureInputQuestion) -> Bool {

@@ -36,6 +36,7 @@ struct MarkdownMessageView: View {
         Group {
             if let displayDocument {
                 MarkdownBlocksView(blocks: displayDocument.blocks)
+                    .environment(\.markdownGallery, MarkdownGallery.images(in: displayDocument.blocks))
             } else {
                 // Parsing waits briefly so token-by-token streaming cancels stale revisions
                 // instead of scheduling work for content the user will never see.
@@ -589,5 +590,19 @@ enum MarkdownInlineFormatter {
             }
         }
         return attributed
+    }
+}
+
+
+enum MarkdownGallery {
+    static func images(in blocks: [MarkdownRenderedBlock]) -> [MarkdownInlineImage] {
+        blocks.flatMap { block -> [MarkdownInlineImage] in
+            switch block {
+            case let .image(image): MarkdownMediaSource.isVideo(image.src) ? [] : [image]
+            case let .blockquote(children), let .githubAlert(_, children): images(in: children)
+            case let .unorderedList(items), let .orderedList(_, items): items.flatMap { images(in: $0.blocks) }
+            default: []
+            }
+        }
     }
 }

@@ -58,6 +58,7 @@ public protocol FeatureClient: AnyObject {
     func setThreadArchived(id: String, archived: Bool) async throws
     func setThreadSettled(id: String, settled: Bool) async throws
     func setThreadSnoozed(id: String, until: Date?) async throws
+    func setActiveOrder(id: String, key: String?) async throws
     func setThreadPinned(id: String, pinned: Bool) async throws
     /// Pins a pull request to the thread by number, replacing the
     /// branch-derived one, or clears the pin with `nil`.
@@ -98,6 +99,7 @@ public protocol FeatureClient: AnyObject {
     ) async throws
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
+    func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws
 
     /// A prompt-ready document for continuing this thread somewhere else.
@@ -230,6 +232,10 @@ public extension FeatureClient {
     func disconnect() async {}
     func addProject(path: String) async throws {}
     func releaseThread(id: String) {}
+    func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws {
+        guard attachments.isEmpty && !dismiss else { throw FeatureCapabilityUnavailable("Question actions") }
+        try await resolveUserInput(id: id, answers: answers)
+    }
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws {}
 
     /// Keeps simple text-only callers source-compatible while the typed API
@@ -535,4 +541,9 @@ public extension FeatureClient {
     func closeTerminal(threadID: String, terminalID _: String) async throws {
         throw FeatureCapabilityUnavailable("Terminal")
     }
+}
+
+
+extension FeatureClient {
+    public func setActiveOrder(id: String, key: String?) async throws { throw FeatureCapabilityUnavailable("Active thread ordering") }
 }

@@ -541,6 +541,7 @@ export const layerWithOptions = (
             const releasedRequests = projection.runtimeRequests.filter(
               (request) =>
                 request.status === "pending" &&
+                request.responseMode !== "message" &&
                 request.responseCapability.type === "live" &&
                 request.responseCapability.providerSessionId === providerSessionId,
             );

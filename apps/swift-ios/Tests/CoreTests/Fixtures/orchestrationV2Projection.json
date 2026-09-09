@@ -26,6 +26,7 @@
     "archivedAt": null,
     "settledOverride": null,
     "settledAt": null,
+    "activeOrderKey": "n",
     "lastVisitedAt": null,
     "deletedAt": null
   },
@@ -36,7 +37,23 @@
   "providerSessions": [],
   "providerThreads": [],
   "providerTurns": [],
-  "runtimeRequests": [],
+  "runtimeRequests": [
+    {
+      "id": "request-input",
+      "nodeId": "node-input",
+      "providerTurnId": null,
+      "nativeRequestRef": null,
+      "kind": "user_input",
+      "status": "pending",
+      "responseMode": "message",
+      "responseCapability": {
+        "type": "not_resumable",
+        "reason": "Historical callback session"
+      },
+      "createdAt": "2026-06-20T00:00:00.000Z",
+      "resolvedAt": null
+    }
+  ],
   "messages": [],
   "plans": [],
   "turnItems": [

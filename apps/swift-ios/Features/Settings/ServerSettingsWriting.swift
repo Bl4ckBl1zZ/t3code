@@ -14,6 +14,7 @@ import Foundation
 /// working, its rows just refuse the write instead of going missing.
 @MainActor
 public protocol FeatureServerSettingsManaging: AnyObject {
+    func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot
     /// Applies a sparse patch and returns the settings the server settled on.
     ///
     /// Returning the server's own answer rather than assuming the write took
@@ -40,5 +41,12 @@ final class EmptyFeatureServerSettingsManager: FeatureServerSettingsManaging {
         patch _: ServerSettingsPatchInput
     ) async throws -> FeatureEnvironmentPreferences {
         throw FeatureCapabilityUnavailable("Server settings")
+    }
+}
+
+
+extension FeatureServerSettingsManaging {
+    public func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot {
+        throw FeatureCapabilityUnavailable("Provider model settings")
     }
 }

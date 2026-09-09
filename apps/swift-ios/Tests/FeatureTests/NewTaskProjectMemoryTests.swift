@@ -8,6 +8,22 @@ struct NewTaskProjectMemoryTests {
         FeatureProject(id: id, environmentID: environment, name: id, path: "/code/\(id)")
     }
 
+    @Test func fastOffIsRememberedPerEnvironmentAndAccount() throws {
+        let suite = "test.fast.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NewTaskProjectMemoryStore(defaults: defaults)
+        let on = FeatureSelection(providerID: "work", modelID: "model", options: [.init(id: "fast", value: .boolean(true))])
+        var off = on
+        off.options = [.init(id: "fast", value: .boolean(false))]
+        store.rememberFastMode(off, environmentID: "mac")
+        #expect(store.applyingFastMode(to: on, environmentID: "mac")?.options == off.options)
+        #expect(store.applyingFastMode(to: on, environmentID: "server")?.options == on.options)
+        var personal = on
+        personal.providerID = "personal"
+        #expect(store.applyingFastMode(to: personal, environmentID: "mac")?.options == on.options)
+    }
+
     @Test
     func preferredProjectIsTheOneLastSelected() {
         var memory = NewTaskProjectMemory()

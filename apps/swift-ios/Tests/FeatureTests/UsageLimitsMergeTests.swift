@@ -14,6 +14,11 @@ struct UsageLimitsMergeTests {
         ]))
     }
 
+    @Test func accountLabelsNeverRenderEmailAddresses() {
+        #expect(FeatureAccountLabel.display("Work", fallback: "codex") == "Work")
+        #expect(FeatureAccountLabel.display("user@example.com", fallback: "codex") == "codex")
+    }
+
     @Test func countsKnownAccountsOnceAndUsesFreshestReport() throws {
         let merged = FeatureUsageLimitsMerge.merge([
             .init(id: "a", label: "Mac", providers: [try provider("one", email: "USER@example.com", percent: 20)]),

@@ -50,3 +50,11 @@ Tap **Select threads** or choose **Select thread** from a row’s menu, then sel
 or delete together. Delete asks for confirmation; unpin follows your confirmation preference.
 Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
 history does not remove worktree files from the environment.
+
+## Arrange active threads on native iOS
+
+On supporting environments, choose **Arrange threads** above the Code or Work task list. Drag
+the handles, or use VoiceOver's **Move up** and **Move down** actions. The order is saved to the
+environment, so other native iOS devices see it too. Project filters leave other threads alone.
+New and reopened threads appear above arranged threads. **Reset to newest first** removes the
+manual order for the displayed active threads. Pinned threads retain their separate order.

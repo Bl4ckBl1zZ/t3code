@@ -359,6 +359,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   // Fractional sort key for the user-arranged pinned run. Absent on threads
   // pinned before reordering existed; those sort below arranged ones.
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  activeOrderKey: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(256), Schema.isPattern(/^[a-z]*[b-z]$/)),
+    ),
+  ),
   workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -832,6 +837,7 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
     Schema.Literals(["dynamic_tool_call", "user_input", "auth_refresh"]),
   ]),
   status: Schema.Literals(["pending", "resolved", "expired", "cancelled"]),
+  responseMode: Schema.optional(Schema.Literals(["callback", "message"])),
   responseCapability: Schema.Union([
     Schema.Struct({ type: Schema.Literal("live"), providerSessionId: ProviderSessionId }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
@@ -1674,6 +1680,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   // Fractional sort key for the user-arranged pinned run. Absent on threads
   // pinned before reordering existed; those sort below arranged ones.
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  activeOrderKey: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(256), Schema.isPattern(/^[a-z]*[b-z]$/)),
+    ),
+  ),
   workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1767,6 +1778,11 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  activeOrderKey: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(256), Schema.isPattern(/^[a-z]*[b-z]$/)),
+    ),
+  ),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2164,6 +2180,11 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  activeOrderKey: Schema.optional(
+    Schema.NullOr(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(256), Schema.isPattern(/^[a-z]*[b-z]$/)),
+    ),
+  ),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2436,6 +2457,11 @@ export const OrchestrationV2Command = Schema.Union([
     /** Fractional key placing this thread within the pinned run. Sent alone to
         reorder, or alongside `pinned: true` to place a fresh pin. */
     pinOrderKey: Schema.optional(TrimmedNonEmptyString),
+    activeOrderKey: Schema.optional(
+      Schema.NullOr(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(256), Schema.isPattern(/^[a-z]*[b-z]$/)),
+      ),
+    ),
     workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
     clearTimeline: Schema.optional(Schema.Literal(true)),
   }),
@@ -2550,6 +2576,10 @@ export const OrchestrationV2Command = Schema.Union([
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
     answers: Schema.optional(ProviderUserInputAnswers),
+    dismiss: Schema.optional(Schema.Boolean),
+    attachmentsByQuestionId: Schema.optional(
+      Schema.Record(Schema.String, Schema.Array(ChatAttachment)),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback"),
