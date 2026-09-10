@@ -782,6 +782,18 @@ public actor T3Client {
     // (`packages/contracts/src/pullRequest.ts`): the server project id, the
     // repository's display name, and the change request's number on the host.
 
+    public func listPullRequests(_ input: PullRequestListInput) async throws -> PullRequestListResult {
+        try await rpc.request("pullRequests.list", payload: try JSONValue.encode(input), as: PullRequestListResult.self)
+    }
+
+    public func pullRequestStats(_ entries: [PullRequestListEntry]) async throws -> PullRequestListStatsResult {
+        try await rpc.request("pullRequests.listStats", payload: .object([
+            "refs": .array(entries.map { .object([
+                "projectId": .string($0.projectId), "repository": .string($0.repository), "number": .number(Double($0.number)),
+            ]) }),
+        ]), as: PullRequestListStatsResult.self)
+    }
+
     public func pullRequestDetail(
         projectID: String,
         repository: String,

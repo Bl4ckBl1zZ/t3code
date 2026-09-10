@@ -50,6 +50,7 @@ public struct WorkspaceView: View {
     @State private var showingAddProject = false
     @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
+    @State private var showingPullRequests = false
     @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
@@ -238,6 +239,11 @@ public struct WorkspaceView: View {
         .sheet(isPresented: $showingAddProject) {
             AddProjectView(model: model)
         }
+        .sheet(isPresented: $showingPullRequests) {
+            if let manager = model.client as? any FeatureProjectPullRequestManaging {
+                PullRequestWorkspaceView(model: model, manager: manager)
+            }
+        }
         .sheet(isPresented: $showingSettings) {
             SettingsView(model: model)
         }
@@ -371,6 +377,17 @@ public struct WorkspaceView: View {
         return VStack(spacing: 0) {
             if WorkspaceSwitcher.showsProjectFilter(workspace) {
                 projectFilter
+                if model.client is any FeatureProjectPullRequestManaging,
+                   model.snapshot.environments.contains(where: { $0.supportsPullRequests == true }) {
+                    Button { showingPullRequests = true } label: {
+                        HStack {
+                            Label("Pull requests", systemImage: "arrow.triangle.pull")
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                        }.font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                            .frame(minHeight: 44).padding(.horizontal, 18).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("sidebar-pull-requests")
+                }
             }
             if workspace != .chat && presentation.active.contains(where: { $0.supportsActiveOrder == true }) {
                 Button("Arrange threads", systemImage: "arrow.up.arrow.down") { showingArrangement = true }

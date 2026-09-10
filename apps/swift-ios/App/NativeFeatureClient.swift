@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureWorkspaceAssetResolving,
+    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -2056,6 +2056,60 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               let project = shell.projects.first(where: { $0.id == thread.projectId }),
               let repository = project.repositoryIdentity?.displayName else { throw NativeFeatureClientError.repositoryIdentityUnavailable }
         try await route.client.runPullRequestStackAction(projectID: project.id, repository: repository, number: number,
+            stack: stack, action: action, mergeMethod: mergeMethod)
+    }
+
+    func listPullRequests(environmentID: String, input: PullRequestListInput) async throws -> PullRequestListResult {
+        guard (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.pullRequests == true else {
+            throw FeatureCapabilityUnavailable("Pull requests")
+        }
+        return try await environmentClient(id: environmentID).listPullRequests(input)
+    }
+
+    func pullRequestStats(environmentID: String, entries: [PullRequestListEntry]) async throws -> PullRequestListStatsResult {
+        try await environmentClient(id: environmentID).pullRequestStats(Array(entries.prefix(500)))
+    }
+
+    private func projectPullRequestRoute(_ scope: FeaturePullRequestProjectScope) throws -> (NativeProjectRoute, String) {
+        let route = try projectRoute(for: scope.projectID)
+        let identity = try project(for: route).repositoryIdentity
+        guard identity?.canonicalKey.lowercased() == scope.canonicalKey else {
+            throw FeatureCapabilityUnavailable("The project repository changed. Refresh the pull-request list")
+        }
+        guard let repository = identity?.displayName, !repository.isEmpty else {
+            throw NativeFeatureClientError.repositoryIdentityUnavailable
+        }
+        return (route, repository)
+    }
+
+    func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {
+        let (route, repository) = try projectPullRequestRoute(scope)
+        let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, number: number)
+        let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, number: number)
+        return FeaturePullRequestOverview(detail: detail, activity: activity)
+    }
+
+    func projectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestLabelCandidateList {
+        let (route, repository) = try projectPullRequestRoute(scope)
+        return try await route.client.pullRequestLabelCandidates(projectID: route.wireID, repository: repository, number: number)
+    }
+
+    func setProjectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int, labels: [String], applied: Bool) async throws {
+        let (route, repository) = try projectPullRequestRoute(scope)
+        try await route.client.setPullRequestLabels(projectID: route.wireID, repository: repository, number: number, labels: labels, applied: applied)
+        pullRequestPreviewCache.removeAll(keepingCapacity: true)
+    }
+
+    func projectPullRequestStack(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestStack? {
+        let (route, repository) = try projectPullRequestRoute(scope)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
+        return try await route.client.pullRequestStack(projectID: route.wireID, repository: repository, number: number)
+    }
+
+    func runProjectPullRequestStackAction(scope: FeaturePullRequestProjectScope, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
+        let (route, repository) = try projectPullRequestRoute(scope)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { throw FeatureCapabilityUnavailable("Stack actions") }
+        try await route.client.runPullRequestStackAction(projectID: route.wireID, repository: repository, number: number,
             stack: stack, action: action, mergeMethod: mergeMethod)
     }
 
@@ -4134,7 +4188,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     scripts: project.scripts,
                     previewUrl: pinnedPreviewURLs[uiID],
                     faviconPath: project.faviconPath,
-                    projectIcon: project.projectIcon
+                    projectIcon: project.projectIcon,
+                    repositoryCanonicalKey: project.repositoryIdentity?.canonicalKey
                 )
             }
         }

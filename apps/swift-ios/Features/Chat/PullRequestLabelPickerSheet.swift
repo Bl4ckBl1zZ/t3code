@@ -1,8 +1,7 @@
 import SwiftUI
 
 struct PullRequestLabelPickerSheet: View {
-    let client: any FeatureClient
-    let threadID: String
+    let access: FeaturePullRequestAccess
     let number: Int
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @State private var result: PullRequestLabelCandidateList?
@@ -81,7 +80,7 @@ struct PullRequestLabelPickerSheet: View {
         loading = true
         errorMessage = nil
         do {
-            let loaded = try await client.pullRequestLabelCandidates(threadID: threadID, number: number)
+            let loaded = try await access.labels(number)
             guard !Task.isCancelled else { return }
             result = loaded
         } catch {
@@ -96,8 +95,7 @@ struct PullRequestLabelPickerSheet: View {
         pending = candidate.name
         Task { @MainActor in
             do {
-                try await client.setPullRequestLabels(threadID: threadID, number: number,
-                    labels: [candidate.name], applied: !candidate.isApplied)
+                try await access.setLabels(number, [candidate.name], !candidate.isApplied)
                 await load()
             } catch { errorMessage = error.localizedDescription }
             pending = nil

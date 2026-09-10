@@ -23,6 +23,9 @@ import {
   ServerProviderUsageLimits,
   PullRequestStack,
   PullRequestLabelCandidateList,
+  PullRequestListInput,
+  PullRequestListResult,
+  PullRequestListStatsResult,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -605,3 +608,102 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(projectIconsPath, projectIconsSerialized);
+
+const pullRequestWorkspacePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestWorkspace.json",
+);
+const pullRequestWorkspaceSerialized = `${JSON.stringify(
+  Schema.encodeSync(
+    Schema.Struct({
+      input: PullRequestListInput,
+      result: PullRequestListResult,
+      stats: PullRequestListStatsResult,
+    }),
+  )({
+    input: {
+      state: "open",
+      involvement: "authored",
+      projectIds: [ProjectId.make("project-pr")],
+      host: "github.com",
+      limit: 50,
+      query: "compiler",
+      filters: {
+        draft: "hide",
+        checks: "passing",
+        labels: [["bug", "docs"]],
+        excludedLabels: ["wontfix"],
+        author: "me",
+      },
+      cursors: { "github.com owner/repo": "opaque-next" },
+    },
+    result: {
+      viewers: { "github.com": "me" },
+      providers: [
+        {
+          host: "github.com",
+          kind: "github",
+          searchesOnHost: true,
+          projectCount: 1,
+          configured: true,
+          detail: null,
+        },
+      ],
+      entries: ["github.com", "enterprise.example"].map((host) => ({
+        provider: "github",
+        host,
+        projectId: ProjectId.make("project-pr"),
+        projectTitle: "Compiler",
+        repository: "owner/repo",
+        number: 42,
+        title: "Fix compiler",
+        url: `https://${host}/owner/repo/pull/42`,
+        author: { login: "me", name: null, avatarUrl: null },
+        headBranch: "fix-compiler",
+        baseBranch: "main",
+        state: "open",
+        isDraft: false,
+        mergeability: "mergeable",
+        additions: 0,
+        deletions: 0,
+        createdAt: "2026-09-10T12:00:00.000Z",
+        updatedAt: "2026-09-10T12:01:00.000Z",
+        viewerReviewRequested: false,
+        labels: [{ name: "bug", color: "ff0000" }],
+        reviewDecision: "approved",
+        checksState: "passing",
+      })),
+      errors: [
+        {
+          projectId: ProjectId.make("unavailable"),
+          projectTitle: "Offline project",
+          message: "Host unavailable",
+        },
+      ],
+      truncated: true,
+      nextCursors: { "github.com owner/repo": "opaque-next" },
+    },
+    stats: {
+      stats: [
+        {
+          projectId: ProjectId.make("project-pr"),
+          repository: "owner/repo",
+          number: 42,
+          additions: 0,
+          deletions: 0,
+        },
+      ],
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestWorkspacePath) ||
+    NodeFS.readFileSync(pullRequestWorkspacePath, "utf8") !== pullRequestWorkspaceSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestWorkspace.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestWorkspacePath, pullRequestWorkspaceSerialized);

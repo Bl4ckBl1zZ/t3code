@@ -3,9 +3,18 @@ import SwiftUI
 // Native PR details and reviewed, remote-only GitHub stack actions.
 
 struct PullRequestDetailSheet: View {
-    let client: any FeatureClient
-    let threadID: String
+    let access: FeaturePullRequestAccess
     let number: Int
+
+    init(client: any FeatureClient, threadID: String, number: Int) {
+        self.access = FeaturePullRequestAccess(client: client, threadID: threadID)
+        self.number = number
+    }
+
+    init(access: FeaturePullRequestAccess, number: Int) {
+        self.access = access
+        self.number = number
+    }
 
     @State private var editingLabels = false
     @State private var selectedNumber: Int?
@@ -47,12 +56,12 @@ struct PullRequestDetailSheet: View {
         }
         .task(id: displayedNumber) { await load() }
         .sheet(item: $pendingStackAction, onDismiss: { Task { await load() } }) { request in
-            PullRequestStackActionSheet(request: request, client: client, threadID: threadID) {
+            PullRequestStackActionSheet(request: request, access: access) {
                 pendingStackAction = nil
             }
         }
         .sheet(isPresented: $editingLabels, onDismiss: { Task { await load() } }) {
-            PullRequestLabelPickerSheet(client: client, threadID: threadID, number: displayedNumber)
+            PullRequestLabelPickerSheet(access: access, number: displayedNumber)
         }
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
@@ -64,11 +73,11 @@ struct PullRequestDetailSheet: View {
         stack = nil
         stackError = nil
         do {
-            let result = try await client.pullRequestOverview(threadID: threadID, number: requestedNumber)
+            let result = try await access.overview(requestedNumber)
             guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
             overview = result
             do {
-                let loadedStack = try await client.pullRequestStack(threadID: threadID, number: requestedNumber)
+                let loadedStack = try await access.stack(requestedNumber)
                 guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
                 stack = loadedStack
             } catch {

@@ -113,6 +113,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     /// `OrchestrationProject.faviconPath`. Nil keeps favicon auto-discovery.
     public var faviconPath: String?
     public var projectIcon: ProjectIconOverride?
+    public var repositoryCanonicalKey: String?
 
     public init(
         id: String,
@@ -125,7 +126,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         scripts: [ProjectScript] = [],
         previewUrl: String? = nil,
         faviconPath: String? = nil,
-        projectIcon: ProjectIconOverride? = nil
+        projectIcon: ProjectIconOverride? = nil,
+        repositoryCanonicalKey: String? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -138,6 +140,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.previewUrl = previewUrl
         self.faviconPath = faviconPath
         self.projectIcon = projectIcon
+        self.repositoryCanonicalKey = repositoryCanonicalKey
     }
 
     /// `ProjectScript` is a Core wire type and is deliberately not `Hashable`,
@@ -154,6 +157,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         hasher.combine(previewUrl)
         hasher.combine(faviconPath)
         hasher.combine(projectIcon)
+        hasher.combine(repositoryCanonicalKey)
         for script in scripts { hasher.combine(script.id) }
     }
 }

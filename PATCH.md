@@ -715,3 +715,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   after native focus restoration settles. Text fields, terminals, dialogs and popup controls retain
   deliberate focus; mobile viewports do not raise the software keyboard. The effect is keyed by
   the fork’s environment/thread identity and cleans up pending animation frames on navigation.
+
+- The native Code sidebar now opens a cross-environment pull-request workspace using existing
+  `pullRequests.list`/`listStats` contracts. It persists filters/sort, assigns shared repositories
+  to one environment, distinguishes hosts, paginates with opaque cursors, and fetches authored and
+  review-requested partitions independently. Four concurrent listing requests bound fan-out;
+  diff counts enrich visible results without treating an unavailable count as zero. Stale responses
+  cannot replace a newer search. Native detail, label and stack screens accept project context
+  without creating a thread, and reject a project whose repository changed since the list was read.
+  Responsive label pills, update times and diff palette roles use native theme tokens. Native PR
+  file/code review and checkout actions remain separate parity work; this does not claim them.

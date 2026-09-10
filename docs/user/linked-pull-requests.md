@@ -41,3 +41,14 @@ review. Conflicts stay last. Smaller measured diffs sort first within each readi
 Searching keeps relevance ordering, and changing a filter leaves your current review open.
 Project choices combine checkouts of the same repository on one machine and distinguish
 matching names across machines.
+
+On iOS, choose **Pull requests** below the Code sidebar’s project filter to browse across your
+connected environments. Open **Filters and sorting** to choose an environment, project, host,
+state, involvement, draft/review/check status, author, or labels. Filters and sort order are
+remembered. Pull down to refresh, or choose **Load more** for older requests.
+
+Your authored requests and requested reviews are fetched separately from the general feed so
+older work can still appear in those groups. Unavailable hosts show an explanation while other
+results remain readable. Some hosts search only loaded rows; the list identifies those hosts.
+Unknown change sizes stay blank until loaded. Long-press a row to copy its link or open its host.
+Tap a row for the existing summary, conversation, labels and reviewed stack actions.

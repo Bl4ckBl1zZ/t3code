@@ -12,8 +12,7 @@ struct NativeStackAction: Identifiable {
 /// Holds the exact stack the reader reviewed; a refresh must never alter an armed operation.
 struct PullRequestStackActionSheet: View {
     let request: NativeStackAction
-    let client: any FeatureClient
-    let threadID: String
+    let access: FeaturePullRequestAccess
     let onFinished: () -> Void
     @State private var method = ""
     @State private var isBusy = false
@@ -73,8 +72,7 @@ struct PullRequestStackActionSheet: View {
         isBusy = true
         Task { @MainActor in
             do {
-                try await client.runPullRequestStackAction(threadID: threadID, number: request.number,
-                    stack: request.stack, action: request.action, mergeMethod: isMerge ? method : nil)
+                try await access.runStackAction(request.number, request.stack, request.action, isMerge ? method : nil)
                 onFinished()
             } catch { errorMessage = error.localizedDescription }
             isBusy = false
