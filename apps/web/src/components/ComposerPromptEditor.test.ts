@@ -49,6 +49,7 @@ describe("registerComposerInlineTokenPaste", () => {
       { discrete: true },
     );
     registerComposerInlineTokenPaste(editor, {
+      createCitationNode: (_citation, source) => $createTextNode(source),
       createMentionNode: (path) => $createTextNode(`<mention:${path}>`),
       getExpandedAbsoluteOffsetForPoint: () => 0,
     });
@@ -94,6 +95,7 @@ describe("registerComposerInlineTokenPaste", () => {
       { discrete: true },
     );
     registerComposerInlineTokenPaste(editor, {
+      createCitationNode: (_citation, source) => $createTextNode(source),
       createMentionNode: (path) => $createTextNode(`<mention:${path}>`),
       getExpandedAbsoluteOffsetForPoint: () => 0,
     });
@@ -128,6 +130,7 @@ describe("registerComposerInlineTokenPaste", () => {
       { discrete: true },
     );
     registerComposerInlineTokenPaste(editor, {
+      createCitationNode: (_citation, source) => $createTextNode(source),
       createMentionNode: (path) => $createTextNode(`<mention:${path}>`),
       getExpandedAbsoluteOffsetForPoint: () => 0,
     });

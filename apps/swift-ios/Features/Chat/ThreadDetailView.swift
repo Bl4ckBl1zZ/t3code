@@ -19,6 +19,8 @@ public struct ThreadDetailView: View {
 
     @SwiftUI.Environment(\.openURL) private var openURL
 
+    @State private var citationPreview: AssistantCitation?
+    @State private var citationError: String?
     @State private var draft = ""
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var bannerHeight: CGFloat = 0
@@ -130,6 +132,12 @@ public struct ThreadDetailView: View {
             model.releaseThread(thread.id)
             persistDraftBeforeLeaving()
         }
+        .sheet(item: $citationPreview) { citation in
+            AssistantCitationPreview(citation: citation) { openCitationSource(citation) }
+        }
+        .alert("Quoted response", isPresented: Binding(get: { citationError != nil }, set: { if !$0 { citationError = nil } })) {
+            Button("OK") { citationError = nil }
+        } message: { Text(citationError ?? "") }
         .sheet(item: $restoreRequest) { request in
             CheckpointRestoreSheet(
                 request: request,
@@ -464,6 +472,21 @@ public struct ThreadDetailView: View {
                     onOpenFile: openFile,
                     onOpenURL: { openURL($0) },
                     onOpenDiff: openDiff,
+                    citationNavigation: model.pendingAssistantCitation.flatMap { request in
+                        request.citation.threadId == (thread.wireID ?? thread.id) && request.citation.environmentId == threadEnvironment?.id ? request : nil
+                    },
+                    onCitationComplete: { request, error in
+                        guard model.pendingAssistantCitation?.id == request.id else { return }
+                        model.pendingAssistantCitation = nil
+                        citationError = error
+                    },
+                    onOpenCitation: { citationPreview = $0 },
+                    citationContext: threadEnvironment?.supportsAssistantCitations == true ? AssistantCitationContext(
+                        environmentId: threadEnvironment?.id ?? "", threadId: thread.wireID ?? thread.id,
+                        onCite: { citation in
+                            guard !isSending else { return }
+                            draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + citation.marker
+                        }) : nil,
                     onUseTemplate: { template in
                         guard !isSending else { return }
                         let prompt = template.prompt
@@ -682,6 +705,10 @@ public struct ThreadDetailView: View {
             }
         )
         .simultaneousGesture(composerKeyboardDismissGesture)
+        .environment(\.openURL, OpenURLAction { url in
+            if let citation = AssistantCitation.parse(url.absoluteString) { citationPreview = citation; return .handled }
+            return .systemAction
+        })
     }
 
     private var composerKeyboardDismissGesture: some Gesture {
@@ -945,6 +972,17 @@ public struct ThreadDetailView: View {
     /// Routes a thread id from a timeline row. Whether the target is archived
     /// decides which stack the navigator pushes onto, and the snapshot is the
     /// only place this view can learn that.
+    private func openCitationSource(_ citation: AssistantCitation) {
+        guard let target = model.snapshot.threads.first(where: {
+            ($0.wireID ?? $0.id) == citation.threadId && $0.environmentID == citation.environmentId
+        }) else {
+            citationError = "The source thread is not available in your connected environments. The saved quote is unchanged."
+            return
+        }
+        model.pendingAssistantCitation = AssistantCitationNavigationRequest(citation: citation)
+        if target.id != thread.id { openRelatedThread(target.id) }
+    }
+
     private func openRelatedThread(_ threadID: String) {
         let isArchived = model.snapshot.threads.first { $0.id == threadID }?.isArchived ?? false
         onOpenRelatedThread(threadID, isArchived)
@@ -1639,6 +1677,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
+    var citationNavigation: AssistantCitationNavigationRequest? = nil
+    var onCitationComplete: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
+    var onOpenCitation: (AssistantCitation) -> Void = { _ in }
+    var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var navigationRequest: Int = 0
 
@@ -1701,6 +1743,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenFile: onOpenFile,
                 onOpenURL: onOpenURL,
                 onOpenDiff: onOpenDiff,
+                onOpenCitation: onOpenCitation,
+                citationContext: citationContext,
                 onUseTemplate: onUseTemplate
             ),
             onLoadEarlier: onLoadEarlier,
@@ -1708,6 +1752,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             in: collectionView
         )
         context.coordinator.navigate(request: navigationRequest, in: collectionView)
+        context.coordinator.navigateCitation(citationNavigation, completion: onCitationComplete, in: collectionView)
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -1765,12 +1810,55 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
             var onOpenURL: (URL) -> Void = { _ in }
             var onOpenDiff: (String, String?) -> Void = { _, _ in }
+            var onOpenCitation: (AssistantCitation) -> Void = { _ in }
+            var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
         private var entriesByID: [String: ThreadTimelineEntry] = [:]
         private var orderedIDs: [String] = []
+        private var citationRequest: AssistantCitationNavigationRequest?
+        private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
+        private var citationPages = Set<String>()
+        private var citationSawLoading = false
+        private var applyingSnapshot = false
+
+        func navigateCitation(_ request: AssistantCitationNavigationRequest?, completion: @escaping (AssistantCitationNavigationRequest, String?) -> Void, in collectionView: UICollectionView) {
+            if citationRequest?.id != request?.id { citationPages = []; citationSawLoading = false }
+            citationRequest = request
+            citationCompletion = completion
+            DispatchQueue.main.async { [weak self, weak collectionView] in
+                guard let self, let collectionView else { return }
+                self.revealCitation(in: collectionView)
+            }
+        }
+
+        private func revealCitation(in collectionView: UICollectionView) {
+            guard let request = citationRequest, !applyingSnapshot, let dataSource else { return }
+            let citation = request.citation
+            if let entryID = orderedIDs.first(where: {
+                guard case let .message(message) = entriesByID[$0] else { return false }
+                return (message.wireMessageID ?? message.id) == citation.messageId && message.role == .assistant
+            }), let path = dataSource.indexPath(for: entryID) {
+                (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
+                collectionView.layoutIfNeeded()
+                collectionView.scrollToItem(at: path, at: .top, animated: !UIAccessibility.isReduceMotionEnabled)
+                UIAccessibility.post(notification: .announcement, argument: "Quoted response: \(citation.text)")
+                citationRequest = nil
+                citationCompletion(request, nil)
+                return
+            }
+            if currentIsLoadingEarlier { citationSawLoading = true; return }
+            let page = orderedIDs.first ?? "empty"
+            if currentCanLoadEarlier && citationPages.count < 20 {
+                if citationPages.insert(page).inserted { citationSawLoading = false; onLoadEarlier?(); return }
+                if !citationSawLoading { return }
+            }
+            citationRequest = nil
+            citationCompletion(request, "The source response could not be loaded. Load earlier turns and try again. Your saved quote is unchanged.")
+        }
+
         private var lastNavigationRequest = 0
         private var pendingPreviousTurn = false
 
@@ -1860,8 +1948,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .id(entryID)
                     .environment(\.markdownMediaContext, context.markdownMedia)
                     .environment(\.markdownPullRequestContext, context.pullRequests)
+                    .environment(\.assistantCitationContext, context.citationContext)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in
+                        if let citation = AssistantCitation.parse(url.absoluteString) {
+                            context.onOpenCitation(citation)
+                            return .handled
+                        }
                         guard let target = CodexMarkdownDirectives.fileTarget(url) else { return .systemAction }
                         let root = context.workspaceRoot.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
                         let path = root.map { target.path.hasPrefix($0) ? String(target.path.dropFirst($0.count)) : target.path } ?? target.path
@@ -2004,9 +2097,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 snapshot.reconfigureItems(reconfiguredIDs)
             }
 
+            applyingSnapshot = true
             dataSource.apply(snapshot, animatingDifferences: false) {
                 [weak self, weak collectionView] in
                 guard let self, let collectionView else { return }
+                self.applyingSnapshot = false
                 DispatchQueue.main.async {
                     if shouldFollowBottom {
                         self.scrollToBottom(
@@ -2016,6 +2111,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     } else if let prependAnchor {
                         self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
                     }
+                    self.revealCitation(in: collectionView)
                     if self.pendingPreviousTurn && !self.currentIsLoadingEarlier {
                         self.pendingPreviousTurn = false
                         self.navigateTurn(forward: false, in: collectionView, allowLoad: false)
@@ -2198,6 +2294,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            if let request = citationRequest {
+                citationRequest = nil
+                citationCompletion(request, nil)
+            }
             (scrollView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
             scrollView.window?.endEditing(false)
             onDismissKeyboard?()
@@ -2590,8 +2690,8 @@ struct FeatureMessageView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
-                            MarkdownMessageView(
-                                message.text,
+                            CitationAwareMessageText(
+                                source: message.text,
                                 isStreaming: message.state == .streaming
                             )
                         }
@@ -2618,8 +2718,8 @@ struct FeatureMessageView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     FeatureMessageAttachmentsView(attachments: message.attachments)
                     if !message.text.isEmpty {
-                        MarkdownMessageView(
-                            message.text,
+                        CitationAwareMessageText(
+                            source: message.text,
                             isStreaming: message.state == .streaming
                         )
                     }
@@ -2654,7 +2754,8 @@ struct FeatureMessageView: View {
                 if !message.text.isEmpty {
                     MarkdownMessageView(
                         message.text,
-                        isStreaming: message.state == .streaming
+                        isStreaming: message.state == .streaming,
+                        citationMessageID: message.wireMessageID
                     )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

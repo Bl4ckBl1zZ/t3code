@@ -1,3 +1,4 @@
+import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import {
   MessageId,
   ProviderSessionId,
@@ -291,7 +292,10 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             message: {
               messageId: message.id,
-              text: appendUploadedFilesBlock(message.text, uploads.promptBlock),
+              text: appendUploadedFilesBlock(
+                expandAssistantCitationsForProvider(message.text),
+                uploads.promptBlock,
+              ),
               attachments: uploads.inlineAttachments,
               createdBy: message.createdBy,
               creationSource: message.creationSource,

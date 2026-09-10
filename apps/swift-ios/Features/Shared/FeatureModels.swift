@@ -41,6 +41,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var supportsPullRequests: Bool?
     public var machineKind: String?
     public var supportsEnvironmentIcon: Bool?
+    public var supportsAssistantCitations: Bool? = nil
     public var supportsCustomModelDefinitions: Bool? = nil
     public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
@@ -54,6 +55,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         supportsPullRequests: Bool? = nil,
         machineKind: String? = nil,
         supportsEnvironmentIcon: Bool? = nil,
+        supportsAssistantCitations: Bool? = nil,
         supportsCustomModelDefinitions: Bool? = nil
     ) {
         self.id = id
@@ -65,6 +67,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.supportsPullRequests = supportsPullRequests
         self.machineKind = machineKind
         self.supportsEnvironmentIcon = supportsEnvironmentIcon
+        self.supportsAssistantCitations = supportsAssistantCitations
         self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
     }
 }
@@ -494,6 +497,8 @@ public struct FeatureUploadAttachment: Sendable, Equatable {
 
 public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
+    /// Citation links use the durable message ID, while recycled rows use the turn-item ID.
+    public var wireMessageID: String? = nil
     public var role: FeatureMessageRole
     public var text: String
     public var createdAt: Date
@@ -513,9 +518,11 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
         state: FeatureMessageState = .complete,
         toolName: String? = nil,
         attachments: [FeatureMessageAttachment] = [],
-        createdBy: String? = nil
+        createdBy: String? = nil,
+        wireMessageID: String? = nil
     ) {
         self.id = id
+        self.wireMessageID = wireMessageID
         self.role = role
         self.text = text
         self.createdAt = createdAt

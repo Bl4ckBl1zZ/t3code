@@ -253,3 +253,24 @@ describe("selectionTouchesMentionBoundary", () => {
     ).toBe(true);
   });
 });
+
+describe("assistant citations in composer text", () => {
+  it("keeps citation links intact beside file mentions and does not parse their encoded contents", () => {
+    const source =
+      "[Assistant quote](t3-citation://v1/e/t/m?text=%40file.ts+%24skill&start=0&end=15&prefix=&suffix=)";
+    const segments = splitPromptIntoComposerSegments(`@before.ts ${source} @after.ts `);
+    expect(segments.map((segment) => segment.type)).toEqual([
+      "mention",
+      "text",
+      "citation",
+      "text",
+      "mention",
+      "text",
+    ]);
+    expect(segments[2]).toMatchObject({
+      type: "citation",
+      source,
+      citation: { text: "@file.ts $skill" },
+    });
+  });
+});

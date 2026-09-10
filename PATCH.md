@@ -68,6 +68,15 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   files into the native file viewer, and offers template prompts through the composer. Invalid
   directives remain literal and code blocks are not interpreted as directives.
 
+- Selected assistant-text citations are now ported through V2 start and steering paths.
+  The durable message retains the origin-independent link; providers receive the decoded
+  quote and separately identified user comment. Web uses Lexical chips, bounded source
+  navigation and the fork's run/attempt folding (no V1 keyset pagination). Swift uses native
+  selection/comment sheets, draft chips outside the voice gesture surface, and its existing
+  V2 earlier-turn loader. Its recycled item ID stays distinct from the durable message ID
+  used by citations. The optional `assistantCitations` capability gates creation; Expo's
+  frozen feed receives only a readable quote/comment compatibility renderer.
+
 - Ports upstream's provider-settings list/editor split onto the fork's existing
   `SettingsPanels.tsx` and `ProviderInstanceCard`, preserving dedicated provider environment
   fields and the Hermes rollout gate. Environment tabs scope reads, writes, additions and
@@ -452,7 +461,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     project-icon propagation, composer focus/multiline/footer transitions, usage account layout,
     and their follow-ups need dedicated adaptation to the fork's timeline, inline settings,
     unified attachments and panel stores. Previously deferred onboarding, shared settings,
-    auto-balancing, citations, galleries, reset credits and browser-profile import stay deferred.
+    auto-balancing, galleries, reset credits and browser-profile import stay deferred.
     The removed settings section-navigation machinery was never adopted by the fork.
   - Expo-only UI, outbox, drag handles and Android appearance/notification changes stay excluded
     under the freeze. Fork release artwork, marketing, review workflows, public security-policy

@@ -9,6 +9,9 @@ struct MarkdownMessageView: View {
     }
 
     private let source: String
+    private let citationMessageID: String?
+    @State private var isCiting = false
+    @SwiftUI.Environment(\.assistantCitationContext) private var citationContext
     private let revision: MarkdownContentRevision
     private let isStreaming: Bool
     @State private var renderedDocument: MarkdownRenderedDocument?
@@ -17,8 +20,9 @@ struct MarkdownMessageView: View {
     @State private var previewTarget: PullRequestLinkTarget?
     @SwiftUI.Environment(\.markdownPullRequestContext) private var pullRequestContext
 
-    init(_ source: String, isStreaming: Bool = false) {
+    init(_ source: String, isStreaming: Bool = false, citationMessageID: String? = nil) {
         self.source = source
+        self.citationMessageID = citationMessageID
         self.isStreaming = isStreaming
         let revision = MarkdownContentRevision(source)
         self.revision = revision
@@ -48,6 +52,9 @@ struct MarkdownMessageView: View {
         }
         .modifier(MarkdownTextSelectionModifier(isEnabled: isSelectingText))
         .contextMenu {
+            if citationMessageID != nil, citationContext != nil, !isStreaming {
+                Button("Cite text", systemImage: "quote.bubble") { isCiting = true }
+            }
             if pullRequestContext != nil {
                 ForEach(PullRequestLinkTarget.links(in: source)) { target in
                     Button("Preview pull request #\(String(target.number))", systemImage: "arrow.triangle.pull") {
@@ -67,6 +74,11 @@ struct MarkdownMessageView: View {
                 UIPasteboard.general.string = source
             } label: {
                 Label("Copy message", systemImage: "doc.on.doc")
+            }
+        }
+        .sheet(isPresented: $isCiting) {
+            if let citationContext, let citationMessageID {
+                AssistantCitationSelectionSheet(text: displayDocument?.citationText ?? source, messageId: citationMessageID, context: citationContext)
             }
         }
         .sheet(item: $previewTarget) { target in

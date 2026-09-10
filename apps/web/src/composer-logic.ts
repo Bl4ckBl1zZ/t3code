@@ -34,6 +34,7 @@ export function composerSubmissionIntentForEnter(input: {
 const isInlineTokenSegment = (
   segment:
     | { type: "text"; text: string }
+    | { type: "citation" }
     | { type: "mention" }
     | { type: "skill" }
     | { type: "terminal-context" },
@@ -73,7 +74,7 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
   let expandedCursor = 0;
 
   for (const segment of segments) {
-    if (segment.type === "mention") {
+    if (segment.type === "mention" || segment.type === "citation") {
       const expandedLength = segment.source.length;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
@@ -114,6 +115,7 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
 function collapsedSegmentLength(
   segment:
     | { type: "text"; text: string }
+    | { type: "citation" }
     | { type: "mention" }
     | { type: "skill" }
     | { type: "terminal-context" },
@@ -127,6 +129,7 @@ function collapsedSegmentLength(
 function clampCollapsedComposerCursorForSegments(
   segments: ReadonlyArray<
     | { type: "text"; text: string }
+    | { type: "citation" }
     | { type: "mention" }
     | { type: "skill" }
     | { type: "terminal-context" }
@@ -161,7 +164,7 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
   let collapsedCursor = 0;
 
   for (const segment of segments) {
-    if (segment.type === "mention") {
+    if (segment.type === "mention" || segment.type === "citation") {
       const expandedLength = segment.source.length;
       if (remaining === 0) {
         return collapsedCursor;

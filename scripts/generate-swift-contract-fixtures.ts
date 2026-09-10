@@ -1,3 +1,4 @@
+import { formatAssistantCitationHref } from "../packages/shared/src/assistantCitations.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Codegen tooling runs from plain node before an Effect runtime exists.
 /**
  * Emits contract-derived JSON fixtures for the native SwiftUI client's tests.
@@ -15,6 +16,7 @@
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  AssistantCitation,
   CustomModelSetting,
   ExecutionEnvironmentDescriptor,
   EnvironmentId,
@@ -504,7 +506,12 @@ const machineSerialized = `${JSON.stringify(
     label: "Studio",
     platform: { os: "darwin", arch: "arm64", machine: "mac-studio" },
     serverVersion: "0.0.38",
-    capabilities: { repositoryIdentity: true, environmentIcon: true, customModelDefinitions: true },
+    capabilities: {
+      repositoryIdentity: true,
+      environmentIcon: true,
+      customModelDefinitions: true,
+      assistantCitations: true,
+    },
   }),
   null,
   2,
@@ -552,3 +559,27 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(customModelsPath, customModelsSerialized);
+
+const citationPath = NodePath.join(NodePath.dirname(outputPath), "assistantCitation.json");
+const citationFixture = Schema.encodeSync(AssistantCitation)({
+  version: 1,
+  environmentId: EnvironmentId.make("environment/remote"),
+  threadId: ThreadId.make("thread:one"),
+  messageId: MessageId.make("assistant?one"),
+  text: "Use `cache[key]` 🚀",
+  comment: "Why?",
+  start: 0,
+  end: 19,
+  prefix: "",
+  suffix: "",
+});
+const citationSerialized = `${JSON.stringify({ citation: citationFixture, href: formatAssistantCitationHref(Schema.decodeUnknownSync(AssistantCitation)(citationFixture)) }, null, 2)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(citationPath) ||
+    NodeFS.readFileSync(citationPath, "utf8") !== citationSerialized
+  ) {
+    console.error("[swift-fixtures] assistantCitation.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(citationPath, citationSerialized);

@@ -10,6 +10,7 @@
   "capabilities": {
     "repositoryIdentity": true,
     "environmentIcon": true,
+    "assistantCitations": true,
     "customModelDefinitions": true
   }
 }

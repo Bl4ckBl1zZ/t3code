@@ -30,7 +30,12 @@ struct FeatureComposerView: View {
     private let voice = VoiceComposerCoordinator.shared
     @State private var caret = VoiceComposerCaret()
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Binding private var text: String
+    @Binding private var storedText: String
+    private var text: String {
+        get { AssistantCitation.removingMarkers(from: storedText) }
+        nonmutating set { storedText = AssistantCitation.replacingPlainText(in: storedText, with: newValue) }
+    }
+    private var textBinding: Binding<String> { Binding(get: { text }, set: { text = $0 }) }
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
     /// The thread's Plan/Build mode, or nil on a surface that has no mode to
@@ -97,7 +102,7 @@ struct FeatureComposerView: View {
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)? = nil
     ) {
-        _text = text
+        _storedText = text
         _selection = selection
         _attachments = attachments
         self.interactionMode = interactionMode
@@ -126,7 +131,12 @@ struct FeatureComposerView: View {
     }
 
     var body: some View {
-        composerSurface
+        VStack(spacing: 8) {
+            if !AssistantCitation.matches(in: storedText).isEmpty {
+                AssistantCitationChips(text: $storedText).disabled(isSending || isStashing)
+            }
+            composerSurface
+        }
             .task(id: historyDraftKey) {
                 historyGeneration = UUID()
                 promptHistory = ComposerPromptHistory()
@@ -509,7 +519,7 @@ struct FeatureComposerView: View {
     private var inputRow: some View {
         TextField(
             isWorking ? "Message to queue…" : "Ask anything…",
-            text: $text,
+            text: textBinding,
             axis: .vertical
         )
         .disabled(isStashing)
@@ -517,9 +527,9 @@ struct FeatureComposerView: View {
             guard press.modifiers.isEmpty, historyAvailable,
                   caret.canRecallHistory(backward: press.key == .upArrow),
                   let recalled = promptHistory.step(backward: press.key == .upArrow,
-                    entries: ComposerPromptHistory.entries(historyMessages()), current: text) else { return .ignored }
-            text = recalled
-            caret.moveCaret(to: recalled.utf16.count)
+                    entries: ComposerPromptHistory.entries(historyMessages()), current: storedText) else { return .ignored }
+            storedText = recalled
+            caret.moveCaret(to: text.utf16.count)
             return .handled
         }
         .font(T3Typography.composer)
@@ -638,8 +648,8 @@ struct FeatureComposerView: View {
     private var historyMenu: some View {
         Menu {
             if let historyDraftKey {
-                Button(stashedDraft == nil ? "Stash draft" : (text.isEmpty && attachments.isEmpty ? "Restore stashed draft" : "Swap with stashed draft")) {
-                    let current = FeatureComposerDraft(text: text, attachments: attachments)
+                Button(stashedDraft == nil ? "Stash draft" : (storedText.isEmpty && attachments.isEmpty ? "Restore stashed draft" : "Swap with stashed draft")) {
+                    let current = FeatureComposerDraft(text: storedText, attachments: attachments)
                     let generation = historyGeneration
                     isStashing = true
                     Task {
@@ -649,22 +659,22 @@ struct FeatureComposerView: View {
                             let restored = try await historyDraftStore.swapStash(current, for: historyDraftKey)
                             guard generation == historyGeneration else { return }
                             stashedDraft = current.text.isEmpty && current.attachments.isEmpty ? nil : current
-                            text = restored.text
+                            storedText = restored.text
                             attachments = restored.attachments
                             promptHistory = ComposerPromptHistory()
                         } catch { historyError = error.localizedDescription }
                     }
-                }.disabled(stashedDraft == nil && text.isEmpty && attachments.isEmpty)
+                }.disabled(stashedDraft == nil && storedText.isEmpty && attachments.isEmpty)
             }
             let entries = ComposerPromptHistory.entries(historyMessages())
             if !entries.isEmpty {
                 Section("Recent prompts") {
                     ForEach(entries.suffix(20).reversed()) { entry in
-                        Button(String(entry.prompt.prefix(100))) {
-                            text = promptHistory.select(entry)
+                        Button(String(AssistantCitation.plainText(entry.prompt).prefix(100))) {
+                            storedText = promptHistory.select(entry)
                             focused.wrappedValue = true
                             caret.moveCaret(to: text.utf16.count)
-                        }.disabled(!text.isEmpty && text != promptHistory.position?.prompt)
+                        }.disabled(!storedText.isEmpty && storedText != promptHistory.position?.prompt)
                     }
                 }
             } else { Text("No sent prompts in this thread") }
@@ -875,13 +885,13 @@ struct FeatureComposerView: View {
     }
 
     private var textIsEmpty: Bool {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        storedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canSend: Bool {
         guard composerTrigger?.kind != .model else { return false }
         return FeatureComposerSubmissionEligibility.canSend(
-            text: text,
+            text: storedText,
             attachmentCount: attachments.count,
             imagesAllowed: imagesAllowed,
             isSending: isSending,

@@ -306,6 +306,10 @@
     "./changeRequestUrl": {
       "types": "./src/changeRequestUrl.ts",
       "import": "./src/changeRequestUrl.ts"
+    },
+    "./assistantCitations": {
+      "types": "./src/assistantCitations.ts",
+      "import": "./src/assistantCitations.ts"
     }
   },
   "scripts": {

@@ -1,3 +1,12 @@
+import type { AssistantCitation } from "@t3tools/contracts";
+import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
+import {
+  AssistantCitationSource,
+  type AssistantCitationRequest,
+  type AssistantCitationTarget,
+} from "./AssistantCitationSource";
+import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
+import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
@@ -162,6 +171,8 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  citationRequest: AssistantCitationTarget | null;
+  listRef: React.RefObject<LegendListRef | null>;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
@@ -218,6 +229,12 @@ const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  citationRequest?: AssistantCitationRequest | null;
+  citationHistoryLoading?: boolean;
+  onCiteAssistantText?: (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) => boolean;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   isWorking: boolean;
   activeTurnInProgress: boolean;
@@ -273,6 +290,9 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  citationRequest = null,
+  citationHistoryLoading = false,
+  onCiteAssistantText,
   onUseArtifactTemplate,
   isWorking,
   activeTurnInProgress,
@@ -537,8 +557,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const threadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
 
+  const expandCitationTurn = useCallback(
+    (runId: RunId | null, attemptId: RunAttemptId | null) => {
+      const expandRun = runId !== null && !expandedRunIds.has(runId);
+      const expandAttempt = attemptId !== null && !expandedAttemptIds.has(attemptId);
+      if (expandRun) setExpandedRunIds((current) => new Set([...current, runId]));
+      if (expandAttempt) setExpandedAttemptIds((current) => new Set([...current, attemptId]));
+      return expandRun || expandAttempt;
+    },
+    [expandedRunIds, expandedAttemptIds],
+  );
+  const citationTarget = useAssistantCitationTarget({
+    request: citationRequest,
+    entries: timelineEntries,
+    rows,
+    listRef,
+    viewport: timelineViewportElement,
+    historyLoading: citationHistoryLoading,
+    onExpandTurn: expandCitationTurn,
+    onManualNavigation,
+  });
+
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      citationRequest: citationTarget.target,
+      listRef,
       timestampFormat,
       routeThreadKey,
       threadRef,
@@ -563,6 +606,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       alwaysExpandActivity,
     }),
     [
+      citationTarget.target,
+      listRef,
       alwaysExpandActivity,
       timestampFormat,
       routeThreadKey,
@@ -645,10 +690,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+        <div
+          ref={setTimelineViewportElement}
+          className="relative h-full min-h-0"
+          data-assistant-citation-viewport="true"
+        >
+          {threadRef && onCiteAssistantText ? (
+            <AssistantSelectionToolbar
+              viewport={timelineViewportElement}
+              threadRef={threadRef}
+              onCite={onCiteAssistantText}
+            />
+          ) : null}
           <LegendList<MessagesTimelineRow>
             ref={listRef}
             data={rows}
+            onLoad={citationTarget.onListLoad}
+            {...(citationTarget.alwaysRender ? { alwaysRender: citationTarget.alwaysRender } : {})}
+            {...(citationTarget.target ? { dataVersion: citationTarget.target.key } : {})}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             renderItem={renderItem}
@@ -1507,15 +1566,23 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
-        <ChatMarkdown
-          onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-          text={messageText}
-          cwd={ctx.markdownCwd}
+        <AssistantCitationSource
+          messageId={row.message.id}
           threadRef={ctx.threadRef ?? undefined}
-          isStreaming={Boolean(row.message.streaming)}
-          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-          skills={ctx.skills}
-        />
+          itemKey={row.id}
+          request={ctx.citationRequest}
+          listRef={ctx.listRef}
+        >
+          <ChatMarkdown
+            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+            text={messageText}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+            skills={ctx.skills}
+          />
+        </AssistantCitationSource>
         {attachments.length > 0 ? <AssistantMessageAttachments attachments={attachments} /> : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}

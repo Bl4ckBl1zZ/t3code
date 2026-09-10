@@ -103,6 +103,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   environmentThemes: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   /** Custom model entries can include names and composer option descriptors. */
+  assistantCitations: Schema.optional(Schema.Boolean),
   customModelDefinitions: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */

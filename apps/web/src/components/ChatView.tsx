@@ -1,3 +1,7 @@
+import type { AssistantCitation } from "@t3tools/contracts";
+import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
+import { assistantCitationFromLocation } from "~/lib/assistantCitationNavigation";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { resolveEnvironmentMachineKind, type EnvironmentMachineKind } from "@t3tools/contracts";
 import { ComposerTasksContent } from "./chat/ComposerTasksBadge";
 import {
@@ -83,7 +87,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useLocation } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import {
   isAtomCommandInterrupted,
@@ -1428,6 +1432,31 @@ function ChatViewContent(props: ChatViewProps) {
   const alwaysExpandActivity = settings.alwaysExpandActivity;
   const autoOpenPlanSidebar = settings.autoOpenPlanSidebar;
   const navigate = useNavigate();
+  const citationLocation = useLocation({
+    select: (location) => ({
+      href: location.href,
+      key: location.state.assistantCitationActivation ?? location.state.__TSR_key,
+    }),
+  });
+  const citationRequest = useMemo(() => {
+    const citation = assistantCitationFromLocation(citationLocation.href);
+    return citation &&
+      citation.environmentId === routeThreadRef.environmentId &&
+      citation.threadId === routeThreadRef.threadId
+      ? { citation, key: citationLocation.key ?? citationLocation.href }
+      : null;
+  }, [
+    citationLocation.href,
+    citationLocation.key,
+    routeThreadRef.environmentId,
+    routeThreadRef.threadId,
+  ]);
+  const citeAssistantText = useCallback(
+    (citation: AssistantCitation, anchor: AssistantCitationSourceAnchor) =>
+      composerRef.current?.citeAssistantText(citation, anchor) ?? false,
+    [],
+  );
+
   const { resolvedTheme } = useTheme();
   // Granular store selectors — avoid subscribing to prompt changes.
   const composerRuntimeMode = useComposerDraftStore(
@@ -6451,7 +6480,7 @@ function ChatViewContent(props: ChatViewProps) {
         firstComposerAttachmentName = firstComposerAttachment.name;
       }
     }
-    let titleSeed = trimmed;
+    let titleSeed = assistantCitationsToPlainText(trimmed);
     if (!titleSeed) {
       if (firstComposerAttachmentName) {
         titleSeed = `Attachment: ${firstComposerAttachmentName}`;
@@ -7658,6 +7687,11 @@ function ChatViewContent(props: ChatViewProps) {
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
+                citationRequest={citationRequest}
+                citationHistoryLoading={serverProjection === null}
+                {...(serverConfig?.environment.capabilities.assistantCitations === true
+                  ? { onCiteAssistantText: citeAssistantText }
+                  : {})}
                 onUseArtifactTemplate={useArtifactTemplate}
                 key={activeThread.id}
                 isWorking={isWorking}

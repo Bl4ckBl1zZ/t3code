@@ -15,6 +15,8 @@ struct FeatureDetailRenderUpdate: Equatable {
 @MainActor
 @Observable
 public final class FeatureRootModel {
+    var pendingAssistantCitation: AssistantCitationNavigationRequest?
+
     public private(set) var snapshot = FeatureSnapshot()
     public private(set) var details: [String: FeatureThreadDetail] = [:]
     /// Advances whenever a Home presentation input changes.

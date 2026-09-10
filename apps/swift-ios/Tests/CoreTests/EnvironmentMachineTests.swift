@@ -9,6 +9,8 @@ struct EnvironmentMachineTests {
         let descriptor = try JSONDecoder().decode(EnvironmentDescriptor.self, from: Data(contentsOf: fixture))
         #expect(descriptor.platform.machine == "mac-studio")
         #expect(descriptor.capabilities.environmentIcon == true)
+        #expect(descriptor.capabilities.assistantCitations == true)
+        #expect(descriptor.capabilities.customModelDefinitions == true)
         #expect(EnvironmentMachineKind(rawValue: descriptor.platform.machine!)?.symbol == "macstudio")
     }
 

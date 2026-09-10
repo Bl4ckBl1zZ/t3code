@@ -4187,6 +4187,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsPullRequests: environment.descriptor?.capabilities.pullRequests,
             machineKind: serverConfigsByEnvironmentID[environment.id]?.settings?.environmentIcon.flatMap(EnvironmentMachineKind.init(rawValue:))?.rawValue ?? environment.descriptor?.platform.machine,
             supportsEnvironmentIcon: environment.descriptor?.capabilities.environmentIcon,
+            supportsAssistantCitations: environment.descriptor?.capabilities.assistantCitations,
             supportsCustomModelDefinitions: environment.descriptor?.capabilities.customModelDefinitions
         )
     }
@@ -4473,7 +4474,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             _ role: FeatureMessageRole,
             _ text: String,
             tool: String? = nil,
-            state: FeatureMessageState? = nil
+            state: FeatureMessageState? = nil,
+            wireMessageID: String? = nil
         ) -> FeatureMessage {
             FeatureMessage(
                 id: item.id,
@@ -4481,7 +4483,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 text: text,
                 createdAt: createdAt,
                 state: state ?? (item.status.isTerminal ? .complete : .streaming),
-                toolName: tool
+                toolName: tool,
+                wireMessageID: wireMessageID
             )
         }
 
@@ -4507,8 +4510,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 createdBy: item.base.createdBy
             )
 
-        case let .assistantMessage(_, text, streaming):
-            return message(.assistant, text, state: streaming ? .streaming : .complete)
+        case let .assistantMessage(messageID, text, streaming):
+            return message(.assistant, text, state: streaming ? .streaming : .complete, wireMessageID: messageID)
 
         case let .reasoning(text, streaming):
             return message(.tool, text, tool: "Thinking", state: streaming ? .streaming : .complete)
@@ -5537,7 +5540,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private func previewText(_ text: String?) -> String? {
         guard let text else { return nil }
-        let compact = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let compact = AssistantCitation.plainText(text).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !compact.isEmpty else { return nil }
         return compact.count > 160 ? "\(compact.prefix(157))..." : compact
     }

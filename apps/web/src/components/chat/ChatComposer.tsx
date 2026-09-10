@@ -1,3 +1,6 @@
+import type { AssistantCitation } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import {
   buildComposerPromptHistoryEntries,
   stepComposerPromptHistory,
@@ -515,6 +518,10 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 // --------------------------------------------------------------------------
 
 export interface ChatComposerHandle {
+  citeAssistantText: (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) => boolean;
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   addDroppedFiles: (files: File[]) => void;
@@ -3050,6 +3057,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         focusComposer();
       },
       insertTextAtEnd: insertComposerTextAtEnd,
+      citeAssistantText: (citation, sourceAnchor) => {
+        if (
+          isConnecting ||
+          isComposerApprovalState ||
+          pendingUserInputs.length > 0 ||
+          projectSelectionRequired
+        )
+          return false;
+        const previousValue = promptRef.current;
+        const separator = previousValue.length > 0 && !/\s$/.test(previousValue) ? " " : "";
+        const source = `${separator}${serializeAssistantCitation(citation)} `;
+        composerEditorRef.current?.requestCitationComment({
+          previousValue,
+          value: previousValue + source,
+          citationStart: previousValue.length + separator.length,
+          sourceAnchor,
+        });
+        return applyPromptReplacement(previousValue.length, previousValue.length, source, {
+          focusEditorAfterReplace: false,
+        });
+      },
       openModelPicker: () => {
         setIsComposerModelPickerOpen(true);
       },
@@ -3531,6 +3559,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
             <div className="relative">
               <ComposerPromptEditor
+                onCitationSubmitAndSend={() => composerFormRef.current?.requestSubmit()}
                 editorRef={composerEditorRef}
                 value={
                   isComposerApprovalState

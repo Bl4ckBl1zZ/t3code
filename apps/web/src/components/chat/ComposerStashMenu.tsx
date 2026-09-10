@@ -1,3 +1,4 @@
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { BookmarkIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 
@@ -15,7 +16,7 @@ function missingImageCount(entry: PromptStashEntry): number {
 }
 
 function stashEntrySnippet(entry: PromptStashEntry): string {
-  const trimmed = entry.prompt.trim().replace(/\s+/g, " ");
+  const trimmed = assistantCitationsToPlainText(entry.prompt).trim().replace(/\s+/g, " ");
   if (trimmed.length > 0) {
     return trimmed.length > SNIPPET_MAX_CHARS ? `${trimmed.slice(0, SNIPPET_MAX_CHARS)}…` : trimmed;
   }
