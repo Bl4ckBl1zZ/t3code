@@ -422,6 +422,10 @@ interface ProviderInstanceCardProps {
   readonly liveProvider: ServerProvider | undefined;
   /** Effective enabled state after any driver-wide rollout gate is applied. */
   readonly effectiveEnabled?: boolean | undefined;
+  readonly mode?: "list" | "editor";
+  readonly selected?: boolean;
+  readonly onSelect?: () => void;
+  readonly readOnly?: boolean;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -480,6 +484,10 @@ export function ProviderInstanceCard({
   effectiveEnabled,
   isExpanded,
   onExpandedChange,
+  mode,
+  selected = false,
+  onSelect,
+  readOnly = false,
   onUpdate,
   onDelete,
   headerAction,
@@ -720,8 +728,57 @@ export function ProviderInstanceCard({
     <code className="text-xs text-muted-foreground">{versionLabel}</code>
   ) : null;
 
+  if (mode === "list") {
+    return (
+      <div
+        className={cn(
+          "group flex min-h-18 items-center gap-3 px-3 py-3 sm:px-4",
+          selected ? "bg-muted/45" : "hover:bg-muted/25",
+        )}
+      >
+        <button
+          type="button"
+          className={cn(
+            "flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            !enabled && !selected && "opacity-60",
+          )}
+          onClick={onSelect}
+          aria-label={`Select ${displayName}`}
+          aria-pressed={selected}
+        >
+          {titleIconNode}
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-medium">{displayName}</span>
+              {versionCodeNode}
+              {versionAdvisory ? (
+                <ArrowUpCircleIcon
+                  className="size-3 shrink-0 text-warning"
+                  aria-label="Update available"
+                />
+              ) : null}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">
+              {summary.headline}
+              {summary.detail ? ` · ${summary.detail}` : ""}
+            </span>
+            {String(instanceId) !== String(instance.driver) ? (
+              <code className="block truncate text-[10px] text-muted-foreground">{instanceId}</code>
+            ) : null}
+          </span>
+        </button>
+        <Switch
+          checked={enabled}
+          disabled={readOnly}
+          onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+          aria-label={`Enable ${displayName}`}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-xl transition-colors hover:bg-muted/20">
+    <fieldset disabled={readOnly} className="min-w-0 rounded-xl">
       <div className="px-3 py-3 sm:px-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 flex-1 space-y-1">
@@ -744,7 +801,7 @@ export function ProviderInstanceCard({
                         )}
                         aria-label="Update available — view details"
                       >
-                        <ArrowUpCircleIcon className="size-3.5 [animation:bounce_2.4s_ease-in-out_infinite] motion-reduce:animate-none" />
+                        <ArrowUpCircleIcon className="size-3.5" />
                       </Button>
                     }
                   />
@@ -828,16 +885,18 @@ export function ProviderInstanceCard({
             {authRowNode}
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            <Button
-              size="compact"
-              variant="ghost-muted"
-              onClick={() => onExpandedChange(!isExpanded)}
-              aria-label={`Toggle ${displayName} details`}
-            >
-              <ChevronDownIcon
-                className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
-              />
-            </Button>
+            {mode !== "editor" ? (
+              <Button
+                size="compact"
+                variant="ghost-muted"
+                onClick={() => onExpandedChange(!isExpanded)}
+                aria-label={`Toggle ${displayName} details`}
+              >
+                <ChevronDownIcon
+                  className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
+                />
+              </Button>
+            ) : null}
             <Switch
               checked={enabled}
               onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
@@ -847,7 +906,7 @@ export function ProviderInstanceCard({
         </div>
       </div>
 
-      <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <Collapsible open={mode === "editor" || isExpanded} onOpenChange={onExpandedChange}>
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">
             <div>
@@ -935,6 +994,6 @@ export function ProviderInstanceCard({
           </div>
         </CollapsibleContent>
       </Collapsible>
-    </div>
+    </fieldset>
   );
 }

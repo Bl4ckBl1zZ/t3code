@@ -14,11 +14,15 @@ import SwiftUI
 /// that cannot save — the same rule the Browser section in Integrations follows.
 public struct SettingsAgentsView: View {
     private let serverSettings: any FeatureServerSettingsManaging
-    private let environmentID: String?
+    private let initialEnvironmentID: String?
+    private let environments: [FeatureEnvironment]
+    @State private var selectedEnvironmentID: String?
+    private var environmentID: String? { selectedEnvironmentID ?? initialEnvironmentID }
     /// The server's own answer, republished whenever the config subscription
     /// reports it changing.
     private let preferences: FeatureEnvironmentPreferences?
 
+    @State private var savedAutoCompact: [String: String] = [:]
     @State private var isEditingAutoCompact = false
     @State private var modelConfiguration: ServerConfigSnapshot?
     @State private var modelError: String?
@@ -27,47 +31,49 @@ public struct SettingsAgentsView: View {
     public init(
         serverSettings: any FeatureServerSettingsManaging,
         environmentID: String?,
-        preferences: FeatureEnvironmentPreferences?
+        preferences: FeatureEnvironmentPreferences?,
+        environments: [FeatureEnvironment] = []
     ) {
         self.serverSettings = serverSettings
-        self.environmentID = environmentID
+        self.initialEnvironmentID = environmentID
+        self.environments = environments
         self.preferences = preferences
     }
 
     private var storedAutoCompactWindow: String {
-        preferences?.claudeAutoCompactWindow ?? ""
+        savedAutoCompact[environmentID ?? ""] ?? modelConfiguration?.settings?.claudeAutoCompactWindow ?? (environmentID == initialEnvironmentID ? preferences?.claudeAutoCompactWindow : nil) ?? ""
     }
 
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 if let modelError { SettingsErrorBanner(message: modelError) }
-                if let config = modelConfiguration, let environmentID {
-                    ForEach(config.providers.filter(\.enabled), id: \.instanceId) { provider in
-                        let models = provider.models.filter { !$0.isCustom }
-                        let hidden = Set(config.settings?.providerModelPreferences[provider.instanceId]?.hiddenModels ?? [])
-                        SettingsSection(title: "\(provider.displayName ?? provider.driver) models") {
-                            if !models.isEmpty {
-                                Button(models.allSatisfy { hidden.contains($0.slug) } ? "Enable all" : "Disable all") {
-                                    let slugs = Set(models.map(\.slug))
-                                    saveModels(provider.instanceId, hidden: models.allSatisfy { hidden.contains($0.slug) }
-                                        ? hidden.subtracting(slugs) : hidden.union(slugs), environmentID: environmentID)
-                                }.frame(minHeight: T3Metrics.minimumTapTarget)
-                                ForEach(models) { model in
-                                    Toggle(model.name, isOn: Binding(
-                                        get: { !hidden.contains(model.slug) },
-                                        set: { enabled in
-                                            var next = hidden
-                                            if enabled { next.remove(model.slug) } else { next.insert(model.slug) }
-                                            saveModels(provider.instanceId, hidden: next, environmentID: environmentID)
-                                        }
-                                    )).padding(.horizontal, SettingsMetrics.rowPadding)
-                                }
-                            }
-                        }.disabled(isSavingModels)
+                if environments.count > 1 {
+                    Picker("Environment", selection: Binding(get: { environmentID ?? "" }, set: { selectedEnvironmentID = $0 })) {
+                        ForEach(environments) { environment in Label(environment.name, systemImage: environment.machineSymbol).tag(environment.id) }
+                    }.padding(.horizontal, SettingsMetrics.rowPadding).disabled(isSavingModels)
+                }
+                if let config = modelConfiguration {
+                    SettingsSection(title: "Accounts") {
+                        ForEach(config.providers) { provider in
+                            NavigationLink {
+                                providerEditor(provider.instanceId)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    ProviderIcon(driver: provider.driver, providerID: provider.instanceId, fallbackName: provider.displayName ?? provider.driver, size: 22)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(provider.displayName ?? provider.driver).font(T3Typography.supportingStrong).foregroundStyle(T3Colors.textPrimary)
+                                        Text(provider.enabled ? provider.status : "Disabled").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                                    }
+                                    Spacer()
+                                    if let version = provider.version { Text(version).font(T3Typography.supporting).foregroundStyle(T3Colors.textTertiary).lineLimit(1) }
+                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(T3Colors.textTertiary)
+                                }.padding(SettingsMetrics.rowPadding).frame(minHeight: T3Metrics.minimumTapTarget)
+                            }.buttonStyle(.plain)
+                        }
                     }
                 }
-                if let environmentID, preferences != nil {
+                if let environmentID, modelConfiguration?.settings != nil || (environmentID == initialEnvironmentID && preferences != nil) {
                     SettingsSection(
                         title: "Claude",
                         footer: """
@@ -92,12 +98,12 @@ public struct SettingsAgentsView: View {
                             ClaudeAutoCompactWindowEditor(
                                 stored: storedAutoCompactWindow,
                                 save: { normalized in
-                                    try await serverSettings.updateServerSettings(
+                                    let result = try await serverSettings.updateServerSettings(
                                         environmentID: environmentID,
-                                        patch: ServerSettingsPatchInput(
-                                            claudeAutoCompactWindow: normalized
-                                        )
+                                        patch: ServerSettingsPatchInput(claudeAutoCompactWindow: normalized)
                                     )
+                                    savedAutoCompact[environmentID] = result.claudeAutoCompactWindow
+                                    return result
                                 },
                                 onFinished: { isEditingAutoCompact = false }
                             )
@@ -130,12 +136,46 @@ public struct SettingsAgentsView: View {
                 let config = try await serverSettings.providerModelConfiguration(environmentID: environmentID)
                 guard !Task.isCancelled, self.environmentID == environmentID else { return }
                 modelConfiguration = config
+                savedAutoCompact[environmentID] = nil
             }
             catch { if !Task.isCancelled { modelError = error.localizedDescription } }
         }
         .navigationTitle("Agents")
         .navigationBarTitleDisplayMode(.inline)
     }
+    @ViewBuilder
+    private func providerEditor(_ providerID: String) -> some View {
+        if let config = modelConfiguration,
+           let provider = config.providers.first(where: { $0.instanceId == providerID }), let environmentID {
+            let models = provider.models.filter { !$0.isCustom }
+            let hidden = Set(config.settings?.providerModelPreferences[providerID]?.hiddenModels ?? [])
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let modelError { SettingsErrorBanner(message: modelError) }
+                    Text(provider.message ?? (provider.enabled ? provider.status : "This account is disabled."))
+                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                    SettingsSection(title: "Models") {
+                        if models.isEmpty { Text("This account has no available built-in models.").padding(SettingsMetrics.rowPadding) }
+                        else {
+                            Button(models.allSatisfy { hidden.contains($0.slug) } ? "Enable all" : "Disable all") {
+                                let slugs = Set(models.map(\.slug))
+                                saveModels(providerID, hidden: models.allSatisfy { hidden.contains($0.slug) } ? hidden.subtracting(slugs) : hidden.union(slugs), environmentID: environmentID)
+                            }.frame(minHeight: T3Metrics.minimumTapTarget)
+                            ForEach(models) { model in
+                                Toggle(model.name, isOn: Binding(get: { !hidden.contains(model.slug) }, set: { enabled in
+                                    var next = hidden
+                                    if enabled { next.remove(model.slug) } else { next.insert(model.slug) }
+                                    saveModels(providerID, hidden: next, environmentID: environmentID)
+                                })).padding(.horizontal, SettingsMetrics.rowPadding)
+                            }
+                        }
+                    }.disabled(isSavingModels)
+                    if isSavingModels { ProgressView("Saving models…") }
+                }.padding(18)
+            }.background(T3Colors.background).navigationTitle(provider.displayName ?? provider.driver).navigationBarTitleDisplayMode(.inline)
+        } else { ContentUnavailableView("Account unavailable", systemImage: "person.crop.circle.badge.questionmark") }
+    }
+
     private func saveModels(_ providerID: String, hidden: Set<String>, environmentID: String) {
         guard !isSavingModels else { return }
         isSavingModels = true

@@ -68,9 +68,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   files into the native file viewer, and offers template prompts through the composer. Invalid
   directives remain literal and code blocks are not interpreted as directives.
 
-- Does not carry upstream's provider-settings list/editor split (`e2d4d12a81`, `f276e632c5`,
-  `5e63aea2df`) or its `ProviderInstanceCard` `mode: "list" | "editor"` restructure. The fork keeps
-  `EnvironmentProviderSettings` inline in `SettingsPanels.tsx` with the card's own expand/collapse.
+- Ports upstream's provider-settings list/editor split onto the fork's existing
+  `SettingsPanels.tsx` and `ProviderInstanceCard`, preserving dedicated provider environment
+  fields and the Hermes rollout gate. Environment tabs scope reads, writes, additions and
+  updates; read-only sessions retain account navigation. Native Agents uses account navigation
+  and per-environment model visibility editing. Custom descriptors, setup terminals and the
+  remaining native provider configuration controls are separate ports.
+
 - Does not carry upstream's pinned-block drag-to-reorder in the web sidebar (the
   `optimisticPinnedOrder` / `handlePinnedDragEnd` block) because the fork keeps its client-local whole-list manual order. The searchable project-filter
   combobox is now ported, including keyboard project settings and query reset on close. Upstream's toggleable unpin

@@ -155,7 +155,8 @@ public struct SettingsView: View {
                     SettingsAgentsView(
                         serverSettings: serverSettingsManager,
                         environmentID: activeEnvironmentID,
-                        preferences: activeEnvironmentPreferences
+                        preferences: activeEnvironmentPreferences,
+                        environments: model.snapshot.environments
                     )
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {

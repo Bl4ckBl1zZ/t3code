@@ -4,12 +4,13 @@ import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { CheckIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  type EnvironmentId,
   ProviderInstanceId,
   ProviderDriverKind,
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Button } from "../ui/button";
@@ -110,13 +111,18 @@ function validateInstanceId(id: string, existing: ReadonlySet<string>): string |
 }
 
 interface AddProviderInstanceDialogProps {
+  environmentId: EnvironmentId;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderInstanceDialogProps) {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+export function AddProviderInstanceDialog({
+  open,
+  onOpenChange,
+  environmentId,
+}: AddProviderInstanceDialogProps) {
+  const settings = useEnvironmentSettings(environmentId);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
 
   const [wizardStep, setWizardStep] = useState(0);
   const [driver, setDriver] = useState<ProviderDriverKind>(DEFAULT_DRIVER_KIND);
