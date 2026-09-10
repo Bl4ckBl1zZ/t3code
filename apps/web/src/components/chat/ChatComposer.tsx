@@ -484,9 +484,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           modelDisplayName={props.activeThreadModelDisplayName}
         />
       ) : null}
-      {props.isPreparingWorktree ? (
-        <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
-      ) : null}
       {props.isRunning && props.hasSendableContent ? (
         <span className="hidden text-[11px] text-muted-foreground/70 sm:inline">
           <kbd className="font-mono">{props.steerShortcutLabel}</kbd> to steer

@@ -84,7 +84,7 @@ describe("draft hero submission transition", () => {
     expect(
       resolveDraftPromotionNavigationTarget({
         serverThreadRef: { environmentId, threadId },
-        serverThreadStarted: true,
+        serverThread: makeThread({ latestRun: completedTurn }),
         backgroundSubmissionPending: true,
       }),
     ).toBeNull();
@@ -1186,5 +1186,53 @@ describe("deriveCommittedServerUserMessageIds", () => {
     expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
       new Set([turnStartId, steerId]),
     );
+  });
+});
+
+describe("V2 preparation feedback", () => {
+  it.each(["preparing", "queued", "starting"] as const)(
+    "keeps the draft mounted during %s",
+    (status) => {
+      expect(
+        resolveDraftPromotionNavigationTarget({
+          serverThreadRef: { environmentId, threadId },
+          serverThread: makeThread({
+            latestRun: { ...completedTurn, status, startedAt: null, completedAt: null },
+          }),
+          backgroundSubmissionPending: false,
+        }),
+      ).toBeNull();
+    },
+  );
+  it.each(["failed", "interrupted", "cancelled"] as const)(
+    "reveals canonical startup %s without a start timestamp",
+    (status) => {
+      const ref = { environmentId, threadId };
+      expect(
+        resolveDraftPromotionNavigationTarget({
+          serverThreadRef: ref,
+          serverThread: makeThread({ latestRun: { ...completedTurn, status, startedAt: null } }),
+          backgroundSubmissionPending: false,
+        }),
+      ).toEqual(ref);
+    },
+  );
+  it("does not clear worktree feedback merely because a user message was projected", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: null, runtime: null }),
+      { preparingWorktree: true },
+    );
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestRun: { ...completedTurn, status: "starting", startedAt: null, completedAt: null },
+        latestUserMessageId: MessageId.make("new-message"),
+        runtime: { ...readySession, status: "starting" },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
   });
 });

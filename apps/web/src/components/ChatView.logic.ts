@@ -99,13 +99,16 @@ export function resolveDraftHeroState(input: {
 
 export function resolveDraftPromotionNavigationTarget(input: {
   serverThreadRef: ScopedThreadRef | null;
-  serverThreadStarted: boolean;
+  serverThread: Pick<Thread, "latestRun" | "runtime"> | null | undefined;
   backgroundSubmissionPending: boolean;
 }): ScopedThreadRef | null {
   if (input.backgroundSubmissionPending) {
     return null;
   }
-  return input.serverThreadStarted ? input.serverThreadRef : null;
+  const run = input.serverThread?.latestRun;
+  const status = run?.status ?? input.serverThread?.runtime?.status;
+  const startupStopped = status === "failed" || status === "interrupted" || status === "cancelled";
+  return run?.startedAt != null || startupStopped ? input.serverThreadRef : null;
 }
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
@@ -713,6 +716,17 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestRunRequestedAt !== (latestRun?.requestedAt ?? null) ||
     input.localDispatch.latestRunStartedAt !== (latestRun?.startedAt ?? null) ||
     input.localDispatch.latestRunCompletedAt !== (latestRun?.completedAt ?? null);
+
+  if (
+    input.localDispatch.preparingWorktree &&
+    latestRun?.startedAt == null &&
+    !(
+      latestRun?.completedAt ||
+      ["failed", "interrupted", "cancelled"].includes(runtime?.status ?? "")
+    )
+  ) {
+    return false;
+  }
 
   if (input.phase === "running") {
     if (latestUserMessageChanged) {

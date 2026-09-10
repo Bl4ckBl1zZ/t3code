@@ -40,7 +40,8 @@ struct ThreadWorkingStatus: Equatable, Sendable {
         state: FeatureThreadState,
         workingStartedAt: Date?,
         timelineItems: [OrchestrationV2ProjectedTurnItem],
-        activeRunID: String?
+        activeRunID: String?,
+        isPreparingWorkspace: Bool = false
     ) -> ThreadWorkingStatus? {
         switch state {
         case .idle, .waitingForApproval, .waitingForInput, .failed, .completed:
@@ -50,9 +51,9 @@ struct ThreadWorkingStatus: Equatable, Sendable {
             // has produced nothing, and calling that "working" is what made the
             // old indicator lie.
             return ThreadWorkingStatus(
-                headline: "Starting agent",
+                headline: isPreparingWorkspace ? "Preparing workspace" : "Starting agent",
                 symbolName: "circle.dotted",
-                startedAt: workingStartedAt
+                startedAt: isPreparingWorkspace ? nil : workingStartedAt
             )
         case .working:
             guard let live = liveItem(in: timelineItems, activeRunID: activeRunID) else {

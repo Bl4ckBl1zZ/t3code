@@ -1026,10 +1026,10 @@ private struct WorkLogRowButton: View {
                         .frame(width: 16, height: 16)
                     // Success is the default outcome — only surface deviations.
                     if row.status == .failure || row.status == .neutral {
-                        Image(systemName: row.status == .failure ? "xmark" : "minus")
+                        Image(systemName: row.status == .failure ? "exclamationmark.circle" : "minus")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(
-                                row.status == .failure ? T3Colors.danger : T3Colors.textTertiary
+                                row.status == .failure && isDestructive ? T3Colors.danger : T3Colors.textTertiary
                             )
                             .frame(width: 16, height: 16)
                     }

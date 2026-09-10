@@ -55,10 +55,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `9842518c9a` and `3f62e6fa65`): it deletes `ThreadSyncStatusPill`, rewrites `ComposerBannerStack`
   around a new `ComposerBanner`/`ComposerSurface`/`ComposerActivityStatus` trio, and rebuilds
   `MessagesTimeline` and `session-logic` on the drawer surfaces the fork already declined. The
-  features that landed only inside those files are therefore not carried either: web video
-  attachments in chat (`ac4aae101d`), expanded-preview playback for agent images (`8f525af5af`),
-  the circle-alert treatment for failed tool calls (`8b817cbcaa`/`f1e6f0c9bb`), interim turn folding
-  (`17c48f7fc1`), and the smoothed worktree setup status (`ef84bc9873`). Upstream's separate web
+  remaining unported behaviors are the complete shoulder/drawer arrangement, live-activity
+  focus treatment and interim turn folding (`17c48f7fc1`). Video attachments, media playback,
+  attached banners and task drawers have since been ported onto the fork's own components. The circle-alert treatment for ordinary failed tools
+  (`8b817cbcaa`/`f1e6f0c9bb`) is now ported to web and Swift, while typed runtime failures
+  retain their severe presentation. Worktree setup feedback (`ef84bc9873`) now stays on the
+  web timeline until a V2 run starts or fails; draft-route promotion waits for that same
+  evidence. Swift distinguishes preparing a workspace from starting the provider. V1 setup
+  activities and the continually repainting text shimmer are not imported. Upstream's separate web
   file-attachment model (`bcb855a633`: a `files` array beside `images`, `composerFileNeedsReattach`,
   per-chip upload progress) is likewise not carried — the fork's composer already models
   image/file/pdf/video in one `images` array with its own upload queue.

@@ -8,6 +8,12 @@ import Testing
 /// item belongs to an interrupted attempt says nothing about that item.
 @Suite("Thread working status")
 struct ThreadWorkingStatusTests {
+    @Test func workspacePreparationDoesNotStartTheAgentTimer() {
+        let status = ThreadWorkingStatus.resolve(state: .queued, workingStartedAt: .now, timelineItems: [], activeRunID: "run", isPreparingWorkspace: true)
+        #expect(status?.headline == "Preparing workspace")
+        #expect(status?.startedAt == nil)
+    }
+
     private let startedAt = Date(timeIntervalSince1970: 10_000)
 
     private func projected(

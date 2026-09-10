@@ -209,6 +209,7 @@ interface TimelineRowSharedState {
 }
 
 interface TimelineRowActivityState {
+  isPreparingWorktree: boolean;
   isWorking: boolean;
   isRevertingCheckpoint: boolean;
   activeTurnInProgress: boolean;
@@ -229,6 +230,7 @@ const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  isPreparingWorktree?: boolean;
   citationRequest?: AssistantCitationRequest | null;
   citationHistoryLoading?: boolean;
   onCiteAssistantText?: (
@@ -295,6 +297,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onCiteAssistantText,
   onUseArtifactTemplate,
   isWorking,
+  isPreparingWorktree = false,
   activeTurnInProgress,
   activeTurnStartedAt,
   listRef,
@@ -635,11 +638,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
       isWorking,
+      isPreparingWorktree,
       isRevertingCheckpoint,
       activeTurnInProgress,
       latestRunId: latestRun?.runId ?? null,
     }),
-    [activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
+    [isPreparingWorktree, activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
   );
   const listHeader = useMemo(
     () =>
@@ -2075,6 +2079,7 @@ function V2EventTimelineRow({
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
+  const { isPreparingWorktree } = use(TimelineRowActivityCtx);
   return (
     <div className="py-0.5 pl-1.5">
       <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70 tabular-nums">
@@ -2083,8 +2088,13 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
           <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
           <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
         </span>
-        <span>
-          {row.createdAt ? (
+        <span
+          key={isPreparingWorktree ? "setup" : "working"}
+          className="min-h-4 transition-opacity duration-150 starting:opacity-0 motion-reduce:transition-none"
+        >
+          {isPreparingWorktree ? (
+            "Setting up worktree…"
+          ) : row.createdAt ? (
             <>
               Working for <WorkingTimer createdAt={row.createdAt} />
             </>
@@ -3246,7 +3256,13 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       />
                     }
                   >
-                    <XIcon className="block size-3 shrink-0 text-destructive" aria-hidden />
+                    <CircleAlertIcon
+                      className={cn(
+                        "block size-3 shrink-0",
+                        showDestructiveRowStyle ? "text-destructive" : "text-muted-foreground",
+                      )}
+                      aria-hidden
+                    />
                   </TooltipTrigger>
                   <TooltipPopup>Failed</TooltipPopup>
                 </Tooltip>

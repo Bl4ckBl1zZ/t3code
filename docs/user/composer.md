@@ -172,3 +172,9 @@ Codex app-access requests show the choices supplied by the app, including sessio
 permanent permission when offered. The label states how long access lasts. Canceling
 an app-access request answers that request; **Cancel turn** on ordinary approvals
 still stops the turn.
+
+While a new workspace is being prepared, setup feedback remains visible until the
+agent starts or a startup failure can be shown. The iOS composer distinguishes
+Preparing workspace from Starting agent. Ordinary failed commands use a muted
+alert icon in the work log; failures that stop the runtime retain their stronger
+error treatment. Open a failed row to inspect its output.

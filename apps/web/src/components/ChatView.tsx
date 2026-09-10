@@ -6567,7 +6567,6 @@ function ChatViewContent(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
       const backgroundThreadRef =
         resolvedSubmissionIntent === "background"
           ? scopeThreadRef(activeThread.environmentId, threadIdForSend)
@@ -7687,6 +7686,7 @@ function ChatViewContent(props: ChatViewProps) {
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
+                isPreparingWorktree={isPreparingWorktree}
                 citationRequest={citationRequest}
                 citationHistoryLoading={serverProjection === null}
                 {...(serverConfig?.environment.capabilities.assistantCitations === true

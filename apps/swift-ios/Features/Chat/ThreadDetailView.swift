@@ -302,7 +302,8 @@ public struct ThreadDetailView: View {
             state: detail.thread.state,
             workingStartedAt: detail.thread.workingStartedAt,
             timelineItems: detail.timelineItems,
-            activeRunID: queueState.activeRun?.id
+            activeRunID: queueState.activeRun?.id,
+            isPreparingWorkspace: queueState.activeRun?.status == "preparing"
         )
     }
 
