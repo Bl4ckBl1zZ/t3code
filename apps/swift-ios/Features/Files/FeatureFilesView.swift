@@ -45,6 +45,16 @@ public struct FeatureFilesView: View {
         )
     }
 
+    /// Workspace ancestors in root-to-parent order; the current file is excluded.
+    static func containingDirectories(path: String) -> [FeatureFileEntry] {
+        let parts = path.split(separator: "/").map(String.init)
+        return [FeatureFileEntry(path: "", name: "Workspace", kind: .directory)] +
+            parts.dropLast().indices.map { index in
+                FeatureFileEntry(path: parts.prefix(index + 1).joined(separator: "/"),
+                    name: parts[index], kind: .directory)
+            }
+    }
+
     public var body: some View {
         FeatureFileDirectoryView(client: client, threadID: threadID, path: nil, title: "Files")
             .background(T3Colors.background)
@@ -279,6 +289,24 @@ private struct FeatureFilePreviewView: View {
         .navigationTitle(entry.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ForEach(FeatureFilesView.containingDirectories(path: entry.path)) { directory in
+                        NavigationLink {
+                            FeatureFileDirectoryView(client: client, threadID: threadID,
+                                path: directory.path.isEmpty ? nil : directory.path, title: directory.name)
+                        } label: {
+                            Label(directory.path.isEmpty ? "Workspace" : directory.path, systemImage: "folder")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "folder")
+                        .frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
+                }
+                .accessibilityLabel("Browse containing folder")
+                .accessibilityIdentifier("file-preview-folders")
+            }
+
             if let assetURL {
                 ToolbarItem(placement: .topBarTrailing) {
                     ShareLink(item: assetURL) {

@@ -194,3 +194,5 @@ interim responses and completed tools. Resource cards remain visible outside tha
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
 
 If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.
+
+In the web file viewer, click a folder in the path to browse its contents without returning to the file tree. On iOS, the folder button in a file preview opens its containing folders or the workspace root.

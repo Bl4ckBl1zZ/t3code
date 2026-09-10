@@ -14,7 +14,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronRight, Code2, Eye, FolderTree, Globe2, LoaderCircle } from "lucide-react";
+import { Code2, Eye, FolderTree, Globe2, LoaderCircle } from "lucide-react";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -56,7 +56,7 @@ import { installFileEditorDismissal } from "./fileEditorDismissal";
 import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRevision";
-import { fileBreadcrumbs } from "./filePath";
+import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
 import {
@@ -781,10 +781,6 @@ export default function FilePreviewPanel({
   const canOpenInBrowser =
     relativePath !== null && isPreviewSupportedInRuntime() && isBrowserPreviewFile(relativePath);
   const absolutePath = relativePath ? resolvePathLinkTarget(relativePath, cwd) : null;
-  const breadcrumbs = useMemo(
-    () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
-    [projectName, relativePath],
-  );
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
 
   useEffect(() => {
@@ -845,36 +841,16 @@ export default function FilePreviewPanel({
             data-file-breadcrumbs
           >
             <div className="flex h-full w-max min-w-full items-center text-xs">
-              {breadcrumbs.map((crumb, index) => (
-                <div
-                  key={crumb.path || "project"}
-                  className="flex min-w-0 shrink-0 items-center"
-                  data-current-file-crumb={crumb.kind === "file"}
-                >
-                  {index > 0 ? (
-                    <ChevronRight className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
-                  ) : null}
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span
-                          className={cn(
-                            "max-w-40 truncate",
-                            crumb.kind === "file"
-                              ? "font-medium text-foreground"
-                              : "text-muted-foreground",
-                          )}
-                        />
-                      }
-                    >
-                      {crumb.label}
-                    </TooltipTrigger>
-                    <TooltipPopup side="top" className="max-w-80">
-                      {crumb.path || projectName}
-                    </TooltipPopup>
-                  </Tooltip>
-                </div>
-              ))}
+              {relativePath && (
+                <FileBreadcrumbs
+                  key={`${environmentId}:${cwd}`}
+                  environmentId={environmentId}
+                  cwd={cwd}
+                  projectName={projectName}
+                  relativePath={relativePath}
+                  onOpenFile={onOpenFile}
+                />
+              )}
             </div>
           </ScrollArea>
           {absolutePath &&

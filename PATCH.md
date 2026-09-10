@@ -687,3 +687,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   retains its cache, and the last closed pool expires after 30 seconds. File reveals retain the
   fork’s mount-aware callbacks. All highlighter creation paths use upstream’s Oniguruma WASM
   preference (`feb3ea7ebf`) to avoid JavaScript-regex backtracking freezes.
+
+- Ports clickable file breadcrumbs (`47a95332a2`) onto the fork’s scoped project-file queries.
+  Folder menus refresh when opened, since V1 workspace-mutation notifications are not carried.
+  Swift file previews offer a containing-folder menu using their existing native directory
+  navigation, including the workspace root.
