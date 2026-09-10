@@ -663,3 +663,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Hidden web surfaces continue parsing/replying but stop canvas work and cursor timers.
   Preserve the fork's narrow-pane font fitting, middle-click selection, and V2 terminal
   routing. Expo materializes text only at its existing native-surface boundary.
+
+- Web pull-request list controls are remembered independently from the selected review.
+  Merge-readiness sorting preserves involvement groups; duplicate repository checkouts
+  collapse only within one environment. Review-tab identity includes the host when known,
+  while the server still resolves reads through the selected project's repository identity.

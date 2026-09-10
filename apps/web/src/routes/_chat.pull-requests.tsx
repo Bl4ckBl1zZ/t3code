@@ -1,3 +1,11 @@
+import {
+  pullRequestListPreferences,
+  writePullRequestListPreferences,
+  type PullRequestListPreferencePatch,
+  type PullRequestListSort,
+} from "../components/pullRequest/pullRequestListPreferences";
+import { sortPullRequestGroups } from "../components/pullRequest/pullRequestList.logic";
+import { pullRequestFilterProjects } from "../components/pullRequest/pullRequestProjectFilter.logic";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { environmentMachineIcon } from "../components/EnvironmentMachineIcon";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -106,7 +114,6 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
-import { toSortableTimestamp } from "../lib/threadSort";
 import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
@@ -146,6 +153,7 @@ export interface PullRequestsSearch {
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
+  readonly selectedHost?: string;
   /**
    * Which server the selected pull request was read from. A project id only names a project on
    * its own server, so this is what tells two servers holding one project apart. Optional: a
@@ -165,8 +173,6 @@ export interface PullRequestsSearch {
   readonly sort?: PullRequestListSort;
 }
 
-type PullRequestListSort = "updated" | "newest" | "oldest" | "largest" | "smallest";
-
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
 const INVOLVEMENT_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
@@ -182,6 +188,7 @@ const STATE_TABS = [
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
 const SORT_OPTIONS = [
+  { value: "ready", label: "Ready to merge", Icon: GitMergeIcon },
   { value: "updated", label: "Recently updated", Icon: ClockIcon },
   { value: "newest", label: "Newest shown", Icon: CalendarArrowDownIcon },
   { value: "oldest", label: "Oldest shown", Icon: CalendarArrowUpIcon },
@@ -261,6 +268,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { environmentId: raw.environmentId as EnvironmentId }
       : {}),
     ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
+    ...(typeof raw.selectedHost === "string" && raw.selectedHost
+      ? { selectedHost: raw.selectedHost.slice(0, 200) }
+      : {}),
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
@@ -286,7 +296,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 
 function PullRequestsRouteView() {
   const search = Route.useSearch();
-  const sort = search.sort ?? "updated";
+  const sort = search.sort ?? "ready";
   const statsPolicy: PullRequestStatsPolicy =
     sort === "largest" || sort === "smallest" ? "eager" : "visible";
   const navigate = useNavigate({ from: Route.fullPath });
@@ -351,25 +361,6 @@ function PullRequestsRouteView() {
       ),
     [environments],
   );
-  const scopedProjects = useMemo(() => {
-    // Two machines can hold the same repository, so a title the workspace carries twice is told
-    // apart by the environment it lives on rather than left as two identical rows.
-    const titleCounts = new Map<string, number>();
-    for (const project of projects) {
-      titleCounts.set(project.title, (titleCounts.get(project.title) ?? 0) + 1);
-    }
-    return projects
-      .map((project) => ({
-        id: project.id,
-        environmentId: project.environmentId,
-        title:
-          (titleCounts.get(project.title) ?? 0) > 1
-            ? `${project.title} · ${environmentLabels.get(project.environmentId) ?? project.environmentId}`
-            : project.title,
-        workspaceRoot: project.workspaceRoot,
-      }))
-      .toSorted((left, right) => left.title.localeCompare(right.title));
-  }, [environmentLabels, projects]);
   // The scope the URL asks for, once the environments have had their say about whether it exists.
   const scopedProjectId = useMemo(
     () => resolveProjectScope(search.projectId, projects, projectsKnown),
@@ -380,6 +371,11 @@ function PullRequestsRouteView() {
     [projects, scopedEnvironmentId, scopedProjectId],
   );
 
+  const scopedProjects = useMemo(
+    () => pullRequestFilterProjects(projects, environmentLabels, scopedProject),
+    [projects, environmentLabels, scopedProject],
+  );
+  const selectedHost = search.selectedHost ?? search.host;
   // A link from a thread or the sidebar only knows the repository, so the owning project is
   // resolved here; an explicit `projectId` in the URL still wins.
   const projectIdForRepository = useMemo(() => {
@@ -393,14 +389,14 @@ function PullRequestsRouteView() {
           repository &&
         // The same `owner/name` can exist on two hosts. Without this the first match wins, and
         // a link that named its host opens the pull request from the other one.
-        (search.host === undefined ||
+        (selectedHost === undefined ||
           pullRequestHostOf(
             project.repositoryIdentity,
             project.repositoryIdentity.provider as SourceControlProviderKind,
-          ) === search.host.toLowerCase()),
+          ) === selectedHost.toLowerCase()),
     );
     return identity?.id;
-  }, [projects, search.host, search.repository]);
+  }, [projects, selectedHost, search.repository]);
 
   // The selection is resolved the same way the scope is: an id no connected environment has can
   // never be read here, and one that arrived before the projects did is not yet wrong.
@@ -483,12 +479,13 @@ function PullRequestsRouteView() {
           return {
             involvement: next.involvement ?? previous.involvement,
             state: next.state ?? previous.state,
-            ...(next.sort && next.sort !== "updated" ? { sort: next.sort } : {}),
+            ...(next.sort && next.sort !== "ready" ? { sort: next.sort } : {}),
             ...(next.repository ? { repository: next.repository } : {}),
             ...(next.number ? { number: next.number } : {}),
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.environmentId ? { environmentId: next.environmentId } : {}),
             ...(next.host ? { host: next.host } : {}),
+            ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.selectedEnvironmentId
               ? { selectedEnvironmentId: next.selectedEnvironmentId }
@@ -506,22 +503,26 @@ function PullRequestsRouteView() {
     [navigate],
   );
 
-  // Changing what the list contains must not leave a selection from the previous view open.
-  // The project filter is untouched: it is the user's scope, not part of the selection.
   const clearedSelection = {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
     selectedEnvironmentId: undefined,
+    selectedHost: undefined,
   };
-  const updateListScope = (patch: {
-    [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
-  }) => {
-    if (rightPanelRef !== null) {
-      // Hide the old selection while retaining peer PR tabs for parallel reviews.
-      useRightPanelStore.getState().close(rightPanelRef);
-    }
-    updateSearch({ ...patch, ...clearedSelection });
+  const updateListScope = (patch: PullRequestListPreferencePatch) => {
+    writePullRequestListPreferences(
+      pullRequestListPreferences({
+        ...search,
+        ...patch,
+        involvement: patch.involvement ?? search.involvement,
+        state: patch.state ?? search.state,
+      }),
+    );
+    // Preserve the selected host even for an old shared URL whose host also
+    // served as its list filter. Filtering never retargets an open review.
+    const host = activePullRequestSurface?.host ?? selectedHost;
+    updateSearch({ ...patch, ...(search.repository && host ? { selectedHost: host } : {}) });
   };
 
   // Searching asks the hosts, which takes a round trip, so the text is held for a moment before
@@ -1391,35 +1392,14 @@ function PullRequestsRouteView() {
       ...group,
       entries: group.entries.map((entry) => withDiffStat(entry, statsByRow)),
     }));
-    if (sort === "updated") return enriched;
-    const entries = enriched.flatMap((group) => group.entries);
-    const hasSize = (entry: (typeof entries)[number]) =>
-      entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry));
-    const timestamp = (entry: (typeof entries)[number]) =>
-      toSortableTimestamp(entry.updatedAt) ?? toSortableTimestamp(entry.createdAt) ?? 0;
-    return [
-      {
-        key: "others" as const,
-        label: "",
-        entries: entries.toSorted((left, right) => {
-          if (sort === "newest" || sort === "oldest") {
-            const leftCreated = toSortableTimestamp(left.createdAt);
-            const rightCreated = toSortableTimestamp(right.createdAt);
-            const measured = Number(rightCreated !== null) - Number(leftCreated !== null);
-            const dated = (leftCreated ?? 0) - (rightCreated ?? 0);
-            return (
-              measured || (sort === "newest" ? -dated : dated) || timestamp(right) - timestamp(left)
-            );
-          }
-          const measured = Number(hasSize(right)) - Number(hasSize(left));
-          const sized = left.additions + left.deletions - (right.additions + right.deletions);
-          return (
-            measured || (sort === "largest" ? -sized : sized) || timestamp(right) - timestamp(left)
-          );
-        }),
-      },
-    ];
-  }, [groups, sort, statsByRow]);
+    return sortPullRequestGroups(
+      enriched,
+      sort,
+      typedParsed.text,
+      (entry) =>
+        entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry)),
+    );
+  }, [groups, sort, statsByRow, typedParsed.text]);
 
   const linkedSelection = useMemo(
     () =>
@@ -1429,9 +1409,10 @@ function PullRequestsRouteView() {
             repository: search.repository,
             number: search.number,
             projectId: selectedProject.id,
+            ...(selectedHost ? { host: selectedHost } : {}),
           }
         : null,
-    [search.number, search.repository, selectedProject],
+    [search.number, search.repository, selectedProject, selectedHost],
   );
   const rightPanelAvailable = selectedPullRequestSurface !== null;
   useEffect(() => {
@@ -1457,6 +1438,7 @@ function PullRequestsRouteView() {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
+            selectedHost: surface.host,
             ...(surface.environmentId === undefined
               ? {}
               : { selectedEnvironmentId: surface.environmentId as EnvironmentId }),
@@ -1529,6 +1511,7 @@ function PullRequestsRouteView() {
         number: entry.number,
         selectedProjectId: entry.projectId,
         selectedEnvironmentId: entry.environmentId,
+        selectedHost: entry.host,
       });
     },
     [rightPanelRef, updateSearch],
@@ -1538,7 +1521,7 @@ function PullRequestsRouteView() {
     <PullRequestSearchInput
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
-      onChange={(query) => updateSearch({ q: query || undefined })}
+      onChange={(query) => updateListScope({ q: query || undefined })}
     />
   );
   const panelToggleControls = (
@@ -1715,7 +1698,7 @@ function PullRequestsRouteView() {
       outlined
       value={sort}
       options={SORT_OPTIONS}
-      onChange={(next) => updateSearch({ sort: next })}
+      onChange={(next) => updateListScope({ sort: next })}
     />
   );
   const filtersMenu = (

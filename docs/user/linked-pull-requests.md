@@ -34,3 +34,10 @@ Choose **Change labels** in a GitHub PR’s summary to search repository labels 
 apply or remove them. Applied labels show a checkmark. Editing needs triage access
 and a server that supports it. The list loads when opened; if the repository has
 more labels than the list can show, use GitHub for the remainder.
+
+The web pull-request list remembers your filters and sort order when reopened from the sidebar.
+The default **Ready to merge** order puts approved, passing work first, then passing work awaiting
+review. Conflicts stay last. Smaller measured diffs sort first within each readiness group.
+Searching keeps relevance ordering, and changing a filter leaves your current review open.
+Project choices combine checkouts of the same repository on one machine and distinguish
+matching names across machines.

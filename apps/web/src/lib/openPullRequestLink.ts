@@ -300,6 +300,7 @@ export function useOpenChangeRequestLink(
       if (resolvedThreadRef) {
         useRightPanelStore.getState().openPullRequest(resolvedThreadRef, {
           projectId: project.id,
+          host: parsed.host,
           // The identity's own spelling, not the one read out of the URL: the panel asks the
           // provider for this repository, while matching a link only ever compares lower case.
           repository: project.repositoryIdentity?.displayName ?? parsed.repository,
@@ -317,6 +318,7 @@ export function useOpenChangeRequestLink(
           repository: parsed.repository,
           number: parsed.number,
           selectedProjectId: project.id,
+          selectedHost: parsed.host,
           // Named so the page opens the right one of two servers holding this project.
           selectedEnvironmentId: project.environmentId,
         },

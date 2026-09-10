@@ -61,6 +61,7 @@ export type RightPanelSurface =
        * takes the environment from its own ref.
        */
       environmentId?: string;
+      host?: string;
       projectId: string;
       repository: string;
       number: number;
@@ -101,7 +102,13 @@ interface RightPanelStoreState {
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
-    target: { environmentId?: string; projectId: string; repository: string; number: number },
+    target: {
+      environmentId?: string;
+      host?: string;
+      projectId: string;
+      repository: string;
+      number: number;
+    },
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -190,6 +197,7 @@ export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-reques
 
 export function pullRequestSurfaceId(target: {
   environmentId?: string;
+  host?: string;
   projectId: string;
   repository: string;
   number: number;
@@ -198,11 +206,14 @@ export function pullRequestSurfaceId(target: {
   // servers is two tabs rather than one tab that changes its mind about which server it is on.
   const scope =
     target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
-  return `pull-request:${scope}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  const host =
+    typeof target.host === "string" ? `${encodeURIComponent(target.host.toLowerCase())}:` : "";
+  return `pull-request:${scope}${encodeURIComponent(target.projectId)}:${host}${encodeURIComponent(target.repository)}:${target.number}`;
 }
 
 export function pullRequestSurface(target: {
   environmentId?: string;
+  host?: string;
   projectId: string;
   repository: string;
   number: number;
@@ -210,6 +221,7 @@ export function pullRequestSurface(target: {
   return {
     id: pullRequestSurfaceId(target),
     kind: "pull-request",
+    ...(typeof target.host === "string" ? { host: target.host.toLowerCase() } : {}),
     ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
     projectId: target.projectId,
     repository: target.repository,

@@ -1,3 +1,9 @@
+import { rankPullRequestsByMergeReadiness, sortPullRequestGroups } from "./pullRequestList.logic";
+import {
+  pullRequestListPreferences,
+  readPullRequestListPreferences,
+  writePullRequestListPreferences,
+} from "./pullRequestListPreferences";
 import type { EnvironmentId, ProjectId, PullRequestListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -1209,5 +1215,247 @@ describe("the priority groups against a paginated feed", () => {
     expect(
       groups.find((group) => group.key === "others")?.entries.map((row) => row.number),
     ).toEqual([6123]);
+  });
+});
+
+describe("default merge-readiness ranking", () => {
+  it("puts ready work first, finished work after open work, and every conflict last", () => {
+    const conflict = entry({
+      number: 1,
+      mergeability: "conflicting",
+      checksState: "passing",
+      reviewDecision: "approved",
+      updatedAt: "2026-09-01T00:00:00Z",
+    });
+    const other = entry({
+      number: 2,
+      checksState: "pending",
+      updatedAt: "2026-08-01T00:00:00Z",
+    });
+    const green = entry({
+      number: 3,
+      checksState: "passing",
+      reviewDecision: "review-required",
+      updatedAt: "2026-07-01T00:00:00Z",
+    });
+    const approved = entry({
+      number: 4,
+      checksState: "passing",
+      reviewDecision: "approved",
+      additions: 1_000,
+      updatedAt: "2026-06-01T00:00:00Z",
+    });
+    const draft = entry({
+      number: 5,
+      isDraft: true,
+      checksState: "passing",
+      reviewDecision: "approved",
+      updatedAt: "2026-09-02T00:00:00Z",
+    });
+    const finished = entry({
+      number: 6,
+      state: "merged",
+      checksState: "passing",
+      reviewDecision: "approved",
+      updatedAt: "2026-09-03T00:00:00Z",
+    });
+
+    expect(
+      rankPullRequestsByMergeReadiness([conflict, other, green, approved, draft, finished]).map(
+        (row) => row.number,
+      ),
+    ).toEqual([4, 3, 5, 2, 6, 1]);
+  });
+
+  it("uses recency when readiness and diff size tie", () => {
+    const older = entry({ number: 1, checksState: "passing" });
+    const newer = entry({
+      number: 2,
+      checksState: "passing",
+      updatedAt: "2026-08-01T00:00:00Z",
+    });
+
+    expect(rankPullRequestsByMergeReadiness([older, newer]).map((row) => row.number)).toEqual([
+      2, 1,
+    ]);
+  });
+
+  it("ranks smaller measured diffs first within a readiness tier as counts arrive", () => {
+    const larger = entry({
+      number: 1,
+      checksState: "passing",
+      reviewDecision: "approved",
+      additions: 1,
+      deletions: 49,
+      updatedAt: "2026-09-01T00:00:00Z",
+    });
+    const smaller = entry({
+      number: 2,
+      checksState: "passing",
+      reviewDecision: "approved",
+      additions: 3,
+      deletions: 2,
+      updatedAt: "2026-08-01T00:00:00Z",
+    });
+    const unknown = entry({
+      number: 3,
+      checksState: "passing",
+      reviewDecision: "approved",
+      additions: 0,
+      deletions: 0,
+      updatedAt: "2026-09-02T00:00:00Z",
+    });
+
+    expect(
+      rankPullRequestsByMergeReadiness([larger, unknown, smaller]).map((row) => row.number),
+    ).toEqual([2, 1, 3]);
+    expect(
+      rankPullRequestsByMergeReadiness([
+        larger,
+        { ...unknown, additions: 1, deletions: 0 },
+        smaller,
+      ]).map((row) => row.number),
+    ).toEqual([3, 2, 1]);
+  });
+
+  it("distinguishes measured empty diffs from missing counts when sorting groups", () => {
+    const unknown = entry({ number: 1, additions: 0, deletions: 0 });
+    const measured = entry({ number: 2 });
+    const empty = entry({ number: 3, additions: 0, deletions: 0 });
+    const groups = [
+      { key: "others", label: "Others", entries: [unknown, measured, empty] },
+    ] as const;
+
+    const sorted = sortPullRequestGroups(groups, "ready", "", (row) => row.number !== 1);
+
+    expect(sorted[0]!.entries.map((row) => row.number)).toEqual([3, 2, 1]);
+    expect(sortPullRequestGroups(groups, "ready", "sidebar", (row) => row.number !== 1)).toEqual(
+      groups,
+    );
+  });
+
+  it("keeps authored work first and ranks each group by readiness", () => {
+    const authoredWaiting = entry({ number: 1, checksState: "pending" });
+    const authoredReady = entry({
+      number: 2,
+      checksState: "passing",
+      reviewDecision: "approved",
+    });
+    const otherReady = entry({
+      number: 3,
+      checksState: "passing",
+      reviewDecision: "approved",
+    });
+    const sorted = sortPullRequestGroups(
+      [
+        { key: "authored", label: "Authored", entries: [authoredWaiting, authoredReady] },
+        { key: "others", label: "Others", entries: [otherReady] },
+      ],
+      "ready",
+      "",
+    );
+
+    expect(sorted.map((group) => group.key)).toEqual(["authored", "others"]);
+    expect(sorted.flatMap((group) => group.entries).map((row) => row.number)).toEqual([2, 1, 3]);
+  });
+
+  it.each([
+    ["updated", [1, 2]],
+    ["newest", [2, 1]],
+    ["oldest", [1, 2]],
+    ["largest", [1, 2]],
+    ["smallest", [2, 1]],
+  ] as const)("keeps authored first while applying the %s sort inside groups", (sort, order) => {
+    const olderLarger = entry({
+      number: 1,
+      additions: 20,
+      createdAt: "2026-07-01T00:00:00Z",
+      updatedAt: "2026-08-01T00:00:00Z",
+    });
+    const newerSmaller = entry({
+      number: 2,
+      additions: 2,
+      createdAt: "2026-08-01T00:00:00Z",
+      updatedAt: "2026-07-01T00:00:00Z",
+    });
+    const sorted = sortPullRequestGroups(
+      [
+        { key: "authored", label: "Authored", entries: [olderLarger, newerSmaller] },
+        { key: "others", label: "Others", entries: [entry({ number: 3 })] },
+      ],
+      sort,
+      "",
+    );
+
+    expect(sorted.map((group) => group.key)).toEqual(["authored", "others"]);
+    expect(sorted[0]!.entries.map((row) => row.number)).toEqual(order);
+  });
+});
+
+describe("remembered pull request list controls", () => {
+  const makeStorage = () => {
+    const held = new Map<string, string>();
+    return {
+      getItem: (key: string) => held.get(key) ?? null,
+      setItem: (key: string, value: string) => void held.set(key, value),
+    };
+  };
+
+  it("restores every filter and the selected sort", () => {
+    const storage = makeStorage();
+    const preferences = {
+      involvement: "reviewing",
+      state: "merged",
+      environmentId: "env-1" as EnvironmentId,
+      projectId: "project-1" as ProjectId,
+      host: "github.com",
+      q: "workflow",
+      draft: "hide",
+      review: "approved",
+      checks: "passing",
+      author: "octocat",
+      labels: ["bug", "priority"],
+      sort: "largest",
+    } as const;
+
+    writePullRequestListPreferences(preferences, storage);
+    expect(readPullRequestListPreferences(storage)).toEqual(preferences);
+  });
+
+  it("omits the default sort from storage", () => {
+    expect(
+      pullRequestListPreferences({
+        involvement: "all",
+        state: "open",
+        sort: "ready",
+      }),
+    ).toEqual({ involvement: "all", state: "open" });
+  });
+
+  it("keeps an explicit recency sort", () => {
+    expect(
+      pullRequestListPreferences({ involvement: "all", state: "open", sort: "updated" }),
+    ).toEqual({ involvement: "all", state: "open", sort: "updated" });
+  });
+
+  it("falls back to the default controls when storage is corrupt", () => {
+    const storage = makeStorage();
+    storage.setItem("t3.pullRequests.preferences", "{not json");
+    expect(readPullRequestListPreferences(storage)).toEqual({ involvement: "all", state: "open" });
+  });
+
+  it("falls back when browser policy denies storage", () => {
+    const denied = {
+      getItem: () => {
+        throw new Error("storage denied");
+      },
+      setItem: () => {
+        throw new Error("storage denied");
+      },
+    };
+    expect(readPullRequestListPreferences(denied)).toEqual({ involvement: "all", state: "open" });
+    expect(() =>
+      writePullRequestListPreferences({ involvement: "all", state: "open" }, denied),
+    ).not.toThrow();
   });
 });

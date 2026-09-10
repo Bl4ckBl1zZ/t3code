@@ -464,6 +464,25 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe(pullRequestSurfaceId(first));
   });
 
+  it("keeps same-number reviews on different hosts separate and normalizes host casing", () => {
+    const first = {
+      projectId: "project-a",
+      repository: "team/repo",
+      number: 1,
+      host: "GitHub.com",
+    };
+    const enterprise = { ...first, host: "git.example.com" };
+    useRightPanelStore.getState().openPullRequest(refA, first);
+    useRightPanelStore.getState().openPullRequest(refA, enterprise);
+    useRightPanelStore.getState().openPullRequest(refA, { ...first, host: "github.com" });
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toHaveLength(2);
+    expect(state.activeSurfaceId).toBe(pullRequestSurfaceId(first));
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
+    ).toMatchObject({ host: "github.com" });
+  });
+
   it("keeps one pull request read from two servers as two tabs", () => {
     const local = {
       environmentId: "local",

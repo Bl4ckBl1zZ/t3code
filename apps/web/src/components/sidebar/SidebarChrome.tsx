@@ -1,3 +1,4 @@
+import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
@@ -175,7 +176,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [isMobile, setOpenMobile]);
   const handlePullRequestsClick = useCallback(() => {
     closeMobileSidebar();
-    void navigate({ to: "/pull-requests", search: { involvement: "all", state: "open" } });
+    void navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
   }, [closeMobileSidebar, navigate]);
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
