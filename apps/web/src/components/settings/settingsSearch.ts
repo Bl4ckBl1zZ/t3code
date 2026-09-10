@@ -165,6 +165,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "panel-animations",
+    title: "Panel animations",
+    to: "/settings/appearance",
+  },
+
+  {
     id: "composer-collapse-on-scroll",
     title: "Collapse composer while scrolling",
     to: "/settings/general",

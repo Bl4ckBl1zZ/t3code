@@ -496,8 +496,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   - PR hover cards, hydration, project-filter choices and panel precedence (`95103905f5`,
     `91c66ac43d`, `110bbe6b55`, `a0eb23993a`, `931d41f933`, `e5a87e8b9c`) need adaptation
     to the fork's PR data and panel stores. Header project settings, keyboard-accessible project
-    actions and navigation motion (`cbe93e8dfb`, `7f8cf30ca4`, `cd713679bb`) likewise need
-    the fork's inline menus/sidebar layout. The later V2 proactive-panels port below supersedes
+    actions (`cbe93e8dfb`, `7f8cf30ca4`) are now adapted to the fork's inline menus; navigation
+    motion (`cd713679bb`) is covered by the opt-in panel-motion port below. The later V2 proactive-panels port supersedes
     the earlier deferral of empty-diff/manual-choice follow-ups (`d115a96763`, `bccad27046`).
   - Connect HTTP credential refresh and network-blocking diagnosis (`363cde4114`,
     `2dca7a1edd`) need the fork's auth/reconnect lifecycle. Installer ownership and mise shims
@@ -907,3 +907,14 @@ are hashes. Schema validation, corrupt-file fallback, failed-read exclusion and 
 storage fallback keep the host authoritative. Refreshes and mutations clear persisted entries;
 partial failed writes invalidate memory epochs too. Clearing waits for in-flight readers,
 and a failed clear disables persistence for the process. No migration or V1 service is used.
+
+### Opt-in web panel motion
+
+Ports upstream `91c8d4771c`/`cd713679bb` panel duration (0–400ms, default zero), appearance
+preview/reset/search, reduced-motion suppression and first-painted-route restoration. Retained
+closing content is scoped to the thread or PR workspace and becomes inert immediately; terminal
+visibility still stops painting when closed. The fork's resizable shell and V2 plan/agent panels
+are retained, rather than importing upstream V1 panel data. Sidebar, terminal drawer, right
+panel, sheet, header/footer breakpoint fades and PR workspace use the shared setting. Resize
+and maximize changes suppress width transitions. This is a web/desktop layout preference;
+native Swift keeps its own platform transitions and push-to-talk gesture tree.

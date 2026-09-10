@@ -714,3 +714,24 @@ describe("ClientSettings diff colors", () => {
     expect(() => decodeClientSettingsPatch({ diffColorScheme: "unknown" })).toThrow();
   });
 });
+
+describe("panel motion preferences", () => {
+  it("keeps motion opt-in for settings saved before the preference existed", () => {
+    expect(decodeClientSettings({}).panelAnimationDurationMs).toBe(0);
+    expect(decodeClientSettings({}).composerCollapseOnScroll).toBe(true);
+  });
+  it("accepts disabling motion and the maximum duration in sparse patches", () => {
+    expect(decodeClientSettingsPatch({ panelAnimationDurationMs: 0 })).toEqual({
+      panelAnimationDurationMs: 0,
+    });
+    expect(decodeClientSettingsPatch({ panelAnimationDurationMs: 400 })).toEqual({
+      panelAnimationDurationMs: 400,
+    });
+  });
+  it("rejects invalid persisted and patched animation durations", () => {
+    for (const duration of [-1, 401, 1.5, "200"]) {
+      expect(() => decodeClientSettings({ panelAnimationDurationMs: duration })).toThrow();
+      expect(() => decodeClientSettingsPatch({ panelAnimationDurationMs: duration })).toThrow();
+    }
+  });
+});

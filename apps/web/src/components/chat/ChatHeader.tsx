@@ -1,3 +1,4 @@
+import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { ThreadPullRequestsControl } from "../pullRequest/ThreadPullRequestsControl";
 import {
   type EnvironmentId,
@@ -138,6 +139,20 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
 }: ChatHeaderProps) {
+  const panelMotion = usePanelAnimationSettings();
+  const headerActionsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const actions = headerActionsRef.current;
+    const container = actions?.parentElement;
+    if (!actions || !container) return;
+    return observeResponsiveBreakpointFade({
+      target: actions,
+      container,
+      active: panelMotion.active,
+      durationMs: panelMotion.durationMs,
+      breakpoint: { value: 48, unit: "rem" },
+    });
+  }, [panelMotion.active, panelMotion.durationMs]);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const activeProjectName = activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -404,6 +419,7 @@ export const ChatHeader = memo(function ChatHeader({
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       <div
+        ref={headerActionsRef}
         data-chat-header-actions
         className={cn(
           "flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3",

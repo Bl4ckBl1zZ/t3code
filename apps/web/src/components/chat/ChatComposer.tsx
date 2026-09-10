@@ -1,3 +1,8 @@
+import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
+import {
+  COMPOSER_FOOTER_COMPACT_BREAKPOINT_PX,
+  COMPOSER_FOOTER_WIDE_ACTIONS_COMPACT_BREAKPOINT_PX,
+} from "../composerFooterLayout";
 import { useComposerRestingState, type ComposerReadingTimeline } from "./useComposerRestingState";
 import { useComposerMultilinePrompt } from "./useComposerMultilinePrompt";
 import { ComposerBanner } from "./ComposerBanner";
@@ -1170,6 +1175,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const isMobileViewport = useMediaQuery("max-sm");
   const resting = useComposerRestingState(activeThreadId, props.readingTimeline);
+  const panelMotion = usePanelAnimationSettings();
+  const composerFooterControlsRef = useRef<HTMLDivElement>(null);
   const restingFooterRef = useRef<HTMLDivElement>(null);
   const [restingFooterWidth, setRestingFooterWidth] = useState(170);
 
@@ -1835,6 +1842,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsComposerFooterCompact(initialCompactness.footerCompact);
     if (typeof ResizeObserver === "undefined") return;
 
+    const footerControls = composerFooterControlsRef.current;
+    const stopFade = footerControls
+      ? observeResponsiveBreakpointFade({
+          target: footerControls,
+          container: composerForm,
+          active: panelMotion.active,
+          durationMs: panelMotion.durationMs,
+          breakpoint: {
+            value: composerFooterHasWideActions
+              ? COMPOSER_FOOTER_WIDE_ACTIONS_COMPACT_BREAKPOINT_PX
+              : COMPOSER_FOOTER_COMPACT_BREAKPOINT_PX,
+            unit: "px",
+          },
+        })
+      : undefined;
     const observer = new ResizeObserver((entries) => {
       const [entry] = entries;
       if (!entry) return;
@@ -1858,9 +1880,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     observer.observe(composerForm);
     return () => {
       observer.disconnect();
+      stopFade?.();
     };
   }, [
     activeThreadId,
+    panelMotion.active,
+    panelMotion.durationMs,
+    isComposerApprovalState,
+    isComposerCollapsedMobile,
     composerFooterActionLayoutKey,
     composerFooterHasWideActions,
     scheduleStickToBottom,
@@ -3914,7 +3941,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   "absolute bottom-px right-px z-10 h-12 w-max gap-1 py-0 sm:gap-1 sm:py-0",
               )}
             >
-              <div className="-m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div
+                ref={composerFooterControlsRef}
+                className="-m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
                 <input
                   ref={attachmentInputRef}
                   type="file"
