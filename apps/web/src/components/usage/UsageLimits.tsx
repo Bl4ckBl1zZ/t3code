@@ -15,6 +15,7 @@ import {
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { Checkbox } from "../ui/checkbox";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
@@ -105,7 +106,12 @@ function LimitWindow({ window, now }: { window: ServerProviderUsageWindow; now: 
                 ? "On pace"
                 : ""}
         </span>
-        <span title={window.resetsAt}>{formatResetsIn(window, now) ?? "Reset not reported"}</span>
+        <Tooltip>
+          <TooltipTrigger render={<span tabIndex={0} />}>
+            {formatResetsIn(window, now) ?? "Reset not reported"}
+          </TooltipTrigger>
+          <TooltipPopup>{window.resetsAt ?? "Reset not reported"}</TooltipPopup>
+        </Tooltip>
       </div>
     </div>
   );
@@ -252,8 +258,17 @@ export function UsageLimits({ onShowUsage }: { onShowUsage: () => void }) {
                             }}
                           >
                             {window.columns.map(({ account, window: memberWindow }) => (
-                              <div key={account.id} className="min-w-0" title={account.label}>
-                                <div className="mb-1 truncate text-[11px]">{account.label}</div>
+                              <div key={account.id} className="min-w-0">
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <div tabIndex={0} className="mb-1 truncate text-[11px]" />
+                                    }
+                                  >
+                                    {account.label}
+                                  </TooltipTrigger>
+                                  <TooltipPopup>{account.label}</TooltipPopup>
+                                </Tooltip>
                                 {memberWindow ? (
                                   <LimitBar
                                     remaining={remainingPercent(memberWindow)}
