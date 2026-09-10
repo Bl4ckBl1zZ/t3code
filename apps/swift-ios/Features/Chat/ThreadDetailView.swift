@@ -1350,6 +1350,7 @@ enum FeatureComposerDraftRestoration {
 /// entries and nothing else.
 enum ThreadTimelineEntry: Identifiable, Equatable {
     case message(FeatureMessage)
+    case turnFold(ThreadTurnFold)
     case lifecycle(Lifecycle)
     case workLog(WorkLog)
     case dayDivider(id: String, date: Date)
@@ -1380,6 +1381,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     var id: String {
         switch self {
         case let .message(message): "message:\(message.id)"
+        case let .turnFold(fold): fold.id
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
         case let .dayDivider(id, _): id
@@ -1391,6 +1393,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     var date: Date? {
         switch self {
         case let .message(message): message.createdAt
+        case let .turnFold(fold): fold.date
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
         case let .dayDivider(_, date): date
@@ -1591,8 +1594,27 @@ private struct ThreadTimelineEntryView: View {
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
 
+    var onToggleFold: (String) -> Void = { _ in }
+
     var body: some View {
         switch entry {
+        case let .turnFold(fold):
+            Button { onToggleFold(fold.runID) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: fold.isExpanded ? "chevron.up" : "chevron.down")
+                    Text(fold.label).font(T3Typography.supportingStrong)
+                    Text("\(fold.hiddenIDs.count)").font(T3Typography.supporting).foregroundStyle(T3Colors.textTertiary)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(T3Colors.textSecondary)
+                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(fold.isExpanded ? "Hide" : "Show") earlier work. \(fold.label)")
+            .accessibilityIdentifier(fold.id)
+            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
         case let .message(message):
             FeatureMessageView(message: message)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1819,6 +1841,17 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
         private var entriesByID: [String: ThreadTimelineEntry] = [:]
         private var orderedIDs: [String] = []
+        private var expandedRunIDs = Set<String>()
+        private var foldChoiceRevision = 0
+        private var renderedFoldChoiceRevision = 0
+        private var rebuildForFold: (() -> Void)?
+        private var hiddenCitationRunIDs: [String: String] = [:]
+
+        private func toggleFold(_ runID: String) {
+            if !expandedRunIDs.insert(runID).inserted { expandedRunIDs.remove(runID) }
+            foldChoiceRevision += 1
+            rebuildForFold?()
+        }
         private var citationRequest: AssistantCitationNavigationRequest?
         private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
         private var citationPages = Set<String>()
@@ -1848,6 +1881,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 UIAccessibility.post(notification: .announcement, argument: "Quoted response: \(citation.text)")
                 citationRequest = nil
                 citationCompletion(request, nil)
+                return
+            }
+            if let runID = hiddenCitationRunIDs[citation.messageId], !expandedRunIDs.contains(runID) {
+                toggleFold(runID)
                 return
             }
             if currentIsLoadingEarlier { citationSawLoading = true; return }
@@ -1940,7 +1977,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         onOpenThread: context.onOpenThread,
                         onOpenFile: context.onOpenFile,
                         onOpenURL: context.onOpenURL,
-                        onOpenDiff: context.onOpenDiff
+                        onOpenDiff: context.onOpenDiff,
+                        onToggleFold: { [weak self] in self?.toggleFold($0) }
                     )
                     // A recycled cell keeps the SwiftUI state of whatever it
                     // rendered last. Keying on the entry drops an expansion
@@ -1999,6 +2037,15 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             self.onLoadEarlier = onLoadEarlier
             self.onDismissKeyboard = onDismissKeyboard
 
+            rebuildForFold = { [weak self, weak collectionView] in
+                guard let self, let collectionView else { return }
+                self.update(threadID: threadID, detail: detail, renderUpdate: renderUpdate,
+                    dynamicTypeSize: dynamicTypeSize, canLoadEarlier: canLoadEarlier,
+                    isLoadingEarlier: isLoadingEarlier, alwaysExpandActivity: alwaysExpandActivity,
+                    rowContext: rowContext, onLoadEarlier: onLoadEarlier,
+                    onDismissKeyboard: onDismissKeyboard, in: collectionView)
+            }
+            let foldChoiceChanged = renderedFoldChoiceRevision != foldChoiceRevision
             let threadChanged = currentThreadID != threadID
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
             // Same treatment as the type size: it changes how every row renders
@@ -2010,14 +2057,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             guard threadChanged || typeSizeChanged || expansionPreferenceChanged
-                || revisionChanged || loadEarlierChanged else { return }
+                || revisionChanged || loadEarlierChanged || foldChoiceChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
             // merges into the run beside it — so a delta that only names changed
             // messages cannot say which rows moved, and applying it would leave
             // stale groups on screen instead of failing loudly.
-            let state = entryState(ThreadTimelineFeed.entries(for: detail))
+            if threadChanged { expandedRunIDs = []; hiddenCitationRunIDs = [:] }
+            let fullEntries = ThreadTimelineFeed.entries(for: detail)
+            let folded = ThreadTimelineFoldPresentation.apply(entries: fullEntries, detail: detail,
+                expandedRunIDs: expandedRunIDs, alwaysExpand: alwaysExpandActivity)
+            hiddenCitationRunIDs = folded.hiddenCitationRunIDs
+            let state = entryState(folded.entries)
+            renderedFoldChoiceRevision = foldChoiceRevision
             let newIDs = state.ids
             let idsChanged = state.idsChanged
             let changedIDs = typeSizeChanged || expansionPreferenceChanged
@@ -2049,9 +2102,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let prependedMessages = !threadChanged
                 && newIDs.count > previousIDs.count
                 && Array(newIDs.suffix(previousIDs.count)) == previousIDs
-            let shouldFollowBottom = isInitialLoad || wasNearBottom
+            let shouldFollowBottom = isInitialLoad || (wasNearBottom && !foldChoiceChanged)
             let prependAnchor = !shouldFollowBottom
-                && (prependedMessages || (loadEarlierChanged && !canLoadEarlier))
+                && (foldChoiceChanged || prependedMessages || (loadEarlierChanged && !canLoadEarlier))
                 ? visibleAnchor(in: collectionView, dataSource: dataSource)
                 : nil
 

@@ -24,6 +24,8 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
     public let id: String
     public let ordinal: Int
     public let status: String
+    public let startedAt: String?
+    public let completedAt: String?
     /// Explicit queue order when the server assigned one; ordinal otherwise.
     public let queuePosition: Int?
     public let userMessageID: String?
@@ -34,6 +36,8 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
         id: String,
         ordinal: Int,
         status: String,
+        startedAt: String? = nil,
+        completedAt: String? = nil,
         queuePosition: Int? = nil,
         userMessageID: String? = nil,
         providerThreadID: String? = nil,
@@ -42,6 +46,8 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
         self.id = id
         self.ordinal = ordinal
         self.status = status
+        self.startedAt = startedAt
+        self.completedAt = completedAt
         self.queuePosition = queuePosition
         self.userMessageID = userMessageID
         self.providerThreadID = providerThreadID
@@ -53,6 +59,8 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
             id: run.id,
             ordinal: run.ordinal,
             status: run.status,
+            startedAt: run.startedAt ?? run.requestedAt,
+            completedAt: run.completedAt,
             queuePosition: run.queuePosition,
             userMessageID: run.userMessageId,
             providerThreadID: run.providerThreadId,

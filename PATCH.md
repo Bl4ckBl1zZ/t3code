@@ -692,3 +692,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Folder menus refresh when opened, since V1 workspace-mutation notifications are not carried.
   Swift file previews offer a containing-folder menu using their existing native directory
   navigation, including the workspace root.
+
+- Swift now folds completed-run interim responses and work behind a stable duration row,
+  retaining terminal replies, attachment-bearing messages, lifecycle cards and live work.
+  Expansion changes recycled collection rows instead of mounting a whole run in one cell,
+  preserves the viewport anchor, and source-citation navigation expands the owning run first.
+  Failed/interrupted/unknown runs remain fully visible; the always-expand preference wins.
