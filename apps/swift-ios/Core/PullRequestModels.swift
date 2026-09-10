@@ -178,6 +178,7 @@ public struct PullRequestStack: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
+    public var reviewers: NativePullRequestReviewerCapabilities? = nil
     public var reactions: Bool? = nil
     public var comment: Bool? = nil
     public var edit: NativePullRequestEditCapabilities? = nil
@@ -190,6 +191,7 @@ public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestViewerPermissions: Codable, Equatable, Sendable {
+    public var requestReviewers: Bool? = nil
     public var comment: Bool? = nil
     public var resolve: Bool? = nil
     public var verdicts: [String]? = nil

@@ -1,0 +1,35 @@
+{
+  "list": {
+    "candidates": [
+      {
+        "login": "octocat",
+        "name": "Octo",
+        "avatarUrl": null,
+        "id": "17",
+        "kind": "user",
+        "isRequested": false
+      },
+      {
+        "login": "mobile-team",
+        "name": "Mobile",
+        "avatarUrl": null,
+        "id": "17",
+        "kind": "team",
+        "isRequested": true
+      }
+    ],
+    "truncated": true
+  },
+  "input": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "reviewers": [
+      {
+        "id": "17",
+        "kind": "team"
+      }
+    ],
+    "requested": false
+  }
+}

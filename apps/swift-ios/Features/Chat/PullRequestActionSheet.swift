@@ -26,7 +26,7 @@ struct PullRequestActionSheet: View {
                     if !methods.isEmpty {
                         Picker("Method", selection: $method) {
                             ForEach(methods, id: \.self) { Text($0.capitalized).tag($0) }
-                        }
+                        }.disabled(pending)
                     }
                     if let error { Text(error).foregroundStyle(T3Colors.warning) }
                     Button(role: action == .close ? .destructive : nil) {

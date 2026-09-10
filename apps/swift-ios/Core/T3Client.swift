@@ -841,6 +841,19 @@ public actor T3Client {
         let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object([:]), as: JSONValue.self)
     }
 
+    public func pullRequestReviewerCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestReviewerCandidateList {
+        try await rpc.request("pullRequests.reviewerCandidates", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ]), as: PullRequestReviewerCandidateList.self)
+    }
+
+    public func requestPullRequestReviewers(projectID: String, repository: String, number: Int, request: PullRequestReviewerRequest) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.requestReviewers", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "reviewers": .array(request.reviewers.map { .object(["id": .string($0.id), "kind": .string($0.kind)]) }), "requested": .bool(request.requested),
+        ]), as: JSONValue.self)
+    }
+
     public func setPullRequestReaction(projectID: String, repository: String, number: Int, request: PullRequestReactionRequest) async throws {
         var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "content": .string(request.content), "reacted": .bool(request.reacted)]
         if let subjectId = request.subjectId { payload["subjectId"] = .string(subjectId) }

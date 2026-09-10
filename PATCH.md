@@ -772,3 +772,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Optimistic changes are scoped per reaction; failures restore the preceding acknowledged state,
   and in-flight presses cannot race the same reaction. Description requests omit `subjectId`;
   comment requests carry the host ID. Mutation availability follows the host reaction capability.
+
+- Native reviewer management lazily reads host candidates, searches their displayed login/name,
+  renders avatars/team identity and distinguishes user/team rows even when their opaque IDs match.
+  Requests and withdrawals send the host ID and kind unchanged; failures keep the previous state,
+  and a failed candidate refresh retains the acknowledged request. Truncated lists explicitly limit
+  search to loaded candidates. Host/viewer permissions gate mutations; hosts without candidate
+  listing direct reviewer management to the host. Editors and method pickers lock during writes.

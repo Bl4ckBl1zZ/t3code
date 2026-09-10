@@ -91,3 +91,7 @@ inside review conversations. Failed saves keep the editor’s text so you can re
 Reaction pills on iOS show each host count and whether you reacted. Tap a pill to add or remove your
 reaction, or open the smile menu to choose another. Long-press a pill to see the reported names.
 The count updates while saving and returns to its previous state if the host refuses the change.
+
+Use **Request reviewers** on iOS to search the people and teams your host lists. A checkmark means
+a review is already requested; tap again to withdraw the request. If the list is incomplete, the
+picker says so—search filters that list, and other reviewers can be managed on the host.

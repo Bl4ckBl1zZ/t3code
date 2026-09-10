@@ -37,6 +37,8 @@ import {
   PullRequestUpdateInput,
   PullRequestReaction,
   PullRequestReactionInput,
+  PullRequestReviewerCandidateList,
+  PullRequestReviewerRequestInput,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -965,3 +967,56 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestReactionsPath, pullRequestReactionsSerialized);
+
+const pullRequestReviewersPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestReviewers.json",
+);
+const pullRequestReviewersSerialized = `${JSON.stringify(
+  Schema.encodeSync(
+    Schema.Struct({
+      list: PullRequestReviewerCandidateList,
+      input: PullRequestReviewerRequestInput,
+    }),
+  )({
+    list: {
+      candidates: [
+        {
+          id: "17",
+          kind: "user",
+          login: "octocat",
+          name: "Octo",
+          avatarUrl: null,
+          isRequested: false,
+        },
+        {
+          id: "17",
+          kind: "team",
+          login: "mobile-team",
+          name: "Mobile",
+          avatarUrl: null,
+          isRequested: true,
+        },
+      ],
+      truncated: true,
+    },
+    input: {
+      projectId,
+      repository: "owner/repo",
+      number: 42,
+      reviewers: [{ id: "17", kind: "team" }],
+      requested: false,
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestReviewersPath) ||
+    NodeFS.readFileSync(pullRequestReviewersPath, "utf8") !== pullRequestReviewersSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestReviewers.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestReviewersPath, pullRequestReviewersSerialized);

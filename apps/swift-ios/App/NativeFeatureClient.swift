@@ -2141,6 +2141,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, resolved: resolved)
     }
 
+    func pullRequestReviewerCandidates(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> PullRequestReviewerCandidateList {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        return try await route.client.pullRequestReviewerCandidates(projectID: route.projectID, repository: route.repository, number: number)
+    }
+
+    func requestPullRequestReviewers(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReviewerRequest) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.requestPullRequestReviewers(projectID: route.projectID, repository: route.repository, number: number, request: request)
+    }
+
     func setPullRequestReaction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReactionRequest) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.setPullRequestReaction(projectID: route.projectID, repository: route.repository, number: number, request: request)

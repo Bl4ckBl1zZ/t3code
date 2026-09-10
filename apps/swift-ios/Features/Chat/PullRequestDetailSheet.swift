@@ -18,6 +18,7 @@ struct PullRequestDetailSheet: View {
 
     @State private var editingLabels = false
     @State private var reviewing = false
+    @State private var choosingReviewers = false
     @State private var textEdit: PullRequestTextEdit?
     @State private var selectedAction: NativePullRequestAction?
     @State private var actionPending = false
@@ -79,6 +80,13 @@ struct PullRequestDetailSheet: View {
             if let draft = reviewDraft, let submit = access.submitReview, let detail = overview?.detail {
                 PullRequestReviewSheet(draft: draft, verdicts: PullRequestReviewDraftModel.verdicts(capabilities: detail.capabilities, viewer: detail.viewerPermissions), submit: { try await submit(displayedNumber, detail.url, $0) }) {
                     Task { await load() }
+                }
+            }
+        }
+        .sheet(isPresented: $choosingReviewers) {
+            if let detail = overview?.detail, let reviewers = access.reviewers?(displayedNumber, detail.url) {
+                PullRequestReviewerPicker(access: reviewers, allowed: detail.capabilities?.reviewers?.request == true && detail.viewerPermissions?.requestReviewers == true) {
+                    await load(preserveContent: true)
                 }
             }
         }
@@ -359,6 +367,18 @@ struct PullRequestDetailSheet: View {
                             .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
                     }
                 }
+            }
+        }
+
+        if detail.capabilities?.reviewers?.request == true, access.reviewers != nil {
+            if detail.capabilities?.reviewers?.listCandidates == true {
+                Button("Request reviewers", systemImage: "person.badge.plus") { choosingReviewers = true }
+                    .frame(minHeight: 44).disabled(detail.viewerPermissions?.requestReviewers != true)
+                if detail.viewerPermissions?.requestReviewers != true {
+                    Text("Requesting reviewers needs write access on this repository.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                }
+            } else {
+                Text("Manage reviewers on the host; it does not provide a candidate list.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
             }
         }
 

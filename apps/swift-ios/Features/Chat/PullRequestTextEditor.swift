@@ -15,7 +15,7 @@ struct PullRequestTextEditor: View {
         NavigationStack {
             Form {
                 Section {
-                    TextEditor(text: $text).frame(minHeight: 200).accessibilityLabel(edit.label)
+                    TextEditor(text: $text).frame(minHeight: 200).accessibilityLabel(edit.label).disabled(pending)
                     if let error { Text(error).foregroundStyle(T3Colors.warning) }
                     Button {
                         pending = true; error = nil
