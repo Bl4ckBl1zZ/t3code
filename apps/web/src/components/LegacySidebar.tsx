@@ -2366,6 +2366,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             />
           )}
           <ProjectFavicon
+            project={project}
             environmentId={project.environmentId}
             cwd={project.workspaceRoot}
             faviconPath={project.faviconPath}

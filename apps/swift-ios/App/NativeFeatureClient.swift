@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureWorkspaceAssetResolving,
+    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -433,6 +433,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) -> Bool {
         generation == environmentGeneration
             && environmentClients[environmentID] === client
+    }
+
+    func setProjectIcon(projectID: String, icon: ProjectIconOverride?) async throws {
+        let route = try projectRoute(for: projectID)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.projectIcons == true else {
+            throw FeatureCapabilityUnavailable("Project icons")
+        }
+        try await route.client.setProjectIcon(projectID: route.wireID, icon: icon)
+        try? await refresh(client: route.client)
     }
 
     func addProject(path: String) async throws {
@@ -4124,7 +4133,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     defaultSelection: project.defaultModelSelection.map(mapSelection),
                     scripts: project.scripts,
                     previewUrl: pinnedPreviewURLs[uiID],
-                    faviconPath: project.faviconPath
+                    faviconPath: project.faviconPath,
+                    projectIcon: project.projectIcon
                 )
             }
         }
@@ -4188,7 +4198,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             machineKind: serverConfigsByEnvironmentID[environment.id]?.settings?.environmentIcon.flatMap(EnvironmentMachineKind.init(rawValue:))?.rawValue ?? environment.descriptor?.platform.machine,
             supportsEnvironmentIcon: environment.descriptor?.capabilities.environmentIcon,
             supportsAssistantCitations: environment.descriptor?.capabilities.assistantCitations,
-            supportsCustomModelDefinitions: environment.descriptor?.capabilities.customModelDefinitions
+            supportsCustomModelDefinitions: environment.descriptor?.capabilities.customModelDefinitions,
+            supportsProjectIcons: environment.descriptor?.capabilities.projectIcons
         )
     }
 

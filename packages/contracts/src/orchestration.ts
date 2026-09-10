@@ -1,3 +1,4 @@
+import { ProjectIconOverride } from "./projectIcon.ts";
 /**
  * Legacy (V1) orchestration contracts.
  *
@@ -42,6 +43,7 @@ export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 export const OrchestrationProject = Project.mapFields(
   Struct.assign({
     faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+    projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   }),
 );
 export type OrchestrationProject = typeof OrchestrationProject.Type;
@@ -79,6 +81,7 @@ export const ProjectMetaUpdateCommand = Schema.Struct({
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 

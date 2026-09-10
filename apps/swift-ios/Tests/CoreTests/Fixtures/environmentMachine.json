@@ -11,6 +11,7 @@
     "repositoryIdentity": true,
     "environmentIcon": true,
     "assistantCitations": true,
+    "projectIcons": true,
     "customModelDefinitions": true
   }
 }

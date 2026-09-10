@@ -487,6 +487,11 @@ public actor T3Client {
         )
     }
 
+    public func setProjectIcon(projectID: String, icon: ProjectIconOverride?) async throws {
+        let payload = try OrchestrationCommands.setProjectIcon(projectID: projectID, icon: icon)
+        let _: JSONValue = try await rpc.request(RPCMethod.projectsMutate.rawValue, payload: payload, as: JSONValue.self)
+    }
+
     @discardableResult
     public func archive(threadID: String, archived: Bool) async throws -> DispatchResult {
         try await dispatch(OrchestrationCommands.archive(threadID: threadID, archived: archived))
@@ -2231,6 +2236,14 @@ public enum OrchestrationCommands {
             "branch": trimmedOrNull(branch),
             "worktreePath": trimmedOrNull(worktreePath),
             "createdAt": .string(createdAt),
+        ])
+    }
+
+    public static func setProjectIcon(projectID: String, icon: ProjectIconOverride?, commandID: String = UUID().uuidString) throws -> JSONValue {
+        .object([
+            "type": .string("project.update"), "commandId": .string(commandID),
+            "projectId": .string(projectID), "faviconPath": .null,
+            "projectIcon": try icon.map { try JSONValue.encode($0) } ?? .null,
         ])
     }
 

@@ -152,7 +152,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `040_ProjectionProjectFaviconPath` likewise targets the project aggregate and is carried as
   `053_ProjectionProjectFaviconPath`. Upstream's `041_AuthSessionClientConnection` targets
   `auth_sessions`, which the fork shares, and is carried as
-  `058_AuthSessionClientConnection`. Upstream's `042_ProjectionThreadLinkedPullRequest` and
+  `058_AuthSessionClientConnection`. Upstream’s `047_ProjectionProjectIcon` is carried as
+  `059_ProjectionProjectIcon` on the retained project aggregate. Upstream's `042_ProjectionThreadLinkedPullRequest` and
   `043_ProjectionThreadsUnsettledAt` are dropped: they add columns to the retired V1
   `projection_threads`, and the fork carries linked pull requests and the un-settle re-entry stamp
   on the orchestration V2 thread JSON projection instead (see below).
@@ -460,7 +461,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     current pinned dependency versions and Electron 43 remain; Electron 44's drag-region fix is
     therefore not applied.
   - New minimap turn navigation, PR merge defaults/videos/link routing, sidebar file drops,
-    project-icon propagation, composer focus/multiline/footer transitions, usage account layout,
+    composer focus/multiline/footer transitions, usage account layout,
     and their follow-ups need dedicated adaptation to the fork's timeline, inline settings,
     unified attachments and panel stores. Previously deferred onboarding, shared settings,
     auto-balancing, galleries, reset credits and browser-profile import stay deferred.
@@ -525,7 +526,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   account deduplication, equal-weight pools separated by window kind, reset ordering,
   aligned account columns, and explicit unavailable/stale reports;
   automatic clean-default-branch pulls (`ba3cb07738`) and customizable
-  project icons (`f6c04c552c`) need project-aggregate ports plus fork-owned migration numbers;
+  project icons (`f6c04c552c`) are carried on the project aggregate as described below;
   desktop browser-profile import (`134d51096e`, `39449e53e3`, `ff5843410d`, `498ab9c399`) conflicts
   with the fork's desktop/browser shell; and media-preview consolidation (`beae2147a9`, `922bd69225`)
   crosses the frozen Expo client and the fork's existing `MarkdownMedia` path. The range's V1
@@ -698,3 +699,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Expansion changes recycled collection rows instead of mounting a whole run in one cell,
   preserves the viewport anchor, and source-citation navigation expands the owning run first.
   Failed/interrupted/unknown runs remain fully visible; the always-expand preference wins.
+
+- Custom project icons (`f6c04c552c`) and automatic colored defaults (`4e89d74436`) are
+  carried through the retained project aggregate, its events/read models, and fork migration
+  `059_ProjectionProjectIcon`. `projectIcons` advertises support; omitted update fields preserve
+  the icon, explicit null clears it, and selecting a file clears the custom override. Web settings
+  apply edits across every member of the selected project group only when all hosts support them.
+  The native project-filter menu exposes the same searchable Lucide catalogue, emoji picker,
+  colors and reset. Native rows use the full canonical project title and preserve cross-environment
+  identity. Lucide vectors are converted at development time to cached native paths; no per-row
+  SVG web view is used. Regenerate with `scripts/generate-swift-project-icons.mjs` after changing
+  the pinned web Lucide version; see the contributor notes for its Python prerequisite.

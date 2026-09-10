@@ -1,16 +1,15 @@
 # Customize a project icon
 
-T3 Code selects a project icon automatically. It checks `t3.json`, common favicon and app icon
-paths, and icon links in project HTML files.
+T3 Code checks your project configuration and common favicon paths automatically. Projects
+without an image get a colored icon based on their name.
 
-To choose a different icon:
+On web and desktop, open **Settings → Projects**, select a project, and use **Appearance →
+Project icon**. Choose a searchable icon and color, enter an emoji, or select a project image
+file. The setting applies to every checkout in the selected project group.
 
-1. Open **Settings** and select **Projects**.
-2. Select the project.
-3. Under **Appearance**, select **Choose a project file**.
-4. Search for an image file and select it.
+On iOS, select a project in the sidebar’s project filter, open that menu again, and choose
+**Change project icon**. Search the icon catalogue or select an emoji, then tap **Save**.
+Changes appear on your other connected clients. Icon editing requires a server that supports it.
 
-T3 Code supports SVG, PNG, ICO, JPEG, GIF, AVIF, and WebP files. The selected path applies to
-each checkout in the project group and appears on your connected clients.
-
-To use automatic detection again, select **Automatic**.
+Use **Reset** to return to automatic detection. On iOS, tap **Save** after resetting.
+Project image files can be SVG, PNG, ICO, JPEG, GIF, AVIF, or WebP.

@@ -32,6 +32,7 @@ import {
   OrchestrationV2ThreadProjection,
   PlanId,
   ProjectId,
+  ProjectIconOverride,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
@@ -510,6 +511,7 @@ const machineSerialized = `${JSON.stringify(
       repositoryIdentity: true,
       environmentIcon: true,
       customModelDefinitions: true,
+      projectIcons: true,
       assistantCitations: true,
     },
   }),
@@ -583,3 +585,23 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(citationPath, citationSerialized);
+
+const projectIconsPath = NodePath.join(NodePath.dirname(outputPath), "projectIcons.json");
+const projectIconsSerialized = `${JSON.stringify(
+  Schema.encodeSync(Schema.Array(Schema.NullOr(ProjectIconOverride)))([
+    { kind: "lucide", name: "folder-code", color: "violet" },
+    { kind: "emoji", emoji: "👩🏽‍💻" },
+    null,
+  ]),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(projectIconsPath) ||
+    NodeFS.readFileSync(projectIconsPath, "utf8") !== projectIconsSerialized
+  ) {
+    console.error("[swift-fixtures] projectIcons.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(projectIconsPath, projectIconsSerialized);

@@ -297,6 +297,7 @@ function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: stri
 function projectActionItemIcon(project: Project): ReactNode {
   return (
     <ProjectFavicon
+      project={project}
       environmentId={project.environmentId}
       cwd={project.workspaceRoot}
       faviconPath={project.faviconPath}

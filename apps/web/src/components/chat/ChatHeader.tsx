@@ -336,6 +336,7 @@ export const ChatHeader = memo(function ChatHeader({
                   }
                 >
                   <ProjectFavicon
+                    project={activeProject}
                     environmentId={activeThreadEnvironmentId}
                     cwd={activeProjectCwd ?? ""}
                     faviconPath={activeProject.faviconPath ?? null}

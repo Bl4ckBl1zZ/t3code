@@ -57,6 +57,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let fileAttachments: FileAttachments?
         public let assistantCitations: Bool?
         public let customModelDefinitions: Bool?
+        public let projectIcons: Bool?
         public let environmentIcon: Bool?
         public let usagePriceOverrides: Bool?
         public let pullRequestStackActions: Bool?
@@ -75,6 +76,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadPullRequestsV2
             case attachmentUploads, fileAttachments
             case assistantCitations
+            case projectIcons
             case customModelDefinitions
             case environmentIcon
             case usagePriceOverrides
@@ -102,6 +104,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
             fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
             assistantCitations = try container.decodeIfPresent(Bool.self, forKey: .assistantCitations)
+            projectIcons = try container.decodeIfPresent(Bool.self, forKey: .projectIcons)
             customModelDefinitions = try container.decodeIfPresent(Bool.self, forKey: .customModelDefinitions)
             environmentIcon = try container.decodeIfPresent(Bool.self, forKey: .environmentIcon)
             usagePriceOverrides = try container.decodeIfPresent(Bool.self, forKey: .usagePriceOverrides)
@@ -325,6 +328,7 @@ public struct OrchestrationProject: Codable, Identifiable, Equatable, Sendable {
     /// A manually chosen project icon, workspace-relative. Absent on servers
     /// predating manual icons and on projects that rely on auto-discovery.
     public let faviconPath: String?
+    public var projectIcon: ProjectIconOverride? = nil
     public let scripts: [ProjectScript]
     public let createdAt: String
     public let updatedAt: String

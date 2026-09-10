@@ -83,6 +83,7 @@ extension OrchestrationProject {
             repositoryIdentity: identity,
             defaultModelSelection: defaultModelSelection,
             faviconPath: faviconPath,
+            projectIcon: projectIcon,
             scripts: scripts,
             createdAt: createdAt,
             updatedAt: updatedAt,

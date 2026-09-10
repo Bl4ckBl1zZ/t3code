@@ -11,6 +11,7 @@ struct EnvironmentMachineTests {
         #expect(descriptor.capabilities.environmentIcon == true)
         #expect(descriptor.capabilities.assistantCitations == true)
         #expect(descriptor.capabilities.customModelDefinitions == true)
+        #expect(descriptor.capabilities.projectIcons == true)
         #expect(EnvironmentMachineKind(rawValue: descriptor.platform.machine!)?.symbol == "macstudio")
     }
 

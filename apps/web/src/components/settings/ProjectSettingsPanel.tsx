@@ -1,3 +1,6 @@
+import type { ProjectIconOverride } from "@t3tools/contracts";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -326,6 +329,13 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
       (member) => member.environmentId === group.environmentId && member.id === group.id,
     ) ?? group.memberProjects[0]!;
   const faviconPath = representative.faviconPath ?? null;
+  const projectIcon = representative.projectIcon ?? null;
+  const allServerConfigs = useAtomValue(environmentServerConfigsAtom);
+  const supportsProjectIcons = group.memberProjects.every(
+    (member) =>
+      allServerConfigs.get(member.environmentId)?.environment.capabilities.projectIcons === true,
+  );
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const pickProjectFavicon =
     typeof window !== "undefined" &&
     group.memberProjects.every(
@@ -365,6 +375,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
         faviconPath: string | null;
+        projectIcon: ProjectIconOverride | null;
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
@@ -453,18 +464,21 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const [isSavingFavicon, setIsSavingFavicon] = useState(false);
   const savingFaviconRef = useRef(false);
   const setFaviconPath = useCallback(
-    async (faviconPath: string | null) => {
+    async (faviconPath: string | null, projectIcon: ProjectIconOverride | null = null) => {
       if (savingFaviconRef.current) return;
       savingFaviconRef.current = true;
       setIsSavingFavicon(true);
       try {
-        await updateAllMembers({ faviconPath }, "Failed to update project icon");
+        await updateAllMembers(
+          { faviconPath, ...(supportsProjectIcons ? { projectIcon } : {}) },
+          "Failed to update project icon",
+        );
       } finally {
         savingFaviconRef.current = false;
         setIsSavingFavicon(false);
       }
     },
-    [updateAllMembers],
+    [updateAllMembers, supportsProjectIcons],
   );
 
   // ----- checkout selection and scripts -----
@@ -796,12 +810,18 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           />
           <SettingsRow
             title="Project icon"
-            description={faviconPath ?? "Automatic"}
+            description={
+              projectIcon?.kind === "emoji"
+                ? projectIcon.emoji
+                : projectIcon?.kind === "lucide"
+                  ? `${projectIcon.name} · ${projectIcon.color}`
+                  : (faviconPath ?? "Automatic")
+            }
             resetAction={
-              faviconPath !== null ? (
+              faviconPath !== null || projectIcon !== null ? (
                 <SettingResetButton
                   label="project icon"
-                  disabled={isSavingFavicon}
+                  disabled={isSavingFavicon || (projectIcon !== null && !supportsProjectIcons)}
                   onClick={() => void setFaviconPath(null)}
                 />
               ) : null
@@ -809,11 +829,23 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             control={
               <div className="flex items-center gap-2">
                 <ProjectFavicon
+                  project={representative}
                   environmentId={representative.environmentId}
                   cwd={representative.workspaceRoot}
                   faviconPath={faviconPath}
                   className="size-6"
                 />
+                {supportsProjectIcons && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    type="button"
+                    disabled={isSavingFavicon}
+                    onClick={() => setIconPickerOpen(true)}
+                  >
+                    Choose icon
+                  </Button>
+                )}
                 <Button
                   size="xs"
                   variant="outline"
@@ -1194,6 +1226,14 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         onDelete={deleteScript}
         onClose={() => setEditorRequest(null)}
       />
+      {supportsProjectIcons && (
+        <ProjectIconPickerDialog
+          current={projectIcon}
+          open={iconPickerOpen}
+          onOpenChange={setIconPickerOpen}
+          onSelect={(icon) => void setFaviconPath(null, icon)}
+        />
+      )}
       <ProjectFaviconPickerDialog
         key={`${representative.environmentId}:${representative.workspaceRoot}:${faviconPickerOpen}`}
         cwd={representative.workspaceRoot}

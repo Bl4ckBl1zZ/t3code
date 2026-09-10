@@ -443,6 +443,7 @@ function SidebarThreadTooltip({
           {showProjectContext && projectTitle ? (
             <div className="flex min-w-0 items-center gap-2">
               <ProjectFavicon
+                projectId={thread.projectId}
                 environmentId={thread.environmentId}
                 cwd={projectCwd ?? ""}
                 faviconPath={projectFaviconPath}
@@ -1490,6 +1491,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 />
               ) : (
                 <ProjectFavicon
+                  projectId={thread.projectId}
                   environmentId={thread.environmentId}
                   cwd={props.projectCwd ?? ""}
                   faviconPath={props.projectFaviconPath}
@@ -1891,6 +1893,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   ) : (
                     <>
                       <ProjectFavicon
+                        projectId={thread.projectId}
                         environmentId={thread.environmentId}
                         cwd={props.projectCwd ?? ""}
                         faviconPath={props.projectFaviconPath}
@@ -2067,6 +2070,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           }
         >
           <ProjectFavicon
+            projectId={thread.projectId}
             environmentId={thread.environmentId}
             cwd={props.projectCwd ?? ""}
             faviconPath={props.projectFaviconPath}
@@ -4278,6 +4282,7 @@ export default function Sidebar() {
                     {scopedProjectGroup ? (
                       <span className="flex shrink-0">
                         <ProjectFavicon
+                          project={scopedProjectGroup}
                           environmentId={scopedProjectGroup.environmentId}
                           cwd={scopedProjectGroup.workspaceRoot}
                           faviconPath={scopedProjectGroup.faviconPath}
@@ -4341,6 +4346,7 @@ export default function Sidebar() {
                           >
                             {project ? (
                               <ProjectFavicon
+                                project={project}
                                 environmentId={project.environmentId}
                                 cwd={project.workspaceRoot}
                                 faviconPath={project.faviconPath}

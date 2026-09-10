@@ -43,6 +43,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var supportsEnvironmentIcon: Bool?
     public var supportsAssistantCitations: Bool? = nil
     public var supportsCustomModelDefinitions: Bool? = nil
+    public var supportsProjectIcons: Bool? = nil
     public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
     public init(
@@ -56,7 +57,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         machineKind: String? = nil,
         supportsEnvironmentIcon: Bool? = nil,
         supportsAssistantCitations: Bool? = nil,
-        supportsCustomModelDefinitions: Bool? = nil
+        supportsCustomModelDefinitions: Bool? = nil,
+        supportsProjectIcons: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -69,6 +71,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.supportsEnvironmentIcon = supportsEnvironmentIcon
         self.supportsAssistantCitations = supportsAssistantCitations
         self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
+        self.supportsProjectIcons = supportsProjectIcons
     }
 }
 
@@ -109,6 +112,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     /// The project's manually chosen icon (workspace-relative), from
     /// `OrchestrationProject.faviconPath`. Nil keeps favicon auto-discovery.
     public var faviconPath: String?
+    public var projectIcon: ProjectIconOverride?
 
     public init(
         id: String,
@@ -120,7 +124,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         defaultSelection: FeatureSelection? = nil,
         scripts: [ProjectScript] = [],
         previewUrl: String? = nil,
-        faviconPath: String? = nil
+        faviconPath: String? = nil,
+        projectIcon: ProjectIconOverride? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -132,6 +137,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.scripts = scripts
         self.previewUrl = previewUrl
         self.faviconPath = faviconPath
+        self.projectIcon = projectIcon
     }
 
     /// `ProjectScript` is a Core wire type and is deliberately not `Hashable`,
@@ -147,6 +153,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         hasher.combine(defaultSelection)
         hasher.combine(previewUrl)
         hasher.combine(faviconPath)
+        hasher.combine(projectIcon)
         for script in scripts { hasher.combine(script.id) }
     }
 }

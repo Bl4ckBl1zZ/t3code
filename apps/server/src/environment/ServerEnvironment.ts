@@ -162,6 +162,7 @@ export const make = Effect.gen(function* () {
       environmentThemes: true,
       environmentIcon: true,
       customModelDefinitions: true,
+      projectIcons: true,
       assistantCitations: true,
       threadPinning: true,
       threadActiveOrderV2: true,

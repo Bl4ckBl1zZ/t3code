@@ -38,6 +38,7 @@ import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFix
 import {
   archiveThread,
   createProject,
+  updateProject,
   discoverHermesSessions,
   forkThreadFromRun,
   mergeThreadBack,
@@ -177,6 +178,28 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
 });
 
 describe("V2 environment commands", () => {
+  it.effect("sends project icons and explicit resets through the project mutation transport", () =>
+    Effect.gen(function* () {
+      const projects: ProjectMutation[] = [];
+      const supervisor = yield* makeSupervisor({ commands: [], projects });
+      const projectId = ProjectId.make("project-icons");
+      const icon = { kind: "emoji", emoji: "🚀" } as const;
+      for (const fields of [{ projectIcon: icon }, { title: "Renamed" }, { projectIcon: null }]) {
+        yield* updateProject({ projectId, ...fields }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        );
+      }
+      expect(projects.map((command) => command.type)).toEqual([
+        "project.update",
+        "project.update",
+        "project.update",
+      ]);
+      expect(projects[0]).toMatchObject({ projectId, projectIcon: icon });
+      expect(projects[1]).not.toHaveProperty("projectIcon");
+      expect(projects[2]).toHaveProperty("projectIcon", null);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("routes projects through the event-sourced project transport", () =>
     Effect.gen(function* () {
       const projects: ProjectMutation[] = [];

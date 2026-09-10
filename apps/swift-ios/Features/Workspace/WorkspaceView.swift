@@ -48,6 +48,7 @@ public struct WorkspaceView: View {
     @State private var showingNewWorkConversation = false
     @State private var newTaskInitialProjectID: String?
     @State private var showingAddProject = false
+    @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
     @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
@@ -228,6 +229,11 @@ public struct WorkspaceView: View {
                     showingNewWorkConversation = false
                 }
             )
+        }
+        .sheet(item: $editingProjectIcon) { project in
+            if let manager = model.client as? any FeatureProjectIconManaging {
+                ProjectIconPickerView(project: project, manager: manager)
+            }
         }
         .sheet(isPresented: $showingAddProject) {
             AddProjectView(model: model)
@@ -782,6 +788,12 @@ public struct WorkspaceView: View {
                         Text("All projects")
                     }
                 }
+                if let project = selectedProject,
+                   model.snapshot.environments.first(where: { $0.id == project.environmentID })?.supportsProjectIcons == true,
+                   model.client is any FeatureProjectIconManaging {
+                    Button { editingProjectIcon = project } label: { Label("Change project icon", systemImage: "paintpalette") }
+                    Divider()
+                }
                 ForEach(filterableProjects) { project in
                     Button {
                         selectedProjectID = project.id
@@ -796,8 +808,14 @@ public struct WorkspaceView: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 13, weight: .medium))
+                    if let project = selectedProject {
+                        ProjectFaviconBadge(environmentID: project.environmentID, workspaceRoot: project.path,
+                            faviconPath: project.faviconPath, projectIcon: project.projectIcon, projectTitle: project.name) {
+                            Image(systemName: "folder")
+                        }
+                    } else {
+                        Image(systemName: "folder").font(.system(size: 13, weight: .medium))
+                    }
                     Text(selectedProject?.name ?? "All projects")
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
@@ -852,6 +870,7 @@ public struct WorkspaceView: View {
                     repositoryIdentity: nil,
                     defaultModelSelection: nil,
                     faviconPath: project.faviconPath,
+                    projectIcon: project.projectIcon,
                     scripts: project.scripts,
                     createdAt: "",
                     updatedAt: "",
@@ -1283,6 +1302,7 @@ struct HomeThreadRowContext: Equatable {
     /// The project's manually chosen icon, forwarded to favicon resolution as
     /// a cache-key hint so icon changes reach existing rows.
     let projectFaviconPath: String?
+    var projectIcon: ProjectIconOverride? = nil
     let environmentLabel: String?
     var machineSymbol: String = "server.rack"
     let providerID: String
@@ -1358,6 +1378,7 @@ struct HomeThreadRowContext: Equatable {
                 projectEnvironmentID: project?.environmentID,
                 projectWorkspaceRoot: project?.path,
                 projectFaviconPath: project?.faviconPath,
+                projectIcon: project?.projectIcon,
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
                 machineSymbol: environment?.machineSymbol ?? "server.rack",
                 providerID: providerID,
@@ -1434,7 +1455,8 @@ struct FeatureThreadRow: View, Equatable {
                 ProjectFaviconBadge(
                     environmentID: context.projectEnvironmentID,
                     workspaceRoot: context.projectWorkspaceRoot,
-                    faviconPath: context.projectFaviconPath
+                    faviconPath: context.projectFaviconPath,
+                    projectIcon: context.projectIcon, projectTitle: context.projectName
                 ) {
                     ProjectBadge(name: context.projectName)
                 }
@@ -1524,7 +1546,8 @@ struct FeatureThreadRow: View, Equatable {
             ProjectFaviconBadge(
                 environmentID: context.projectEnvironmentID,
                 workspaceRoot: context.projectWorkspaceRoot,
-                faviconPath: context.projectFaviconPath
+                faviconPath: context.projectFaviconPath,
+                    projectIcon: context.projectIcon, projectTitle: context.projectName
             ) {
                 ProjectBadge(name: context.projectName)
             }

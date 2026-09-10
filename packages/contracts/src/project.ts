@@ -1,3 +1,4 @@
+import { ProjectIconOverride } from "./projectIcon.ts";
 import * as Schema from "effect/Schema";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
@@ -53,6 +54,7 @@ export const Project = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start. Null/absent means
   // "no override": clients fall back to t3.json, then the global setting.
@@ -102,6 +104,7 @@ export const ProjectMutation = Schema.Union([
     defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
     // Absent = leave unchanged; null = clear the manual icon.
     faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
     scripts: Schema.optional(Schema.Array(ProjectScript)),
   }),
   Schema.Struct({
