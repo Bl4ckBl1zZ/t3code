@@ -56,3 +56,8 @@ release notes open on hover or keyboard focus; Tab reaches their full-release li
 Codex file citations open the referenced file and line. Artifact-template results appear
 as cards on web, desktop, and iOS. Choose **Use template** to add a prompt to the
 composer, then edit and send it when ready.
+
+In the native iOS app, opening a quote's source briefly highlights the matching text
+inside the original response, including lists, tables and code blocks. If an edited
+response no longer has an unambiguous match, the app opens the response and explains
+that it could not mark the exact quote. Your saved quote remains unchanged.

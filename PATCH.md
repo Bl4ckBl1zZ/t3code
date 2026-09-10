@@ -834,3 +834,12 @@ bounded excerpts disclose truncation. Tasks stay unsent and preserve existing co
 text and attachments. Native checkout-command copy uses the reported source-control
 provider, with no host guessing. Structured review-context chips remain a separate visual
 parity gap; these handoffs currently stage quoted text.
+
+### Native citation source highlighting
+
+Native source navigation resolves the shared normalized UTF-16 quote selector back to
+rendered text and briefly marks the exact inline/code ranges without mutating cached
+Markdown documents. List/table separators match native citation capture. Ambiguous
+repeated text is never guessed; unique text can recover after offsets shift. Highlights
+expire after three seconds without continuous animation and remain scoped to the source
+message and transcript coordinator.

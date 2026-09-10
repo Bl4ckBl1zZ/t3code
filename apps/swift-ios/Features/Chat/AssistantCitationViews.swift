@@ -150,7 +150,7 @@ extension MarkdownRenderedDocument {
             case .unorderedList(let items), .orderedList(_, let items): items.map { citationText($0.blocks) }.joined(separator: "\n")
             case .blockquote(let nested), .githubAlert(_, let nested): citationText(nested)
             case .table(let table): ([table.header] + table.rows).map { $0.map { String($0.attributedText.characters) }.joined(separator: "\t") }.joined(separator: "\n")
-            case .codeBlock(_, let code): code
+            case .codeBlock(_, let code, _): code
             case .image, .htmlEmbed, .artifactTemplate, .thematicBreak: ""
             }
         }.joined(separator: "\n")

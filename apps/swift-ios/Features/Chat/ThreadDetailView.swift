@@ -1883,6 +1883,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             foldChoiceRevision += 1
             rebuildForFold?()
         }
+        private let citationHighlight = AssistantCitationHighlight()
         private var citationRequest: AssistantCitationNavigationRequest?
         private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
         private var citationPages = Set<String>()
@@ -1909,9 +1910,16 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
                 collectionView.layoutIfNeeded()
                 collectionView.scrollToItem(at: path, at: .top, animated: !UIAccessibility.isReduceMotionEnabled)
+                var sourceMatches = false
+                if case let .message(message) = entriesByID[entryID] {
+                    let document = MarkdownRenderCache.shared.documentImmediately(for: MarkdownContentRevision(message.text))
+                    sourceMatches = AssistantCitationTextRange.resolve(in: document?.citationText ?? message.text, quote: citation.text,
+                        start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) != nil
+                }
+                if sourceMatches { citationHighlight.show(citation) }
                 UIAccessibility.post(notification: .announcement, argument: "Quoted response: \(citation.text)")
                 citationRequest = nil
-                citationCompletion(request, nil)
+                citationCompletion(request, sourceMatches ? nil : "The source response is visible, but the saved quote no longer matches unambiguously. Your saved quote is unchanged.")
                 return
             }
             if let runID = hiddenCitationRunIDs[citation.messageId], !expandedRunIDs.contains(runID) {
@@ -1997,6 +2005,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 }
 
                 let context = rowContext
+                let highlight = citationHighlight
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -2019,6 +2028,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.markdownMediaContext, context.markdownMedia)
                     .environment(\.markdownPullRequestContext, context.pullRequests)
                     .environment(\.assistantCitationContext, context.citationContext)
+                    .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in
                         if let citation = AssistantCitation.parse(url.absoluteString) {

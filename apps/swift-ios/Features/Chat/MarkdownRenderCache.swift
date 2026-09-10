@@ -134,7 +134,7 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// posted in, which this render task does not know, and loading happens on
     /// the main actor once the block is on screen.
     case image(MarkdownInlineImage)
-    case codeBlock(language: String?, code: String)
+    case codeBlock(language: String?, code: String, citationRange: NSRange? = nil)
     /// Carried through unrendered: the embed's document is assembled on the
     /// main actor from the current colour scheme, which this render task does
     /// not know and must not capture.
