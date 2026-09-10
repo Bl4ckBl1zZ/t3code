@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
+import * as Persistence from "effect/unstable/persistence/Persistence";
+import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import * as TestClock from "effect/testing/TestClock";
 import type {
   Project,
@@ -170,6 +174,11 @@ function makeService(input: {
           }),
         }),
         SourceControlRateLimit.layer,
+        Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
+          Layer.provide(Persistence.layerKvs),
+          Layer.provide(KeyValueStore.layerMemory),
+          Layer.provide(NodeServices.layer),
+        ),
       ),
     ),
   );
@@ -3661,5 +3670,101 @@ it.effect("hands a label change to the host, and reads the labels back for the m
       applied: false,
     });
     assert.deepStrictEqual(received, { labels: ["bug"], applied: false });
+  }),
+);
+
+it.effect("does not reuse persisted detail when a project moves to another workspace", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const projects = [
+      project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+    ];
+    const service = yield* makeService({
+      projects,
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: ({ cwd }) =>
+            Effect.sync(() => {
+              reads += 1;
+              return {
+                ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                title: cwd,
+                body: "",
+                changedFiles: 0,
+                mergedAt: null,
+                closedAt: null,
+                reviewers: [],
+                checks: [],
+                mergeCapabilities: { merge: true, squash: true, rebase: true },
+                viewerPermissions: {
+                  actions: [],
+                  comment: true,
+                  resolve: true,
+                  verdicts: [],
+                  requestReviewers: true,
+                },
+              };
+            }),
+        }),
+      ],
+    });
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    assert.strictEqual((yield* service.detail(ref)).title, "/a");
+    assert.strictEqual((yield* service.detail(ref)).title, "/a");
+    assert.strictEqual(reads, 1);
+    projects[0] = project({ id: "p1", title: "web", workspaceRoot: "/b", repository: "acme/web" });
+    assert.strictEqual((yield* service.detail(ref)).title, "/b");
+    assert.strictEqual(reads, 2);
+  }),
+);
+
+it.effect("forgets detail after a host partially writes and then reports a failure", () =>
+  Effect.gen(function* () {
+    let title = "Before";
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.sync(() => ({
+              ...changeRequest(1, "2026-07-02T00:00:00Z"),
+              title,
+              body: "",
+              changedFiles: 0,
+              mergedAt: null,
+              closedAt: null,
+              reviewers: [],
+              checks: [],
+              mergeCapabilities: { merge: true, squash: true, rebase: true },
+              viewerPermissions: {
+                actions: [],
+                comment: true,
+                resolve: true,
+                verdicts: [],
+                requestReviewers: true,
+              },
+            })),
+          updateChangeRequest: () =>
+            Effect.sync(() => {
+              title = "After";
+            }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new PullRequestProviderError({
+                    operation: "updateChangeRequest",
+                    provider: "github",
+                    reason: "failed",
+                    detail: "Second write failed",
+                  }),
+                ),
+              ),
+            ),
+        }),
+      ],
+    });
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    assert.strictEqual((yield* service.detail(ref)).title, "Before");
+    yield* service.update({ ...ref, title: "After" }).pipe(Effect.flip);
+    assert.strictEqual((yield* service.detail(ref)).title, "After");
   }),
 );

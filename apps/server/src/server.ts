@@ -28,6 +28,7 @@ import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
+import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -513,6 +514,7 @@ const commandReadinessLayer = HttpRouter.middleware(
 );
 
 const PullRequestServiceLive = PullRequestService.layer.pipe(
+  Layer.provide(PullRequestReadCache.layer),
   // One registry entry per supported host; the service only knows the registry.
   Layer.provide(PullRequestProviderRegistry.layer),
   Layer.provide(SourceControlProviderRegistryLayerLive),

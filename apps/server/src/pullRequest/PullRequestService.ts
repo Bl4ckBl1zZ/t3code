@@ -2,7 +2,7 @@ import type {
   PullRequestLabelCandidateList,
   PullRequestLabelChangeInput,
 } from "@t3tools/contracts";
-import type { PullRequestStack } from "@t3tools/contracts";
+import { PullRequestStack } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -10,6 +10,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import {
   PullRequestOperationError,
   PullRequestUnavailableError,
@@ -22,7 +25,7 @@ import {
   type PullRequestActivity,
   type PullRequestCommentInput,
   type PullRequestCommentUpdateInput,
-  type PullRequestDetail,
+  PullRequestDetail,
   type PullRequestDiffFileContentsInput,
   type PullRequestDiffFileContentsResult,
   type PullRequestDiffStat,
@@ -505,6 +508,7 @@ export function repositoryIdentityOf(project: OrchestrationProjectShell): string
 
 export const make = Effect.gen(function* () {
   const registry = yield* PullRequestProviderRegistry;
+  const readCache = yield* PullRequestReadCache.PullRequestReadCache;
   const projectService = yield* ProjectService.ProjectService;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
@@ -1315,7 +1319,7 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const stack: PullRequestService["Service"]["stack"] = (input) =>
+  const stackUncached: PullRequestService["Service"]["stack"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
         project.api.getStack
@@ -2086,20 +2090,61 @@ export const make = Effect.gen(function* () {
     return Cache.get(listCache, key);
   };
 
-  const detailCache = yield* Cache.makeWith(
-    (key: string) => {
-      const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
-      return detailUncached({ projectId, repository, number } as PullRequestRef);
-    },
-    {
-      capacity: DETAIL_CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
-    },
-  );
-  const detail: PullRequestService["Service"]["detail"] = (input) => {
-    const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
-    return Cache.get(detailCache, key);
-  };
+  // Persist the fork's detail read (15 seconds) and stack (60 seconds). V2 does not use
+  // upstream's V1-linked summary reader. Resolve the project before every cache read so
+  // removed projects and changed hosts/workspaces cannot reuse another identity's data.
+  const persistedRead = Effect.fn("PullRequestService.persistedRead")(function* <A>(
+    input: PullRequestRef,
+    operation: string,
+    codec: Schema.Codec<A, string>,
+    read: Effect.Effect<A, PullRequestError>,
+    ttlMs: number,
+  ) {
+    const project = yield* requireProject(input);
+    const key = [
+      "fork-v2",
+      operation,
+      project.api.kind,
+      project.host.toLowerCase(),
+      project.repository,
+      project.project.id,
+      project.project.workspaceRoot,
+      String(input.number),
+    ]
+      .map(encodeURIComponent)
+      .join(":");
+    const lookup = yield* Effect.cached(read);
+    const encoded = lookup.pipe(
+      Effect.flatMap((value) =>
+        Schema.encodeEffect(codec)(value).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PullRequestOperationError({
+                operation: "cache",
+                detail: "Could not encode PR cache data.",
+                cause,
+              }),
+          ),
+        ),
+      ),
+    );
+    const payload = yield* readCache.get(key, encoded, ttlMs);
+    const decoded = yield* Schema.decodeUnknownEffect(codec)(payload).pipe(Effect.option);
+    return Option.isSome(decoded) ? decoded.value : yield* lookup;
+  });
+  const detailCodec = Schema.fromJsonString(PullRequestDetail);
+  const stackCodec = Schema.fromJsonString(Schema.NullOr(PullRequestStack));
+  const stack: PullRequestService["Service"]["stack"] = (input) =>
+    persistedRead(input, "stack", stackCodec, stackUncached(input), 60_000);
+
+  const detail: PullRequestService["Service"]["detail"] = (input) =>
+    persistedRead(
+      input,
+      "detail",
+      detailCodec,
+      detailUncached(input),
+      Duration.toMillis(DETAIL_CACHE_TTL),
+    );
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
@@ -2185,16 +2230,20 @@ export const make = Effect.gen(function* () {
   };
 
   const invalidate: PullRequestService["Service"]["invalidate"] = (input) =>
-    Effect.sync(() => {
-      if (input.reference === undefined) {
-        listingsEpoch = ++epochCounter;
-        // A whole-workspace refresh is the reader asking to be re-answered from the hosts,
-        // and that includes who the hosts say they are.
-        viewersByHost.clear();
-        return;
-      }
-      bumpRefEpoch(input.reference);
-    });
+    readCache.invalidate.pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          if (input.reference === undefined) {
+            listingsEpoch = ++epochCounter;
+            // A whole-workspace refresh is the reader asking to be re-answered from the hosts,
+            // and that includes who the hosts say they are.
+            viewersByHost.clear();
+            return;
+          }
+          bumpRefEpoch(input.reference);
+        }),
+      ),
+    );
 
   // A mutation's own client re-reads right after it, and every other client's next read must
   // see the action too — so a write forgets the change request it touched and the listings its
@@ -2204,8 +2253,10 @@ export const make = Effect.gen(function* () {
       method: (input: I) => Effect.Effect<void, PullRequestError>,
     ): ((input: I) => Effect.Effect<void, PullRequestError>) =>
     (input) =>
-      method(input).pipe(
-        Effect.tap(() =>
+      readCache.invalidate.pipe(
+        Effect.andThen(method(input)),
+        Effect.ensuring(readCache.invalidate),
+        Effect.ensuring(
           Effect.sync(() => {
             bumpRefEpoch(input);
             listingsEpoch = ++epochCounter;

@@ -627,7 +627,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   the same environment. A host read validates additions; unlinking uses the saved identity
   without requiring the host or project to remain available. Stack detail controls use the
   native parity RPC and capture immutable reviewed heads before submitting merge/rebase.
-  Automatic discovery, source/tombstone metadata and persistent PR caches remain separate ports.
+  Automatic discovery and source/tombstone metadata remain separate ports. Persistent PR detail/stack reads are now ported as described below.
 
 - GitHub PR labels are editable in web/desktop and Swift detail screens. Optional
   host capability and viewer permission flags gate lazy candidate reads and mutations;
@@ -896,3 +896,14 @@ expanded layout; trackpad momentum cannot immediately undo explicit expansion. T
 `composerCollapseOnScroll` preference defaults on and is exposed in desktop General settings.
 Native voice gestures and mobile layouts are unchanged. Upstream's full geometry animation
 is not yet ported; the layout change currently has no motion interpolation.
+
+### PR reads across restarts
+
+Upstream `33242d0164` persistence is adapted to the fork's PR detail and stack APIs rather
+than its V1-linked summary reader. Details retain their 15-second freshness limit and stacks
+expire after 60 seconds, measured from the original host read across restarts. Keys include
+operation, provider, host, repository, project and workspace identity; persisted filenames
+are hashes. Schema validation, corrupt-file fallback, failed-read exclusion and unavailable
+storage fallback keep the host authoritative. Refreshes and mutations clear persisted entries;
+partial failed writes invalidate memory epochs too. Clearing waits for in-flight readers,
+and a failed clear disables persistence for the process. No migration or V1 service is used.

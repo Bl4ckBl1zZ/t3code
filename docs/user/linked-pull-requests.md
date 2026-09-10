@@ -126,3 +126,7 @@ you can edit its comment or remove it. **Ask** leaves the text field empty for y
 Review-context cards remain inspectable in sent messages and are compatible with web and desktop.
 Findings without a file location and check output stay in the PR context rather than gaining an
 invented line number.
+
+Recent pull request details and stack reads can survive a server restart, reducing repeated
+host requests. Details expire after 15 seconds and stacks after one minute, counted from the
+original read. Refreshing or changing a pull request clears those cached reads.
