@@ -66,6 +66,15 @@ struct FeatureComposerApprovalPanel: View {
             Divider().overlay(T3Colors.separator)
 
             VStack(spacing: 9) {
+                if let options = approval.options {
+                    ForEach(options, id: \.decision) { option in
+                        approvalButton(option.label,
+                            background: option.decision == .allowOnce ? T3Colors.accent : Color.clear,
+                            border: T3Colors.border,
+                            foreground: option.decision == .deny ? T3Colors.danger : T3Colors.textPrimary,
+                            action: { onDecision(option.decision) })
+                    }
+                } else {
                 HStack(spacing: 7) {
                     approvalButton(
                         "Approve once",
@@ -74,7 +83,7 @@ struct FeatureComposerApprovalPanel: View {
                     )
 
                     approvalButton(
-                        "Always allow",
+                        "Allow this session",
                         background: Color.clear,
                         border: T3Colors.border,
                         foreground: T3Colors.textPrimary,
@@ -94,6 +103,7 @@ struct FeatureComposerApprovalPanel: View {
                 .font(T3Typography.supportingStrong)
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.top, 10)

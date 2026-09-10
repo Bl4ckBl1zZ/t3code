@@ -383,7 +383,21 @@
       "type": "approval_request",
       "requestId": "request-approval",
       "requestKind": "command",
-      "prompt": "Run ls?"
+      "prompt": "Run ls?",
+      "options": [
+        {
+          "decision": "accept",
+          "label": "Allow once"
+        },
+        {
+          "decision": "acceptForSession",
+          "label": "Allow this session"
+        },
+        {
+          "decision": "decline",
+          "label": "Decline"
+        }
+      ]
     },
     {
       "id": "item-checkpoint",
@@ -1029,7 +1043,21 @@
         "type": "approval_request",
         "requestId": "request-approval",
         "requestKind": "command",
-        "prompt": "Run ls?"
+        "prompt": "Run ls?",
+        "options": [
+          {
+            "decision": "accept",
+            "label": "Allow once"
+          },
+          {
+            "decision": "acceptForSession",
+            "label": "Allow this session"
+          },
+          {
+            "decision": "decline",
+            "label": "Decline"
+          }
+        ]
       }
     },
     {

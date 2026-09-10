@@ -1,9 +1,14 @@
-import { type RuntimeRequestId, type ProviderApprovalDecision } from "@t3tools/contracts";
+import {
+  type RuntimeRequestId,
+  type ProviderApprovalOption,
+  type ProviderApprovalDecision,
+} from "@t3tools/contracts";
 import { memo } from "react";
 import { Button } from "../ui/button";
 
 interface ComposerPendingApprovalActionsProps {
   requestId: RuntimeRequestId;
+  options?: readonly ProviderApprovalOption[] | undefined;
   isResponding: boolean;
   canRespond: boolean;
   onRespondToApproval: (
@@ -14,48 +19,33 @@ interface ComposerPendingApprovalActionsProps {
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
   requestId,
+  options,
   isResponding,
   canRespond,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
+  const choices =
+    options ??
+    ([
+      { decision: "cancel", label: "Cancel turn" },
+      { decision: "decline", label: "Decline" },
+      { decision: "acceptForSession", label: "Always allow this session" },
+      { decision: "accept", label: "Approve once" },
+    ] satisfies readonly ProviderApprovalOption[]);
   return (
     <>
-      <Button
-        size="micro"
-        className="font-normal [@media(pointer:coarse)]:min-h-10"
-        variant="ghost"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "cancel")}
-      >
-        Cancel turn
-      </Button>
-      <Button
-        size="micro"
-        className="font-normal [@media(pointer:coarse)]:min-h-10"
-        variant="ghost"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "decline")}
-      >
-        Decline
-      </Button>
-      <Button
-        size="micro"
-        className="font-normal [@media(pointer:coarse)]:min-h-10"
-        variant="ghost"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
-      >
-        Always allow this session
-      </Button>
-      <Button
-        size="micro"
-        className="font-normal [@media(pointer:coarse)]:min-h-10"
-        variant="ghost"
-        disabled={isResponding || !canRespond}
-        onClick={() => void onRespondToApproval(requestId, "accept")}
-      >
-        Approve once
-      </Button>
+      {choices.map((option) => (
+        <Button
+          key={option.decision}
+          size="micro"
+          className="font-normal [@media(pointer:coarse)]:min-h-10"
+          variant="ghost"
+          disabled={isResponding || !canRespond}
+          onClick={() => void onRespondToApproval(requestId, option.decision)}
+        >
+          {option.label}
+        </Button>
+      ))}
     </>
   );
 });

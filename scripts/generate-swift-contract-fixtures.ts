@@ -198,6 +198,11 @@ const turnItems: OrchestrationV2TurnItem[] = [
     requestId: RuntimeRequestId.make("request-approval"),
     requestKind: "command",
     prompt: "Run ls?",
+    options: [
+      { decision: "accept", label: "Allow once" },
+      { decision: "acceptForSession", label: "Allow this session" },
+      { decision: "decline", label: "Decline" },
+    ],
   },
   {
     ...base("item-checkpoint"),

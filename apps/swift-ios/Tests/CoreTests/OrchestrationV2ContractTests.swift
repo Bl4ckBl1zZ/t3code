@@ -52,6 +52,18 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertNil(dismiss["answers"])
     }
 
+    func testApprovalOptionsRoundTripAndUnknownDecisionsStayUnavailable() throws {
+        let projection = try projection()
+        let item = try XCTUnwrap(projection.turnItems.first { $0.type == "approval_request" })
+        guard case let .approvalRequest(_, _, _, options) = item.payload else { return XCTFail("Missing approval") }
+        XCTAssertEqual(options?.map(\.label), ["Allow once", "Allow this session", "Decline"])
+        let decoded = try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONEncoder().encode(item))
+        XCTAssertEqual(decoded, item)
+        XCTAssertEqual(FeatureApprovalDecision(providerDecision: "acceptAlways"), .allowAlways)
+        XCTAssertEqual(FeatureApprovalDecision(providerDecision: "cancel"), .cancel)
+        XCTAssertNil(FeatureApprovalDecision(providerDecision: "future-grant"))
+    }
+
     func testContractGeneratedProjectionDecodes() throws {
         let projection = try projection()
         XCTAssertEqual(projection.thread.id, "thread-v2")

@@ -167,3 +167,8 @@ collapse the stack.
 On web and desktop, the timeline minimap includes **Previous turn** and **Next turn**
 buttons. They follow the turn at your reading position; keyboard focus on the rail
 starts there too. iPhone and iPad offer the same navigation in the thread menu.
+
+Codex app-access requests show the choices supplied by the app, including session or
+permanent permission when offered. The label states how long access lasts. Canceling
+an app-access request answers that request; **Cancel turn** on ordinary approvals
+still stops the turn.

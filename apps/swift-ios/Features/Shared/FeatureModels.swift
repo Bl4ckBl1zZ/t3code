@@ -538,6 +538,7 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
     public var kind: FeatureApprovalKind
     public var title: String
     public var detail: String
+    public var options: [FeatureApprovalOption]?
 
     public init(
         id: String,
@@ -545,7 +546,8 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
         threadID: String,
         kind: FeatureApprovalKind,
         title: String,
-        detail: String
+        detail: String,
+        options: [FeatureApprovalOption]? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -553,6 +555,7 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
         self.kind = kind
         self.title = title
         self.detail = detail
+        self.options = options
     }
 }
 
@@ -1317,7 +1320,25 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
 public enum FeatureApprovalDecision: String, Sendable, Codable {
     case allowOnce
     case allowForSession
+    case allowAlways
+    case cancel
     case deny
+
+    public init?(providerDecision: String) {
+        switch providerDecision {
+        case "accept": self = .allowOnce
+        case "acceptForSession": self = .allowForSession
+        case "acceptAlways": self = .allowAlways
+        case "decline": self = .deny
+        case "cancel": self = .cancel
+        default: return nil
+        }
+    }
+}
+
+public struct FeatureApprovalOption: Codable, Equatable, Hashable, Sendable {
+    public let decision: FeatureApprovalDecision
+    public let label: String
 }
 
 public enum FeatureEvent: Sendable {

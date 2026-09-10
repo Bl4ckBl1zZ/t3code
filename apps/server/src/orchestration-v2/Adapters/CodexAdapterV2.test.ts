@@ -1115,10 +1115,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       });
       const events: Array<ProviderAdapterV2Event> = [];
       const terminalReceipt = yield* Deferred.make<void>();
+      const approvalReceipt =
+        yield* Deferred.make<Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }>>();
       yield* runtime.events.pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             events.push(event);
+            if (event.type === "turn_item.updated" && event.turnItem.type === "approval_request")
+              yield* Deferred.succeed(approvalReceipt, event);
             if (event.type === "turn.terminal") yield* Deferred.succeed(terminalReceipt, undefined);
           }),
         ),
@@ -1146,6 +1150,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         continuationRequests,
         terminalEvents,
         awaitTerminal: Deferred.await(terminalReceipt),
+        awaitApproval: Deferred.await(approvalReceipt),
         subagentUpdates,
         hasPendingBackgroundWork,
       };
@@ -1156,6 +1161,118 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
         event.type === "message.updated" && event.message.role === "assistant",
     );
+
+  it.effect(
+    "routes Codex app-access approval choices through V2 and rejects unoffered persistence",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "mcp-thread";
+          const nativeTurnId = "mcp-turn";
+          const transcript = makeCodexReplayTranscript({
+            scenario: "mcp-approval",
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Use Safari." }),
+              {
+                type: "emit_inbound",
+                label: "mcp approval",
+                frame: {
+                  id: 99,
+                  method: "mcpServer/elicitation/request",
+                  params: {
+                    mode: "form",
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    serverName: "computer-use",
+                    message: "Allow ChatGPT to use Safari?",
+                    requestedSchema: {
+                      type: "object",
+                      properties: {
+                        approval: {
+                          type: "string",
+                          oneOf: [
+                            { const: "once", title: "Once" },
+                            { const: "session", title: "Allow Safari this session" },
+                          ],
+                        },
+                      },
+                      required: ["approval"],
+                    },
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "approval response",
+                frame: {
+                  id: 99,
+                  result: {
+                    action: "accept",
+                    _meta: { persist: "session" },
+                    content: { approval: "session" },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn completed",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("mcp-attempt"),
+              text: "Use Safari.",
+            }),
+          );
+          const event = yield* harness.awaitApproval;
+          if (event.turnItem.type !== "approval_request")
+            return yield* Effect.die("Missing approval");
+          const item = event.turnItem;
+          assert.equal(item.requestKind, "mcp-elicitation");
+          assert.equal(item.prompt, "Allow ChatGPT to use Safari?");
+          assert.equal(item.title, "Safari");
+          const requestNode = harness.events.find(
+            (event) => event.type === "node.updated" && event.node.id === item.nodeId,
+          );
+          assert.ok(requestNode?.type === "node.updated");
+          if (requestNode?.type === "node.updated")
+            assert.equal(requestNode.node.parentNodeId, "node-mcp-attempt");
+          assert.equal(item.nativeItemRef, null);
+          assert.deepEqual(
+            item.options?.map((option) => option.decision),
+            ["cancel", "decline", "acceptForSession", "accept"],
+          );
+          assert.equal(
+            item.options?.find((option) => option.decision === "acceptForSession")?.label,
+            "Allow Safari this session",
+          );
+          const rejected = yield* Effect.exit(
+            harness.runtime.respondToRuntimeRequest({
+              requestId: item.requestId,
+              decision: "acceptAlways",
+            }),
+          );
+          assert.equal(rejected._tag, "Failure");
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: item.requestId,
+            decision: "acceptForSession",
+          });
+          yield* harness.awaitTerminal;
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
 
   it.effect("projects async questions without holding the provider turn open", () =>
     Effect.scoped(

@@ -280,7 +280,7 @@ public enum ThreadWorkLogPresentation {
         case let .webSearch(patterns, _):
             guard let patterns, !patterns.isEmpty else { return nil }
             return patterns.joined(separator: ", ")
-        case let .approvalRequest(_, _, prompt):
+        case let .approvalRequest(_, _, prompt, _):
             return prompt
         case let .userInputRequest(_, questions):
             let joined = questions.map(\.question).joined(separator: " · ")

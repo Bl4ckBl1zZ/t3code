@@ -1705,6 +1705,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let wireDecision = switch decision {
         case .allowOnce: "accept"
         case .allowForSession: "acceptForSession"
+        case .allowAlways: "acceptAlways"
+        case .cancel: "cancel"
         case .deny: "decline"
         }
         _ = try await route.client.respondToApproval(
@@ -4220,7 +4222,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
 
             switch item.payload {
-            case let .approvalRequest(requestID, requestKind, prompt):
+            case let .approvalRequest(requestID, requestKind, prompt, options):
                 // The item's own status is the authority on whether the request
                 // is still open; V1 had to pair requested/resolved activities.
                 guard !item.status.isTerminal else { break }
@@ -4239,7 +4241,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         threadID: threadID,
                         kind: mapApprovalKind(requestKind),
                         title: item.base.title ?? approvalTitle(for: requestKind),
-                        detail: prompt ?? ""
+                        detail: prompt ?? "",
+                        options: options?.compactMap { option in
+                            FeatureApprovalDecision(providerDecision: option.decision).map { FeatureApprovalOption(decision: $0, label: option.label) }
+                        }
                     )
                 )
 
@@ -5928,7 +5933,7 @@ private struct ProjectionItemSupportIndex {
         // An approval or user-input row names its own request; every other row
         // reaches it through the execution node that raised it.
         let requestID: String? = switch item.payload {
-        case let .approvalRequest(requestID, _, _): requestID
+        case let .approvalRequest(requestID, _, _, _): requestID
         case let .userInputRequest(requestID, _): requestID
         default: node?.runtimeRequestId
         }

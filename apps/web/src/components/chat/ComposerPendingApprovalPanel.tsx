@@ -12,7 +12,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
 }: ComposerPendingApprovalPanelProps) {
   const approvalSummary =
     approval.requestKind === "mcp-elicitation"
-      ? "App access approval requested"
+      ? `App access approval requested${approval.title ? ` · ${approval.title}` : ""}`
       : approval.requestKind === "command"
         ? "Command approval requested"
         : approval.requestKind === "file-read"

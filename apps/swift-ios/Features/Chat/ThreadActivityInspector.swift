@@ -384,7 +384,7 @@ public enum ThreadActivityInspector {
             addBlock(&blocks, "Input", input)
             addBlock(&blocks, "Output", output)
 
-        case let .approvalRequest(_, _, prompt):
+        case let .approvalRequest(_, _, prompt, _):
             addBlock(&blocks, "Prompt", prompt, monospaced: false)
 
         case let .userInputRequest(_, questions):

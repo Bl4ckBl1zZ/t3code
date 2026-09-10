@@ -241,15 +241,12 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   when the dispatch fails. `launchThread` can only claim when the caller named the thread id — a
   server-allocated id has nothing to claim into yet. Signed uploads now handle all known attachment kinds, with per-chip progress and retry.
   Pending claims remain at the V2 command boundary; no V1 normalizer is restored.
-- Does not carry upstream's Codex MCP-elicitation approvals end to end (`7c6163c67`). The contract
-  widening (`ProviderRequestKind`'s `mcp-elicitation`, `ProviderApprovalDecision`'s `acceptAlways`,
-  `ProviderApprovalOption`) lives in the fork's `providerPolicy.ts` rather than upstream's
-  `orchestration.ts`, and `CodexSessionRuntime` carries upstream's handler — but that module is
-  V1 leftovers the fork's V2 stack does not run, and `CodexAdapterV2` registers no
-  `mcpServer/elicitation/request` handler. Codex app-access prompts therefore do not reach the
-  fork's clients yet; the approval panels only label the kind. `acceptAlways` collapses to
-  `acceptForSession` on the wire, which is the widest grant Codex's command/file-change approval
-  responses can carry.
+- Ports Codex MCP app-access approvals (`7c6163c67`) onto `CodexAdapterV2`, with
+  provider-labelled choices carried in the V2 JSON turn-item projection and web/Swift composers.
+  The live adapter rejects decisions the provider did not offer. Session/permanent grants are
+  returned as MCP form content and persistence metadata; unsupported input forms and URL
+  elicitations remain declined, matching upstream. This imports only the isolated form helpers,
+  never the V1 runtime. Ordinary Codex command/file approvals retain their session-only ceiling.
 - Keeps the fork's `MarkdownMedia` path for chat markdown images instead of upstream's
   `classifyMarkdownImageSource` renderer (`77c9d1eb5`, `5a7a7cf29`, `55c909334`). The fork's path
   already resolves workspace files through signed asset URLs and additionally handles browser

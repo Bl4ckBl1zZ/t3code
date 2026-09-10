@@ -1,4 +1,8 @@
 import {
+  describeMcpElicitation,
+  toMcpElicitationResponse,
+} from "../../provider/codexMcpElicitation.ts";
+import {
   classifyV2AgentKind,
   CodexSettings,
   defaultInstanceIdForDriver,
@@ -26,6 +30,7 @@ import type {
   OrchestrationV2TurnItem,
   ProviderUserInputAnswers,
   ProviderApprovalDecision,
+  ProviderApprovalOption,
   ProviderRequestKind,
   ProviderTurnId,
   ProviderInstanceId,
@@ -977,6 +982,7 @@ type PendingCodexRuntimeRequest =
       readonly requestId: RuntimeRequestId;
       readonly requestKind: ProviderRequestKind;
       readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
+      readonly allowedDecisions?: ReadonlyArray<ProviderApprovalDecision>;
     }
   | {
       readonly type: "user_input";
@@ -1541,6 +1547,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           now,
         });
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        const mcpRequestSequence = yield* Ref.make(0);
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         const pendingRootTurns = yield* Ref.make(new Map<string, ProviderAdapterV2TurnInput>());
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
@@ -3197,13 +3204,18 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           readonly nativeRequestId: string;
           readonly requestKind: ProviderRequestKind;
           readonly prompt?: string | null;
+          readonly title?: string;
+          readonly options?: ReadonlyArray<ProviderApprovalOption>;
         }) =>
           Effect.gen(function* () {
             const createdAt = yield* DateTime.now;
-            const parentNodeId = idAllocator.derive.nodeFromProviderItem({
-              driver: CODEX_PROVIDER,
-              nativeItemId: input.nativeItemId,
-            });
+            const parentNodeId =
+              input.requestKind === "mcp-elicitation"
+                ? input.context.rootNodeId
+                : idAllocator.derive.nodeFromProviderItem({
+                    driver: CODEX_PROVIDER,
+                    nativeItemId: input.nativeItemId,
+                  });
             const ordinal = yield* resolveItemOrdinal(
               input.context,
               `${input.nativeItemId}:approval:${input.nativeRequestId}`,
@@ -3231,7 +3243,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               countsForRun: false,
               providerThreadId: input.context.providerThread.id,
               providerTurnId: input.context.providerTurnId,
-              nativeItemRef: codexNativeItemRef(input.nativeItemId),
+              nativeItemRef:
+                input.requestKind === "mcp-elicitation"
+                  ? null
+                  : codexNativeItemRef(input.nativeItemId),
               runtimeRequestId: requestId,
               checkpointScopeId: null,
               startedAt: createdAt,
@@ -3262,17 +3277,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nodeId,
               providerThreadId: input.context.providerThread.id,
               providerTurnId: input.context.providerTurnId,
-              nativeItemRef: codexNativeItemRef(input.nativeItemId),
+              nativeItemRef:
+                input.requestKind === "mcp-elicitation"
+                  ? null
+                  : codexNativeItemRef(input.nativeItemId),
               parentItemId: null,
               ordinal,
               status: "waiting",
-              title: null,
+              title: input.title ?? null,
               startedAt: createdAt,
               completedAt: null,
               updatedAt: createdAt,
               type: "approval_request",
               requestId,
               requestKind: input.requestKind,
+              ...(input.options === undefined ? {} : { options: input.options }),
               ...(input.prompt === null || input.prompt === undefined
                 ? {}
                 : { prompt: input.prompt }),
@@ -4123,6 +4142,68 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             return {
               decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
             } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+          }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+          Effect.gen(function* () {
+            if (toMcpElicitationResponse(payload, "accept").action !== "accept")
+              return { action: "decline" } as const;
+            const context = payload.turnId
+              ? yield* awaitActiveTurn(payload.turnId)
+              : yield* findActiveTurnByNativeThreadId(payload.threadId);
+            if (
+              context === undefined ||
+              context.providerThread.nativeThreadRef?.nativeId !== payload.threadId
+            )
+              return { action: "decline" } as const;
+            const nativeRequestId = `mcp-elicitation:${yield* Ref.modify(mcpRequestSequence, (current) => [current, current + 1])}`;
+            const description = describeMcpElicitation(payload);
+            const artifacts = yield* buildApprovalRequestArtifacts({
+              context,
+              nativeItemId: nativeRequestId,
+              nativeRequestId,
+              requestKind: "mcp-elicitation",
+              prompt: payload.message,
+              title: description.appName,
+              options: description.options,
+            });
+            const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
+            yield* Ref.update(pendingRuntimeRequests, (current) =>
+              new Map(current).set(String(artifacts.request.id), {
+                type: "approval",
+                requestId: artifacts.request.id,
+                requestKind: "mcp-elicitation",
+                decision,
+                allowedDecisions: description.options.map((option) => option.decision),
+              }),
+            );
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CODEX_PROVIDER,
+              node: artifacts.node,
+            });
+            yield* emitProviderEvent({
+              type: "runtime_request.updated",
+              driver: CODEX_PROVIDER,
+              threadId: artifacts.node.threadId,
+              runtimeRequest: artifacts.request,
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            const resolved = yield* Deferred.await(decision).pipe(
+              Effect.ensuring(
+                Ref.update(pendingRuntimeRequests, (current) => {
+                  const updated = new Map(current);
+                  updated.delete(String(artifacts.request.id));
+                  return updated;
+                }),
+              ),
+            );
+            return toMcpElicitationResponse(payload, resolved);
           }).pipe(Effect.orDie),
         );
 
@@ -5326,6 +5407,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   cause: toProtocolError(
                     `Codex ${pending.requestKind} request ${requestInput.requestId} requires an approval decision.`,
                   ),
+                });
+              }
+              if (
+                pending.allowedDecisions &&
+                !pending.allowedDecisions.includes(requestInput.decision)
+              ) {
+                return yield* new ProviderAdapterRuntimeRequestResponseError({
+                  driver: CODEX_PROVIDER,
+                  requestId: requestInput.requestId,
+                  cause: toProtocolError("This approval decision was not offered by the provider."),
                 });
               }
               yield* Deferred.succeed(pending.decision, requestInput.decision);

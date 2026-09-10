@@ -185,6 +185,7 @@ describe("V2 client presentation", () => {
       requestId,
       requestKind: "command" as const,
       prompt: "Allow command?",
+      options: [{ decision: "accept" as const, label: "Allow once" }],
     };
     const projection = {
       ...v2Projection,
@@ -214,6 +215,7 @@ describe("V2 client presentation", () => {
         requestKind: "command",
         createdAt: "2026-06-20T01:00:00.000Z",
         detail: "Allow command?",
+        options: [{ decision: "accept", label: "Allow once" }],
         responseCapability: "not_resumable",
       },
     ]);

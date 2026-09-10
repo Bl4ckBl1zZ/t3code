@@ -523,7 +523,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case commandExecution(input: String, output: String?, exitCode: Int?, liveness: OrchestrationV2CommandLiveness)
         case fileSearch(pattern: String?, results: [OrchestrationV2FileSearchResult]?)
         case webSearch(patterns: [String]?, results: [OrchestrationV2WebSearchResult]?)
-        case approvalRequest(requestID: String, requestKind: String, prompt: String?)
+        case approvalRequest(requestID: String, requestKind: String, prompt: String?, options: [ProviderApprovalOption]?)
         case checkpoint(checkpointID: String, scopeID: String, files: [OrchestrationV2CheckpointFileSummary])
         case checkpointRollback(checkpointID: String, scopeID: String, restoredFileCount: Int, rolledBackRunCount: Int)
         case runInterruptRequest(message: String)
@@ -548,7 +548,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case type
         case messageId, inputIntent, text, attachments
         case streaming, planId, markdown, steps, explanation
-        case requestId, questions, requestKind, prompt
+        case requestId, questions, requestKind, prompt, options
         case fileName, additions, deletions, diffStr, oldStr, newStr
         case input, output, exitCode
         case pattern, results, patterns
@@ -635,7 +635,8 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             payload = .approvalRequest(
                 requestID: try container.decode(String.self, forKey: .requestId),
                 requestKind: try container.decode(String.self, forKey: .requestKind),
-                prompt: try container.decodeIfPresent(String.self, forKey: .prompt)
+                prompt: try container.decodeIfPresent(String.self, forKey: .prompt),
+                options: try container.decodeIfPresent([ProviderApprovalOption].self, forKey: .options)
             )
         case "checkpoint":
             payload = .checkpoint(
@@ -763,10 +764,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case let .webSearch(patterns, results):
             try container.encodeIfPresent(patterns, forKey: .patterns)
             try container.encodeIfPresent(results, forKey: .results)
-        case let .approvalRequest(requestID, requestKind, prompt):
+        case let .approvalRequest(requestID, requestKind, prompt, options):
             try container.encode(requestID, forKey: .requestId)
             try container.encode(requestKind, forKey: .requestKind)
             try container.encodeIfPresent(prompt, forKey: .prompt)
+            try container.encodeIfPresent(options, forKey: .options)
         case let .checkpoint(checkpointID, scopeID, files):
             try container.encode(checkpointID, forKey: .checkpointId)
             try container.encode(scopeID, forKey: .scopeId)
@@ -1514,4 +1516,9 @@ public extension OrchestrationV2ThreadProjection {
             return false
         }
     }
+}
+
+public struct ProviderApprovalOption: Codable, Equatable, Hashable, Sendable {
+    public let decision: String
+    public let label: String
 }

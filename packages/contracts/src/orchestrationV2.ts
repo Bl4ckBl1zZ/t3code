@@ -37,6 +37,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import {
   ProviderApprovalDecision,
+  ProviderApprovalOption,
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderUserInputAnswers,
@@ -1208,6 +1209,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     requestId: RuntimeRequestId,
     requestKind: ProviderRequestKind,
     prompt: Schema.optional(Schema.String),
+    options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2018,6 +2020,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     requestId: RuntimeRequestId,
     requestKind: ProviderRequestKind,
     prompt: Schema.optional(Schema.String),
+    options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
