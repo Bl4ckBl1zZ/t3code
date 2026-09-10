@@ -51,6 +51,7 @@ struct FeatureComposerView: View {
     private let interactionMode: Binding<FeatureInteractionMode>?
 
     private let providers: [FeatureProvider]
+    private let providerSetup: ProviderSetupContext?
     private let threadSelection: FeatureSelection?
     private let materializesDefaultSelection: Bool
     private let isSending: Bool
@@ -89,6 +90,7 @@ struct FeatureComposerView: View {
         attachments: Binding<[FeatureDraftAttachment]>,
         interactionMode: Binding<FeatureInteractionMode>? = nil,
         providers: [FeatureProvider],
+        providerSetup: ProviderSetupContext? = nil,
         threadSelection: FeatureSelection?,
         materializesDefaultSelection: Bool = true,
         isSending: Bool,
@@ -118,6 +120,7 @@ struct FeatureComposerView: View {
         _attachments = attachments
         self.interactionMode = interactionMode
         self.providers = providers
+        self.providerSetup = providerSetup
         self.threadSelection = threadSelection
         self.materializesDefaultSelection = materializesDefaultSelection
         self.isSending = isSending
@@ -929,7 +932,8 @@ struct FeatureComposerView: View {
                 selection: $selection,
                 providers: providers,
                 threadSelection: threadSelection,
-                materializesDefaultSelection: materializesDefaultSelection
+                materializesDefaultSelection: materializesDefaultSelection,
+                setupContext: providerSetup
             )
         }
         // The picker used to own this: mounting it was what materialized a

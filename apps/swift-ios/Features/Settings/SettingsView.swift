@@ -378,7 +378,8 @@ public struct SettingsView: View {
             VStack(spacing: 0) {
                 ProviderModelPicker(
                     providers: model.snapshot.providers,
-                    selection: $settings.defaultSelection
+                    selection: $settings.defaultSelection,
+                    setupContext: ProviderSetupContext(client: model.client, environmentID: model.snapshot.environments.first(where: \.isActive)?.id)
                 )
                 .padding(.horizontal, SettingsMetrics.rowPadding)
                 .frame(minHeight: 58)

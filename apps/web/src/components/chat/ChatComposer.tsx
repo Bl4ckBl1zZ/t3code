@@ -713,6 +713,7 @@ export interface ChatComposerProps {
     cursorAdjacentToMention: boolean,
   ) => void;
 
+  onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   onProviderModelSelect: (instanceId: ProviderInstanceId, model: string) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   toggleInteractionMode: () => void;
@@ -3306,7 +3307,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           type="button"
           size="sm"
           variant="ghost"
-          disabled
+          disabled={providerCatalogAvailability === "loading" || !props.onOpenProviderSetup}
+          onClick={() => props.onOpenProviderSetup?.(selectedInstanceId)}
           data-chat-provider-unavailable="true"
           data-chat-provider-availability={providerCatalogAvailability}
           className="shrink-0 gap-2 px-2 text-muted-foreground/70 sm:px-3"
@@ -3321,6 +3323,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ) : (
         <ProviderModelPicker
           isComposerOwned
+          size={isComposerResting ? "xs" : "sm"}
+          {...(props.onOpenProviderSetup ? { onOpenProviderSetup: props.onOpenProviderSetup } : {})}
           activeInstanceId={selectedInstanceId}
           model={selectedModelForPickerWithCustomFallback}
           lockedProvider={lockedProvider}
@@ -3328,10 +3332,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           instanceEntries={providerInstanceEntries}
           keybindings={keybindings}
           modelOptionsByInstance={modelOptionsByInstance}
-          triggerClassName={cn(
-            "-ms-2.5",
-            isComposerResting && "h-7 min-w-12 max-w-40 px-1 text-xs",
-          )}
+          triggerClassName={cn("-ms-2.5", isComposerResting && "min-w-12 max-w-40 px-1")}
           terminalOpen={terminalOpen}
           open={isComposerModelPickerOpen}
           {...(composerProviderState.modelPickerIconClassName

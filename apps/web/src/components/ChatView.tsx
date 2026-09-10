@@ -7442,6 +7442,12 @@ function ChatViewContent(props: ChatViewProps) {
     [activeRuntime, activeThread, providerStatuses, supportsProviderSwitchingViaHandoff],
   );
 
+  const openProviderSetup = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      void navigate({ to: "/settings/providers", search: { environmentId, instanceId } });
+    },
+    [environmentId, navigate],
+  );
   const onProviderModelSelect = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
       if (!activeThread) return;
@@ -8044,6 +8050,9 @@ function ChatViewContent(props: ChatViewProps) {
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
               <ProviderStatusBanner
                 status={visibleProviderStatus}
+                {...(serverConfig?.environment.capabilities.providerTerminalEnvironment === true
+                  ? { onOpenProviderSetup: openProviderSetup }
+                  : {})}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
               />
             </div>
@@ -8310,6 +8319,10 @@ function ChatViewContent(props: ChatViewProps) {
                             onChangeActivePendingUserInputCustomAnswer={
                               onChangeActivePendingUserInputCustomAnswer
                             }
+                            {...(serverConfig?.environment.capabilities
+                              .providerTerminalEnvironment === true
+                              ? { onOpenProviderSetup: openProviderSetup }
+                              : {})}
                             onProviderModelSelect={onProviderModelSelect}
                             getModelDisabledReason={getModelDisabledReason}
                             toggleInteractionMode={toggleInteractionMode}

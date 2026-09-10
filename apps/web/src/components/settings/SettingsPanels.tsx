@@ -1,3 +1,4 @@
+import { ProviderAccountSetup } from "./ProviderAccountSetup";
 import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { type EnvironmentId } from "@t3tools/contracts";
@@ -3044,6 +3045,8 @@ export function GeneralSettingsPanel() {
 }
 
 interface ProviderSettingsPanelProps {
+  readonly initialEnvironmentId?: EnvironmentId;
+  readonly initialInstanceId?: ProviderInstanceId;
   readonly includeDriver?: (driver: ProviderDriverKind) => boolean;
   readonly title?: string;
   readonly allowAddInstance?: boolean;
@@ -3052,13 +3055,14 @@ interface ProviderSettingsPanelProps {
 export function ProviderSettingsPanel(props: ProviderSettingsPanelProps = {}) {
   const { environments } = useEnvironments();
   const primary = usePrimaryEnvironment();
-  const [selectedId, setSelectedId] = useState<EnvironmentId | null>(null);
-  const options = buildProviderEnvironmentOptions(environments, primary?.environmentId ?? null);
-  const environmentId = resolveSelectedProviderEnvironmentId(
-    options,
-    selectedId,
-    primary?.environmentId ?? null,
+  const [selectedId, setSelectedId] = useState<EnvironmentId | null>(
+    props.initialEnvironmentId ?? null,
   );
+  useEffect(() => setSelectedId(props.initialEnvironmentId ?? null), [props.initialEnvironmentId]);
+  const options = buildProviderEnvironmentOptions(environments, primary?.environmentId ?? null);
+  const environmentId =
+    selectedId ??
+    resolveSelectedProviderEnvironmentId(options, null, primary?.environmentId ?? null);
   const selected = options.find((environment) => environment.environmentId === environmentId);
   return (
     <SettingsPageContainer width="wide">
@@ -3124,7 +3128,13 @@ function EnvironmentProviderSettings(
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
     ReadonlySet<ProviderDriverKind>
   >(() => new Set());
-  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
+    props.initialInstanceId ?? null,
+  );
+  useEffect(
+    () => setSelectedInstanceId(props.initialInstanceId ?? null),
+    [props.initialInstanceId],
+  );
   const refreshingRef = useRef(false);
 
   const providerUpdateCandidates = useMemo(
@@ -3450,7 +3460,10 @@ function EnvironmentProviderSettings(
     });
   };
 
-  const selectedRow = rows.find((row) => row.instanceId === selectedInstanceId) ?? rows[0];
+  const selectedRow =
+    selectedInstanceId === null
+      ? rows[0]
+      : rows.find((row) => row.instanceId === selectedInstanceId);
   const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
     const driverOption = getDriverOption(row.driver);
     const liveProvider = serverProviders.find(
@@ -3618,7 +3631,18 @@ function EnvironmentProviderSettings(
           </div>
           <div className="min-w-0 p-2 lg:max-h-[42rem] lg:overflow-y-auto">
             {selectedRow ? (
-              renderProviderInstance(selectedRow, "editor")
+              <>
+                {renderProviderInstance(selectedRow, "editor")}
+                {serverConfig ? (
+                  <ProviderAccountSetup
+                    key={selectedRow.instanceId}
+                    config={serverConfig}
+                    instanceId={selectedRow.instanceId}
+                    disabled={readOnly}
+                    onRefresh={() => void refreshProviders()}
+                  />
+                ) : null}
+              </>
             ) : (
               <p className="p-4 text-sm text-muted-foreground">No providers configured.</p>
             )}

@@ -93,6 +93,7 @@ public struct NewThreadView: View {
                         attachments: $attachments,
                         interactionMode: $interactionMode,
                         providers: creationProviders,
+                        providerSetup: ProviderSetupContext(client: model.client, environmentID: selectedProject?.environmentID),
                         threadSelection: nil,
                         isSending: isSubmitting,
                         isWorking: false,

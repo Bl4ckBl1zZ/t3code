@@ -27,6 +27,7 @@ import type {
   ContextMenuItem,
   ModelSelection,
   ProviderDriverKind,
+  ProviderInstanceId,
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
   ThreadEnvMode,
@@ -832,6 +833,17 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               resolvedSelection && activeEntry ? (
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
                   <ProviderModelPicker
+                    {...(allServerConfigs.get(representative.environmentId)?.environment
+                      .capabilities.providerTerminalEnvironment === true
+                      ? {
+                          onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
+                            void navigate({
+                              to: "/settings/providers",
+                              search: { environmentId: representative.environmentId, instanceId },
+                            });
+                          },
+                        }
+                      : {})}
                     activeInstanceId={resolvedSelection.instanceId}
                     model={resolvedSelection.model}
                     lockedProvider={null}

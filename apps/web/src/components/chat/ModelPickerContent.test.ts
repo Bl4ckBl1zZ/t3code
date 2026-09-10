@@ -2,7 +2,7 @@ import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3
 import { describe, expect, it } from "vite-plus/test";
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
-import { shouldIncludeModelPickerOption } from "./ModelPickerContent";
+import { shouldIncludeModelPickerOption, shouldOfferModelPickerSetup } from "./ModelPickerContent";
 
 function entry(status: ServerProvider["status"]) {
   return deriveProviderInstanceEntries([
@@ -64,4 +64,38 @@ describe("shouldIncludeModelPickerOption", () => {
       ).toBe(false);
     },
   );
+});
+
+describe("model picker account setup", () => {
+  function account(overrides: Partial<ServerProvider> = {}) {
+    return deriveProviderInstanceEntries([
+      {
+        ...entry("ready").snapshot,
+        instanceId: ProviderInstanceId.make("codex_work"),
+        driver: ProviderDriverKind.make("codex"),
+        ...overrides,
+      },
+    ])[0]!;
+  }
+  const models = [{ slug: "model", name: "Model" }];
+  it("offers setup when an enabled account lacks an install, authentication or models", () => {
+    expect(
+      shouldOfferModelPickerSetup(account({ installed: false, status: "error" }), models),
+    ).toBe(true);
+    expect(
+      shouldOfferModelPickerSetup(
+        account({ auth: { status: "unauthenticated" }, status: "warning" }),
+        models,
+      ),
+    ).toBe(true);
+    expect(shouldOfferModelPickerSetup(account(), [])).toBe(true);
+    expect(shouldOfferModelPickerSetup(account(), models)).toBe(false);
+  });
+  it("does not offer unsupported or disabled account flows", () => {
+    expect(shouldOfferModelPickerSetup(account({ enabled: false, installed: false }), [])).toBe(
+      false,
+    );
+    expect(shouldOfferModelPickerSetup(account({ status: "disabled" }), [])).toBe(false);
+    expect(shouldOfferModelPickerSetup(entry("error"), [])).toBe(false);
+  });
 });

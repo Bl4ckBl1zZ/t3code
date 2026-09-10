@@ -39,7 +39,8 @@ struct SettingsProjectDefaultsView: View {
                         selection: Binding(get: { modelDefault }, set: { selection in
                             Task { await save(.init(defaultModelSelection: .some(selection.map(coreSelection)))) }
                         }),
-                        materializesDefaultSelection: false
+                        materializesDefaultSelection: false,
+                        setupContext: ProviderSetupContext(client: model.client, environmentID: environmentID)
                     ).padding(14)
                     Button("Use automatic model selection") {
                         Task { await save(.init(defaultModelSelection: .some(nil))) }

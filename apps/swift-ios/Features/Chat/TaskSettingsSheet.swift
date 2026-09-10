@@ -18,6 +18,7 @@ struct TaskSettingsSheet: View {
     let providers: [FeatureProvider]
     let threadSelection: FeatureSelection?
     let materializesDefaultSelection: Bool
+    var setupContext: ProviderSetupContext? = nil
 
     var body: some View {
         NavigationStack {
@@ -28,7 +29,8 @@ struct TaskSettingsSheet: View {
                         selection: $selection,
                         style: .row,
                         threadSelection: threadSelection,
-                        materializesDefaultSelection: materializesDefaultSelection
+                        materializesDefaultSelection: materializesDefaultSelection,
+                        setupContext: setupContext
                     )
                     .listRowBackground(T3Colors.surface)
                 }

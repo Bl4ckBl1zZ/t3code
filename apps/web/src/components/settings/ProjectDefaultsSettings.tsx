@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { ProjectDefaultActionsSettings } from "./ProjectDefaultActionsSettings";
 import {
   DEFAULT_CLIENT_SETTINGS,
@@ -46,6 +47,7 @@ export function ProjectDefaultsSettings({
 }: {
   environmentId: EnvironmentId | null;
 }) {
+  const navigate = useNavigate();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clientSettings = useClientSettings();
@@ -228,6 +230,17 @@ export function ProjectDefaultsSettings({
                 className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 disabled:opacity-50"
               >
                 <ProviderModelPicker
+                  {...(representative?.serverConfig?.environment.capabilities
+                    .providerTerminalEnvironment === true
+                    ? {
+                        onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
+                          void navigate({
+                            to: "/settings/providers",
+                            search: { environmentId: representative.environmentId, instanceId },
+                          });
+                        },
+                      }
+                    : {})}
                   activeInstanceId={selection.instanceId}
                   model={selection.model}
                   lockedProvider={null}

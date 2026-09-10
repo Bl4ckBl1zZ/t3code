@@ -686,6 +686,7 @@ public struct ThreadDetailView: View {
             attachments: $attachments,
             interactionMode: composerInteractionMode,
             providers: threadProviders,
+            providerSetup: ProviderSetupContext(client: model.client, environmentID: thread.environmentID),
             threadSelection: currentSelection,
             materializesDefaultSelection: false,
             isSending: isSending,

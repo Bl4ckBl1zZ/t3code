@@ -1025,3 +1025,14 @@ Web/desktop settings and action controls, and native action editing/execution li
 use the effective actions behind `projectActionDefaults`. Inherited actions are never
 written to t3.json. Native preserves teardown and single-run wire flags; its existing
 terminal runner still does not provide desktop single-run toggle semantics.
+
+## Provider picker setup paths
+
+Web/desktop picker and banner setup links preserve target environment/account IDs
+through provider settings. Account setup reuses the reviewed Codex/Claude terminal
+flow and `providerTerminalEnvironment`; it pretypes without submitting and owns
+cleanup/retry. Swift model pickers and account settings push a machine-scoped setup
+screen using the same native terminal protocol, preserving the composer voice
+gesture surface. Small picker controls and floating-layer event scope match upstream.
+Antigravity setup is not advertised until its V2 adapter exists. Remote model-manifest
+metadata/new badges remain a separate port; the fork's current highlight policy stays.

@@ -156,6 +156,13 @@ public struct SettingsAgentsView: View {
                             SettingsProviderAccountView(manager: serverSettings, environmentID: environmentID,
                                 instanceID: providerID, driver: provider.driver, supported: accountsSupported(environmentID)) { await refreshAccounts(environmentID) }
                         } label: { SettingsNavigationRow(title: "Configuration", systemImage: "slider.horizontal.3") }
+                        if let client = serverSettings as? any FeatureClient,
+                           let context = ProviderSetupContext(client: client, environmentID: environmentID),
+                           provider.driver == "codex" || provider.driver == "claudeAgent" {
+                            NavigationLink { ProviderSetupView(context: context, instanceID: providerID) } label: {
+                                SettingsNavigationRow(title: "Install or sign in", systemImage: "person.crop.circle.badge.plus")
+                            }
+                        }
                     }
                     SettingsSection(title: "Models") {
                         if models.isEmpty { Text("This account has no available built-in models.").padding(SettingsMetrics.rowPadding) }

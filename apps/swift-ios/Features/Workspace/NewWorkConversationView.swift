@@ -72,6 +72,7 @@ public struct NewWorkConversationView: View {
                 attachments: $attachments,
                 interactionMode: $interactionMode,
                 providers: targetProviders,
+                providerSetup: ProviderSetupContext(client: model.client, environmentID: activeTarget?.environmentID),
                 threadSelection: defaultSelection,
                 materializesDefaultSelection: false,
                 isSending: isSubmitting,

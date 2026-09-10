@@ -22,3 +22,13 @@ The model ID must exist at your provider. Renaming its display label does not
 change which model runs. Custom options replace that model's default option set;
 only option IDs supported by the provider affect requests. Servers that predate
 custom model definitions need an update before these editors can save them.
+
+When an account is unavailable, the model picker and status banner can open
+its setup screen on the correct environment. Codex and Claude setup include an
+account-specific terminal with an install or sign-in command ready to review.
+Press Enter to run it, then refresh status. Closing the setup terminal ends that
+terminal session. Your configured account home and binary are respected.
+
+On iOS, use **Set up agents** in the model picker, or **Install or sign in** in
+an account's settings. Setup stays on the selected task's machine. Older servers
+show that an update is required instead of opening an unscoped terminal.
