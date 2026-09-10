@@ -697,3 +697,20 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
+
+describe("ClientSettings diff colors", () => {
+  it("preserves the original colors for existing preferences", () => {
+    expect(decodeClientSettings({}).diffColorScheme).toBe("red-green");
+  });
+  it.each(["red-green", "blue-orange"])(
+    "accepts %s in persisted preferences and patches",
+    (diffColorScheme) => {
+      expect(decodeClientSettings({ diffColorScheme }).diffColorScheme).toBe(diffColorScheme);
+      expect(decodeClientSettingsPatch({ diffColorScheme }).diffColorScheme).toBe(diffColorScheme);
+    },
+  );
+  it("rejects unknown schemes at both boundaries", () => {
+    expect(() => decodeClientSettings({ diffColorScheme: "unknown" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ diffColorScheme: "unknown" })).toThrow();
+  });
+});

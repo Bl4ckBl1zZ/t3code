@@ -38,6 +38,14 @@ enum T3Colors {
     static var primaryActionForeground: Color { Color(uiColor: palette.primaryActionForeground) }
     static var accent: Color { Color(uiColor: palette.accent) }
     static var danger: Color { Color(uiColor: palette.danger) }
+    static var diffAddition: Color {
+        T3ThemeStore.shared.diffColorScheme == .blueOrange
+            ? color(light: rgb(0x2563EB), dark: rgb(0x60A5FA)) : success
+    }
+    static var diffDeletion: Color {
+        T3ThemeStore.shared.diffColorScheme == .blueOrange
+            ? color(light: rgb(0xEA580C), dark: rgb(0xFB923C)) : danger
+    }
 
     // Fixed roles. These have no palette counterpart on the Expo client either
     // — it renders them from constant Tailwind classes — so a palette that

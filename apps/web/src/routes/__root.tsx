@@ -173,6 +173,10 @@ function EnvironmentThemeSync() {
 }
 
 function ContrastAppearanceSync() {
+  const diffColorScheme = useClientSettings((settings) => settings.diffColorScheme);
+  useEffect(() => {
+    document.documentElement.dataset.diffColorScheme = diffColorScheme;
+  }, [diffColorScheme]);
   const appearanceContrast = useClientSettings((settings) => settings.appearanceContrast);
 
   useEffect(() => {

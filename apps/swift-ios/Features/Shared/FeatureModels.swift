@@ -1115,7 +1115,13 @@ public enum FeatureAppearance: String, CaseIterable, Sendable, Codable {
     case dark
 }
 
+public enum FeatureDiffColorScheme: String, Sendable, Codable {
+    case redGreen = "red-green"
+    case blueOrange = "blue-orange"
+}
+
 public struct FeatureSettings: Sendable, Equatable, Codable {
+    public var diffColorScheme: FeatureDiffColorScheme
     public var appearance: FeatureAppearance
     public var hapticsEnabled: Bool
     public var notificationsEnabled: Bool
@@ -1140,6 +1146,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var defaultSelection: FeatureSelection?
 
     public init(
+        diffColorScheme: FeatureDiffColorScheme = .redGreen,
         appearance: FeatureAppearance = .system,
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
@@ -1151,6 +1158,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         darkThemeID: String = T3ThemeDefaults.paletteID,
         defaultSelection: FeatureSelection? = nil
     ) {
+        self.diffColorScheme = diffColorScheme
         self.appearance = appearance
         self.hapticsEnabled = hapticsEnabled
         self.notificationsEnabled = notificationsEnabled
@@ -1164,6 +1172,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case diffColorScheme
         case appearance
         case hapticsEnabled
         case notificationsEnabled
@@ -1178,6 +1187,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        diffColorScheme = (try? container.decodeIfPresent(FeatureDiffColorScheme.self, forKey: .diffColorScheme)) ?? .redGreen
         appearance = try container.decodeIfPresent(
             FeatureAppearance.self,
             forKey: .appearance
@@ -1224,6 +1234,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(diffColorScheme, forKey: .diffColorScheme)
         try container.encode(appearance, forKey: .appearance)
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)

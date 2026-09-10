@@ -1,7 +1,7 @@
 "use client";
 
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
-import { ChevronsUpDownIcon, XIcon } from "lucide-react";
+import { ChevronsUpDownIcon, SearchIcon, XIcon } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
@@ -389,7 +389,29 @@ function ComboboxChipRemove({
 
 const useComboboxFilter = ComboboxPrimitive.useFilter;
 
+function ComboboxSearchInput(props: React.ComponentProps<typeof ComboboxInput>) {
+  return (
+    <div className="shrink-0 px-3 pt-2.5">
+      <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
+        <SearchIcon
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
+        />
+        <ComboboxInput
+          {...props}
+          className="[&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5"
+          inputClassName="rounded-none bg-transparent text-sm"
+          showTrigger={false}
+          size="sm"
+          unstyled
+        />
+      </div>
+    </div>
+  );
+}
+
 export {
+  ComboboxSearchInput,
   Combobox,
   ComboboxChipsInput,
   ComboboxInput,

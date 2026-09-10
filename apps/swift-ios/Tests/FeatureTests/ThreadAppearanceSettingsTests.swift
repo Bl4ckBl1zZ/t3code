@@ -7,6 +7,13 @@ import XCTest
 /// stored settings blob is shared with builds that predate the key and with
 /// builds that will add more, so both directions have to survive a round trip.
 final class ThreadAppearanceSettingsTests: XCTestCase {
+    func testUnknownDiffPalettePreservesOtherSettings() throws {
+        let data = Data(#"{"appearance":"dark","diffColorScheme":"future"}"#.utf8)
+        let settings = try JSONDecoder().decode(FeatureSettings.self, from: data)
+        XCTAssertEqual(settings.appearance, .dark)
+        XCTAssertEqual(settings.diffColorScheme, .redGreen)
+    }
+
     func testActivityDetailIsOffByDefault() {
         XCTAssertFalse(FeatureSettings().alwaysExpandActivity)
     }
@@ -31,6 +38,7 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
             """.utf8
         )
         let settings = try JSONDecoder().decode(FeatureSettings.self, from: legacy)
+        XCTAssertEqual(settings.diffColorScheme, .redGreen)
         XCTAssertFalse(settings.alwaysExpandActivity)
         XCTAssertTrue(settings.showSkillsInSlashMenu)
         XCTAssertEqual(settings.appearance, .dark)
@@ -58,6 +66,7 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
         settings.alwaysExpandActivity = true
         settings.showSkillsInSlashMenu = false
         settings.appearance = .light
+        settings.diffColorScheme = .blueOrange
 
         let data = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(FeatureSettings.self, from: data)

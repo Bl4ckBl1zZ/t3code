@@ -72,9 +72,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `5e63aea2df`) or its `ProviderInstanceCard` `mode: "list" | "editor"` restructure. The fork keeps
   `EnvironmentProviderSettings` inline in `SettingsPanels.tsx` with the card's own expand/collapse.
 - Does not carry upstream's pinned-block drag-to-reorder in the web sidebar (the
-  `optimisticPinnedOrder` / `handlePinnedDragEnd` block) or its searchable project-filter combobox
-  (`48c176b3cf`, `filterSidebarProjectScopeItems`): both are written against upstream's sidebar
-  shell, and the fork keeps its client-local whole-list manual order. Upstream's toggleable unpin
+  `optimisticPinnedOrder` / `handlePinnedDragEnd` block) because the fork keeps its client-local whole-list manual order. The searchable project-filter
+  combobox is now ported, including keyboard project settings and query reset on close. Upstream's toggleable unpin
   confirmation (`22c311ddec`) _is_ carried — the setting, `requestThreadUnpinConfirmation`, and
   `useThreadActions` come across unchanged, and the fork's `Sidebar.tsx` `toggleThreadPin` gates its
   `thread.metadata.update` on it rather than upstream's `confirmAndUnpinThread`, which routes
@@ -594,3 +593,15 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   exposes a public TestFlight invitation after Apple's initial Beta App Review. The fork does not
   consume the upstream Expo project's OTA updates; TestFlight distributes signed updates to
   opted-in testers.
+
+- Carries upstream diff navigation and appearance controls: a changed-file tree and path copy
+  buttons in web review, plus red/green or blue/orange diff roles on web/desktop and native Swift.
+  Native stores the preference in FeatureSettings and applies it through T3ThemeStore; semantic
+  success/error colors remain independent of the diff palette.
+- Web prompt recall is adapted to the fork's unified attachment queue and V2 message projection.
+  Up/down only recall when the composer has no attached context and its caret is at the visual
+  edge; generated plan/attachment prompts and appended context are excluded. Native already
+  implements its own prompt recall.
+- Desktop release notes use the upstream focusable popover and bounded newest-first excerpts.
+  Omission counts cross IPC as optional fields for older consumers. Links point at the fork's
+  release feed, and the fork's automatic download/install state machine remains intact.

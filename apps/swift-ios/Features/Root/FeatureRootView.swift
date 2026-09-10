@@ -49,6 +49,9 @@ public struct FeatureRootView: View {
         // T3Colors reader picks it up; this is the one place settings feed it.
         // `apply` no-ops unless the selection actually moved, so the frequent
         // non-theme settings updates cost nothing.
+        .onChange(of: model.snapshot.settings.diffColorScheme, initial: true) { _, value in
+            T3ThemeStore.shared.diffColorScheme = value
+        }
         .onChange(of: themeSelection, initial: true) { _, selection in
             T3ThemeStore.shared.apply(
                 lightPaletteID: selection.light,

@@ -1,3 +1,4 @@
+import { DiffFilePathCopyButton } from "../DiffFilePathCopyButton";
 import type {
   AnnotationSide,
   CodeViewDiffItem,
@@ -11,7 +12,7 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback, useMemo, useState, type ReactNode, type Ref } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { fnv1a32 } from "~/lib/diffRendering";
+import { fnv1a32, resolveFileDiffPath } from "~/lib/diffRendering";
 import {
   buildDiffReviewComment,
   restoreDiffReviewCommentRange,
@@ -252,9 +253,12 @@ export function AnnotatableCodeView({
         onGutterUtilityClick: beginComment,
       }}
       renderHeaderPrefix={(item) =>
-        item.type === "diff"
-          ? renderHeaderPrefix(item.fileDiff, item.id, item.collapsed === true)
-          : null
+        item.type === "diff" ? (
+          <>
+            {renderHeaderPrefix(item.fileDiff, item.id, item.collapsed === true)}
+            <DiffFilePathCopyButton filePath={resolveFileDiffPath(item.fileDiff)} />
+          </>
+        ) : null
       }
       renderAnnotation={(annotation) => {
         const hasDraft = annotation.metadata.entries.some((entry) => entry.kind === "draft");

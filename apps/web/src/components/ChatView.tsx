@@ -7690,6 +7690,7 @@ function ChatViewContent(props: ChatViewProps) {
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
                         <div className="relative z-10">
                           <ChatComposer
+                            promptHistoryMessages={serverProjection?.messages ?? []}
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}

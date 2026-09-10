@@ -37,3 +37,18 @@ Open an image to view it full screen. Pinch to zoom, drag to pan while zoomed,
 or double-tap to toggle zoom. Fit image restores the full image. At its fitted
 size, swipe between images in the message's gallery. VoiceOver offers zoom
 adjustments and a Fit image action. Saving or sharing keeps the original image.
+
+## Prompt history and diff colors
+
+On web and desktop, press Up in an empty composer to recall your last prompt. Continue
+with Up/Down at the first/last visual line to browse older/newer prompts. Down past the
+newest prompt clears the composer. Attached context is not recalled.
+
+Choose **Diff colors** in Appearance settings to use red/green or blue/orange additions
+and deletions. The native iOS app offers the same choice in its thread appearance settings.
+In web and desktop review panels, use **Show changed-file tree** to navigate folders
+and files, and the copy control beside a file heading to copy its path.
+
+The sidebar project filter supports searching project names. Open a project's settings
+from its gear button or with Shift+F10 while the project is highlighted. Desktop nightly
+release notes open on hover or keyboard focus; Tab reaches their full-release links.

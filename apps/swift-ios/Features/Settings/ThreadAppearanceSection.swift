@@ -7,9 +7,10 @@ import SwiftUI
 /// away once the turn finishes. "Show skills in slash menu" is the web client's
 /// companion composer setting.
 ///
-/// A section rather than a screen because it is two toggles — drop it into the
+/// A section rather than a screen — drop it into the
 /// appearance area of the settings sheet alongside the theme picker.
 struct ThreadAppearanceSection: View {
+    @Binding var diffColorScheme: FeatureDiffColorScheme
     @Binding var alwaysExpandActivity: Bool
     @Binding var showSkillsInSlashMenu: Bool
 
@@ -22,6 +23,15 @@ struct ThreadAppearanceSection: View {
     var body: some View {
         SettingsSection(title: "Threads", footer: Self.footer) {
             VStack(spacing: 0) {
+                HStack {
+                    Label("Diff colors", systemImage: "plus.forwardslash.minus")
+                    Spacer()
+                    Picker("Diff colors", selection: $diffColorScheme) {
+                        Text("Red & green").tag(FeatureDiffColorScheme.redGreen)
+                        Text("Blue & orange").tag(FeatureDiffColorScheme.blueOrange)
+                    }
+                }.font(T3Typography.threadBody).padding(16)
+                SettingsRowDivider()
                 SettingsToggleRow(
                     title: "Activity detail",
                     systemImage: "list.bullet.indent",

@@ -17,6 +17,7 @@ export interface SettingsSearchItem {
   readonly title: string;
   readonly to: SettingsPath;
   readonly targetId?: string;
+  readonly searchTerms?: readonly string[];
   // Its row only renders in the desktop app, so a browser result would land on
   // an anchor that isn't there.
   readonly desktopOnly?: boolean;
@@ -48,6 +49,12 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "diff-color-scheme",
+    title: "Diff colors",
+    to: "/settings/appearance",
+    searchTerms: ["red green blue orange additions deletions changes counts palette colorblind"],
+  },
   {
     id: "color-scheme",
     title: "Color scheme",
@@ -344,6 +351,8 @@ export function searchSettings(
       (isElectron || item.desktopOnly !== true) &&
       (!item.windowsOnly ||
         isWindowsPlatform(typeof navigator === "undefined" ? "" : navigator.platform)) &&
-      normalizeSearchText(item.title).includes(normalizedQuery),
+      normalizeSearchText([item.title, ...(item.searchTerms ?? [])].join(" ")).includes(
+        normalizedQuery,
+      ),
   );
 }

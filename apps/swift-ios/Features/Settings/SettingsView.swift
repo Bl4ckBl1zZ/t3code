@@ -47,6 +47,7 @@ public struct SettingsView: View {
                             environmentThemes: activeEnvironmentThemes
                         )
                         ThreadAppearanceSection(
+                            diffColorScheme: $settings.diffColorScheme,
                             alwaysExpandActivity: $settings.alwaysExpandActivity,
                             showSkillsInSlashMenu: $settings.showSkillsInSlashMenu
                         )
