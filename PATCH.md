@@ -779,3 +779,20 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   and a failed candidate refresh retains the acknowledged request. Truncated lists explicitly limit
   search to loaded candidates. Host/viewer permissions gate mutations; hosts without candidate
   listing direct reviewer management to the host. Editors and method pickers lock during writes.
+
+- Native PR checkout and agent handoff use the existing host Git operation and V2 thread metadata.
+  The thread is created before worktree preparation so setup scripts have an owner; failed
+  preparation/attachment keeps an empty recoverable thread and never stages or sends an agent task.
+  Ask/Explain avoid checkout, existing-thread tasks preserve the live composer, and stale reused
+  worktrees retain their changes with an explicit warning. No V1 launch path is imported.
+
+- Live tool focus is derived from V2 run ownership and projected item status on web and Swift.
+  Running foreground work wins over concurrent completions; the last success remains between
+  messages. Background processes keep separate visible rows, and failures/compaction cannot claim
+  the live focus. Native running rows remain visible before a result arrives.
+
+- Composer loading polish reads the V2 shell/projection, rather than V1 sessions or activities.
+  Provider discovery carries the optional `reportsContextWindow` presentation hint (Codex/Claude
+  true; unspecified drivers remain unknown). A started thread reserves its meter while loading,
+  and session-local Git identity prevents non-repository branch-strip flashes. Multiline browser
+  drafts stay expanded; the collapsed editor remains inert but measurable for restored wrapping.

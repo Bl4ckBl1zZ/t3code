@@ -16,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
+  rememberCheckoutIsRepo,
+  recallCheckoutIsRepo,
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
@@ -1277,5 +1279,20 @@ describe("shouldRefocusComposerOnWindowFocus", () => {
   it("leaves focus inside a dialog or popup alone", () => {
     expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "dialog" }))).toBe(false);
     expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "-popup" }))).toBe(false);
+  });
+});
+
+describe("checkout Git identity while loading", () => {
+  it("remembers false and separates environments and worktrees", () => {
+    const a = EnvironmentId.make("repo-memory-a"),
+      b = EnvironmentId.make("repo-memory-b");
+    rememberCheckoutIsRepo(a, "/project", false);
+    rememberCheckoutIsRepo(b, "/project", true);
+    expect(recallCheckoutIsRepo(a, "/project")).toBe(false);
+    expect(recallCheckoutIsRepo(b, "/project")).toBe(true);
+    expect(recallCheckoutIsRepo(a, "/worktree")).toBeUndefined();
+    expect(recallCheckoutIsRepo(a, null)).toBeUndefined();
+    rememberCheckoutIsRepo(a, "/project", true);
+    expect(recallCheckoutIsRepo(a, "/project")).toBe(true);
   });
 });

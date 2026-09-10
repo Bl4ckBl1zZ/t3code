@@ -161,6 +161,7 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let displayName: String?
     public let accentColor: String?
     public let badgeLabel: String?
+    public var reportsContextWindow: Bool? = nil
     public let showInteractionModeToggle: Bool?
     public let requiresNewThreadForModelChange: Bool?
     public let enabled: Bool

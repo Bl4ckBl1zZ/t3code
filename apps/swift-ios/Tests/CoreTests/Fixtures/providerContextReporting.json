@@ -1,0 +1,16 @@
+{
+  "instanceId": "codex-work",
+  "driver": "codex",
+  "reportsContextWindow": true,
+  "enabled": true,
+  "installed": true,
+  "version": null,
+  "status": "ready",
+  "auth": {
+    "status": "authenticated"
+  },
+  "checkedAt": "2026-09-10T00:00:00Z",
+  "models": [],
+  "slashCommands": [],
+  "skills": []
+}

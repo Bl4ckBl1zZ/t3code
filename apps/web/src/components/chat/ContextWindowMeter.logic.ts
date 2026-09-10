@@ -23,3 +23,12 @@ export function formatContextWindowCompactionMessage(
     ? `Context for ${modelDisplayName} compacts automatically when needed.`
     : "Context compacts automatically when needed.";
 }
+
+/** Unknown providers reserve conservatively until the V2 projection arrives. */
+export function shouldReserveContextWindowMeter(input: {
+  detailLoading: boolean;
+  threadStarted: boolean;
+  providerReportsContextWindow: boolean | null;
+}): boolean {
+  return input.detailLoading && input.threadStarted && input.providerReportsContextWindow !== false;
+}

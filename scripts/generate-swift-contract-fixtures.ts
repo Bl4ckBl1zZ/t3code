@@ -23,6 +23,7 @@ import {
   ExecutionEnvironmentDescriptor,
   EnvironmentId,
   ServerProviderUsageLimits,
+  ServerProvider,
   PullRequestStack,
   PullRequestLabelCandidateList,
   PullRequestListInput,
@@ -1066,3 +1067,18 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestCheckoutPath, pullRequestCheckoutSerialized);
+
+const providerContextReportingPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "providerContextReporting.json",
+);
+const providerContextReportingSerialized = `${JSON.stringify(Schema.encodeSync(ServerProvider)({ instanceId: ProviderInstanceId.make("codex-work"), driver: ProviderDriverKind.make("codex"), reportsContextWindow: true, enabled: true, installed: true, version: null, status: "ready", auth: { status: "authenticated" }, checkedAt: "2026-09-10T00:00:00Z", models: [], slashCommands: [], skills: [] }), null, 2)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(providerContextReportingPath) ||
+    NodeFS.readFileSync(providerContextReportingPath, "utf8") !== providerContextReportingSerialized
+  ) {
+    console.error("[swift-fixtures] providerContextReporting.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(providerContextReportingPath, providerContextReportingSerialized);

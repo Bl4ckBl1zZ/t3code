@@ -390,6 +390,8 @@ import {
   PullRequestDialogState,
   cloneComposerImageForRetry,
   deriveLockedProvider,
+  rememberCheckoutIsRepo,
+  recallCheckoutIsRepo,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
@@ -3149,8 +3151,13 @@ function ChatViewContent(props: ChatViewProps) {
     : undefined;
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
-  // Default true while loading to avoid toolbar flicker.
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const reportedIsRepo = gitStatusQuery.data?.isRepo;
+  useEffect(() => {
+    if (gitStatusCwd !== null && reportedIsRepo !== undefined) {
+      rememberCheckoutIsRepo(environmentId, gitStatusCwd, reportedIsRepo);
+    }
+  }, [environmentId, gitStatusCwd, reportedIsRepo]);
+  const isGitRepo = reportedIsRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
   const showComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     isGitRepo,
@@ -8004,6 +8011,7 @@ function ChatViewContent(props: ChatViewProps) {
                             }
                             activeThreadModelSelection={activeThread?.modelSelection}
                             onThreadModelOptionsChange={onThreadModelOptionsChange}
+                            threadDetailLoading={isServerThread && serverProjection === null}
                             activeThreadVisibleTurnItems={serverVisibleTurnItems}
                             resolvedTheme={resolvedTheme}
                             settings={settings}

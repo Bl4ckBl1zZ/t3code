@@ -780,3 +780,26 @@ export function shouldRefocusComposerOnWindowFocus(
     ) === null
   );
 }
+
+// A checkout's Git identity arrives asynchronously. Remember known non-repos
+// so revisiting them does not briefly mount and remove the branch strip.
+const sessionCheckoutIsRepo = new Map<string, boolean>();
+export function rememberCheckoutIsRepo(
+  environmentId: EnvironmentId,
+  cwd: string,
+  isRepo: boolean,
+): void {
+  const key = JSON.stringify([environmentId, cwd]);
+  sessionCheckoutIsRepo.delete(key);
+  sessionCheckoutIsRepo.set(key, isRepo);
+  if (sessionCheckoutIsRepo.size > 256) {
+    const oldest = sessionCheckoutIsRepo.keys().next().value;
+    if (oldest !== undefined) sessionCheckoutIsRepo.delete(oldest);
+  }
+}
+export function recallCheckoutIsRepo(
+  environmentId: EnvironmentId,
+  cwd: string | null,
+): boolean | undefined {
+  return cwd === null ? undefined : sessionCheckoutIsRepo.get(JSON.stringify([environmentId, cwd]));
+}

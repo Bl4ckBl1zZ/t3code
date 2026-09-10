@@ -1,3 +1,4 @@
+import { useComposerMultilinePrompt } from "./useComposerMultilinePrompt";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerSurface } from "./ComposerSurface";
 import type { AssistantCitation } from "@t3tools/contracts";
@@ -127,8 +128,11 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
-import { ContextWindowMeter } from "./ContextWindowMeter";
-import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
+import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWindowMeter";
+import {
+  resolveContextWindowModelDisplayName,
+  shouldReserveContextWindowMeter,
+} from "./ContextWindowMeter.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
@@ -455,6 +459,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -485,6 +490,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
         />
+      ) : props.reserveContextWindowMeter ? (
+        <ContextWindowMeterPlaceholder />
       ) : null}
       {props.isRunning && props.hasSendableContent ? (
         <span className="hidden text-[11px] text-muted-foreground/70 sm:inline">
@@ -647,6 +654,7 @@ export interface ChatComposerProps {
   onThreadModelOptionsChange: (options: ReadonlyArray<ProviderOptionSelection> | undefined) => void;
 
   // Context window
+  threadDetailLoading?: boolean;
   activeThreadVisibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
 
   // Misc
@@ -1147,6 +1155,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     null,
   );
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
+  const hasWrappedPrompt = useComposerMultilinePrompt(composerMenuAnchor);
+  const hasMultilinePrompt = prompt.includes("\n") || hasWrappedPrompt;
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
@@ -1154,7 +1164,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const isMobileViewport = useMediaQuery("max-sm");
   const isComposerCollapsedMobile =
-    isMobileViewport && !forceExpandedOnMobile && !isComposerFocused;
+    isMobileViewport && !forceExpandedOnMobile && !isComposerFocused && !hasMultilinePrompt;
 
   // ------------------------------------------------------------------
   // Refs
@@ -3457,10 +3467,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
           <div
             ref={setComposerMenuAnchor}
+            inert={isComposerCollapsedMobile}
             className={cn(
               "relative px-3 pb-2 sm:px-4",
               hasComposerHeader ? "pt-2.5 sm:pt-3" : "pt-3.5 sm:pt-4",
-              isComposerCollapsedMobile && "hidden",
+              // Keep the editor measurable while collapsed: a restored soft-wrapped
+              // draft must be able to reopen before it receives focus.
+              isComposerCollapsedMobile &&
+                "invisible pointer-events-none absolute inset-x-0 top-0 max-h-0 overflow-hidden",
             )}
           >
             {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
@@ -3831,6 +3845,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
+                  reserveContextWindowMeter={shouldReserveContextWindowMeter({
+                    detailLoading: props.threadDetailLoading === true,
+                    threadStarted:
+                      !!activeThread &&
+                      (activeThread.latestRun !== null ||
+                        activeThread.latestUserMessageAt !== null ||
+                        activeThread.runtime !== null),
+                    providerReportsContextWindow:
+                      selectedProviderStatus?.reportsContextWindow ?? null,
+                  })}
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}

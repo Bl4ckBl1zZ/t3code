@@ -1,6 +1,7 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  shouldReserveContextWindowMeter,
   formatContextWindowCompactionMessage,
   resolveContextWindowModelDisplayName,
 } from "./ContextWindowMeter.logic";
@@ -54,5 +55,41 @@ describe("formatContextWindowCompactionMessage", () => {
     expect(formatContextWindowCompactionMessage(null)).toBe(
       "Context compacts automatically when needed.",
     );
+  });
+});
+
+describe("context meter loading footprint", () => {
+  it("reserves for a started thread while usage is loading, including unknown providers", () => {
+    for (const reports of [true, null])
+      expect(
+        shouldReserveContextWindowMeter({
+          detailLoading: true,
+          threadStarted: true,
+          providerReportsContextWindow: reports,
+        }),
+      ).toBe(true);
+  });
+  it("does not reserve once loaded, before the first run, or for a known unsupported provider", () => {
+    expect(
+      shouldReserveContextWindowMeter({
+        detailLoading: false,
+        threadStarted: true,
+        providerReportsContextWindow: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReserveContextWindowMeter({
+        detailLoading: true,
+        threadStarted: false,
+        providerReportsContextWindow: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReserveContextWindowMeter({
+        detailLoading: true,
+        threadStarted: true,
+        providerReportsContextWindow: false,
+      }),
+    ).toBe(false);
   });
 });

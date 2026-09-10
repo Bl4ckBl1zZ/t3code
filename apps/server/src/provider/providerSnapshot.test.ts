@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  buildServerProvider,
   isCommandMissingCause,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -156,5 +157,29 @@ describe("ProviderCommandNotFoundError", () => {
       expect(error).not.toHaveProperty("stderr");
       expect(error.message).not.toContain("secret-token-value");
     });
+  });
+});
+
+describe("provider context reporting metadata", () => {
+  it("preserves true, false and unknown without inventing a runtime capability", () => {
+    for (const value of [true, false, undefined]) {
+      const snapshot = buildServerProvider({
+        presentation: {
+          displayName: "Test",
+          ...(value === undefined ? {} : { reportsContextWindow: value }),
+        },
+        enabled: true,
+        checkedAt: "2026-09-10T00:00:00Z",
+        models: [],
+        probe: {
+          installed: true,
+          version: null,
+          status: "ready",
+          auth: { status: "authenticated" },
+        },
+      });
+      expect(snapshot.reportsContextWindow).toBe(value);
+      expect("reportsContextWindow" in snapshot).toBe(value !== undefined);
+    }
   });
 });

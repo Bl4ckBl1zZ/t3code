@@ -209,3 +209,7 @@ to its next action; a failure stays in the history and returns the activity indi
 Running background commands remain visible when the group is collapsed. On iOS, running tool rows
 remain available before their first result, and background processes do not take over the composer's
 foreground status.
+
+Multiline drafts stay expanded in the mobile browser, including text that wraps without explicit
+line breaks. While a previously started thread loads, the composer reserves room for its context
+meter. Returning to a known non-Git project keeps the branch toolbar hidden while status refreshes.
