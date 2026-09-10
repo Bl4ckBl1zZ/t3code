@@ -48,8 +48,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   native task/approval surfaces outside its push-to-talk gesture hierarchy. Its stash tab
   and list also remain outside that hierarchy; an atomic local queue preserves legacy
   single-slot stashes and swaps unsent content into the queue during restoration.
-  The remaining timeline ports are live-activity focus and interim turn folding
-  (`17c48f7fc1`), which must use V2 runs and attempts rather than V1 activities.
+  Web interim response folding (`17c48f7fc1`) now uses V2 run folds, retaining
+  the final response, persistent resources and interruption evidence. Native
+  transcript-level interim folding and live-activity focus remain separate ports.
   Ordinary failed tools use a muted circle alert on web and Swift, while typed runtime
   failures retain their severe presentation. Workspace setup feedback remains visible
   until a V2 run starts or fails; draft-route promotion waits for that same evidence.

@@ -187,3 +187,6 @@ On native iOS, use **Prompt history → Stash draft** to save up to 20 drafts fo
 thread. The Stash tab opens the saved list. Restoring moves any unsent text and attachments
 into the stash first. Removing a saved draft asks for confirmation. Existing single-slot
 stashes remain available after updating.
+
+Completed web conversations keep the final response visible. Expand **Worked for…** to read
+interim responses and completed tools. Resource cards remain visible outside that fold.

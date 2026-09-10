@@ -455,10 +455,9 @@ function timelineEntryFoldRunId(entry: TimelineEntry): RunId | null {
 }
 
 /**
- * Settled turns keep their first and terminal assistant messages visible.
- * Everything between them folds behind a "Worked for ..." row anchored at
- * the first hidden entry. Keeping both ends prevents a short follow-up from
- * hiding a substantive opening response while still bounding noisy turns.
+ * Settled V2 runs keep their terminal assistant message visible. Interim
+ * responses and completed work fold behind the duration row; live resources
+ * and interruption evidence keep their existing visibility rules.
  */
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
@@ -535,16 +534,9 @@ function deriveTurnFolds(input: {
     if (group.hasStreamingMessage) {
       continue;
     }
-    const firstAssistantEntry = group.entries.find(
-      (entry): entry is Extract<TimelineEntry, { kind: "message" }> => entry.kind === "message",
-    );
     const hiddenEntryIds = new Set<string>();
     for (const entry of group.entries) {
-      if (
-        entry.id !== firstAssistantEntry?.id &&
-        entry.id !== group.terminalEntry?.id &&
-        !timelineEntryIsPersistentResourceCard(entry)
-      ) {
+      if (entry.id !== group.terminalEntry?.id && !timelineEntryIsPersistentResourceCard(entry)) {
         hiddenEntryIds.add(entry.id);
       }
     }

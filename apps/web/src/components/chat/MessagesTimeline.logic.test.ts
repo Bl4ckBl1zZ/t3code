@@ -610,7 +610,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("keeps the first and terminal assistant messages visible around settled work", () => {
+  it("folds interim assistant messages while keeping resource cards and the terminal response", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -696,7 +696,6 @@ describe("deriveMessagesTimelineRows", () => {
     expect(foldRow?.label).toBe("Worked for 22s");
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
-      "assistant-first-entry",
       "turn-fold:turn-1",
       "thread-created-entry",
       "assistant-final-entry",
@@ -713,8 +712,8 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(expandedRows.map((row) => row.id)).toEqual([
       "user-entry",
-      "assistant-first-entry",
       "turn-fold:turn-1",
+      "assistant-first-entry",
       "work-entry-1",
       "thread-created-entry",
       "assistant-final-entry",
@@ -866,7 +865,6 @@ describe("deriveMessagesTimelineRows", () => {
       "user-entry",
       "turn-fold:turn-1",
       "subagent-card-entry",
-      "assistant-commentary-entry",
       "assistant-final-entry",
     ]);
   });
@@ -1410,7 +1408,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(finalRow?.kind === "message" && finalRow.showAssistantMeta).toBe(true);
   });
 
-  it("folds assistant messages between the first and terminal messages", () => {
+  it("folds every assistant message before the terminal message", () => {
     // A short follow-up must not hide a substantive opening response: both ends
     // of a settled turn stay visible and only the middle folds.
     const rows = deriveMessagesTimelineRows({
@@ -1470,11 +1468,7 @@ describe("deriveMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
-    expect(rows.map((row) => row.id)).toEqual([
-      "assistant-first-entry",
-      "turn-fold:turn-1",
-      "assistant-final-entry",
-    ]);
+    expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
   });
 
   it("does not fold the active in-progress turn", () => {
