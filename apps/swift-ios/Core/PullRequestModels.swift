@@ -70,9 +70,8 @@ public struct PullRequestThreadComment: Codable, Equatable, Sendable, Identifiab
     public let url: String?
 }
 
-/// A conversation anchored to a line of the diff. The sheet has no diff to pin
-/// these to, so only what the timeline could ever show is carried; `side` stays
-/// the wire string rather than an enum this client makes nothing of.
+/// A host review conversation with its original diff coordinates. Outdated
+/// conversations stay readable without being attached to a newer line.
 public struct PullRequestReviewThread: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let path: String
@@ -86,9 +85,7 @@ public struct PullRequestReviewThread: Codable, Equatable, Sendable, Identifiabl
     /// What the host says the thread holds, when it answered in pages.
     public let commentCount: Int?
     /// Feeds `pullRequests.threadComments`. Absent once the thread is whole,
-    /// so its presence is what says a page is missing. Nothing reads it yet —
-    /// review threads are decoded but not rendered — but dropping it here
-    /// would make a future reader believe short threads are whole threads.
+    /// so its presence is what says a page is missing.
     public let nextCommentsCursor: String?
 }
 

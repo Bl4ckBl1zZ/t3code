@@ -29,6 +29,7 @@ import {
   PullRequestDiffInput,
   PullRequestDiffResult,
   PullRequestSubmitReviewInput,
+  PullRequestThreadCommentsResult,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -776,3 +777,30 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestReviewPath, pullRequestReviewSerialized);
+
+const pullRequestThreadPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestThread.json");
+const pullRequestThreadSerialized = `${JSON.stringify(
+  Schema.encodeSync(PullRequestThreadCommentsResult)({
+    comments: [
+      {
+        id: "comment-2",
+        author: null,
+        body: "  Markdown reply  ",
+        createdAt: "2026-09-10T00:00:00Z",
+        url: null,
+      },
+    ],
+    nextCursor: "opaque/thread/page3",
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestThreadPath) ||
+    NodeFS.readFileSync(pullRequestThreadPath, "utf8") !== pullRequestThreadSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestThread.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestThreadPath, pullRequestThreadSerialized);

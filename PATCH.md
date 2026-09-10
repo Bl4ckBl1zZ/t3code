@@ -738,4 +738,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   only against the whole PR, never a commit-specific diff. Added/deleted/context coordinates and
   renamed paths follow the contracts. Submission clears only the exact snapshot acknowledged by
   the host, preserving failed drafts and concurrent edits. These are host reviews, separate from
-  working-tree comments sent to the coding agent. Existing-thread replies/resolution remain to port.
+  working-tree comments sent to the coding agent. Existing review conversations support paginated replies and reversible resolution.
+
+- Native host review conversations are shown in Timeline and on matching Code lines. Placement
+  requires the same file, side and line in the whole-PR diff; outdated, withheld and commit-scoped
+  conversations stay separate. Replies and resolution intersect host/viewer permissions and
+  revalidate repository identity. Failed replies retain their text; refreshing merges loaded comment
+  pages and preserves other unsent replies. Repeated cursors stop rather than looping.

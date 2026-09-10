@@ -22,6 +22,7 @@ protocol FeatureProjectPullRequestManaging: AnyObject, Sendable {
 /// project. A workspace browse never creates a dummy thread just to read a PR.
 @MainActor
 struct FeaturePullRequestAccess {
+    let threads: ((Int, String) -> FeaturePullRequestThreadAccess)?
     let draftKey: String
     let submitReview: ((Int, String, PullRequestReviewSubmission) async throws -> Void)?
     let diff: ((Int, String?, String?) async throws -> PullRequestDiffResult)?
@@ -34,8 +35,9 @@ struct FeaturePullRequestAccess {
     init(client: any FeatureClient, threadID: String) {
         draftKey = "thread:\(threadID)"
         if let reviewer = client as? any FeaturePullRequestReviewWriting {
+            threads = { FeaturePullRequestThreadAccess(writer: reviewer, scope: .thread(threadID), number: $0, expectedURL: $1) }
             submitReview = { try await reviewer.submitPullRequestReview(scope: .thread(threadID), number: $0, expectedURL: $1, submission: $2) }
-        } else { submitReview = nil }
+        } else { submitReview = nil; threads = nil }
         if let reader = client as? any FeaturePullRequestCodeReading {
             diff = { try await reader.pullRequestDiff(scope: .thread(threadID), number: $0, cursor: $1, commit: $2) }
         } else { diff = nil }
@@ -49,8 +51,9 @@ struct FeaturePullRequestAccess {
     init(manager: any FeatureProjectPullRequestManaging, scope: FeaturePullRequestProjectScope) {
         draftKey = "project:\(scope.projectID):\(scope.canonicalKey)"
         if let reviewer = manager as? any FeaturePullRequestReviewWriting {
+            threads = { FeaturePullRequestThreadAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
             submitReview = { try await reviewer.submitPullRequestReview(scope: .project(scope), number: $0, expectedURL: $1, submission: $2) }
-        } else { submitReview = nil }
+        } else { submitReview = nil; threads = nil }
         if let reader = manager as? any FeaturePullRequestCodeReading {
             diff = { try await reader.pullRequestDiff(scope: .project(scope), number: $0, cursor: $1, commit: $2) }
         } else { diff = nil }
@@ -75,5 +78,20 @@ protocol FeaturePullRequestCodeReading: AnyObject, Sendable {
 
 @MainActor
 protocol FeaturePullRequestReviewWriting: AnyObject, Sendable {
+    func pullRequestThreadComments(scope: FeaturePullRequestScope, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult
+    func replyToPullRequestThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, body: String) async throws
+    func setPullRequestThreadResolution(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, resolved: Bool) async throws
     func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws
+}
+
+@MainActor
+struct FeaturePullRequestThreadAccess {
+    let loadMore: (String, String) async throws -> PullRequestThreadCommentsResult
+    let reply: (String, String) async throws -> Void
+    let resolve: (String, Bool) async throws -> Void
+    init(writer: any FeaturePullRequestReviewWriting, scope: FeaturePullRequestScope, number: Int, expectedURL: String) {
+        loadMore = { try await writer.pullRequestThreadComments(scope: scope, number: number, threadID: $0, cursor: $1) }
+        reply = { try await writer.replyToPullRequestThread(scope: scope, number: number, expectedURL: expectedURL, threadID: $0, body: $1) }
+        resolve = { try await writer.setPullRequestThreadResolution(scope: scope, number: number, expectedURL: expectedURL, threadID: $0, resolved: $1) }
+    }
 }

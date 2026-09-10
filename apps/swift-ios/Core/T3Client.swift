@@ -810,6 +810,27 @@ public actor T3Client {
         )
     }
 
+    public func pullRequestThreadComments(projectID: String, repository: String, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult {
+        try await rpc.request("pullRequests.threadComments", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "threadId": .string(threadID), "cursor": .string(cursor),
+        ]), as: PullRequestThreadCommentsResult.self)
+    }
+
+    public func replyToPullRequestThread(projectID: String, repository: String, number: Int, threadID: String, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.replyToThread", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "threadId": .string(threadID), "body": .string(body),
+        ]), as: JSONValue.self)
+    }
+
+    public func setPullRequestThreadResolution(projectID: String, repository: String, number: Int, threadID: String, resolved: Bool) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.setThreadResolution", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "threadId": .string(threadID), "resolved": .bool(resolved),
+        ]), as: JSONValue.self)
+    }
+
     public func submitPullRequestReview(projectID: String, repository: String, number: Int, submission: PullRequestReviewSubmission) async throws {
         let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(submission))
         guard case var .object(payload) = encoded else { throw CocoaError(.coderInvalidValue) }

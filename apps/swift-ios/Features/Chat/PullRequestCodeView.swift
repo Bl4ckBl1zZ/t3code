@@ -7,6 +7,7 @@ struct PullRequestCodeView: View {
     let commits: [PullRequestCommit]
     let load: (Int, String?, String?) async throws -> PullRequestDiffResult
     let reviewDraft: PullRequestReviewDraftModel?
+    let conversations: PullRequestConversationContext
     let canComment: Bool
     @State private var model = PullRequestCodeModel()
     @State private var selectedCommit: String?
@@ -51,7 +52,7 @@ struct PullRequestCodeView: View {
                     Group {
                         if let file = row.file {
                             NavigationLink {
-                                PullRequestCodeFileView(file: file, reviewDraft: reviewDraft, canComment: canComment && selectedCommit == nil)
+                                PullRequestCodeFileView(file: file, reviewDraft: reviewDraft, canComment: canComment && selectedCommit == nil, conversations: conversations, commit: selectedCommit)
                             } label: {
                                 FeatureReviewFileRow(file: file).frame(minHeight: 52)
                             }
@@ -111,8 +112,18 @@ private struct PullRequestCodeFileView: View {
     let file: FeatureReviewFile
     let reviewDraft: PullRequestReviewDraftModel?
     let canComment: Bool
+    let conversations: PullRequestConversationContext
+    let commit: String?
+    private var fileThreads: [PullRequestReviewThread] { conversations.threads.filter { $0.path == file.path } }
+    private var placed: [String: [PullRequestReviewThread]] {
+        Dictionary(grouping: fileThreads.compactMap { thread -> (String, PullRequestReviewThread)? in
+            PullRequestThreadPlacement.anchor(thread: thread, file: file, commit: commit).map { ($0, thread) }
+        }, by: { $0.0 }).mapValues { $0.map { $0.1 } }
+    }
     @State private var commentingLine: FeatureDiffLine?
     var body: some View {
+        let placedThreads = placed
+        let unplacedThreads = fileThreads.filter { PullRequestThreadPlacement.anchor(thread: $0, file: file, commit: commit) == nil }
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(file.path).font(T3Typography.supporting.monospaced()).textSelection(.enabled)
@@ -130,6 +141,16 @@ private struct PullRequestCodeFileView: View {
                             ForEach(file.lines) { line in
                                 FeatureDiffLineRow(line: line, isSelected: false, minimumWidth: geometry.size.width,
                                     select: canComment && PullRequestReviewDraftModel.position(line) != nil ? { commentingLine = line } : nil)
+                                ForEach(placedThreads[line.id] ?? []) { thread in
+                                    conversation(thread).frame(width: geometry.size.width).padding(.vertical, 8)
+                                }
+                            }
+                            if !unplacedThreads.isEmpty {
+                                Text(commit == nil ? "Conversations outside these hunks" : "PR conversations · not attached to this commit")
+                                    .font(T3Typography.supportingStrong).frame(width: geometry.size.width).padding(.vertical, 12)
+                            }
+                            ForEach(unplacedThreads) { thread in
+                                conversation(thread).frame(width: geometry.size.width).padding(.vertical, 8)
                             }
                         }
                     }
@@ -148,4 +169,9 @@ private struct PullRequestCodeFileView: View {
             }
         }
     }
+    private func conversation(_ thread: PullRequestReviewThread) -> some View {
+        PullRequestThreadCard(thread: thread, access: conversations.access, canReply: conversations.canReply,
+            canResolve: conversations.canResolve, onReplied: conversations.refresh)
+    }
+
 }

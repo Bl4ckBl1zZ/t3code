@@ -2104,10 +2104,30 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.pullRequestDiff(projectID: route.projectID, repository: route.repository, number: number, cursor: cursor, commit: commit)
     }
 
-    func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws {
+    func pullRequestThreadComments(scope: FeaturePullRequestScope, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult {
+        let route = try pullRequestRoute(scope: scope)
+        return try await route.client.pullRequestThreadComments(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, cursor: cursor)
+    }
+
+    private func validatedPullRequestRoute(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> (client: T3Client, projectID: String, repository: String) {
         let route = try pullRequestRoute(scope: scope)
         let current = try await route.client.pullRequestDetail(projectID: route.projectID, repository: route.repository, number: number)
         guard current.url == expectedURL else { throw FeatureCapabilityUnavailable("The pull request repository changed. Reopen the review") }
+        return route
+    }
+
+    func replyToPullRequestThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, body: String) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.replyToPullRequestThread(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, body: body)
+    }
+
+    func setPullRequestThreadResolution(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, resolved: Bool) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, resolved: resolved)
+    }
+
+    func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.submitPullRequestReview(projectID: route.projectID, repository: route.repository, number: number, submission: submission)
     }
 

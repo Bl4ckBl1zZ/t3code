@@ -26,3 +26,8 @@ public struct PullRequestReviewSubmission: Codable, Equatable, Sendable {
     public let body: String
     public let comments: [PullRequestReviewCommentDraft]
 }
+
+public struct PullRequestThreadCommentsResult: Codable, Equatable, Sendable {
+    public let comments: [PullRequestThreadComment]
+    public let nextCursor: String?
+}

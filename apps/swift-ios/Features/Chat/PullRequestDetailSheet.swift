@@ -75,12 +75,10 @@ struct PullRequestDetailSheet: View {
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
 
-    private func load() async {
+    private func load(preserveContent: Bool = false) async {
         let requestedNumber = displayedNumber
         loadError = nil
-        overview = nil
-        stack = nil
-        stackError = nil
+        if !preserveContent { overview = nil; stack = nil; stackError = nil }
         do {
             let result = try await access.overview(requestedNumber)
             guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
@@ -124,6 +122,10 @@ struct PullRequestDetailSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(overview.detail)
+                if let loadError {
+                    Text("Refresh failed: \(loadError)").font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
+                    Button("Retry refresh") { Task { await load(preserveContent: true) } }
+                }
                 if let stack { stackSection(stack, detail: overview.detail) }
                 if let stackError {
                     Text("Could not load stack: \(stackError)").font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
@@ -150,9 +152,27 @@ struct PullRequestDetailSheet: View {
                     summary(overview.detail, activity: overview.activity)
                 case .timeline:
                     timeline(overview.activity)
+                    if let activity = overview.activity, !activity.reviewThreads.isEmpty {
+                        section("Review conversations") {
+                            LazyVStack(spacing: 12) {
+                                ForEach(activity.reviewThreads) { thread in
+                                    PullRequestThreadCard(thread: thread,
+                                        access: access.threads?(displayedNumber, overview.detail.url),
+                                        canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
+                                        canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
+                                        onReplied: { await load(preserveContent: true) })
+                                }
+                            }
+                        }
+                    }
                 case .code:
                     if overview.detail.capabilities?.diff == true, let diff = access.diff {
                         PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff, reviewDraft: reviewDraft,
+                            conversations: PullRequestConversationContext(threads: overview.activity?.reviewThreads ?? [],
+                                access: access.threads?(displayedNumber, overview.detail.url),
+                                canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
+                                canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
+                                refresh: { await load(preserveContent: true) }),
                             canComment: access.submitReview != nil && overview.detail.capabilities?.review?.inlineComment == true && overview.detail.viewerPermissions?.comment == true && !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty)
                             .id(displayedNumber)
                     } else {

@@ -63,3 +63,8 @@ On iOS, tap a changed line in **Code → All commits** to add a private line com
 **Review** to edit or remove pending comments, write a summary, and submit a comment, approval,
 or request for changes where your host and account allow it. Drafts stay on this device when you
 close the sheet. Failed submissions preserve them; successful submissions clear only what was sent.
+
+Review conversations appear in **Timeline** and beside their matching lines in the Code view.
+Older or out-of-hunk conversations stay separate from current code. Expand a resolved conversation
+to read it, load more comments, reply, or reopen it when permitted. Replies preserve your text when
+sending fails, and resolving a conversation can be undone with **Reopen conversation**.
