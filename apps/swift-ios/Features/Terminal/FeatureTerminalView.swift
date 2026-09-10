@@ -101,6 +101,7 @@ public struct FeatureTerminalView: View {
             GhosttyTerminalSurface(
                 terminalKey: "\(threadID):\(activeTerminalID)",
                 buffer: terminal?.buffer ?? "",
+                outputCursor: terminal?.outputCursor,
                 fontSize: CGFloat(fontSize),
                 isRunning: isRunning,
                 focusRequest: focusRequest,

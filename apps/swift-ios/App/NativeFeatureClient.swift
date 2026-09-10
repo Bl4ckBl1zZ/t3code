@@ -2753,6 +2753,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if let coreSnapshot = event.snapshot {
             var snapshot = NativeWorkspaceMapper.terminal(coreSnapshot)
             snapshot.threadID = threadID
+            snapshot.outputCursor = FeatureTerminalOutputCursor(byteOffset: snapshot.buffer.utf8.count)
             snapshot.buffer = Self.cappedTerminalBuffer(snapshot.buffer)
             terminalSnapshots[key] = snapshot
             return snapshot
@@ -2762,7 +2763,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ?? FeatureTerminalSnapshot(threadID: threadID, terminalID: terminalID)
         switch event.type {
         case "output":
-            snapshot.buffer.append(event.data ?? "")
+            let data = event.data ?? ""
+            var cursor = snapshot.outputCursor ?? FeatureTerminalOutputCursor(byteOffset: snapshot.buffer.utf8.count)
+            cursor.byteOffset += data.utf8.count
+            snapshot.outputCursor = cursor
+            snapshot.buffer.append(data)
             snapshot.buffer = Self.cappedTerminalBuffer(snapshot.buffer)
         case "exited":
             snapshot.state = .exited
@@ -2774,6 +2779,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snapshot.error = event.message
         case "cleared":
             snapshot.buffer = ""
+            snapshot.outputCursor = FeatureTerminalOutputCursor()
         case "activity":
             snapshot.title = event.label ?? snapshot.title
             snapshot.hasRunningSubprocess = event.hasRunningSubprocess
@@ -2794,6 +2800,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         snapshot.threadID = threadID
         if let cached = terminalSnapshots[key] {
             snapshot.buffer = cached.buffer
+            snapshot.outputCursor = cached.outputCursor
             snapshot.error = cached.error
         }
         terminalSnapshots[key] = snapshot

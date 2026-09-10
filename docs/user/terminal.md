@@ -12,3 +12,9 @@ On Windows and Linux, **Ctrl+Insert** copies the current terminal selection.
 On Linux and BSD, middle-click pastes the selection from that terminal. With no terminal
 selection, it does nothing; it does not paste the system clipboard. Applications that
 capture mouse input still receive the click themselves.
+
+Web, desktop, and iOS keep a bounded local replay tail. A busy terminal keeps its
+live screen and ANSI state as older replay history is discarded. Reconnecting
+or falling behind the retained tail restores the current tail once. Hidden web
+terminal drawers pause canvas rendering while continuing to receive output and
+answer terminal queries; revealing a drawer redraws its current screen.

@@ -3,7 +3,13 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
+import {
+  INITIAL_TERMINAL_OUTPUT_CURSOR,
+  readTerminalOutputUpdate,
+  type TerminalOutputCursor,
+  type TerminalOutputUpdate,
+  type TerminalSessionState,
+} from "@t3tools/client-runtime/state/terminal";
 import {
   Plus,
   Square,
@@ -27,6 +33,7 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -95,8 +102,12 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
   terminal.write(`\r\n[terminal] ${message}\r\n`);
 }
 
-function writeTerminalBuffer(terminal: GhosttyTerminalSurface, buffer: string): void {
-  terminal.resetAndWrite(buffer);
+export function writeTerminalOutputUpdate(
+  terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write">,
+  update: TerminalOutputUpdate,
+): void {
+  if (update.type === "reset") terminal.resetAndWrite(update.data);
+  else if (update.type === "append") terminal.write(update.data);
 }
 
 function parseTerminalColor(value: string, fallback: GhosttyColor): GhosttyColor {
@@ -154,16 +165,23 @@ function terminalFontOptions(family: string, size: number): { family?: string; s
 }
 
 export function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
-  const isDark = document.documentElement.classList.contains("dark");
-  const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
-  const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";
   const drawerSurface =
     mountElement?.closest(".thread-terminal-drawer") ??
     document.querySelector(".thread-terminal-drawer") ??
     document.body;
   const drawerStyles = getComputedStyle(drawerSurface);
+  const themeStyles = mountElement ? getComputedStyle(mountElement) : drawerStyles;
+  const colorScheme = themeStyles.colorScheme;
+  const isDark =
+    colorScheme === "dark"
+      ? true
+      : colorScheme === "light"
+        ? false
+        : document.documentElement.classList.contains("dark");
+  const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
+  const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";
   const bodyStyles = getComputedStyle(document.body);
-  const themeStyles = getComputedStyle(document.documentElement);
+  const rootThemeStyles = getComputedStyle(document.documentElement);
   const background = normalizeComputedColor(
     drawerStyles.backgroundColor,
     normalizeComputedColor(bodyStyles.backgroundColor, fallbackBackground),
@@ -172,8 +190,16 @@ export function terminalThemeFromApp(mountElement?: HTMLElement | null): Ghostty
     drawerStyles.color,
     normalizeComputedColor(bodyStyles.color, fallbackForeground),
   );
-  const terminalBackground = readThemeColor(themeStyles, "--terminal-background", background);
-  const terminalForeground = readThemeColor(themeStyles, "--terminal-foreground", foreground);
+  const terminalBackground = readThemeColor(
+    themeStyles,
+    "--terminal-background",
+    readThemeColor(rootThemeStyles, "--terminal-background", background),
+  );
+  const terminalForeground = readThemeColor(
+    themeStyles,
+    "--terminal-foreground",
+    readThemeColor(rootThemeStyles, "--terminal-foreground", foreground),
+  );
   const terminalCursor = readThemeColor(
     themeStyles,
     "--terminal-cursor",
@@ -324,6 +350,7 @@ interface TerminalViewportProps {
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   focusRequestId: number;
   autoFocus: boolean;
+  visible: boolean;
   resizeEpoch: number;
   drawerHeight: number;
   keybindings: ResolvedKeybindingsConfig;
@@ -348,12 +375,18 @@ export function TerminalViewport({
   onAddTerminalContext,
   focusRequestId,
   autoFocus,
+  visible,
   resizeEpoch,
   drawerHeight,
   keybindings,
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<GhosttyTerminalSurface | null>(null);
+  const visibleRef = useRef(visible);
+  useLayoutEffect(() => {
+    visibleRef.current = visible;
+    terminalRef.current?.setVisible(visible);
+  }, [visible]);
   const environmentId = threadRef.environmentId;
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
@@ -425,7 +458,8 @@ export function TerminalViewport({
       input: { threadId, terminalId, cols, rows },
     }),
   );
-  const terminalBuffer = terminalSession.buffer;
+  const terminalOutput = terminalSession.output;
+  const outputCursorRef = useRef<TerminalOutputCursor>(INITIAL_TERMINAL_OUTPUT_CURSOR);
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
   const synchronizedStatusRef = useRef<TerminalSessionState["status"]>("closed");
@@ -448,14 +482,14 @@ export function TerminalViewport({
   );
   const terminalVersion = terminalSession.version;
   const previousSessionRef = useRef({
-    buffer: terminalBuffer,
+    output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
   });
   const latestSessionRef = useRef(previousSessionRef.current);
   latestSessionRef.current = {
-    buffer: terminalBuffer,
+    output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -485,6 +519,9 @@ export function TerminalViewport({
     const setup = async (): Promise<(() => void) | null> => {
       const setupFont = terminalFontRef.current;
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
+        get visible() {
+          return visibleRef.current;
+        },
         theme: terminalThemeFromApp(mount),
         font: terminalFontOptions(setupFont.family, setupFont.size),
         onData: (data) => handleData(data),
@@ -506,6 +543,7 @@ export function TerminalViewport({
       }
       // The theme observer is not installed yet, so re-read the theme in case
       // the app toggled light/dark while the WASM surface was loading.
+      terminal.setVisible(visibleRef.current);
       terminal.setTheme(terminalThemeFromApp(mount));
       setupTerminal = terminal;
       terminalRef.current = terminal;
@@ -518,7 +556,13 @@ export function TerminalViewport({
       }
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
-      if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);
+      const initialOutput = readTerminalOutputUpdate(
+        latestSession.output,
+        INITIAL_TERMINAL_OUTPUT_CURSOR,
+      );
+      if (initialOutput.type === "reset" && initialOutput.data.length > 0)
+        writeTerminalOutputUpdate(terminal, initialOutput);
+      outputCursorRef.current = initialOutput.cursor;
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
@@ -526,7 +570,8 @@ export function TerminalViewport({
       // never started, so only "exited" triggers the message — as with xterm.)
       synchronizedStatusRef.current = "closed";
       synchronizeTerminalStatus(terminal, latestSession.status);
-      if (autoFocus) window.requestAnimationFrame(() => terminal.focus());
+      // WASM may finish after the user has returned to the composer.
+      if (visibleRef.current && mount.contains(document.activeElement)) terminal.focus();
 
       const clearSelectionAction = () => {
         selectionActionRequestIdRef.current += 1;
@@ -901,7 +946,9 @@ export function TerminalViewport({
 
     return () => {
       cancelled = true;
+      const hadFocus = mount.contains(document.activeElement);
       teardown?.();
+      if (hadFocus && mount.isConnected) mount.focus({ preventScroll: true });
     };
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
@@ -910,7 +957,7 @@ export function TerminalViewport({
   useEffect(() => {
     const terminal = terminalRef.current;
     const current = {
-      buffer: terminalBuffer,
+      output: terminalOutput,
       error: terminalError,
       status: terminalStatus,
       version: terminalVersion,
@@ -922,43 +969,26 @@ export function TerminalViewport({
 
     const previous = previousSessionRef.current;
     synchronizeTerminalStatus(terminal, current.status);
-    if (current.version === previous.version) {
+    if (current.version === previous.version && current.output === previous.output) {
       return;
     }
 
-    if (
-      current.buffer.length >= previous.buffer.length &&
-      current.buffer.startsWith(previous.buffer)
-    ) {
-      terminal.write(current.buffer.slice(previous.buffer.length));
-    } else {
-      writeTerminalBuffer(terminal, current.buffer);
-    }
+    const outputUpdate = readTerminalOutputUpdate(current.output, outputCursorRef.current);
+    writeTerminalOutputUpdate(terminal, outputUpdate);
+    outputCursorRef.current = outputUpdate.cursor;
     terminal.clearSelection();
 
     if (current.error !== null && current.error !== previous.error) {
       writeSystemMessage(terminal, current.error);
     }
 
-    if (previous.version === 0 && autoFocus) {
-      window.requestAnimationFrame(() => {
-        terminal.focus();
-      });
-    }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+  }, [terminalOutput, terminalError, terminalStatus, terminalVersion]);
 
   useEffect(() => {
-    if (!autoFocus) return;
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    const frame = window.requestAnimationFrame(() => {
-      terminal.focus();
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [autoFocus, focusRequestId]);
+    if (!autoFocus || !visible) return;
+    (terminalRef.current ?? containerRef.current)?.focus();
+  }, [autoFocus, focusRequestId, visible]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -979,6 +1009,7 @@ export function TerminalViewport({
   return (
     <div
       ref={containerRef}
+      tabIndex={-1}
       className="relative h-full w-full overflow-hidden bg-[var(--terminal-background)]"
     />
   );
@@ -1541,6 +1572,7 @@ export default function ThreadTerminalDrawer({
                           onSessionExited={() => onCloseTerminal(terminalId)}
                           onAddTerminalContext={onAddTerminalContext}
                           focusRequestId={focusRequestId}
+                          visible={visible}
                           autoFocus={terminalId === resolvedActiveTerminalId}
                           resizeEpoch={resizeEpoch}
                           drawerHeight={drawerHeight}
@@ -1570,6 +1602,7 @@ export default function ThreadTerminalDrawer({
                   onSessionExited={() => onCloseTerminal(resolvedActiveTerminalId)}
                   onAddTerminalContext={onAddTerminalContext}
                   focusRequestId={focusRequestId}
+                  visible={visible}
                   autoFocus
                   resizeEpoch={resizeEpoch}
                   drawerHeight={drawerHeight}

@@ -1027,7 +1027,18 @@ public enum FeatureTerminalState: String, Sendable, Codable {
     case failed
 }
 
+/// Local renderer position; never sent to the server. A new attach or clear creates a generation.
+public struct FeatureTerminalOutputCursor: Sendable, Equatable, Codable {
+    public var generation: UUID
+    public var byteOffset: Int
+    public init(generation: UUID = UUID(), byteOffset: Int = 0) {
+        self.generation = generation
+        self.byteOffset = byteOffset
+    }
+}
+
 public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
+    public var outputCursor: FeatureTerminalOutputCursor? = nil
     public var threadID: String
     public var terminalID: String
     public var state: FeatureTerminalState

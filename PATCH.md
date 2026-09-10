@@ -637,3 +637,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   server setting, with a capability gate for older servers. Web/desktop and Swift show the
   resolved glyph in environment selectors and thread context. Swift has a per-environment
   settings screen; Automatic deletes the override. V2 thread state and migrations are untouched.
+
+- Terminal replay uses upstream's bounded chunk buffer and per-attach cursors in
+  client-runtime/web; Swift carries local byte cursors through its existing capped
+  buffer. Repeated output and history rollover append without resetting live VT state.
+  Hidden web surfaces continue parsing/replying but stop canvas work and cursor timers.
+  Preserve the fork's narrow-pane font fitting, middle-click selection, and V2 terminal
+  routing. Expo materializes text only at its existing native-surface boundary.
