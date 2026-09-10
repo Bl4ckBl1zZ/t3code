@@ -1,3 +1,4 @@
+import { resolveRestingComposerInset } from "./chat/composerRestingState";
 import {
   observeProactivePanelUserChoice,
   shouldOpenProactivePullRequest,
@@ -1613,6 +1614,8 @@ function ChatViewContent(props: ChatViewProps) {
   const legendListRef = useRef<LegendListRef | null>(null);
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
+  const [composerResting, setComposerResting] = useState(false);
+  const [restingControlsHost, setRestingControlsHost] = useState<HTMLDivElement | null>(null);
   const isAtEndRef = useRef(true);
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
@@ -1627,7 +1630,7 @@ function ChatViewContent(props: ChatViewProps) {
       const nextHeight = Math.ceil(composerOverlayElement.getBoundingClientRect().height);
       if (nextHeight <= 0) return;
       setComposerOverlayHeight((currentHeight) =>
-        currentHeight === nextHeight ? currentHeight : nextHeight,
+        resolveRestingComposerInset(currentHeight, nextHeight, composerResting),
       );
     };
 
@@ -1637,7 +1640,7 @@ function ChatViewContent(props: ChatViewProps) {
     const observer = new ResizeObserver(updateHeight);
     observer.observe(composerOverlayElement);
     return () => observer.disconnect();
-  }, [composerOverlayElement]);
+  }, [composerOverlayElement, composerResting]);
 
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
@@ -4755,6 +4758,16 @@ function ChatViewContent(props: ChatViewProps) {
     [composerOverlayHeight],
   );
 
+  const composerReadingTimeline = useMemo(
+    () => ({
+      getElement: () => legendListRef.current?.getScrollableNode() ?? null,
+      overflows: () => timelineRealContentOverflowsViewport(),
+      atEnd: () => isAtEndRef.current,
+      onManualNavigation: cancelTimelineLiveFollowForUserNavigation,
+    }),
+    [timelineRealContentOverflowsViewport, cancelTimelineLiveFollowForUserNavigation],
+  );
+
   // Live-follow stays active after send/thread-open until an actual list scroll
   // gesture opts out.
   const scrollToEnd = useCallback((animated = false) => {
@@ -4961,28 +4974,32 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
 
-  const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
-    if (
-      !isAtEnd &&
-      liveFollowUserScrollGenerationRef.current === anchorUserScrollGenerationRef.current
-    ) {
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-      return;
-    }
-    if (isAtEndRef.current === isAtEnd) return;
-    isAtEndRef.current = isAtEnd;
-    if (isAtEnd) {
-      timelineScrollModeRef.current = "following-end";
-      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-    } else {
-      timelineScrollModeRef.current = "free-scrolling";
-      liveFollowUserScrollGenerationRef.current = null;
-      showScrollDebouncer.current.maybeExecute();
-    }
-  }, []);
+  const onIsAtEndChange = useCallback(
+    (isAtEnd: boolean) => {
+      if (
+        !isAtEnd &&
+        liveFollowUserScrollGenerationRef.current === anchorUserScrollGenerationRef.current
+      ) {
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+        return;
+      }
+      if (isAtEndRef.current === isAtEnd) return;
+      isAtEndRef.current = isAtEnd;
+      if (isAtEnd) {
+        composerRef.current?.restoreAfterTimelineReachedEnd();
+        timelineScrollModeRef.current = "following-end";
+        liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+      } else {
+        timelineScrollModeRef.current = "free-scrolling";
+        liveFollowUserScrollGenerationRef.current = null;
+        showScrollDebouncer.current.maybeExecute();
+      }
+    },
+    [composerRef],
+  );
 
   useEffect(() => {
     if (!activeThread?.id) {
@@ -8069,6 +8086,10 @@ function ChatViewContent(props: ChatViewProps) {
                       <ComposerSurface.Host>
                         <div className="relative z-10">
                           <ChatComposer
+                            readingTimeline={composerReadingTimeline}
+                            restingControlsHost={restingControlsHost}
+                            expandedTaskDrawer={tasksDrawerExpanded}
+                            onRestingChange={setComposerResting}
                             attachments={
                               <>
                                 <ComposerBannerStack items={composerBannerItems} />
@@ -8211,6 +8232,10 @@ function ChatViewContent(props: ChatViewProps) {
                           {showComposerContextStrip && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
+                                composerControlsHostRef={
+                                  isServerThread ? setRestingControlsHost : undefined
+                                }
+                                composerControlsVisible={composerResting}
                                 environmentId={activeThread.environmentId}
                                 threadId={activeThread.id}
                                 showGitControls={isGitRepo}

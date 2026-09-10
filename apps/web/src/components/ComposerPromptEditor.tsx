@@ -912,6 +912,8 @@ interface ComposerPromptEditorProps {
   disabled: boolean;
   placeholder: string;
   className?: string;
+  containerClassName?: string | undefined;
+  placeholderClassName?: string | undefined;
   onRemoveTerminalContext: (contextId: string) => void;
   onChange: (
     nextValue: string,
@@ -1611,6 +1613,8 @@ function ComposerPromptEditorInner({
   disabled,
   placeholder,
   className,
+  containerClassName,
+  placeholderClassName,
   onRemoveTerminalContext,
   onCitationSubmitAndSend,
   onChange,
@@ -1906,7 +1910,12 @@ function ComposerPromptEditorInner({
   return (
     <ComposerCitationCommentContext value={citationCommentActions}>
       <ComposerTerminalContextActionsContext value={terminalContextActions}>
-        <div className="relative [font-family:var(--font-composer,var(--font-sans))] [font-size:var(--font-size-prompt,0.875rem)] [@media(max-width:39.999rem)_and_(pointer:coarse)]:[font-size:max(var(--font-size-prompt,1rem),16px)]">
+        <div
+          className={cn(
+            "relative [font-family:var(--font-composer,var(--font-sans))] [font-size:var(--font-size-prompt,0.875rem)] [@media(max-width:39.999rem)_and_(pointer:coarse)]:[font-size:max(var(--font-size-prompt,1rem),16px)]",
+            containerClassName,
+          )}
+        >
           <PlainTextPlugin
             contentEditable={
               <ContentEditable
@@ -1923,7 +1932,12 @@ function ComposerPromptEditorInner({
             }
             placeholder={
               terminalContexts.length > 0 ? null : (
-                <div className="pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75">
+                <div
+                  className={cn(
+                    "pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75",
+                    placeholderClassName,
+                  )}
+                >
                   {placeholder}
                 </div>
               )
@@ -1954,6 +1968,8 @@ export function ComposerPromptEditor({
   disabled,
   placeholder,
   className,
+  containerClassName,
+  placeholderClassName,
   onRemoveTerminalContext,
   onCitationSubmitAndSend,
   onChange,
@@ -2004,6 +2020,8 @@ export function ComposerPromptEditor({
         editorRef={editorRef}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
+        containerClassName={containerClassName}
+        placeholderClassName={placeholderClassName}
       />
     </LexicalComposer>
   );

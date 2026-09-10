@@ -1,3 +1,4 @@
+import { cn } from "~/lib/utils";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
@@ -43,6 +44,8 @@ import { Separator } from "./ui/separator";
 import { ComposerSurface } from "./chat/ComposerSurface";
 
 interface BranchToolbarProps {
+  composerControlsHostRef?: ((element: HTMLDivElement | null) => void) | undefined;
+  composerControlsVisible?: boolean;
   layout?: "composer" | "panel";
   panelSection?: "all" | "workspace" | "branch";
   environmentId: EnvironmentId;
@@ -396,6 +399,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
+  composerControlsHostRef,
+  composerControlsVisible = false,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -529,7 +534,12 @@ export const BranchToolbar = memo(function BranchToolbar({
           onUsePreviousWorktree={onUsePreviousWorktree}
         />
       ) : (
-        <div className="flex min-w-10 flex-1 items-center gap-1">
+        <div
+          className={cn(
+            "flex min-w-10 items-center gap-1",
+            composerControlsVisible ? "shrink" : "flex-1",
+          )}
+        >
           {showEnvironmentIndicator && availableEnvironments && (
             <>
               <BranchToolbarEnvironmentSelector
@@ -559,6 +569,18 @@ export const BranchToolbar = memo(function BranchToolbar({
           ) : null}
         </div>
       )}
+
+      {composerControlsHostRef ? (
+        <div
+          ref={composerControlsHostRef}
+          data-chat-resting-composer-controls-host="true"
+          data-composer-context-control
+          className={cn(
+            "min-w-0 flex-1 items-center overflow-x-hidden",
+            composerControlsVisible ? "flex" : "hidden",
+          )}
+        />
+      ) : null}
 
       {showGitControls ? (
         <BranchToolbarBranchSelector

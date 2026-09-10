@@ -44,6 +44,17 @@ On mobile, the model picker shows each OpenCode model's upstream provider, such 
 GitHub Copilot, or OpenCode Zen, beneath its name. Search by that provider name to narrow the list
 when starting a thread or changing an existing thread's model.
 
+## Reading with a compact composer
+
+On desktop-sized web and desktop windows, scrolling through a conversation compacts a
+single-line composer. The editor keeps your draft and caret. Model and mode controls move
+into the context strip, while attachment, voice, and send controls remain available.
+Click or type in the editor, return to the conversation's end, or start voice input to
+expand it again. Multiline drafts, open questions, approvals, and errors stay expanded.
+
+Turn this off with **Settings → General → Collapse composer while scrolling**. This
+preference does not change the native iOS composer's touch and voice gestures.
+
 ## Changing projects
 
 On web and desktop, changing the project from a new thread keeps the current environment when that

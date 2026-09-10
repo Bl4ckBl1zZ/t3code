@@ -29,10 +29,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   thread is unpinned; the fractional-key math itself is upstream's shared
   `@t3tools/client-runtime/state/thread-sort`, so web and mobile compute identical orders. The
   server keeps advertising the `threadPinReorder` capability. Mobile uses this end to end. The web
-  sidebar deliberately does not adopt upstream's pinned-block drag: it keeps the fork's
-  client-local whole-list manual order (`applyManualThreadOrderForSidebarV2`), which already lets
-  users arrange pinned threads and would otherwise fight upstream's DnD over the same
-  `DndContext`. Upstream's `animatePinnedLayoutChanges` (which stops dnd-kit replaying the
+  sidebar keeps the fork's whole-list drag surface, but persists pinned and active positions
+  through V2 metadata on capable servers. Client-local ordering remains only as a legacy
+  fallback; see Web durable sidebar order below. Upstream's `animatePinnedLayoutChanges` (which stops dnd-kit replaying the
   committed layout move after the pointer is released) is carried and applied to the fork's
   whole-list `SortableSidebarThreadRow` instead of upstream's pinned-block row.
 - Replaces upstream's web thread context menu stack (`threadActionMenu.logic.ts`,
@@ -89,8 +88,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Swift preserves unknown account configuration and other accounts when editing custom models.
   Setup terminals and the remaining native provider configuration controls are separate ports.
 
-- Does not carry upstream's pinned-block drag-to-reorder in the web sidebar (the
-  `optimisticPinnedOrder` / `handlePinnedDragEnd` block) because the fork keeps its client-local whole-list manual order. The searchable project-filter
+- Ports web drag-to-reorder onto the fork's existing sortable rows and V2 metadata instead
+  of upstream's `optimisticPinnedOrder` / `handlePinnedDragEnd` implementation. The searchable project-filter
   combobox is now ported, including keyboard project settings and query reset on close. Upstream's toggleable unpin
   confirmation (`22c311ddec`) _is_ carried — the setting, `requestThreadUnpinConfirmation`, and
   `useThreadActions` come across unchanged, and the fork's `Sidebar.tsx` `toggleThreadPin` gates its
@@ -823,7 +822,7 @@ unique edited-file counts and bounded expanded histories. Single tools keep thei
 labels; failed/declined calls form separate groups, and live work, compaction and persistent
 resource cards stay visible. This ports upstream completed-group presentation without
 V1 work-log ingestion or subagent observability. Full upstream integration-specific group
-labels and expanded-history scroll-position persistence are not yet carried.
+labels remain separate work; bounded history persistence is described below.
 
 ### Native targeted PR handoffs
 
@@ -832,8 +831,8 @@ agent-thread preparation flow. Selected findings do not pull in unrelated review
 original side/line, outdated/resolved state and optional revision remain explicit, and
 bounded excerpts disclose truncation. Tasks stay unsent and preserve existing composer
 text and attachments. Native checkout-command copy uses the reported source-control
-provider, with no host guessing. Structured review-context chips remain a separate visual
-parity gap; these handoffs currently stage quoted text.
+provider, with no host guessing. Structured review-context chips now preserve these findings
+through draft, stash, send, and transcript rendering; see Native PR review context below.
 
 ### Native citation source highlighting
 
@@ -885,3 +884,15 @@ bounds are preserved; fileless findings/checks stay in general context. Bounded 
 malformed blocks visible, escaping reserved host tags prevents nested forged chips, and longer
 backtick fences preserve code. Swift↔web serialization was exercised in both directions. No new
 server capability, schema or V1 runtime is required.
+
+### Desktop resting composer
+
+Deliberate wheel and timeline keyboard reading gestures compact eligible single-line composers.
+The Lexical editor stays mounted; model/mode controls move into the existing context strip,
+attachment/voice/send controls stay reachable, and measured footer width reserves editor space.
+The expanded timeline inset is retained to avoid covering the last message on reopening.
+Explicit editing, logical-end arrival, voice, requests/errors and thread changes restore the
+expanded layout; trackpad momentum cannot immediately undo explicit expansion. The shared
+`composerCollapseOnScroll` preference defaults on and is exposed in desktop General settings.
+Native voice gestures and mobile layouts are unchanged. Upstream's full geometry animation
+is not yet ported; the layout change currently has no motion interpolation.
