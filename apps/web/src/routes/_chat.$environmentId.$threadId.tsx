@@ -1,3 +1,4 @@
+import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
@@ -48,8 +49,9 @@ function ChatThreadRouteView() {
       return;
     }
 
-    if (renderState === "missing" && environmentHasAnyThreads) {
-      void navigate({ to: "/", replace: true });
+    if (renderState === "missing") {
+      useSidebarPendingFileDropStore.getState().clearPendingFileDropsForThread(threadRef);
+      if (environmentHasAnyThreads) void navigate({ to: "/", replace: true });
     }
   }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, threadRef]);
 

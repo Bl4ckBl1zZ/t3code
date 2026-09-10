@@ -58,3 +58,7 @@ the handles, or use VoiceOver's **Move up** and **Move down** actions. The order
 environment, so other native iOS devices see it too. Project filters leave other threads alone.
 New and reopened threads appear above arranged threads. **Reset to newest first** removes the
 manual order for the displayed active threads. Pinned threads retain their separate order.
+
+On web and desktop, drop files onto a thread row or search result to open that thread and attach
+the files to its draft. This works in either sidebar layout. Files use the same validation and
+upload controls as files dropped onto the conversation; dropping never sends a message.

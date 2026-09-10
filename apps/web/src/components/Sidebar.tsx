@@ -1,3 +1,7 @@
+import {
+  useSidebarFileDropNavigation,
+  useSidebarFileDropTarget,
+} from "../hooks/useSidebarFileDrop";
 import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useReducer, type SyntheticEvent } from "react";
 import {
@@ -888,6 +892,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
+  onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
   onRenameTitleChange: (title: string) => void;
   onCommitRename: (threadRef: ScopedThreadRef, title: string, originalTitle: string) => void;
@@ -932,6 +937,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     () => scopeThreadRef(thread.environmentId, thread.id),
     [thread.environmentId, thread.id],
   );
+  const fileDrop = useSidebarFileDropTarget(threadRef, props.onFileDropThreads);
   const threadKey = scopedThreadKey(threadRef);
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
@@ -1297,6 +1303,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
   const rowSurfaceClassName = cn(
+    fileDrop.active && "ring-1 ring-inset ring-primary/70 bg-sidebar-row-hover",
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
@@ -1447,6 +1454,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     return (
       <li
         data-thread-item
+        {...fileDrop.handlers}
         className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
       >
         <Tooltip>
@@ -1784,6 +1792,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       ref={props.sortable?.setNodeRef}
       style={props.sortable?.style}
       {...props.sortable?.listeners}
+      {...fileDrop.handlers}
       data-thread-item
       className={cn(
         "list-none py-0.5 [content-visibility:auto]",
@@ -1986,8 +1995,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   resultId: string;
   onHighlight: () => void;
   onSelect: () => void;
+  onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
 }) {
   const { thread } = props;
+  const threadRef = useMemo(
+    () => scopeThreadRef(thread.environmentId, thread.id),
+    [thread.environmentId, thread.id],
+  );
+  const fileDrop = useSidebarFileDropTarget(threadRef, props.onFileDropThreads);
   // Same details tooltip as the regular rows: a search hit is still a thread,
   // and the hover card is how you disambiguate identically-titled results.
   const gitCwd = thread.worktreePath ?? props.projectCwd;
@@ -2023,7 +2038,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   return (
-    <li role="presentation" className="list-none">
+    <li role="presentation" className="list-none" {...fileDrop.handlers}>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -2042,6 +2057,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               onMouseMove={props.onHighlight}
               onClick={props.onSelect}
               className={cn(
+                fileDrop.active && "ring-1 ring-inset ring-primary/70 bg-sidebar-row-hover",
                 "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm outline-none",
                 props.isHighlighted || props.isRouteActive
                   ? "bg-sidebar-row-active text-sidebar-foreground"
@@ -3030,13 +3046,14 @@ export default function Sidebar() {
       if (isMobile) {
         setOpenMobile(false);
       }
-      void router.navigate({
+      return router.navigate({
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(threadRef),
       });
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
+  const handleThreadFileDrop = useSidebarFileDropNavigation(navigateToThread);
   // The work-mode composer target: a fresh draft on the Hermes backing
   // project. Returns false when Hermes is not ready so callers can fall back.
   const openWorkComposer = useCallback((): boolean => {
@@ -4474,6 +4491,7 @@ export default function Sidebar() {
                         resultId={`sidebar-thread-search-result-${index}`}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
+                        onFileDropThreads={handleThreadFileDrop}
                       />
                     );
                   })}
@@ -4589,6 +4607,7 @@ export default function Sidebar() {
                             EMPTY_PROVIDER_ENTRIES,
                           onThreadClick: handleThreadClick,
                           onThreadActivate: navigateToThread,
+                          onFileDropThreads: handleThreadFileDrop,
                           onStartRename: startThreadRename,
                           onRenameTitleChange: setRenamingTitle,
                           onCommitRename: commitThreadRename,

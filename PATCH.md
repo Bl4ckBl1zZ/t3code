@@ -66,6 +66,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   file-attachment model (`bcb855a633`: a `files` array beside `images`, `composerFileNeedsReattach`,
   per-chip upload progress) is likewise not carried — the fork's composer already models
   image/file/pdf/video in one `images` array with its own upload queue.
+- Sidebar file drops are ported to both web sidebar layouts and search results using the
+  fork's unified attachment queue. Deferred drops are scoped by environment and thread,
+  survive repeated drops, and are cleared individually on navigation failure or when a
+  thread is missing. No V1 thread runtime or separate upstream file array is introduced.
 - Codex file citations and artifact-template cards are now ported to web's stable
   `createChatMarkdownComponents` wrappers, preserving the fork's MarkdownMedia/HTML embed paths.
   Swift parses the two directives inside its existing block/inline render cache, routes cited
