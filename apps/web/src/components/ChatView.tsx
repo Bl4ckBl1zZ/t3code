@@ -1,3 +1,4 @@
+import { ComposerTasksContent } from "./chat/ComposerTasksBadge";
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
@@ -2615,6 +2616,51 @@ function ChatViewContent(props: ChatViewProps) {
     () => deriveActivePlanState(serverProjection, activeLatestRun?.runId ?? undefined),
     [activeLatestRun?.runId, serverProjection],
   );
+  const [tasksDrawerExpanded, setTasksDrawerExpanded] = useState(false);
+  useEffect(() => setTasksDrawerExpanded(false), [activeLatestRun?.runId, activeThread?.id]);
+  const composerTasks = useMemo(() => {
+    if (
+      !activePlan ||
+      !activeLatestRun ||
+      latestRunSettled ||
+      activePlan.runId !== activeLatestRun.runId ||
+      pendingApprovals.length > 0 ||
+      pendingUserInputs.length > 0
+    )
+      return null;
+    const current = activePlan.steps.find((step) => step.status === "inProgress");
+    if (!current) return null;
+    return {
+      steps: activePlan.steps,
+      progress: {
+        step: current.step,
+        completedSteps: activePlan.steps.filter((step) => step.status === "completed").length,
+        totalSteps: activePlan.steps.length,
+      },
+    };
+  }, [
+    activePlan,
+    activeLatestRun,
+    latestRunSettled,
+    pendingApprovals.length,
+    pendingUserInputs.length,
+  ]);
+  const composerTasksNotice =
+    composerTasks === null
+      ? null
+      : {
+          id: "active-tasks",
+          priority: "activity" as const,
+          variant: "default" as const,
+          content: (
+            <ComposerTasksContent
+              expanded={tasksDrawerExpanded}
+              onToggle={() => setTasksDrawerExpanded((open) => !open)}
+              progress={composerTasks.progress}
+              steps={composerTasks.steps}
+            />
+          ),
+        };
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -7664,7 +7710,7 @@ function ChatViewContent(props: ChatViewProps) {
                 ref={draftHeroTransition.transitionGroupRef}
                 className="chat-composer-horizontal-inset w-full"
               >
-                <div className="pointer-events-auto relative z-10">
+                <div className="pointer-events-auto relative z-10 mx-auto max-w-3xl">
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
@@ -7681,10 +7727,24 @@ function ChatViewContent(props: ChatViewProps) {
                           isProjectlessConversation={isHermesConversation}
                         />
                       </div>
-                      <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                      <ComposerBannerStack
+                        className="relative z-0"
+                        items={
+                          composerTasksNotice === null
+                            ? composerBannerItems
+                            : [composerTasksNotice, ...composerBannerItems]
+                        }
+                      />
                     </div>
                   ) : (
-                    <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                    <ComposerBannerStack
+                      className="relative z-0"
+                      items={
+                        composerTasksNotice === null
+                          ? composerBannerItems
+                          : [composerTasksNotice, ...composerBannerItems]
+                      }
+                    />
                   )}
                   {isServerThread ? (
                     <BackgroundProcessesControl

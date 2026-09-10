@@ -509,6 +509,7 @@ public struct ThreadDetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 queueSurfaces
+                ComposerTasksView(detail: detail)
                 composer(detail)
             }
             .background {

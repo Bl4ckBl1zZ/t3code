@@ -628,3 +628,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   per-model replacement/deletion. Usage scans capture price settings and reprice cached
   transcript records, including provider-reported costs. Web supports multi-environment
   edits with per-environment retry; Swift exposes per-environment model-price editing.
+
+- Composer task summaries derive only from the current V2 run's todo list. Web's
+  attached banner stack keeps task activity in front and retains urgent fork notices;
+  Swift adds an expandable task row beside, outside, the voice composer's gesture tree.
+  Approval controls use compact web styling while preserving V2 non-resumable guards.

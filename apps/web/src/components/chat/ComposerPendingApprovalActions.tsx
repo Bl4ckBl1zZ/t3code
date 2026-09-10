@@ -21,7 +21,8 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   return (
     <>
       <Button
-        size="sm"
+        size="micro"
+        className="font-normal [@media(pointer:coarse)]:min-h-10"
         variant="ghost"
         disabled={isResponding || !canRespond}
         onClick={() => void onRespondToApproval(requestId, "cancel")}
@@ -29,24 +30,27 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         Cancel turn
       </Button>
       <Button
-        size="sm"
-        variant="destructive-outline"
+        size="micro"
+        className="font-normal [@media(pointer:coarse)]:min-h-10"
+        variant="ghost"
         disabled={isResponding || !canRespond}
         onClick={() => void onRespondToApproval(requestId, "decline")}
       >
         Decline
       </Button>
       <Button
-        size="sm"
-        variant="outline"
+        size="micro"
+        className="font-normal [@media(pointer:coarse)]:min-h-10"
+        variant="ghost"
         disabled={isResponding || !canRespond}
         onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
         Always allow this session
       </Button>
       <Button
-        size="sm"
-        variant="default"
+        size="micro"
+        className="font-normal [@media(pointer:coarse)]:min-h-10"
+        variant="ghost"
         disabled={isResponding || !canRespond}
         onClick={() => void onRespondToApproval(requestId, "accept")}
       >

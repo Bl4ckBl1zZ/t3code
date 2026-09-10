@@ -158,3 +158,8 @@ If an inline video fails to load, choose **Retry video**. Videos pause when the 
 moves into the background. Web and desktop media menus offer save actions; image
 menus also offer **Copy image** when the browser supports it. These actions may need
 the environment to be connected or the remote host to allow browser downloads.
+
+While an agent works through a task list, the composer shows the current task and
+completion count. Expand the row to see the full list. Other notices stay accessible
+above it; on web, use the notice peek or keyboard focus to reveal them and Escape to
+collapse the stack.
