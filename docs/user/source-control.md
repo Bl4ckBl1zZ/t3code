@@ -171,3 +171,7 @@ changes automatically on desktop-sized layouts. Changes open only when a ready c
 modified files. Closing a panel or choosing another surface takes precedence over pending automatic
 opens. A linked PR already shown in the panel follows its replacement; unrelated reviews stay put.
 Compact layouts and the native iOS app keep explicit navigation.
+
+When right-panel tabs overflow, use the left and right arrows or the mouse wheel over the
+tab strip to reach hidden tabs. Selecting a tab brings it into view. Arrow scrolling respects
+your system's reduced-motion preference.
