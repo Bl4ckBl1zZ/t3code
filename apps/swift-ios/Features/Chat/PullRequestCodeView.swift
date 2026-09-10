@@ -118,6 +118,23 @@ private struct PullRequestCodeFileView: View {
     let conversations: PullRequestConversationContext
     let commit: String?
     let fileContents: ((PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents)?
+    @SwiftUI.Environment(\.pullRequestSelectionHandoff) private var selectionHandoff
+    @State private var selectingLines = false
+    @State private var selectionStart: String?
+    @State private var selectionEnd: String?
+    private var selectedLines: Set<String> {
+        guard let selectionStart, let start = displayedLines.firstIndex(where: { $0.id == selectionStart }),
+              let end = displayedLines.firstIndex(where: { $0.id == (selectionEnd ?? selectionStart) }) else { return [] }
+        return Set(displayedLines[min(start, end)...max(start, end)].map(\.id))
+    }
+    private var codeSelection: PullRequestHandoffSelection? {
+        guard let selectionStart else { return nil }
+        return .code(file: file, lines: displayedLines, firstID: selectionStart, lastID: selectionEnd ?? selectionStart, commit: commit)
+    }
+    private func selectLine(_ line: FeatureDiffLine) {
+        if selectionStart == nil || selectionEnd != nil { selectionStart = line.id; selectionEnd = nil }
+        else { selectionEnd = line.id }
+    }
     @State private var fullContents: PullRequestDiffFileContents?
     @State private var hydratedLines: [FeatureDiffLine]?
     @State private var fullContext = false
@@ -133,6 +150,7 @@ private struct PullRequestCodeFileView: View {
     @State private var commentingLine: FeatureDiffLine?
     var body: some View {
         let originalPositions = Set(file.lines.map(PullRequestFullContext.positionKey))
+        let selectedIDs = selectedLines
         let placedThreads = placed
         let unplacedThreads = fileThreads.filter { PullRequestThreadPlacement.anchor(thread: $0, file: file, commit: commit) == nil }
         VStack(alignment: .leading, spacing: 8) {
@@ -149,6 +167,15 @@ private struct PullRequestCodeFileView: View {
                 if loadingContext { ProgressView() }
                 if let contextError { Text(contextError).font(T3Typography.supporting).foregroundStyle(T3Colors.warning).padding(.horizontal, 16) }
             }
+            if selectingLines {
+                HStack(spacing: 10) {
+                    Text(selectionStart == nil ? "Tap the first line, then the last line." : "\(selectedLines.count) selected · tap another line to set the range")
+                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                    Spacer(minLength: 0)
+                    if let selection = codeSelection { PullRequestSelectionMenu(selection: selection) }
+                    Button("Clear") { selectionStart = nil; selectionEnd = nil }.disabled(selectionStart == nil)
+                }.padding(.horizontal, 16).frame(minHeight: 44)
+            }
             if fullContext, let fullContents, hydratedLines == nil {
                 PullRequestFileVersionsView(contents: fullContents)
             } else if displayedLines.isEmpty {
@@ -158,8 +185,8 @@ private struct PullRequestCodeFileView: View {
                     ScrollView([.horizontal, .vertical]) {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(displayedLines) { line in
-                                FeatureDiffLineRow(line: line, isSelected: false, minimumWidth: geometry.size.width,
-                                    select: canComment && originalPositions.contains(PullRequestFullContext.positionKey(line)) && PullRequestReviewDraftModel.position(line) != nil ? { commentingLine = line } : nil)
+                                FeatureDiffLineRow(line: line, isSelected: selectedIDs.contains(line.id), minimumWidth: geometry.size.width,
+                                    select: selectingLines && line.kind != .hunk ? { selectLine(line) } : canComment && originalPositions.contains(PullRequestFullContext.positionKey(line)) && PullRequestReviewDraftModel.position(line) != nil ? { commentingLine = line } : nil)
                                 ForEach(placedThreads[line.id] ?? []) { thread in
                                     conversation(thread).frame(width: geometry.size.width).padding(.vertical, 8)
                                 }
@@ -182,7 +209,15 @@ private struct PullRequestCodeFileView: View {
         }
         .navigationTitle(file.path.split(separator: "/").last.map(String.init) ?? file.path)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: fullContext) { _, _ in selectionStart = nil; selectionEnd = nil }
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if selectionHandoff != nil {
+                    Button(selectingLines ? "Done selecting" : "Select lines", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        selectingLines.toggle(); selectionStart = nil; selectionEnd = nil
+                    }.disabled(displayedLines.isEmpty || (fullContext && hydratedLines == nil))
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Copy path", systemImage: "document.on.document") { UIPasteboard.general.string = file.path }
             }

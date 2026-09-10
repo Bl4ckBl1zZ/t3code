@@ -107,3 +107,15 @@ edit the staged text before sending. Your existing text and attachments are pres
 another task replaces an untouched previous handoff. If an existing worktree could not advance to
 the PR’s current head, a warning explains that the checkout may contain older code. A failed checkout
 or thread attachment keeps the empty thread and shows the recovery action without staging the task.
+
+In the native iOS PR view, use the agent menu beside an individual comment or check
+to ask about it, explain it, or investigate that finding. The task keeps the original
+review location, including outdated or resolved status, and is staged for you to send.
+
+In a changed file, choose **Select lines**, tap the first and last line, then open the
+agent menu to ask about or explain that excerpt. Both sides of the diff and the selected
+commit are included when available. Long excerpts are explicitly marked as shortened.
+Choose **Done selecting** to return to normal line-comment controls.
+
+**Copy checkout command** provides the command for the reported source-control host.
+Copying does not run it or change your checkout.

@@ -17,7 +17,7 @@ struct FeatureDetailRenderUpdate: Equatable {
 public final class FeatureRootModel {
     var pendingPullRequestPrompts: [String: PendingPullRequestPrompt] = [:]
 
-    func stagePullRequestTask(scope: FeaturePullRequestScope, overview: FeaturePullRequestOverview, kind: PullRequestHandoffKind, mode: PullRequestCheckoutMode) async throws -> String {
+    func stagePullRequestTask(scope: FeaturePullRequestScope, overview: FeaturePullRequestOverview, kind: PullRequestHandoffKind, mode: PullRequestCheckoutMode, selection: PullRequestHandoffSelection? = nil) async throws -> String {
         let prepared: FeaturePullRequestPreparedThread
         if case let .thread(id) = scope, kind != .checkout {
             guard let thread = snapshot.threads.first(where: { $0.id == id }) else { throw FeatureCapabilityUnavailable("The thread is no longer available. Reopen the pull request from its project") }
@@ -29,7 +29,7 @@ public final class FeatureRootModel {
             prepared = try await preparer.preparePullRequestAgentThread(scope: scope, number: overview.detail.number, expectedURL: overview.detail.url, title: "PR #\(overview.detail.number): \(overview.detail.title)", mode: kind.needsCheckout ? mode : nil)
             upsert(prepared.thread)
         }
-        let prompt = PullRequestHandoffPrompt.build(kind: kind, detail: overview.detail, activity: overview.activity)
+        let prompt = PullRequestHandoffPrompt.build(kind: kind, detail: overview.detail, activity: overview.activity, selection: selection)
         pendingPullRequestPrompts[prepared.thread.id] = PendingPullRequestPrompt(text: prompt, warning: prepared.staleCheckout ? "This checkout is not on the pull request's latest commits. Local changes or commits may have prevented it from moving. Review the branch before sending." : nil)
         return prepared.thread.id
     }

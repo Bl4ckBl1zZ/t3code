@@ -46,20 +46,29 @@ enum PullRequestHandoffPrompt {
         return incoming.isEmpty ? kept : kept + "\n\n" + incoming
     }
 
-    static func build(kind: PullRequestHandoffKind, detail: PullRequestDetail, activity: PullRequestActivity?) -> String {
+    static func build(kind: PullRequestHandoffKind, detail: PullRequestDetail, activity: PullRequestActivity?, selection: PullRequestHandoffSelection? = nil) -> String {
         guard kind != .checkout else { return "" }
         func bound(_ value: String) -> String { String(value.prefix(2_000)) }
         let context = "PR #\(detail.number): \(bound(detail.title))\n\(bound(detail.url))\nBranch: \(bound(detail.headBranch)) → \(bound(detail.baseBranch))"
         let instruction: String
-        switch kind {
+        if let selection {
+            switch kind {
+            case .ask: instruction = "My question about the selected \(selection.kind.rawValue): "
+            case .explain: instruction = "Explain the selected \(selection.kind.rawValue) in its pull-request context. Do not change code."
+            case .findings: instruction = selection.kind == .check ? "Investigate this specific check, reproduce its failure, fix valid issues, and verify the result. Do not assume the check name explains its failure." : "Check this specific review finding against the code and its original location. Fix valid issues and verify the result. Do not sweep unrelated findings."
+            case .conflicts: instruction = "Inspect the selected context and resolve the relevant conflict while preserving both sides' intended behavior."
+            case .checkout: return ""
+            }
+        } else { switch kind {
         case .ask: instruction = "My question about this pull request: "
         case .explain: instruction = "Explain this pull request's changes, their purpose, and the important tradeoffs. Do not change code."
         case .findings: instruction = "Check the actionable review findings and failing checks, fix valid issues in this thread's checkout, and verify the changes. Keep the work focused."
         case .conflicts: instruction = "Resolve this pull request's conflicts with its base branch in this thread's checkout. Preserve both sides' intended behavior and verify the result."
         case .checkout: return ""
         }
+        }
         var findings: [String] = []
-        if kind == .findings {
+        if kind == .findings, selection == nil {
             let threads = activity?.reviewThreads ?? []
             let attached = Set(threads.flatMap { $0.comments.map(\.id) })
             findings += threads.filter { !$0.isResolved }.compactMap { thread in
@@ -72,6 +81,7 @@ enum PullRequestHandoffPrompt {
         }
         let omitted = max(0, findings.count - 20)
         var data = [context] + Array(findings.suffix(20))
+        if let selection { data.append(selection.context) }
         if omitted > 0 { data.append("\(omitted) further findings omitted; inspect the host for the rest.") }
         if activity?.commentsTruncated == true { data.append("The conversation was truncated; more comments may exist on the host.") }
         // Quoting keeps multiline host text visibly separate from the request.
@@ -81,12 +91,38 @@ enum PullRequestHandoffPrompt {
 }
 
 struct PullRequestHandoffHandler {
-    let perform: @MainActor (FeaturePullRequestScope, FeaturePullRequestOverview, PullRequestHandoffKind, PullRequestCheckoutMode) async throws -> Void
+    let perform: @MainActor (FeaturePullRequestScope, FeaturePullRequestOverview, PullRequestHandoffKind, PullRequestCheckoutMode, PullRequestHandoffSelection?) async throws -> Void
 }
 private struct PullRequestHandoffKey: EnvironmentKey { static let defaultValue: PullRequestHandoffHandler? = nil }
 extension EnvironmentValues {
     var pullRequestHandoff: PullRequestHandoffHandler? {
         get { self[PullRequestHandoffKey.self] }
         set { self[PullRequestHandoffKey.self] = newValue }
+    }
+}
+
+struct PullRequestSelectionHandoff {
+    let perform: @MainActor (PullRequestHandoffKind, PullRequestHandoffSelection) -> Void
+}
+private struct PullRequestSelectionHandoffKey: EnvironmentKey { static let defaultValue: PullRequestSelectionHandoff? = nil }
+extension EnvironmentValues {
+    var pullRequestSelectionHandoff: PullRequestSelectionHandoff? {
+        get { self[PullRequestSelectionHandoffKey.self] }
+        set { self[PullRequestSelectionHandoffKey.self] = newValue }
+    }
+}
+
+struct PullRequestSelectionMenu: View {
+    let selection: PullRequestHandoffSelection
+    @SwiftUI.Environment(\.pullRequestSelectionHandoff) private var handoff
+    var body: some View {
+        if let handoff {
+            Menu {
+                Button("Ask agent") { handoff.perform(.ask, selection) }
+                Button("Explain") { handoff.perform(.explain, selection) }
+                if selection.kind != .code { Button("Fix this finding") { handoff.perform(.findings, selection) } }
+            } label: { Image(systemName: "text.bubble").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel("Open \(selection.label) in agent")
+        }
     }
 }

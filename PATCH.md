@@ -824,3 +824,13 @@ labels; failed/declined calls form separate groups, and live work, compaction an
 resource cards stay visible. This ports upstream completed-group presentation without
 V1 work-log ingestion or subagent observability. Full upstream integration-specific group
 labels and expanded-history scroll-position persistence are not yet carried.
+
+### Native targeted PR handoffs
+
+Native comments/checks and selected diff ranges can be handed to the existing V2
+agent-thread preparation flow. Selected findings do not pull in unrelated review items;
+original side/line, outdated/resolved state and optional revision remain explicit, and
+bounded excerpts disclose truncation. Tasks stay unsent and preserve existing composer
+text and attachments. Native checkout-command copy uses the reported source-control
+provider, with no host guessing. Structured review-context chips remain a separate visual
+parity gap; these handoffs currently stage quoted text.

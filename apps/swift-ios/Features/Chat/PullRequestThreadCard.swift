@@ -34,7 +34,11 @@ struct PullRequestThreadCard: View {
             if expanded {
                 ForEach(model.comments) { comment in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(comment.author?.login ?? "Unknown").font(T3Typography.supportingStrong)
+                        HStack {
+                            Text(comment.author?.login ?? "Unknown").font(T3Typography.supportingStrong)
+                            Spacer(minLength: 0)
+                            PullRequestSelectionMenu(selection: .comment(comment, thread: thread))
+                        }
                         MarkdownMessageView(comment.body)
                         if reactions.canReact || !(comment.reactions ?? []).isEmpty {
                             PullRequestReactionBar(reactions: comment.reactions ?? [], subjectID: comment.id, context: reactions)

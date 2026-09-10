@@ -1,3 +1,4 @@
+import UIKit
 import SwiftUI
 
 // Native PR details and reviewed, remote-only GitHub stack actions.
@@ -18,6 +19,7 @@ struct PullRequestDetailSheet: View {
 
     @SwiftUI.Environment(\.pullRequestHandoff) private var handoff
     @SwiftUI.Environment(\.dismiss) private var dismiss
+    @State private var handoffSelection: PullRequestHandoffSelection?
     @State private var handoffKind: PullRequestHandoffKind?
     @State private var handoffMode = PullRequestCheckoutMode.worktree
     @State private var handoffPending = false
@@ -54,6 +56,9 @@ struct PullRequestDetailSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .environment(\.pullRequestSelectionHandoff, handoff == nil ? nil : PullRequestSelectionHandoff { kind, selection in
+            handoffMode = .worktree; handoffError = nil; handoffSelection = selection; handoffKind = kind
+        })
         .background(T3Colors.background)
         .navigationTitle("Pull Request #\(displayedNumber)")
         .navigationBarTitleDisplayMode(.inline)
@@ -79,7 +84,8 @@ struct PullRequestDetailSheet: View {
                 Form {
                     Section { Text(overview?.detail.title ?? "") }
                     Section {
-                        Text(kind.label)
+                        Text(handoffSelection == nil ? kind.label : "Selected \(handoffSelection?.kind.rawValue ?? "context")")
+                        if let selection = handoffSelection { Text(selection.context).font(T3Typography.supporting.monospaced()).lineLimit(12).textSelection(.enabled) }
                         Text("The task will be staged in the composer for you to review and send.").foregroundStyle(T3Colors.textSecondary)
                         if kind.needsCheckout, case .project = access.scope {
                             Picker("Checkout", selection: $handoffMode) {
@@ -96,7 +102,7 @@ struct PullRequestDetailSheet: View {
                         Task {
                             defer { handoffPending = false }
                             do {
-                                try await handoff.perform(access.scope, overview, kind, handoffMode)
+                                try await handoff.perform(access.scope, overview, kind, handoffMode, handoffSelection)
                                 handoffKind = nil
                                 dismiss()
                             } catch { handoffError = error.localizedDescription }
@@ -216,10 +222,14 @@ struct PullRequestDetailSheet: View {
                     Menu("Open in agent", systemImage: "text.bubble") {
                         ForEach(PullRequestHandoffKind.allCases) { kind in
                             if kind != .conflicts || overview.detail.mergeability == .conflicting {
-                                Button(kind.label) { handoffMode = .worktree; handoffError = nil; handoffKind = kind }
+                                Button(kind.label) { handoffSelection = nil; handoffMode = .worktree; handoffError = nil; handoffKind = kind }
                             }
                         }
                     }.frame(minHeight: 44)
+                }
+                if let command = PullRequestCheckoutCommand.build(provider: overview.detail.provider, number: overview.detail.number,
+                    headBranch: overview.detail.headBranch, headRepository: overview.detail.headRepositoryNameWithOwner) {
+                    Button("Copy checkout command", systemImage: "document.on.document") { UIPasteboard.general.string = command }.frame(minHeight: 44)
                 }
                 if access.editing != nil, PullRequestEditingLogic.canEditChangeRequest(overview.detail) {
                     Menu("Edit pull request", systemImage: "pencil") {
@@ -547,6 +557,7 @@ struct PullRequestDetailSheet: View {
                 }
             }
             Spacer(minLength: 0)
+            PullRequestSelectionMenu(selection: .check(check))
         }
     }
 
@@ -620,6 +631,8 @@ struct PullRequestDetailSheet: View {
                             .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textTertiary)
                     }
+                    Spacer(minLength: 0)
+                    PullRequestSelectionMenu(selection: .comment(comment))
                 }
                 if !comment.body.isEmpty {
                     MarkdownMessageView(comment.body)
