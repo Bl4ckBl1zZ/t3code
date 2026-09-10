@@ -50,3 +50,7 @@ draft and moving its unfinished prompt to another project.
 In the hosted web app, settings that require a primary server are dimmed with an
 explanation. Use the desktop app or that server's own web address for those controls.
 Settings with a machine selector can still be changed for the selected machine.
+
+Claude and Codex subscription limits can update while an agent is working. Each account keeps
+its own usage windows, including Claude's model-specific weekly limits. Repeated notifications
+leave the display unchanged, and a failed refresh keeps the last known allowance.

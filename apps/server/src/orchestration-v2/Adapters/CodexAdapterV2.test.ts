@@ -1,3 +1,4 @@
+import type { CodexRateLimitSnapshot } from "../../provider/providerUsageLimits.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
@@ -1064,7 +1065,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       return yield* Effect.die(`Timed out waiting for ${label}.`);
     });
 
-  const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+  const makeCodexReplayHarness = (
+    transcript: CodexReplay.CodexAppServerReplayTranscript,
+    usageLimitListener?: {
+      readonly publish: (snapshot: CodexRateLimitSnapshot) => Effect.Effect<void>;
+    },
+  ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const idAllocator = yield* IdAllocatorV2;
@@ -1087,6 +1093,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
       };
       const adapter = makeCodexAdapterV2({
+        ...(usageLimitListener ? { usageLimitListener } : {}),
         instanceId: CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
@@ -1161,6 +1168,59 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
         event.type === "message.updated" && event.message.role === "assistant",
     );
+
+  it.effect("forwards account usage notifications through the V2 adapter", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const receipt = yield* Deferred.make<CodexRateLimitSnapshot>();
+        const nativeThreadId = "usage-thread";
+        const nativeTurnId = "usage-turn";
+        const rateLimits = {
+          limitId: "codex",
+          primary: { usedPercent: 42, resetsAt: 1788652800, windowDurationMins: 300 },
+          secondary: null,
+          credits: null,
+          planType: "plus" as const,
+        };
+        const transcript = makeCodexReplayTranscript({
+          scenario: "usage-limits",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Hello." }),
+            {
+              type: "emit_inbound",
+              label: "account usage",
+              frame: { method: "account/rateLimits/updated", params: { rateLimits } },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript, {
+          publish: (snapshot) => Deferred.succeed(receipt, snapshot).pipe(Effect.asVoid),
+        });
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("usage-attempt"),
+            text: "Hello.",
+          }),
+        );
+        assert.equal((yield* Deferred.await(receipt)).primary?.usedPercent, 42);
+        yield* harness.awaitTerminal;
+      }),
+    ).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
 
   it.effect(
     "routes Codex app-access approval choices through V2 and rejects unoffered persistence",

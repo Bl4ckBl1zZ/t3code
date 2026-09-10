@@ -1,4 +1,8 @@
 import {
+  CodexUsageLimitListener,
+  type CodexRateLimitSnapshot,
+} from "../../provider/providerUsageLimits.ts";
+import {
   describeMcpElicitation,
   toMcpElicitationResponse,
 } from "../../provider/codexMcpElicitation.ts";
@@ -1428,6 +1432,7 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
       const idAllocator = yield* IdAllocatorV2;
       const serverConfig = yield* ServerConfig;
       const homeLayout = yield* resolveCodexHomeLayout(config);
+      const usageLimitListener = yield* Effect.serviceOption(CodexUsageLimitListener);
 
       yield* materializeCodexShadowHome(homeLayout).pipe(
         Effect.mapError(
@@ -1449,6 +1454,9 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
 
       return makeCodexAdapterV2({
         instanceId,
+        ...(Option.isSome(usageLimitListener)
+          ? { usageLimitListener: usageLimitListener.value }
+          : {}),
         settings,
         environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
         clientFactory,
@@ -1488,6 +1496,9 @@ export const layer: Layer.Layer<
 );
 
 export interface CodexAdapterV2Options {
+  readonly usageLimitListener?: {
+    readonly publish: (snapshot: CodexRateLimitSnapshot) => Effect.Effect<void>;
+  };
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
@@ -3395,6 +3406,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             };
             return { node, request, turnItem };
           });
+
+        yield* client.handleServerNotification(
+          "account/rateLimits/updated",
+          (payload) =>
+            adapterOptions.usageLimitListener?.publish(payload.rateLimits) ?? Effect.void,
+        );
 
         yield* client.handleServerNotification("item/agentMessage/delta", (payload) =>
           Effect.gen(function* () {

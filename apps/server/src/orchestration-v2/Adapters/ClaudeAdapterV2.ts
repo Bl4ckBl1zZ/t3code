@@ -1,3 +1,4 @@
+import { ClaudeUsageLimitListener } from "../../provider/providerUsageLimits.ts";
 import { ModelManifest } from "../../provider/ModelManifest.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
@@ -2282,6 +2283,11 @@ interface PendingClaudeRuntimeRequest {
 }
 
 export interface ClaudeAdapterV2Options {
+  readonly usageLimitListener?: {
+    readonly publish: (
+      info: import("@anthropic-ai/claude-agent-sdk").SDKRateLimitInfo,
+    ) => Effect.Effect<void>;
+  };
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
@@ -4128,6 +4134,11 @@ export function makeClaudeAdapterV2(
           }
 
           const message = input.message;
+          if (message.type === "rate_limit_event") {
+            yield* (
+              adapterOptions.usageLimitListener?.publish(message.rate_limit_info) ?? Effect.void
+            );
+          }
           // Background lifecycle first, and deliberately ahead of the wake
           // buffer. A background command settles precisely when no turn is
           // active, and buffering its outcome until the model happens to wake up
@@ -5337,11 +5348,15 @@ export const ClaudeAdapterV2Driver: ProviderAdapterDriver<
       const queryRunner = yield* ClaudeAgentSdkQueryRunner;
       const serverConfig = yield* ServerConfig;
       const manifest = yield* Effect.serviceOption(ModelManifest);
+      const usageLimitListener = yield* Effect.serviceOption(ClaudeUsageLimitListener);
       const continuationRequests = yield* ProviderContinuationRequests;
       const baseEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
       const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
       return makeClaudeAdapterV2({
         instanceId,
+        ...(Option.isSome(usageLimitListener)
+          ? { usageLimitListener: usageLimitListener.value }
+          : {}),
         modelCatalog: Option.isSome(manifest)
           ? manifest.value.current.pipe(Effect.map(resolveClaudeModelCatalog))
           : Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG),

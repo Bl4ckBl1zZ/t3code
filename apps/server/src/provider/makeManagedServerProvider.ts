@@ -1,6 +1,7 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   type ServerProvider,
+  type ServerProviderUsageLimits,
   ServerSettingsError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -18,6 +19,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
+
+import { usageLimitsAfterProbe } from "./providerUsageLimits.ts";
 
 interface ProviderSnapshotState {
   readonly snapshot: ServerProvider;
@@ -43,7 +46,13 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   readonly refreshOnInterval?: boolean;
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
 }): Effect.fn.Return<
-  ServerProviderShape,
+  ServerProviderShape & {
+    readonly updateUsageLimits: (
+      update: (
+        current: ServerProviderUsageLimits | undefined,
+      ) => ServerProviderUsageLimits | undefined,
+    ) => Effect.Effect<void>;
+  },
   ServerSettingsError,
   Scope.Scope | BackgroundPolicy.BackgroundPolicy | ServerSettingsService
 > {
@@ -69,6 +78,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     nextSnapshot: ServerProvider,
   ) {
     const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+      const usageLimits = usageLimitsAfterProbe(
+        state.snapshot.usageLimits,
+        nextSnapshot.usageLimits,
+      );
+      nextSnapshot = { ...nextSnapshot, ...(usageLimits === undefined ? {} : { usageLimits }) };
       if (state.enrichmentGeneration !== generation || Equal.equals(state.snapshot, nextSnapshot)) {
         return [null, state] as const;
       }
@@ -138,17 +152,19 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       return state.snapshot;
     }
 
-    const nextSnapshot = yield* input.checkProvider;
-    const nextGeneration = yield* Ref.modify(snapshotStateRef, (state) => {
+    const probedSnapshot = yield* input.checkProvider;
+    const [nextSnapshot, nextGeneration] = yield* Ref.modify(snapshotStateRef, (state) => {
+      const usageLimits = usageLimitsAfterProbe(
+        state.snapshot.usageLimits,
+        probedSnapshot.usageLimits,
+      );
+      const snapshot = { ...probedSnapshot, ...(usageLimits === undefined ? {} : { usageLimits }) };
       const generation = input.enrichSnapshot
         ? state.enrichmentGeneration + 1
         : state.enrichmentGeneration;
       return [
-        generation,
-        {
-          snapshot: nextSnapshot,
-          enrichmentGeneration: generation,
-        },
+        [snapshot, generation] as const,
+        { snapshot, enrichmentGeneration: generation },
       ] as const;
     });
     yield* Ref.set(settingsRef, nextSettings);
@@ -239,10 +255,20 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   return {
     maintenanceCapabilities: input.maintenanceCapabilities,
+    updateUsageLimits: (update) =>
+      Effect.gen(function* () {
+        const next = yield* Ref.modify(snapshotStateRef, (state) => {
+          const usageLimits = update(state.snapshot.usageLimits);
+          if (Equal.equals(usageLimits, state.snapshot.usageLimits)) return [null, state] as const;
+          const snapshot = { ...state.snapshot, usageLimits };
+          return [snapshot, { ...state, snapshot }] as const;
+        });
+        if (next) yield* PubSub.publish(changesPubSub, next);
+      }),
     getSnapshot: Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot)),
     refresh: refreshSnapshot().pipe(Effect.tapError(Effect.logError), Effect.orDie),
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },
-  } satisfies ServerProviderShape;
+  };
 });

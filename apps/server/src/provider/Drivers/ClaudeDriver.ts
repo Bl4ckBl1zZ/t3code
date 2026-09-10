@@ -1,3 +1,5 @@
+import { applyClaudeRateLimitEvent, ClaudeUsageLimitListener } from "../providerUsageLimits.ts";
+import * as DateTime from "effect/DateTime";
 import { resolveClaudeModelCatalog, scopeClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 /**
  * ClaudeDriver — `ProviderDriver` for the Claude Agent SDK runtime.
@@ -148,24 +150,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         continuationGroupKey,
       });
 
-      const orchestrationAdapter = yield* ClaudeAdapterV2Driver.create({
-        instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build Claude orchestration adapter.",
-              cause,
-            }),
-        ),
-      );
       const textGeneration = yield* makeClaudeTextGeneration(
         effectiveConfig,
         processEnv,
@@ -249,6 +233,33 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         ),
       );
 
+      const orchestrationAdapter = yield* ClaudeAdapterV2Driver.create({
+        instanceId,
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.provideService(ClaudeUsageLimitListener, {
+          publish: (info) =>
+            Effect.gen(function* () {
+              const checkedAt = DateTime.formatIso(yield* DateTime.now);
+              yield* snapshot.updateUsageLimits((previous) =>
+                applyClaudeRateLimitEvent(previous, info, checkedAt),
+              );
+            }),
+        }),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Claude orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
       return {
         instanceId,
         driverKind: DRIVER_KIND,

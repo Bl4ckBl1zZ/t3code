@@ -262,6 +262,7 @@ function nonEmptyProbeString(value: string): string | undefined {
 }
 
 type ClaudeCapabilitiesProbe = {
+  readonly usageCheckedAt?: string;
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
   readonly email: string | undefined;
   readonly subscriptionType: string | undefined;
@@ -372,6 +373,7 @@ const probeClaudeCapabilities = (
       claudeSettings.binaryPath,
       claudeEnvironment,
     );
+    const usageCheckedAt = DateTime.formatIso(yield* DateTime.now);
     return yield* Effect.tryPromise(async () => {
       const q = claudeQuery({
         // Never yield — we only need initialization data, not a conversation.
@@ -412,7 +414,7 @@ const probeClaudeCapabilities = (
         tokenSource: account?.tokenSource,
         apiProvider: account?.apiProvider,
         slashCommands: parseClaudeInitializationCommands(init.commands),
-        ...(usage ? { usage } : {}),
+        ...(usage ? { usage, usageCheckedAt } : {}),
       } satisfies ClaudeCapabilitiesProbe;
     });
   }).pipe(
@@ -612,7 +614,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
       usageLimits: capabilities.usage
-        ? claudeUsageLimits(capabilities.usage, checkedAt)
+        ? claudeUsageLimits(capabilities.usage, capabilities.usageCheckedAt ?? checkedAt)
         : unavailableUsageLimits(checkedAt, "probeFailed"),
     },
   });

@@ -1,3 +1,5 @@
+import { applyCodexRateLimitEvent, CodexUsageLimitListener } from "../providerUsageLimits.ts";
+import * as DateTime from "effect/DateTime";
 /**
  * CodexDriver — first concrete `ProviderDriver` in the new per-instance model.
  *
@@ -153,24 +155,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         env: processEnv,
       });
 
-      const orchestrationAdapter = yield* CodexAdapterV2Driver.create({
-        instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build Codex orchestration adapter.",
-              cause,
-            }),
-        ),
-      );
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
 
       // Build a managed snapshot whose settings never change — mutations come
@@ -225,6 +209,33 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         ),
       );
 
+      const orchestrationAdapter = yield* CodexAdapterV2Driver.create({
+        instanceId,
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.provideService(CodexUsageLimitListener, {
+          publish: (info) =>
+            Effect.gen(function* () {
+              const checkedAt = DateTime.formatIso(yield* DateTime.now);
+              yield* snapshot.updateUsageLimits((previous) =>
+                applyCodexRateLimitEvent(previous, info, checkedAt),
+              );
+            }),
+        }),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Codex orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
       return {
         instanceId,
         driverKind: DRIVER_KIND,

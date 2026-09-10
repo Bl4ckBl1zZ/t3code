@@ -1086,3 +1086,13 @@ MarkdownMedia renderer reserves the natural aspect ratio within its existing hei
 authored HTML dimensions taking precedence. Host-file previews are capability-gated. Swift
 mirrors the optional contract and keeps its fixed transcript media frame to avoid collection-view
 remeasurement. No V1 runtime or database migration is involved.
+
+### Live subscription limits through V2 (2026-09-11 parity port)
+
+Codex account/rateLimits/updated and Claude rate_limit_event now feed instance-owned provider
+snapshots directly from V2 adapters. Sparse updates preserve other windows and reset metadata;
+unchanged notifications do not broadcast. Claude scoped events reuse the first model bucket
+reported by that account's probe, never a guessed model name. Cached Claude probes retain their
+original sample timestamp. Failed or older probes do not erase newer live bars; unsupported
+accounts remain unsupported. This uses the existing provider snapshot contract on web/desktop,
+Expo and Swift, with no V1 provider bridge or migration.
