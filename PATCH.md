@@ -710,3 +710,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   identity. Lucide vectors are converted at development time to cached native paths; no per-row
   SVG web view is used. Regenerate with `scripts/generate-swift-project-icons.mjs` after changing
   the pinned web Lucide version; see the contributor notes for its Python prerequisite.
+
+- Returning to a desktop-sized browser or Electron window refocuses the composer (`ecf3716fd1`)
+  after native focus restoration settles. Text fields, terminals, dialogs and popup controls retain
+  deliberate focus; mobile viewports do not raise the software keyboard. The effect is keyed by
+  the fork’s environment/thread identity and cleans up pending animation frames on navigation.

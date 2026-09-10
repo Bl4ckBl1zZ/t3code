@@ -198,3 +198,7 @@ If you choose another panel while a turn is working, its arriving plan will not 
 In the web file viewer, click a folder in the path to browse its contents without returning to the file tree. On iOS, the folder button in a file preview opens its containing folders or the workspace root.
 
 Completed responses on iOS collapse earlier commentary and work under a “Worked for” row. Tap it to show or hide that work. The final response, attachments, and live work stay visible. Opening a quote from collapsed work expands its response first. The always-expand activity preference keeps the full transcript open.
+
+When you return to the desktop app or a desktop-sized browser window, the composer regains
+focus so you can type immediately. An active text field, terminal, dialog, or popup keeps its
+focus. Returning on a phone does not automatically open the keyboard.
