@@ -16,6 +16,7 @@ const clientSettings: ClientSettings = {
   diffColorScheme: "red-green",
   alwaysExpandActivity: false,
   autoOpenPlanSidebar: false,
+  proactivePanelsEnabled: false,
   appearanceContrast: 100,
   browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
   browserDefaultZoomFactor: 1.25,

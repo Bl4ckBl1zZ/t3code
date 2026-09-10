@@ -498,8 +498,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     `91c66ac43d`, `110bbe6b55`, `a0eb23993a`, `931d41f933`, `e5a87e8b9c`) need adaptation
     to the fork's PR data and panel stores. Header project settings, keyboard-accessible project
     actions and navigation motion (`cbe93e8dfb`, `7f8cf30ca4`, `cd713679bb`) likewise need
-    the fork's inline menus/sidebar layout. The fork has no upstream proactive-panels controller,
-    so its empty-diff and manual-choice follow-ups (`d115a96763`, `bccad27046`) are excluded.
+    the fork's inline menus/sidebar layout. The later V2 proactive-panels port below supersedes
+    the earlier deferral of empty-diff/manual-choice follow-ups (`d115a96763`, `bccad27046`).
   - Connect HTTP credential refresh and network-blocking diagnosis (`363cde4114`,
     `2dca7a1edd`) need the fork's auth/reconnect lifecycle. Installer ownership and mise shims
     (`2fb99a7a66`, `c7dc3cbd06`, `2271a27dad`) need a Cursor SDK/native-updater audit.
@@ -680,8 +680,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - Ports upstream panel user-choice revisions (`bccad27046`) while retaining the fork’s
   independent thread-details visibility. V2 automatic plan panels respect choices made during
   their run; resource reconciliation never counts as a manual choice. The proactive panel API
-  gives linked PRs precedence over automatic plan/diff panels. Automatic PR discovery and
-  completed-run diff opening remain separate integrations.
+  gives linked PRs precedence over automatic plan/diff panels. V2 linked-PR and completed-run
+  diff opening are now integrated behind `proactivePanelsEnabled`; background PR discovery
+  remains a separate server integration.
 
 - Ports lazy diff workers (`b3e1d88590`, readiness follow-up `ce4712d5b0`) at code-view
   boundaries instead of wrapping the entire chat. Concurrent views share a pool, quick reopen
@@ -796,3 +797,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   true; unspecified drivers remain unknown). A started thread reserves its meter while loading,
   and session-local Git identity prevents non-repository branch-strip flashes. Multiline browser
   drafts stay expanded; the collapsed editor remains inert but measurable for restored wrapping.
+
+- Opt-in proactive panels (`fb93902ee2`, `8588d7f63b`) observe V2 run completion and checkpoint
+  summaries, never V1 turns. They defer until checkpoint/Git state is definitive, ignore empty,
+  failed and stale diffs, retain the user's revision across loading, and refresh the revision once
+  per new run. A selected linked PR can follow its replacement, but unrelated/manual selections
+  win. The setting is searchable, resettable, off by default and restricted to inline desktop
+  panels; native/compact clients keep explicit navigation rather than opening modal sheets.

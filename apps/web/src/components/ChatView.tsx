@@ -1,3 +1,10 @@
+import {
+  observeProactivePanelUserChoice,
+  shouldOpenProactivePullRequest,
+  shouldOpenProactiveRunDiff,
+  resolveProactiveRunDiffAction,
+  shouldRetargetThreadPullRequestPanel,
+} from "./proactivePanels";
 import { ComposerBanner } from "./chat/ComposerBanner";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import {
@@ -175,6 +182,7 @@ import {
   resolveThreadPanelPresentation,
 } from "../rightPanelLayout";
 import {
+  pullRequestSurface,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadPanelOpen,
@@ -3981,6 +3989,127 @@ function ChatViewContent(props: ChatViewProps) {
       supportsPullRequests,
     ],
   );
+  const proactivePanelObservationRef = useRef<ReturnType<
+    typeof observeProactivePanelUserChoice
+  > | null>(null);
+  const observedThreadPullRequestRef = useRef<{
+    threadKey: string;
+    reference: NonNullable<typeof activeThread>["linkedPullRequest"];
+  } | null>(null);
+  const activeRunningRunId = latestRunSettled ? null : (activeLatestRun?.runId ?? null);
+  const linkedThreadPullRequestKey =
+    linkedThreadPullRequest === null
+      ? null
+      : JSON.stringify([
+          linkedThreadPullRequest.projectId,
+          linkedThreadPullRequest.repository.toLowerCase(),
+          linkedThreadPullRequest.number,
+          linkedThreadPullRequest.url,
+        ]);
+  useEffect(() => {
+    if (!isServerThread || !activeThreadRef || !activeThreadKey) {
+      proactivePanelObservationRef.current = null;
+      observedThreadPullRequestRef.current = null;
+      return;
+    }
+    const panels = useRightPanelStore.getState();
+    const observation = observeProactivePanelUserChoice(proactivePanelObservationRef.current, {
+      threadKey: activeThreadKey,
+      runningRunId: activeRunningRunId,
+      userActionRevision: panels.getUserActionRevision(activeThreadRef),
+    });
+    proactivePanelObservationRef.current = observation;
+    const previous = observedThreadPullRequestRef.current;
+    observedThreadPullRequestRef.current = {
+      threadKey: activeThreadKey,
+      reference: linkedThreadPullRequest,
+    };
+    const followSelected =
+      previous?.threadKey === activeThreadKey &&
+      shouldRetargetThreadPullRequestPanel(
+        previous.reference,
+        linkedThreadPullRequest,
+        selectActiveRightPanelSurface(panels.byThreadKey, activeThreadRef),
+      );
+    if (followSelected && linkedThreadPullRequest && supportsPullRequests) {
+      panels.openProactive(
+        activeThreadRef,
+        pullRequestSurface(linkedThreadPullRequest),
+        observation.userActionRevision,
+      );
+    }
+    if (!clientSettingsHydrated || serverProjection === null) return;
+    const settledRunId = latestRunSettled ? (activeLatestRun?.runId ?? null) : null;
+    const completedRunId = shouldOpenProactiveRunDiff({
+      previousRunningRunId: observation.runningRunId,
+      runningRunId: activeRunningRunId,
+      settledRunId,
+      runCompleted: activeLatestRun?.status === "completed",
+    })
+      ? settledRunId
+      : null;
+    const enabled =
+      settings.proactivePanelsEnabled && !shouldUsePlanSidebarSheet && exposeWorkspaceArtifacts;
+    const diffAction =
+      enabled && completedRunId !== null
+        ? resolveProactiveRunDiffAction({
+            checkpoint: visibleTurnDiffSummaries.find(
+              (checkpoint) => checkpoint.runId === completedRunId,
+            ),
+            isGitRepo: gitStatusQuery.data?.isRepo,
+          })
+        : "ignore";
+    const eligibleLink =
+      enabled && shouldOpenProactivePullRequest(observation.targetKey, linkedThreadPullRequestKey);
+    proactivePanelObservationRef.current = {
+      ...observation,
+      runningRunId: diffAction === "defer" ? observation.runningRunId : activeRunningRunId,
+      targetKey:
+        eligibleLink && !pullRequestsCapabilityKnown
+          ? observation.targetKey
+          : linkedThreadPullRequestKey,
+    };
+    if (!followSelected && eligibleLink && supportsPullRequests && linkedThreadPullRequest) {
+      panels.openProactive(
+        activeThreadRef,
+        pullRequestSurface(linkedThreadPullRequest),
+        observation.userActionRevision,
+      );
+    }
+    if (
+      diffAction !== "open" ||
+      completedRunId === null ||
+      !panels.openProactive(
+        activeThreadRef,
+        { id: "diff", kind: "diff" },
+        observation.userActionRevision,
+      )
+    )
+      return;
+    useDiffPanelStore.getState().selectTurn(activeThreadRef, completedRunId);
+    onDiffPanelOpen?.();
+  }, [
+    activeThreadKey,
+    activeThreadRef,
+    activeRunningRunId,
+    activeLatestRun?.runId,
+    activeLatestRun?.status,
+    latestRunSettled,
+    linkedThreadPullRequest,
+    linkedThreadPullRequestKey,
+    isServerThread,
+    serverProjection,
+    clientSettingsHydrated,
+    settings.proactivePanelsEnabled,
+    shouldUsePlanSidebarSheet,
+    exposeWorkspaceArtifacts,
+    visibleTurnDiffSummaries,
+    gitStatusQuery.data?.isRepo,
+    supportsPullRequests,
+    pullRequestsCapabilityKnown,
+    onDiffPanelOpen,
+  ]);
+
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
     if (previewPanelOpen) {

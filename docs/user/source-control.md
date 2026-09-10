@@ -165,3 +165,9 @@ threads; it does not query the source-control host.
 
 Remote **Open in editor** also supports Zed over SSH when the environment advertises an
 SSH target and Zed is installed on the client machine.
+
+Enable **Proactive panels** in Settings → General to open linked pull requests and completed-run
+changes automatically on desktop-sized layouts. Changes open only when a ready checkpoint contains
+modified files. Closing a panel or choosing another surface takes precedence over pending automatic
+opens. A linked PR already shown in the panel follows its replacement; unrelated reviews stay put.
+Compact layouts and the native iOS app keep explicit navigation.
