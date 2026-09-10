@@ -1,3 +1,5 @@
+import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { CodexArtifactTemplateCard } from "./CodexArtifactTemplateCard";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
@@ -1935,8 +1937,13 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
               const api = readLocalApi();
               if (!api) return;
               const pullRequest = resolveThreadPullRequest(href);
-              const currentPullRequest =
-                threadRef === undefined ? null : readThreadShell(threadRef)?.linkedPullRequest;
+              const shell = threadRef === undefined ? null : readThreadShell(threadRef);
+              const links =
+                shell?.linkedPullRequests ??
+                (shell?.linkedPullRequest ? [shell.linkedPullRequest] : []);
+              const currentPullRequest = links.find((link) =>
+                matchesLinkedPullRequestUrl(link, href),
+              );
               const threadLinkAction =
                 currentPullRequest != null && matchesLinkedPullRequestUrl(currentPullRequest, href)
                   ? "unlink-from-thread"
@@ -1993,6 +2000,16 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         );
         if (!href || (!faviconHost && !unresolvedPathHref)) {
           return link;
+        }
+        const pullRequest = resolveThreadPullRequest(href);
+        if (pullRequest && threadRef) {
+          return (
+            <PullRequestLinkPreview
+              link={link}
+              originalUrl={href}
+              target={{ environmentId: threadRef.environmentId, input: pullRequest }}
+            />
+          );
         }
         return (
           <Tooltip>
@@ -2215,7 +2232,7 @@ function ChatMarkdown({
       if (
         threadRef === undefined ||
         readThreadShell(threadRef) === null ||
-        threadServerConfig?.environment.capabilities.threadPullRequestLinking !== true
+        threadServerConfig?.environment.capabilities.threadPullRequestsV2 !== true
       ) {
         return null;
       }
@@ -2235,28 +2252,42 @@ function ChatMarkdown({
     },
     [projects, threadRef, threadServerConfig],
   );
+  const readPullRequestDetail = useAtomCommand(pullRequestEnvironment.readDetail, {
+    reportFailure: false,
+  });
   const updateThreadPullRequestLink = useCallback(
     async (href: string, linked: boolean) => {
       if (threadRef === undefined) return;
-      const linkedPullRequest = linked ? resolveThreadPullRequest(href) : null;
-      if (linked && linkedPullRequest === null) {
-        throw new Error("The pull request is not available in this environment.");
+      const shell = readThreadShell(threadRef);
+      const links =
+        shell?.linkedPullRequests ?? (shell?.linkedPullRequest ? [shell.linkedPullRequest] : []);
+      const link = linked
+        ? resolveThreadPullRequest(href)
+        : links.find((candidate) => matchesLinkedPullRequestUrl(candidate, href));
+      if (!link) {
+        if (linked) throw new Error("The pull request is not available in this environment.");
+        return;
       }
-      if (!linked) {
-        const currentPullRequest = readThreadShell(threadRef)?.linkedPullRequest;
-        if (currentPullRequest == null || !matchesLinkedPullRequestUrl(currentPullRequest, href)) {
-          return;
-        }
+      let confirmedLink = link;
+      if (linked) {
+        const detail = await readPullRequestDetail({
+          environmentId: threadRef.environmentId,
+          input: link,
+        });
+        if (detail._tag === "Failure") throw squashAtomCommandFailure(detail);
+        confirmedLink = { ...link, url: detail.value.url };
       }
       const result = await updateThreadMetadata({
         environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId, linkedPullRequest },
+        input: {
+          threadId: threadRef.threadId,
+          ...(linked ? { linkPullRequest: confirmedLink } : { unlinkPullRequest: confirmedLink }),
+        },
       });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
         throw squashAtomCommandFailure(result);
-      }
     },
-    [resolveThreadPullRequest, threadRef, updateThreadMetadata],
+    [resolveThreadPullRequest, threadRef, updateThreadMetadata, readPullRequestDetail],
   );
   const openExternalLinkInPreview = useCallback(
     (url: string) => {

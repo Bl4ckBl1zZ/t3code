@@ -1,5 +1,10 @@
+import * as Schema from "effect/Schema";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { DiffFileTree } from "../diffs/DiffFileTree";
+import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
+import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
-import type { CodeViewDiffItem } from "@pierre/diffs/react";
+import type { CodeViewDiffItem, CodeViewHandle } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetailView,
@@ -16,6 +21,7 @@ import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   Columns2Icon,
+  FolderTreeIcon,
   MessageSquareIcon,
   MessageSquareOffIcon,
   Rows3Icon,
@@ -209,6 +215,12 @@ export function PullRequestCodeTab({
   refreshToken?: number;
 }) {
   const { resolvedTheme } = useTheme();
+  const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
+    "t3:pull-request-file-tree",
+    false,
+    Schema.Boolean,
+  );
+  const [viewer, setViewer] = useState<CodeViewHandle<ReviewAnnotationGroup> | null>(null);
   const settings = useClientSettings();
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
@@ -542,6 +554,10 @@ export function PullRequestCodeTab({
     [items],
   );
   const allFilesCollapsed = areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys);
+  const fileTreeEntries = useMemo(() => diffFileTreeEntries(files), [files]);
+  const loadNextSlice = useCallback(() => {
+    if (nextCursor !== null) setSliceState((previous) => ({ ...previous, cursor: nextCursor }));
+  }, [nextCursor]);
 
   // The sentinel is held as state rather than a ref because the viewer mounts its own footer:
   // an effect reading a ref could run before that node exists and would never arm the observer.
@@ -585,6 +601,17 @@ export function PullRequestCodeTab({
         return next;
       }),
     [],
+  );
+
+  const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
+  const revealFile = useCallback(
+    (path: string) => {
+      const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
+      if (item === undefined) return;
+      if (item.collapsed === true) toggleFile(item.id);
+      requestTreeReveal(item.id);
+    },
+    [items, requestTreeReveal, toggleFile],
   );
 
   const toggleAllFiles = () => {
@@ -1155,6 +1182,26 @@ export function PullRequestCodeTab({
             {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
           </TooltipPopup>
         </Tooltip>
+        {fileKeys.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={fileTreeOpen ? "Hide file tree" : "Show file tree"}
+                  variant="ghost"
+                  size="sm"
+                  pressed={fileTreeOpen}
+                  onPressedChange={(pressed) => setFileTreeOpen(Boolean(pressed))}
+                />
+              }
+            >
+              <FolderTreeIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {fileTreeOpen ? "Hide file tree" : "Show file tree"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   );
@@ -1166,7 +1213,7 @@ export function PullRequestCodeTab({
       {/* The overlay is anchored to this wrapper, not the scroller: absolute positioning
           inside an overflowing element tracks the content's bottom edge, which would carry
           the trigger away with the first scroll. */}
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 min-w-0 flex-1">
         <div className="h-full overflow-auto">{body}</div>
         {reviewOverlay}
       </div>
@@ -1310,58 +1357,94 @@ export function PullRequestCodeTab({
             </CollapsiblePanel>
           </Collapsible>
         ) : null}
-        {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
+        <div className="flex min-h-0 flex-1">
+          {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
             up; the viewer inside still owns its own scrolling. */}
-        <div
-          className="relative min-h-0 flex-1"
-          // The chevron answers this too, but the whole header row is the target a reader
-          // actually aims for. The header lives in the viewer's shadow tree, so the capture
-          // listener walks `composedPath` — the only way to see through the shadow boundary.
-          onClickCapture={(event) => {
-            const composedPath = event.nativeEvent.composedPath?.() ?? [];
-            for (const node of composedPath) {
-              if (!(node instanceof HTMLElement)) continue;
-              // A control inside the header — the collapse chevron — handles itself, and
-              // this capture listener fires before its own click does. Leave it alone or
-              // the two toggles cancel out.
-              if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
-                return;
+          <div
+            className="relative min-h-0 min-w-0 flex-1"
+            // The chevron answers this too, but the whole header row is the target a reader
+            // actually aims for. The header lives in the viewer's shadow tree, so the capture
+            // listener walks `composedPath` — the only way to see through the shadow boundary.
+            onClickCapture={(event) => {
+              const composedPath = event.nativeEvent.composedPath?.() ?? [];
+              for (const node of composedPath) {
+                if (!(node instanceof HTMLElement)) continue;
+                // A control inside the header — the collapse chevron — handles itself, and
+                // this capture listener fires before its own click does. Leave it alone or
+                // the two toggles cancel out.
+                if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
+                  return;
+                }
+                if (node.hasAttribute("data-diffs-header")) {
+                  const filePath = node.querySelector("[data-title]")?.textContent?.trim();
+                  if (filePath === undefined || filePath === "") return;
+                  const item = items.find(
+                    (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
+                  );
+                  if (item !== undefined) toggleFile(item.id);
+                  return;
+                }
               }
-              if (node.hasAttribute("data-diffs-header")) {
-                const filePath = node.querySelector("[data-title]")?.textContent?.trim();
-                if (filePath === undefined || filePath === "") return;
-                const item = items.find(
-                  (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
-                );
-                if (item !== undefined) toggleFile(item.id);
-                return;
-              }
-            }
-          }}
-        >
-          {/* The viewer virtualizes against the element it is told is scrolling and places its
+            }}
+          >
+            {/* The viewer virtualizes against the element it is told is scrolling and places its
               rows absolutely, so it has to own that element — the thread diff panel hands it the
               same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
-          <StyledDiffCodeView<ReviewAnnotationGroup>
-            // Keep scrollbar space stable so file metadata and line numbers do not shift as a
-            // diff crosses the overflow boundary. The viewer is itself focusable for keyboard
-            // interaction, but its native host outline clips and competes with the focus
-            // indicators on its actual controls.
-            className="h-full overflow-auto [scrollbar-gutter:stable]"
-            items={items}
-            selectedLines={selectedLines}
-            onSelectedLinesChange={setSelectedLines}
-            options={diffViewOptions}
-            // The viewer owns the scroll container, so the sentinel that asks for the next slice
-            // has to live inside it — at the end of the files, where reaching it means the reader
-            // is running out of diff.
-            renderCodeViewFooter={renderCodeViewFooter}
-            renderHeaderPrefix={renderHeaderPrefix}
-            renderHeaderMetadata={renderHeaderMetadata}
-            renderAnnotation={renderAnnotation}
-            unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
-          />
-          {reviewOverlay}
+            <StyledDiffCodeView<ReviewAnnotationGroup>
+              viewerRef={setViewer}
+              // Keep scrollbar space stable so file metadata and line numbers do not shift as a
+              // diff crosses the overflow boundary. The viewer is itself focusable for keyboard
+              // interaction, but its native host outline clips and competes with the focus
+              // indicators on its actual controls.
+              className="h-full overflow-auto [scrollbar-gutter:stable]"
+              items={items}
+              selectedLines={selectedLines}
+              onSelectedLinesChange={setSelectedLines}
+              options={diffViewOptions}
+              // The viewer owns the scroll container, so the sentinel that asks for the next slice
+              // has to live inside it — at the end of the files, where reaching it means the reader
+              // is running out of diff.
+              renderCodeViewFooter={renderCodeViewFooter}
+              renderHeaderPrefix={renderHeaderPrefix}
+              renderHeaderMetadata={renderHeaderMetadata}
+              renderAnnotation={renderAnnotation}
+              unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
+            />
+            {reviewOverlay}
+          </div>
+          {fileTreeOpen ? (
+            <aside className="flex w-[min(20rem,40%)] min-w-32 shrink-0 border-l border-border/60">
+              <DiffFileTree
+                ariaLabel={`Pull request #${detail.number} files`}
+                entries={fileTreeEntries}
+                onSelectFile={revealFile}
+                // The tree lists only what has arrived; a footer says so while the diff is still
+                // paging, and lets the reader pull the rest in without scrolling for it.
+                footer={
+                  nextCursor === null ? null : (
+                    <div className="shrink-0 border-t border-border/60 p-2">
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="w-full"
+                        disabled={diffQuery.isPending}
+                        onClick={
+                          diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice
+                        }
+                      >
+                        {diffQuery.error !== null
+                          ? "Retry"
+                          : diffQuery.isPending
+                            ? "Loading more files..."
+                            : "Load more files"}
+                      </Button>
+                    </div>
+                  )
+                }
+              />
+            </aside>
+          ) : null}
         </div>
         {unstructured}
       </div>

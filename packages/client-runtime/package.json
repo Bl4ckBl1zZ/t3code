@@ -214,6 +214,14 @@
     "./work-log/command-label": {
       "types": "./src/work-log/commandLabel.ts",
       "default": "./src/work-log/commandLabel.ts"
+    },
+    "./media-reference": {
+      "types": "./src/mediaReference.ts",
+      "default": "./src/mediaReference.ts"
+    },
+    "./media-actions": {
+      "types": "./src/mediaActions.ts",
+      "default": "./src/mediaActions.ts"
     }
   },
   "scripts": {

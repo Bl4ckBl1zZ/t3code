@@ -29,3 +29,8 @@ changing the request on its host.
 In GitHub PR details, open **Stack** to browse layers, refresh their state, or review
 a merge/rebase. The confirmation captures the revisions you reviewed. A failure
 requires closing and refreshing before another attempt.
+
+Choose **Change labels** in a GitHub PR’s summary to search repository labels and
+apply or remove them. Applied labels show a checkmark. Editing needs triage access
+and a server that supports it. The list loads when opened; if the repository has
+more labels than the list can show, use GitHub for the remainder.

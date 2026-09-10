@@ -173,13 +173,28 @@ public struct PullRequestStack: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
+    public var labels: Bool? = nil
     public let actions: [String]
     public let mergeMethods: [String]
     public let updateMethods: [String]?
 }
 
 public struct NativePullRequestViewerPermissions: Codable, Equatable, Sendable {
+    public var labels: Bool? = nil
     public let stackRebase: Bool?
     public let actions: [String]
     public let updateMethods: [String]?
+}
+
+public struct PullRequestLabelCandidate: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let color: String?
+    public let description: String?
+    public let isApplied: Bool
+    public var id: String { name }
+}
+
+public struct PullRequestLabelCandidateList: Codable, Equatable, Sendable {
+    public let candidates: [PullRequestLabelCandidate]
+    public let truncated: Bool
 }

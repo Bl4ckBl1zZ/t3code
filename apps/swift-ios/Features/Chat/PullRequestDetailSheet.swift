@@ -7,6 +7,7 @@ struct PullRequestDetailSheet: View {
     let threadID: String
     let number: Int
 
+    @State private var editingLabels = false
     @State private var selectedNumber: Int?
     @State private var stack: PullRequestStack?
     @State private var stackError: String?
@@ -49,6 +50,9 @@ struct PullRequestDetailSheet: View {
             PullRequestStackActionSheet(request: request, client: client, threadID: threadID) {
                 pendingStackAction = nil
             }
+        }
+        .sheet(isPresented: $editingLabels, onDismiss: { Task { await load() } }) {
+            PullRequestLabelPickerSheet(client: client, threadID: threadID, number: displayedNumber)
         }
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
@@ -197,11 +201,18 @@ struct PullRequestDetailSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if !detail.labels.isEmpty {
+        if !detail.labels.isEmpty || detail.capabilities?.labels == true {
             section("Labels") {
                 Text(detail.labels.map(\.name).joined(separator: " · "))
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                if detail.capabilities?.labels == true {
+                    Button("Change labels", systemImage: "tag") { editingLabels = true }
+                        .disabled(detail.viewerPermissions?.labels != true)
+                    if detail.viewerPermissions?.labels != true {
+                        Text("Changing labels needs triage access on this repository.")
+                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                    }
+                }
             }
         }
 

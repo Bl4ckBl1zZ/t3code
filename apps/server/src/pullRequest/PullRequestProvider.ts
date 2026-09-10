@@ -1,3 +1,4 @@
+import type { PullRequestLabelCandidateList } from "@t3tools/contracts";
 import type { PullRequestStack, PullRequestStackHead } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -450,6 +451,19 @@ export interface PullRequestProviderApi {
         readonly kind: PullRequestReviewerKind;
       }>;
       readonly requested: boolean;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  readonly listLabelCandidates?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<PullRequestLabelCandidateList, PullRequestProviderError>;
+
+  /** Puts labels on the change request, or takes them off. One call for both directions. */
+  readonly setLabels?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly labels: ReadonlyArray<string>;
+      readonly applied: boolean;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

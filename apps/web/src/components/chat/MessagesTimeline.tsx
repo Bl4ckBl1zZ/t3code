@@ -1,3 +1,4 @@
+import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
   type EnvironmentId,
@@ -1202,12 +1203,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       />
                     </button>
                   ) : attachment.type === "video" && attachment.previewUrl ? (
-                    <video
+                    <MediaVideoPlayer
                       src={attachment.previewUrl}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="block h-auto max-h-[220px] w-full bg-black object-contain"
+                      label={attachment.name}
+                      className="block w-full"
+                      videoClassName="block h-auto max-h-[220px] w-full bg-black object-contain"
+                      actionsSource={{
+                        kind: "video",
+                        name: attachment.name,
+                        src: attachment.previewUrl,
+                      }}
                     />
                   ) : (
                     <MessageFileAttachmentTile attachment={attachment} />
@@ -1538,13 +1543,12 @@ function AssistantMessageAttachments({
               key={attachment.id}
               className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-muted/20 sm:col-span-2"
             >
-              <video
+              <MediaVideoPlayer
                 src={attachment.previewUrl}
-                controls
-                playsInline
-                preload="metadata"
-                aria-label={attachment.name}
-                className="block max-h-[32rem] w-full bg-black object-contain"
+                label={attachment.name}
+                className="block w-full"
+                videoClassName="block max-h-[32rem] w-full bg-black object-contain"
+                actionsSource={{ kind: "video", name: attachment.name, src: attachment.previewUrl }}
               />
               <figcaption className="truncate border-t border-border/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
                 {attachment.name}

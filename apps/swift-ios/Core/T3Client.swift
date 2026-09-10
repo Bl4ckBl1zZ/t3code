@@ -742,6 +742,19 @@ public actor T3Client {
         )
     }
 
+    public func pullRequestLabelCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestLabelCandidateList {
+        try await rpc.request("pullRequests.labelCandidates", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ]), as: PullRequestLabelCandidateList.self)
+    }
+
+    public func setPullRequestLabels(projectID: String, repository: String, number: Int, labels: [String], applied: Bool) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.setLabels", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "labels": .array(labels.map { .string($0) }), "applied": .bool(applied),
+        ]), as: JSONValue.self)
+    }
+
     public func pullRequestStack(projectID: String, repository: String, number: Int) async throws -> PullRequestStack? {
         try await rpc.request("pullRequests.stack", payload: .object([
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),

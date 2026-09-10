@@ -39,6 +39,7 @@ import {
   pullRequestReviewOutcomeRingClassName,
   pullRequestReviewOutcomeStaleLabel,
 } from "./pullRequestPresentation";
+import { PullRequestLabelPicker } from "./PullRequestLabelPicker";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import {
@@ -622,7 +623,7 @@ export function PullRequestSummaryTab({
               ) : null}
             </span>
           </MetaRow>
-          {detail.labels.length > 0 ? (
+          {detail.labels.length > 0 || detail.capabilities.labels === true ? (
             <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.map((label) => {
@@ -641,6 +642,14 @@ export function PullRequestSummaryTab({
                     </span>
                   );
                 })}
+                {detail.capabilities.labels === true ? (
+                  <PullRequestLabelPicker
+                    environmentId={environmentId}
+                    reference={reference}
+                    allowed={detail.viewerPermissions.labels === true}
+                    onChanged={onRefresh}
+                  />
+                ) : null}
               </span>
             </MetaRow>
           ) : null}

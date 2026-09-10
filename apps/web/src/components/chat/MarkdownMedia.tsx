@@ -1,3 +1,13 @@
+import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
+import { MediaActions } from "../media/MediaActions";
+import {
+  mediaFileReference,
+  mediaUrlReference,
+  type MediaReference,
+} from "@t3tools/client-runtime/media-reference";
+import { assetEnvironment } from "../../state/assets";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AssetResource, ScopedThreadRef } from "@t3tools/contracts";
 import { isWorkspaceVideoPreviewPath } from "@t3tools/shared/filePreview";
 import { memo, useState } from "react";
@@ -80,42 +90,69 @@ function MediaUnavailable({ name }: { name: string }) {
   );
 }
 
-function ResolvedMedia({ url, name, isVideo }: { url: string; name: string; isVideo: boolean }) {
+function ResolvedMedia({
+  url,
+  name,
+  isVideo,
+  reference,
+  asset,
+  onRetry,
+}: {
+  url: string;
+  name: string;
+  isVideo: boolean;
+  reference?: MediaReference;
+  asset?: { environmentId: ScopedThreadRef["environmentId"]; resource: AssetResource };
+  onRetry?: () => Promise<void>;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
-  if (failedUrl === url) {
-    return <MediaUnavailable name={name} />;
-  }
   if (isVideo) {
     return (
-      <video
+      <MediaVideoPlayer
         src={url}
-        controls
-        playsInline
-        preload="metadata"
-        aria-label={name}
-        className={MEDIA_FRAME_CLASS_NAME}
-        onError={() => setFailedUrl(url)}
+        label={name}
+        className="my-2 block max-h-96 max-w-full"
+        videoClassName={MEDIA_FRAME_CLASS_NAME}
+        onRetry={onRetry}
+        actionsSource={{
+          kind: "video",
+          name,
+          src: url,
+          ...(reference ? { reference } : {}),
+          ...(asset ? { asset } : {}),
+        }}
       />
     );
   }
+  if (failedUrl === url) return <MediaUnavailable name={name} />;
   return (
     <>
-      <button
-        type="button"
-        className="block max-w-full cursor-zoom-in"
-        aria-label={`Expand image ${name}`}
-        onClick={() => setExpanded(true)}
+      <MediaActions
+        source={{
+          kind: "image",
+          name,
+          src: url,
+          ...(reference ? { reference } : {}),
+          ...(asset ? { asset } : {}),
+        }}
       >
-        <img
-          src={url}
-          alt={name}
-          loading="lazy"
-          className={MEDIA_FRAME_CLASS_NAME}
-          onError={() => setFailedUrl(url)}
-        />
-      </button>
+        <button
+          type="button"
+          className="block max-w-full cursor-zoom-in"
+          aria-label={`Expand image ${name}`}
+          onClick={() => setExpanded(true)}
+        >
+          <img
+            src={url}
+            alt={name}
+            loading="lazy"
+            className={MEDIA_FRAME_CLASS_NAME}
+            onError={() => setFailedUrl(url)}
+          />
+        </button>
+      </MediaActions>
       {expanded &&
         createPortal(
           <ExpandedImageDialog
@@ -140,6 +177,38 @@ function ResourceMedia({
   isVideo: boolean;
 }) {
   const assetUrl = useAssetUrlState(threadRef.environmentId, resource);
+  const refresh = useAtomQueryRunner(assetEnvironment.createUrl, {
+    refresh: true,
+    reportFailure: false,
+  });
+  const retry = async () => {
+    const result = await refresh({ environmentId: threadRef.environmentId, input: { resource } });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+  };
+  if (isVideo) {
+    const reference =
+      assetUrl._tag === "Success" && assetUrl.sourcePath
+        ? mediaFileReference(assetUrl.sourcePath)
+        : undefined;
+    const src = assetUrl._tag === "Success" ? assetUrl.url : null;
+    return (
+      <MediaVideoPlayer
+        src={src}
+        label={name}
+        sourceFailed={assetUrl._tag === "Failure"}
+        onRetry={retry}
+        className="my-2 block max-h-96 max-w-full"
+        videoClassName={MEDIA_FRAME_CLASS_NAME}
+        actionsSource={{
+          kind: "video",
+          name,
+          src,
+          ...(reference ? { reference } : {}),
+          asset: { environmentId: threadRef.environmentId, resource },
+        }}
+      />
+    );
+  }
   if (assetUrl._tag === "Failure") {
     return <MediaUnavailable name={name} />;
   }
@@ -150,7 +219,16 @@ function ResourceMedia({
       </span>
     );
   }
-  return <ResolvedMedia url={assetUrl.url} name={name} isVideo={isVideo} />;
+  return (
+    <ResolvedMedia
+      url={assetUrl.url}
+      name={name}
+      isVideo={isVideo}
+      {...(assetUrl.sourcePath ? { reference: mediaFileReference(assetUrl.sourcePath) } : {})}
+      asset={{ environmentId: threadRef.environmentId, resource }}
+      onRetry={retry}
+    />
+  );
 }
 
 export const MarkdownMedia = memo(function MarkdownMedia({
@@ -166,14 +244,24 @@ export const MarkdownMedia = memo(function MarkdownMedia({
   const isVideo = kind === "video" || (kind === undefined && isWorkspaceVideoPreviewPath(src));
   if (!threadRef) {
     return DIRECT_MEDIA_SRC_PATTERN.test(src) ? (
-      <ResolvedMedia url={src} name={name} isVideo={isVideo} />
+      <ResolvedMedia
+        url={src}
+        name={name}
+        isVideo={isVideo}
+        {...(mediaUrlReference(src) ? { reference: mediaUrlReference(src)! } : {})}
+      />
     ) : (
       <MediaUnavailable name={name} />
     );
   }
   const resolved = resolveMarkdownMediaSource(src, threadRef);
   return resolved._tag === "direct" ? (
-    <ResolvedMedia url={resolved.url} name={name} isVideo={isVideo} />
+    <ResolvedMedia
+      url={resolved.url}
+      name={name}
+      isVideo={isVideo}
+      {...(mediaUrlReference(resolved.url) ? { reference: mediaUrlReference(resolved.url)! } : {})}
+    />
   ) : (
     <ResourceMedia
       threadRef={threadRef}

@@ -153,3 +153,8 @@ the gallery offers **Share original** and **Save image**.
 
 Native iOS remembers **Fast** on or off separately for each environment and provider account.
 The choice follows new tasks when the selected model supports that option.
+
+If an inline video fails to load, choose **Retry video**. Videos pause when the app
+moves into the background. Web and desktop media menus offer save actions; image
+menus also offer **Copy image** when the browser supports it. These actions may need
+the environment to be connected or the remote host to allow browser downloads.

@@ -1,3 +1,4 @@
+import { PullRequestLabelCandidateList, PullRequestLabelChangeInput } from "./pullRequest.ts";
 import { PullRequestStack } from "./pullRequest.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
@@ -399,6 +400,8 @@ export const WS_METHODS = {
   pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
   pullRequestsSetReaction: "pullRequests.setReaction",
   pullRequestsInvalidate: "pullRequests.invalidate",
+  pullRequestsLabelCandidates: "pullRequests.labelCandidates",
+  pullRequestsSetLabels: "pullRequests.setLabels",
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
 
@@ -716,6 +719,17 @@ export const WsPullRequestsReviewerCandidatesRpc = Rpc.make(
     error: PullRequestRpcError,
   },
 );
+
+export const WsPullRequestsLabelCandidatesRpc = Rpc.make(WS_METHODS.pullRequestsLabelCandidates, {
+  payload: PullRequestRef,
+  success: PullRequestLabelCandidateList,
+  error: PullRequestRpcError,
+});
+export const WsPullRequestsSetLabelsRpc = Rpc.make(WS_METHODS.pullRequestsSetLabels, {
+  payload: PullRequestLabelChangeInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
 
 export const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequestsRequestReviewers, {
   payload: PullRequestReviewerRequestInput,
@@ -1363,6 +1377,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
+  WsPullRequestsLabelCandidatesRpc,
+  WsPullRequestsSetLabelsRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

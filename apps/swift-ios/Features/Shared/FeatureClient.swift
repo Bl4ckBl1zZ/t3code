@@ -74,6 +74,8 @@ public protocol FeatureClient: AnyObject {
     ) async throws -> FeatureLinkedPullRequest?
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest?
     func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws
+    func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList
+    func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws
     func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack?
     func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws
@@ -262,6 +264,8 @@ public extension FeatureClient {
     }
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? { throw FeatureCapabilityUnavailable("Multiple pull requests") }
     func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws { throw FeatureCapabilityUnavailable("Multiple pull requests") }
+    func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList { throw FeatureCapabilityUnavailable("Label editing") }
+    func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws { throw FeatureCapabilityUnavailable("Label editing") }
     func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? { nil }
     func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws { throw FeatureCapabilityUnavailable("Stack actions") }
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}

@@ -1,3 +1,4 @@
+import type { PullRequestLabelCandidate, PullRequestLabelCandidateList } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -2124,6 +2125,7 @@ export function buildReviewerRequestJson(
  * only read access can still be told apart from a passer-by.
  */
 export interface GitHubViewerAccess {
+  readonly canTriage?: boolean;
   readonly canWrite: boolean;
   /** GitHub's own `viewerCanUpdate`, true for the author as well as for anyone with write. */
   readonly canUpdate: boolean;
@@ -2171,6 +2173,9 @@ export function decodeViewerPermissionsJson(
   const repository = decoded.success.data.repository;
   return Result.succeed({
     canWrite: toCanWrite(repository.viewerPermission),
+    canTriage:
+      repository.viewerPermission?.trim().toUpperCase() === "TRIAGE" ||
+      toCanWrite(repository.viewerPermission),
     ...toPullRequestViewerFields(repository.pullRequest),
   });
 }
@@ -2312,4 +2317,97 @@ export function decodePullRequestStacksJson(
       state: toState({ state: pullRequest.state, mergedAt: pullRequest.merged_at }),
     })),
   });
+}
+
+export const LABEL_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    labels(first: ${GRAPHQL_PAGE_SIZE}, orderBy: { field: NAME, direction: ASC }) {
+      pageInfo { hasNextPage }
+      nodes { name color description }
+    }
+    pullRequest(number: $number) {
+      labels(first: ${GRAPHQL_PAGE_SIZE}) { nodes { name } }
+    }
+  }
+}`;
+
+const RawLabelCandidatesSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      labels: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            pageInfo: Schema.optional(RawPageInfoSchema),
+            nodes: Schema.Array(
+              Schema.NullOr(
+                Schema.Struct({
+                  ...RawLabelSchema.fields,
+                  description: Schema.optional(Schema.NullOr(Schema.String)),
+                }),
+              ),
+            ),
+          }),
+        ),
+      ),
+      /** Null for a number that names no pull request the viewer can see. */
+      pullRequest: Schema.NullOr(
+        Schema.Struct({
+          labels: Schema.optional(
+            Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Schema.NullOr(RawLabelSchema)) })),
+          ),
+        }),
+      ),
+    }),
+  }),
+});
+
+const decodeLabelCandidates = decodeJsonResult(RawLabelCandidatesSchema);
+
+/**
+ * The repository's labels, with the ones already on this pull request marked. A label the pull
+ * request wears that the repository no longer defines — deleted since, or past the page — leads
+ * the list anyway, because a label that cannot be seen cannot be taken off.
+ */
+export function decodeLabelCandidatesJson(
+  raw: string,
+): Result.Result<PullRequestLabelCandidateList, DecodeFailure> {
+  const decoded = decodeLabelCandidates(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const repository = decoded.success.data.repository;
+  const applied = new Set(
+    (repository.pullRequest?.labels?.nodes ?? []).flatMap((label) => {
+      const name = trimmed(label?.name);
+      return name === null ? [] : [name];
+    }),
+  );
+  const candidates = new Map<string, PullRequestLabelCandidate>();
+  for (const node of repository.labels?.nodes ?? []) {
+    const name = trimmed(node?.name);
+    if (name === null) continue;
+    candidates.set(name, {
+      name,
+      color: trimmed(node?.color),
+      description: trimmed(node?.description),
+      isApplied: applied.has(name),
+    });
+  }
+  const missing = [...applied].filter((name) => !candidates.has(name));
+  return Result.succeed({
+    candidates: [
+      ...missing.map((name) => ({ name, color: null, description: null, isApplied: true })),
+      ...candidates.values(),
+    ],
+    truncated: repository.labels?.pageInfo?.hasNextPage === true,
+  });
+}
+
+/** The body of `POST /repos/{owner}/{repo}/issues/{number}/labels`, which adds to what is there. */
+const LabelRequestSchema = Schema.Struct({ labels: Schema.Array(Schema.String) });
+
+const encodeLabelRequest = Schema.encodeSync(Schema.fromJsonString(LabelRequestSchema));
+
+export function buildLabelRequestJson(labels: ReadonlyArray<string>): string {
+  return encodeLabelRequest({ labels });
 }

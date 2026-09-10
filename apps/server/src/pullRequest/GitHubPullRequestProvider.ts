@@ -41,6 +41,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   },
   reviewers: { request: true, listCandidates: true },
   edit: { changeRequest: true, comment: true },
+  labels: true,
 };
 
 /**
@@ -78,6 +79,7 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
     // leaves them commenting, which is what an author has to say about their own change anyway.
     verdicts: access.didAuthor ? (["comment"] as const) : CAPABILITIES.review.verdicts,
     requestReviewers: access.canWrite,
+    labels: access.canTriage ?? access.canWrite,
     ...(access.canWrite ? { stackRebase: true } : {}),
     ...(access.canUpdateBranch === true ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
@@ -419,6 +421,21 @@ export const make = Effect.gen(function* () {
       cli
         .getPullRequestStack({ ...input, includeDetails: true })
         .pipe(Effect.mapError(fail("getStack"))),
+    listLabelCandidates: (input) =>
+      cli.listLabelCandidates(input).pipe(Effect.mapError(fail("listLabelCandidates"))),
+
+    setLabels: (input) =>
+      cli
+        .setLabels({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          labels: input.labels,
+          applied: input.applied,
+        })
+        .pipe(Effect.mapError(fail("setLabels"))),
+
     runAction: (input) =>
       cli
         .runPullRequestAction({

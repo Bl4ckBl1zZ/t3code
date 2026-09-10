@@ -200,6 +200,17 @@ export function createPullRequestEnvironmentAtoms<R, E>(
      * for a minute, because who has access to a repository changes far more slowly than the
      * change request it is being read for.
      */
+    labelCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:label-candidates",
+      tag: WS_METHODS.pullRequestsLabelCandidates,
+      staleTimeMs: 15_000,
+    }),
+    setLabels: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:set-labels",
+      tag: WS_METHODS.pullRequestsSetLabels,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     reviewerCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:reviewer-candidates",
       tag: WS_METHODS.pullRequestsReviewerCandidates,

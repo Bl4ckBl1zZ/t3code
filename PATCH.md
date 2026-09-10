@@ -612,3 +612,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   without requiring the host or project to remain available. Stack detail controls use the
   native parity RPC and capture immutable reviewed heads before submitting merge/rebase.
   Automatic discovery, source/tombstone metadata and persistent PR caches remain separate ports.
+
+- GitHub PR labels are editable in web/desktop and Swift detail screens. Optional
+  host capability and viewer permission flags gate lazy candidate reads and mutations;
+  the server checks triage access and invalidates detail/list caches after attempted
+  updates, including partial failures. This host API port has no V1 runtime dependency.
+
+- Web PR code review also carries the paged changed-file tree; chat PR links load hover
+  details on demand and use atomic V2 collection actions from their context menu.
+- Inline video recovery uses the fork's asset URLs and range streaming. Web previews
+  preserve an active playhead across URL renewal, prepare a first frame only while idle,
+  and provide explicit save/copy actions. Swift offers retry and pauses when backgrounded.

@@ -17,6 +17,7 @@
 import {
   ServerProviderUsageLimits,
   PullRequestStack,
+  PullRequestLabelCandidateList,
   CheckpointId,
   CheckpointScopeId,
   ContextHandoffId,
@@ -444,4 +445,28 @@ if (process.argv.includes("--check")) {
   }
 } else {
   NodeFS.writeFileSync(stackPath, stackSerialized);
+}
+
+const labelsPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestLabels.json");
+const labelsSerialized = `${JSON.stringify(
+  Schema.encodeSync(PullRequestLabelCandidateList)({
+    candidates: [
+      { name: "bug", color: "d73a4a", description: "Something is broken", isApplied: true },
+      { name: "legacy", color: null, description: null, isApplied: false },
+    ],
+    truncated: true,
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(labelsPath) ||
+    NodeFS.readFileSync(labelsPath, "utf8") !== labelsSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestLabels.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(labelsPath, labelsSerialized);
 }

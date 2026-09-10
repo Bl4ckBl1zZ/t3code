@@ -2006,6 +2006,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return detail
     }
 
+    func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList {
+        let route = try threadRoute(for: threadID)
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }),
+              let repository = project.repositoryIdentity?.displayName else { throw NativeFeatureClientError.repositoryIdentityUnavailable }
+        return try await route.client.pullRequestLabelCandidates(projectID: project.id, repository: repository, number: number)
+    }
+
+    func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws {
+        let route = try threadRoute(for: threadID)
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }),
+              let repository = project.repositoryIdentity?.displayName else { throw NativeFeatureClientError.repositoryIdentityUnavailable }
+        try await route.client.setPullRequestLabels(projectID: project.id, repository: repository, number: number, labels: labels, applied: applied)
+        pullRequestPreviewCache.removeAll(keepingCapacity: true)
+    }
+
     func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? {
         let route = try threadRoute(for: threadID)
         guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }

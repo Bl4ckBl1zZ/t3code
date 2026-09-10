@@ -1,3 +1,7 @@
+import type {
+  PullRequestLabelCandidateList,
+  PullRequestLabelChangeInput,
+} from "@t3tools/contracts";
 import type { PullRequestStack } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
@@ -162,6 +166,12 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<PullRequestReviewerCandidateList, PullRequestError>;
     readonly requestReviewers: (
       input: PullRequestReviewerRequestInput,
+    ) => Effect.Effect<void, PullRequestError>;
+    readonly labelCandidates: (
+      input: PullRequestRef,
+    ) => Effect.Effect<PullRequestLabelCandidateList, PullRequestError>;
+    readonly setLabels: (
+      input: PullRequestLabelChangeInput,
     ) => Effect.Effect<void, PullRequestError>;
     readonly invalidate: (input: PullRequestInvalidateInput) => Effect.Effect<void>;
   }
@@ -459,6 +469,10 @@ function withRateLimitBackoff(
     submitReview: interactive("submitReview", api.submitReview),
     listReviewerCandidates: interactive("listReviewerCandidates", api.listReviewerCandidates),
     setReviewerRequest: interactive("setReviewerRequest", api.setReviewerRequest),
+    ...(api.listLabelCandidates === undefined
+      ? {}
+      : { listLabelCandidates: interactive("listLabelCandidates", api.listLabelCandidates) }),
+    ...(api.setLabels === undefined ? {} : { setLabels: interactive("setLabels", api.setLabels) }),
     replyToThread: interactive("replyToThread", api.replyToThread),
     setReaction: interactive("setReaction", api.setReaction),
     setThreadResolution: interactive("setThreadResolution", api.setThreadResolution),
@@ -1699,6 +1713,75 @@ export const make = Effect.gen(function* () {
    * the one the request is made from. So the same permission guards both: a page that could open
    * the menu without it would offer a list whose every press was going to be turned down.
    */
+  const LABEL_CHANGE_REFUSAL = "Changing labels needs triage access on this repository.";
+  const labelCandidates: PullRequestService["Service"]["labelCandidates"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<PullRequestLabelCandidateList, PullRequestError> => {
+        const list = project.api.listLabelCandidates;
+        if (project.api.capabilities.labels !== true || list === undefined) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "labelCandidates",
+              detail: "This host cannot change the labels on a change request.",
+            }),
+          );
+        }
+        return viewerPermissionsOf(project, input, "labelCandidates").pipe(
+          Effect.flatMap(
+            (viewer): Effect.Effect<PullRequestLabelCandidateList, PullRequestError> =>
+              viewer.labels !== true
+                ? Effect.fail(
+                    new PullRequestOperationError({
+                      operation: "labelCandidates",
+                      detail: LABEL_CHANGE_REFUSAL,
+                    }),
+                  )
+                : list({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                  }).pipe(Effect.mapError(toPullRequestError("labelCandidates"))),
+          ),
+        );
+      }),
+    );
+
+  const setLabels: PullRequestService["Service"]["setLabels"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        const change = project.api.setLabels;
+        if (project.api.capabilities.labels !== true || change === undefined) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "setLabels",
+              detail: "This host cannot change the labels on a change request.",
+            }),
+          );
+        }
+        return viewerPermissionsOf(project, input, "setLabels").pipe(
+          Effect.flatMap(
+            (viewer): Effect.Effect<void, PullRequestError> =>
+              viewer.labels !== true
+                ? Effect.fail(
+                    new PullRequestOperationError({
+                      operation: "setLabels",
+                      detail: LABEL_CHANGE_REFUSAL,
+                    }),
+                  )
+                : change({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                    labels: input.labels,
+                    applied: input.applied,
+                  }).pipe(Effect.mapError(toPullRequestError("setLabels"))),
+          ),
+        );
+      }),
+    );
+
   const reviewerCandidates: PullRequestService["Service"]["reviewerCandidates"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap(
@@ -2161,6 +2244,16 @@ export const make = Effect.gen(function* () {
     setReaction: invalidatedByMutation(setReaction),
     // The candidate list is deliberately read fresh per menu-open, so it stays uncached.
     reviewerCandidates,
+    labelCandidates,
+    setLabels: (input) =>
+      invalidatedByMutation(setLabels)(input).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            bumpRefEpoch(input);
+            listingsEpoch = ++epochCounter;
+          }),
+        ),
+      ),
     requestReviewers: invalidatedByMutation(requestReviewers),
     invalidate,
   });

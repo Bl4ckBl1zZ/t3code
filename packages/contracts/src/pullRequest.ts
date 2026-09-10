@@ -357,6 +357,7 @@ export type PullRequestReviewerCapabilities = typeof PullRequestReviewerCapabili
  * buttons.
  */
 export const PullRequestCapabilities = Schema.Struct({
+  labels: Schema.optionalKey(Schema.Boolean),
   /** A unified patch can be fetched for the change request. */
   diff: Schema.Boolean,
   /** A comment can be posted, and the conversation read back. */
@@ -406,6 +407,7 @@ export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
  * offering one they may not use ends in the host's own refusal — which at least says why.
  */
 export const PullRequestViewerPermissions = Schema.Struct({
+  labels: Schema.optionalKey(Schema.Boolean),
   /** Stack rebases need write access even when the selected branch is not behind its base. */
   stackRebase: Schema.optionalKey(Schema.Boolean),
   /** Which of the actions this viewer may take; anything absent is theirs to look at only. */
@@ -1146,3 +1148,25 @@ export class PullRequestOperationError extends Schema.TaggedErrorClass<PullReque
     return `Pull request operation ${this.operation} failed: ${this.detail}`;
   }
 }
+
+/** A label the repository defines, with whether this change request already wears it. */
+export const PullRequestLabelCandidate = Schema.Struct({
+  ...PullRequestLabel.fields,
+  description: Schema.NullOr(Schema.String),
+  isApplied: Schema.Boolean,
+});
+export type PullRequestLabelCandidate = typeof PullRequestLabelCandidate.Type;
+
+export const PullRequestLabelCandidateList = Schema.Struct({
+  candidates: Schema.Array(PullRequestLabelCandidate),
+  /** The repository defines more labels than the read asked for; the list is not all of them. */
+  truncated: Schema.Boolean,
+});
+export type PullRequestLabelCandidateList = typeof PullRequestLabelCandidateList.Type;
+
+export const PullRequestLabelChangeInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  labels: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(25)),
+  applied: Schema.Boolean,
+});
+export type PullRequestLabelChangeInput = typeof PullRequestLabelChangeInput.Type;
