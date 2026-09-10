@@ -324,6 +324,7 @@ const GitLayerLive = Layer.empty.pipe(
 );
 
 const ProjectTeardownScriptRunnerLayerLive = ProjectTeardownScriptRunner.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
   Layer.provide(ProjectServiceLayerLive),
   Layer.provide(ProcessRunner.layer),
 );

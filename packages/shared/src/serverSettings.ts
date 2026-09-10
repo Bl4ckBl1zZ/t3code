@@ -151,6 +151,8 @@ export function applyServerSettingsPatch(
     backgroundActivityProfile,
     backgroundActivity,
     usagePriceOverrides: pricePatch,
+    projectScriptOverrides: scriptOverridesPatch,
+    defaultProjectScripts: defaultScriptsPatch,
     projectAutoPullOverrides: autoPullPatch,
     projectAgentBrowserAccessOverrides: browserAccessPatch,
     ...patchForMerge
@@ -209,6 +211,8 @@ export function applyServerSettingsPatch(
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
+    defaultProjectScripts: defaultScriptsPatch ?? current.defaultProjectScripts,
+    projectScriptOverrides: { ...current.projectScriptOverrides, ...scriptOverridesPatch },
     projectAutoPullOverrides,
     projectAgentBrowserAccessOverrides,
     ...(backgroundActivity !== undefined

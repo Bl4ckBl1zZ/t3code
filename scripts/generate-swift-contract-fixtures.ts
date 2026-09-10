@@ -1291,3 +1291,48 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(projectDefaultsFixturePath, projectDefaultsFixture);
+
+const projectActionsFixturePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "projectActions.json",
+);
+const actionDefaults = [
+  {
+    id: "setup",
+    name: "Setup",
+    command: "echo setup",
+    icon: "configure",
+    runOnWorktreeCreate: true,
+    runOnWorktreeDelete: true,
+    singleRun: true,
+  },
+] as const;
+const projectActionsFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      defaultProjectScripts: actionDefaults,
+      projectScriptOverrides: { [ProjectId.make("reset")]: null, [ProjectId.make("empty")]: [] },
+    }),
+    settings: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        defaultProjectScripts: actionDefaults,
+        projectScriptOverrides: { reset: null, empty: [] },
+      }),
+    ),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      projectActionDefaults: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(projectActionsFixturePath) ||
+    NodeFS.readFileSync(projectActionsFixturePath, "utf8") !== projectActionsFixture
+  ) {
+    console.error("[swift-fixtures] projectActions.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(projectActionsFixturePath, projectActionsFixture);

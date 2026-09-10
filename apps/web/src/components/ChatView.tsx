@@ -1,3 +1,4 @@
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { resolveRestingComposerInset } from "./chat/composerRestingState";
@@ -1374,6 +1375,9 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
+  const updateActionSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    reportFailure: false,
+  });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
@@ -2082,8 +2086,17 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
     [activeThread?.environmentId, activeThread?.projectId],
   );
-  const activeProject = useProject(activeProjectRef);
+  const rawActiveProject = useProject(activeProjectRef);
   const serverConfigs = useServerConfigs();
+  const supportsActionDefaults =
+    serverConfigs.get(environmentId)?.environment.capabilities.projectActionDefaults === true;
+  const activeProject = useMemo(
+    () =>
+      rawActiveProject && supportsActionDefaults
+        ? { ...rawActiveProject, scripts: resolveProjectScripts(settings, rawActiveProject) }
+        : rawActiveProject,
+    [rawActiveProject, settings, supportsActionDefaults],
+  );
   const handleNewThreadInActiveProject = useCallback(() => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   }, [activeProjectRef, handleNewThread]);
@@ -3751,14 +3764,21 @@ function ChatViewContent(props: ChatViewProps) {
       keybinding?: string | null;
       keybindingCommand: KeybindingCommand | null;
     }): Promise<AtomCommandResult<void, unknown>> => {
-      const updateResult = mapAtomCommandResult(
-        await updateProject({
-          environmentId,
-          input: {
-            projectId: input.projectId,
-            scripts: input.nextScripts,
-          },
-        }),
+      const updateResult = mapAtomCommandResult<unknown, unknown, void>(
+        supportsActionDefaults
+          ? await updateActionSettings({
+              environmentId,
+              input: {
+                patch: { projectScriptOverrides: { [input.projectId]: input.nextScripts } },
+              },
+            })
+          : await updateProject({
+              environmentId,
+              input: {
+                projectId: input.projectId,
+                scripts: input.nextScripts,
+              },
+            }),
         () => undefined,
       );
       if (updateResult._tag === "Failure") {
@@ -3781,7 +3801,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return updateResult;
     },
-    [environmentId, updateProject, upsertKeybinding],
+    [environmentId, supportsActionDefaults, updateActionSettings, updateProject, upsertKeybinding],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {

@@ -98,9 +98,10 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var path: String
     public var threadCount: Int
     public var defaultSelection: FeatureSelection?
-    /// The project's configured scripts, verbatim from `OrchestrationProject`.
+    /// Effective project actions, including machine defaults and project overrides.
     /// The details sheet lists them as run rows and names ports after the script
     /// that opened them, so a port row without these degrades to "Port 5173".
+    public var scriptsInheritDefaults: Bool?
     public var scripts: [ProjectScript]
     /// `previewUrl` from the project's checked-in `t3.json`.
     ///
@@ -124,6 +125,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         threadCount: Int = 0,
         defaultSelection: FeatureSelection? = nil,
         scripts: [ProjectScript] = [],
+        scriptsInheritDefaults: Bool? = nil,
         previewUrl: String? = nil,
         faviconPath: String? = nil,
         projectIcon: ProjectIconOverride? = nil,
@@ -136,6 +138,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.path = path
         self.threadCount = threadCount
         self.defaultSelection = defaultSelection
+        self.scriptsInheritDefaults = scriptsInheritDefaults
         self.scripts = scripts
         self.previewUrl = previewUrl
         self.faviconPath = faviconPath

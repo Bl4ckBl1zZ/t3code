@@ -10,6 +10,8 @@
     "enableProviderUpdateChecks": true,
     "enableAgentBrowserAccess": true,
     "projectAgentBrowserAccessOverrides": {},
+    "defaultProjectScripts": [],
+    "projectScriptOverrides": {},
     "defaultAutoPull": false,
     "projectAutoPullOverrides": {},
     "backgroundActivity": {

@@ -266,6 +266,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let providerInstances: [String: JSONValue]
     public let providerDefinitions: [String: JSONValue]
     public let defaultModelSelection: ModelSelection?
+    public let defaultProjectScripts: [ProjectScript]
+    public let projectScriptOverrides: [String: [ProjectScript]?]
     public let defaultAutoPull: Bool
     public let projectAgentBrowserAccessOverrides: [String: Bool]
     public let projectAutoPullOverrides: [String: Bool]
@@ -312,6 +314,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         providerInstances: [String: JSONValue] = [:],
         providerDefinitions: [String: JSONValue] = [:],
         defaultModelSelection: ModelSelection? = nil,
+        defaultProjectScripts: [ProjectScript] = [],
+        projectScriptOverrides: [String: [ProjectScript]?] = [:],
         defaultAutoPull: Bool = false,
         projectAutoPullOverrides: [String: Bool] = [:],
         projectAgentBrowserAccessOverrides: [String: Bool] = [:],
@@ -333,6 +337,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
         self.defaultModelSelection = defaultModelSelection
+        self.defaultProjectScripts = defaultProjectScripts
+        self.projectScriptOverrides = projectScriptOverrides
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
@@ -349,9 +355,20 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.defaultThemeSetAt = defaultThemeSetAt
     }
 
+    public func projectScriptsInheritDefaults(projectID: String, legacyScripts: [ProjectScript]) -> Bool {
+        if let override = projectScriptOverrides[projectID] { return override == nil }
+        return legacyScripts.isEmpty
+    }
+
+    public func resolvedProjectScripts(projectID: String, legacyScripts: [ProjectScript]) -> [ProjectScript] {
+        if let override = projectScriptOverrides[projectID] { return override ?? defaultProjectScripts }
+        return legacyScripts.isEmpty ? defaultProjectScripts : legacyScripts
+    }
+
     private enum CodingKeys: String, CodingKey {
         case providerInstances
         case defaultModelSelection
+        case defaultProjectScripts, projectScriptOverrides
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
         case environmentIcon
         case usagePriceOverrides
@@ -381,6 +398,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
         defaultModelSelection = try container.decodeIfPresent(ModelSelection.self, forKey: .defaultModelSelection)
+        defaultProjectScripts = try container.decodeIfPresent([ProjectScript].self, forKey: .defaultProjectScripts) ?? []
+        projectScriptOverrides = try container.decodeIfPresent([String: [ProjectScript]?].self, forKey: .projectScriptOverrides) ?? [:]
         defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
         projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
@@ -426,6 +445,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providerInstances, forKey: .providerInstances)
         try container.encode(defaultModelSelection, forKey: .defaultModelSelection)
+        try container.encode(defaultProjectScripts, forKey: .defaultProjectScripts)
+        try container.encode(projectScriptOverrides, forKey: .projectScriptOverrides)
         try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
         try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
@@ -460,6 +481,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     /// Outer nil omits the field; a present nil restores automatic selection.
     public var defaultModelSelection: ModelSelection??
     public var defaultThreadEnvMode: ServerThreadEnvironmentMode?
+    public var defaultProjectScripts: [ProjectScript]?
+    public var projectScriptOverrides: [String: [ProjectScript]?]?
     public var defaultAutoPull: Bool?
     public var projectAgentBrowserAccessOverrides: [String: Bool?]?
     public var projectAutoPullOverrides: [String: Bool?]?
@@ -479,6 +502,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public init(
         defaultModelSelection: ModelSelection?? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode? = nil,
+        defaultProjectScripts: [ProjectScript]? = nil,
+        projectScriptOverrides: [String: [ProjectScript]?]? = nil,
         defaultAutoPull: Bool? = nil,
         projectAutoPullOverrides: [String: Bool?]? = nil,
         projectAgentBrowserAccessOverrides: [String: Bool?]? = nil,
@@ -492,6 +517,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     ) {
         self.defaultModelSelection = defaultModelSelection
         self.defaultThreadEnvMode = defaultThreadEnvMode
+        self.defaultProjectScripts = defaultProjectScripts
+        self.projectScriptOverrides = projectScriptOverrides
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
@@ -514,6 +541,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
             } else { fields["defaultModelSelection"] = .null }
         }
         if let defaultThreadEnvMode { fields["defaultThreadEnvMode"] = .string(defaultThreadEnvMode.rawValue) }
+        if let defaultProjectScripts { fields["defaultProjectScripts"] = .array(defaultProjectScripts.map(\.json)) }
+        if let projectScriptOverrides { fields["projectScriptOverrides"] = .object(projectScriptOverrides.mapValues { scripts in scripts.map { .array($0.map(\.json)) } ?? .null }) }
         if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
         if let projectAgentBrowserAccessOverrides { fields["projectAgentBrowserAccessOverrides"] = .object(projectAgentBrowserAccessOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }

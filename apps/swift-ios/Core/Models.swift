@@ -57,6 +57,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let fileAttachments: FileAttachments?
         public let assistantCitations: Bool?
         public let customModelDefinitions: Bool?
+        public let projectActionDefaults: Bool?
         public let projectDefaults: Bool?
         public let projectBrowserAccess: Bool?
         public let projectAutoPull: Bool?
@@ -82,6 +83,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadPullRequestsV2
             case attachmentUploads, fileAttachments
             case assistantCitations
+            case projectActionDefaults
             case projectDefaults
             case projectBrowserAccess
             case projectAutoPull
@@ -115,6 +117,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
             fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
             assistantCitations = try container.decodeIfPresent(Bool.self, forKey: .assistantCitations)
+            projectActionDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectActionDefaults)
             projectDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectDefaults)
             projectBrowserAccess = try container.decodeIfPresent(Bool.self, forKey: .projectBrowserAccess)
             projectAutoPull = try container.decodeIfPresent(Bool.self, forKey: .projectAutoPull)
@@ -332,8 +335,25 @@ public struct ProjectScript: Codable, Identifiable, Equatable, Sendable {
     public let command: String
     public let icon: String
     public let runOnWorktreeCreate: Bool
+    public let runOnWorktreeDelete: Bool?
     public let previewUrl: String?
     public let autoOpenPreview: Bool?
+    public let singleRun: Bool?
+
+    public init(id: String, name: String, command: String, icon: String, runOnWorktreeCreate: Bool, runOnWorktreeDelete: Bool? = nil, previewUrl: String? = nil, autoOpenPreview: Bool? = nil, singleRun: Bool? = nil) {
+        self.id = id; self.name = name; self.command = command; self.icon = icon
+        self.runOnWorktreeCreate = runOnWorktreeCreate; self.runOnWorktreeDelete = runOnWorktreeDelete
+        self.previewUrl = previewUrl; self.autoOpenPreview = autoOpenPreview; self.singleRun = singleRun
+    }
+
+    public var json: JSONValue {
+        var fields: [String: JSONValue] = ["id": .string(id), "name": .string(name), "command": .string(command), "icon": .string(icon), "runOnWorktreeCreate": .bool(runOnWorktreeCreate)]
+        if let runOnWorktreeDelete { fields["runOnWorktreeDelete"] = .bool(runOnWorktreeDelete) }
+        if let previewUrl { fields["previewUrl"] = .string(previewUrl) }
+        if let autoOpenPreview { fields["autoOpenPreview"] = .bool(autoOpenPreview) }
+        if let singleRun { fields["singleRun"] = .bool(singleRun) }
+        return .object(fields)
+    }
 }
 
 public struct OrchestrationProject: Codable, Identifiable, Equatable, Sendable {

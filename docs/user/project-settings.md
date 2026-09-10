@@ -55,3 +55,16 @@ On iOS, open **Settings → Project defaults**, select a machine, and choose the
 model or **Local** / **New worktree** workspace. **Use automatic model selection**
 clears the machine's model preference. Your project default and explicit draft
 choices take priority; changing defaults does not change running threads.
+
+## Shared actions
+
+Set **Default actions** in **Settings → Projects → Project defaults** on web or
+desktop. In iOS **Settings → Project defaults**, use **Machine actions**. Actions
+are available to projects that inherit them, and run in the selected checkout or
+worktree. Setup actions run when a worktree is created; teardown actions run before
+it is removed. Each project can have one of each.
+
+Existing project actions keep working. Editing inherited actions creates a project
+override; **Use machine defaults** restores inheritance. Deleting every action from
+a project keeps it empty, even when machine defaults exist. Changing machine actions
+does not rewrite project files. A failed save keeps the editor open for retry.

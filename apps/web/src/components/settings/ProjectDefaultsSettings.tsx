@@ -1,3 +1,4 @@
+import { ProjectDefaultActionsSettings } from "./ProjectDefaultActionsSettings";
 import {
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
@@ -459,6 +460,7 @@ export function ProjectDefaultsSettings({
           }
         />
       </SettingsSection>
+      <ProjectDefaultActionsSettings environmentId={environmentId} />
     </SettingsPageContainer>
   );
 }

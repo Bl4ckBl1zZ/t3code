@@ -10,7 +10,11 @@
  * @module ProjectTeardownScriptRunner
  */
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { projectScriptRuntimeEnv, teardownProjectScript } from "@t3tools/shared/projectScripts";
+import {
+  projectScriptRuntimeEnv,
+  resolveProjectScripts,
+  teardownProjectScript,
+} from "@t3tools/shared/projectScripts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -19,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import { ProcessRunner } from "../processRunner.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const TEARDOWN_SCRIPT_TIMEOUT = Duration.minutes(2);
@@ -45,6 +50,7 @@ export class ProjectTeardownScriptRunner extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
+  const serverSettings = yield* ServerSettingsService;
   const processRunner = yield* ProcessRunner;
   const fileSystem = yield* FileSystem.FileSystem;
 
@@ -58,7 +64,8 @@ export const make = Effect.gen(function* () {
       if (!project) {
         return;
       }
-      const script = teardownProjectScript(project.scripts);
+      const settings = yield* serverSettings.getSettings;
+      const script = teardownProjectScript(resolveProjectScripts(settings, project));
       if (!script) {
         return;
       }

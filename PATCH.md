@@ -1012,3 +1012,16 @@ servers retain their existing fallback. Existing draft reuse and navigation-race
 guards remain fork-owned. Settings → Projects supports project and machine scope,
 with grouped settings rows; project model fan-out checks target catalog availability.
 Shared action defaults are a separate port and are not advertised by this capability.
+
+## Shared project action defaults
+
+Machine actions and sparse project action overrides resolve through the shared
+project-script helper. Missing overrides preserve nonempty legacy/t3.json actions;
+null explicitly inherits machine actions; an empty array disables them. Writes replace
+one array instead of merging removed entries. V2 launch, MCP worktree creation and
+Git PR preparation share the standalone setup runner; fork teardown resolves the
+same settings through ProjectService. No V1 thread query or migration is introduced.
+Web/desktop settings and action controls, and native action editing/execution lists,
+use the effective actions behind `projectActionDefaults`. Inherited actions are never
+written to t3.json. Native preserves teardown and single-run wire flags; its existing
+terminal runner still does not provide desktop single-run toggle semantics.

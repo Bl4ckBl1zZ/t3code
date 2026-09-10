@@ -1,9 +1,19 @@
 {
   "patch": {
-    "defaultAutoPull": true,
-    "projectAutoPullOverrides": {
-      "off": false,
-      "reset": null
+    "defaultProjectScripts": [
+      {
+        "id": "setup",
+        "name": "Setup",
+        "command": "echo setup",
+        "icon": "configure",
+        "runOnWorktreeCreate": true,
+        "runOnWorktreeDelete": true,
+        "singleRun": true
+      }
+    ],
+    "projectScriptOverrides": {
+      "reset": null,
+      "empty": []
     }
   },
   "settings": {
@@ -13,12 +23,23 @@
     "enableProviderUpdateChecks": true,
     "enableAgentBrowserAccess": true,
     "projectAgentBrowserAccessOverrides": {},
-    "defaultProjectScripts": [],
-    "projectScriptOverrides": {},
-    "defaultAutoPull": true,
-    "projectAutoPullOverrides": {
-      "off": false
+    "defaultProjectScripts": [
+      {
+        "id": "setup",
+        "name": "Setup",
+        "command": "echo setup",
+        "icon": "configure",
+        "runOnWorktreeCreate": true,
+        "runOnWorktreeDelete": true,
+        "singleRun": true
+      }
+    ],
+    "projectScriptOverrides": {
+      "reset": null,
+      "empty": []
     },
+    "defaultAutoPull": false,
+    "projectAutoPullOverrides": {},
     "backgroundActivity": {
       "schemaVersion": 1,
       "profile": "balanced",
@@ -117,7 +138,7 @@
     "usagePriceOverrides": {}
   },
   "capabilities": {
-    "projectAutoPull": true,
+    "projectActionDefaults": true,
     "repositoryIdentity": true
   }
 }

@@ -11,6 +11,7 @@ struct SettingsProjectDefaultsView: View {
     private var manager: any FeatureServerSettingsManaging {
         (model.client as? any FeatureServerSettingsManaging) ?? EmptyFeatureServerSettingsManager.shared
     }
+    private var actionsEnabled: Bool { !loading && !saving && config?.environment?.capabilities.projectActionDefaults == true }
     private var defaultsEnabled: Bool { !loading && !saving && config?.environment?.capabilities.projectDefaults == true }
     private var enabled: Bool { !loading && !saving && config?.environment?.capabilities.projectAutoPull == true }
     private var browserEnabled: Bool { !loading && !saving && config?.environment?.capabilities.projectBrowserAccess == true }
@@ -67,6 +68,9 @@ struct SettingsProjectDefaultsView: View {
                     Text("Projects can override browser access. Changes apply when an agent’s next session is prepared.")
                         .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(14)
                 }.disabled(!browserEnabled)
+                SettingsProjectActionsSection(title: "Machine actions", scripts: config?.settings?.defaultProjectScripts ?? [], enabled: actionsEnabled, inherited: false, canReset: !(config?.settings?.defaultProjectScripts.isEmpty ?? true), resetTitle: "Clear default actions") { scripts in
+                    await save(.init(defaultProjectScripts: scripts ?? []))
+                }
                 ThreadDetailsSection(title: "Project overrides") {
                     if projects.isEmpty { Text("No projects on this machine.").padding(14) }
                     ForEach(projects) { project in
@@ -95,6 +99,9 @@ struct SettingsProjectDefaultsView: View {
                                 Text("On").tag("on")
                                 Text("Off").tag("off")
                             }.disabled(!browserEnabled)
+                            SettingsProjectActionsSection(title: "Actions", scripts: config?.settings?.resolvedProjectScripts(projectID: project.wireID ?? project.id, legacyScripts: project.scriptsInheritDefaults == true ? [] : project.scripts) ?? project.scripts, enabled: actionsEnabled, inherited: actionsInherited(project), canReset: !actionsInherited(project)) { scripts in
+                                await save(.init(projectScriptOverrides: [project.wireID ?? project.id: scripts]))
+                            }
                             Text(project.path).font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
                         }.padding(14)
                     }
@@ -109,6 +116,9 @@ struct SettingsProjectDefaultsView: View {
         .task(id: environmentID) { await load() }
     }
 
+    private func actionsInherited(_ project: FeatureProject) -> Bool {
+        project.scriptsInheritDefaults == true
+    }
     private var modelDefault: FeatureSelection? {
         guard let value = config?.settings?.defaultModelSelection else { return nil }
         return FeatureSelection(providerID: value.instanceId, modelID: value.model, options: (value.options ?? []).compactMap { option in
@@ -151,20 +161,23 @@ struct SettingsProjectDefaultsView: View {
             errorMessage = nil
         } catch { if !Task.isCancelled && requestedID == environmentID { errorMessage = error.localizedDescription } }
     }
-    private func save(_ patch: ServerSettingsPatchInput) async {
+    @discardableResult
+    private func save(_ patch: ServerSettingsPatchInput) async -> Bool {
         let isBrowser = patch.projectAgentBrowserAccessOverrides != nil || patch.enableAgentBrowserAccess != nil
+        let isAction = patch.defaultProjectScripts != nil || patch.projectScriptOverrides != nil
         let isDefault = patch.defaultModelSelection != nil || patch.defaultThreadEnvMode != nil
-        guard isDefault ? defaultsEnabled : (isBrowser ? browserEnabled : enabled) else { return }
+        guard isAction ? actionsEnabled : (isDefault ? defaultsEnabled : (isBrowser ? browserEnabled : enabled)) else { return false }
         saving = true
         let requestedID = environmentID
         defer { saving = false }
         do {
             // Recheck the capability before sending a sparse patch to a reconnected server.
             let current = try await manager.providerModelConfiguration(environmentID: requestedID)
-            let supported = isDefault ? current.environment?.capabilities.projectDefaults : (isBrowser ? current.environment?.capabilities.projectBrowserAccess : current.environment?.capabilities.projectAutoPull)
+            let supported = isAction ? current.environment?.capabilities.projectActionDefaults : (isDefault ? current.environment?.capabilities.projectDefaults : (isBrowser ? current.environment?.capabilities.projectBrowserAccess : current.environment?.capabilities.projectAutoPull))
             guard supported == true else { throw FeatureCapabilityUnavailable("Project defaults") }
             try await manager.updateServerSettings(environmentID: requestedID, patch: patch)
             await load()
-        } catch { errorMessage = error.localizedDescription }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 }

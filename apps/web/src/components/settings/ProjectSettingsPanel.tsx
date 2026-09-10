@@ -1,3 +1,9 @@
+import {
+  resolveProjectScripts,
+  projectScriptsInheritDefaults,
+} from "@t3tools/shared/projectScripts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { useProjectScriptSettings } from "./useProjectScriptSettings";
 import { ProjectAutoPullSettings, ProjectBrowserAccessSettings } from "./ProjectBooleanSettings";
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -29,7 +35,6 @@ import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@t3tools/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
-import * as Cause from "effect/Cause";
 import { ChevronDownIcon, CopyIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import {
   useCallback,
@@ -50,15 +55,9 @@ import {
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { shortcutLabelForCommand } from "../../keybindings";
-import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { readLocalApi } from "../../localApi";
-import {
-  buildProjectScript,
-  commandForProjectScript,
-  nextProjectScriptId,
-} from "../../projectScripts";
-import { decodeProjectScriptKeybindingRule } from "../../lib/projectScriptKeybindings";
+import { commandForProjectScript } from "../../projectScripts";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -342,12 +341,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
-  const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
-    reportFailure: false,
-  });
-  const removeKeybinding = useAtomCommand(serverEnvironment.removeKeybinding, {
-    reportFailure: false,
-  });
+
   const projectNameEditedRef = useRef(false);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
@@ -558,12 +552,32 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     serverEnvironment.configValueAtom(selectedCheckout.environmentId),
   );
   const keybindings = selectedServerConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS;
-  const scripts = selectedCheckout.scripts;
+  const scriptSettings = selectedServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
+  const supportsActionDefaults =
+    selectedServerConfig?.environment.capabilities.projectActionDefaults === true;
+  const scripts = supportsActionDefaults
+    ? resolveProjectScripts(scriptSettings, selectedCheckout)
+    : selectedCheckout.scripts;
+  const scriptsInherited =
+    supportsActionDefaults && projectScriptsInheritDefaults(scriptSettings, selectedCheckout);
+  const {
+    saving: isSavingScripts,
+    persist: persistScripts,
+    submit: submitScript,
+  } = useProjectScriptSettings(
+    selectedServerConfig
+      ? [
+          {
+            environmentId: selectedCheckout.environmentId,
+            settings: scriptSettings,
+            keybindings,
+            project: selectedCheckout,
+            supportsDefaults: supportsActionDefaults,
+          },
+        ]
+      : [],
+  );
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
-  // Script writes replace the whole array, so two overlapping writes computed
-  // from the same snapshot would drop each other's changes. One at a time.
-  const [isSavingScripts, setIsSavingScripts] = useState(false);
-  const savingScriptsRef = useRef(false);
   const t3File = useT3ProjectFileState(
     selectedCheckout.environmentId,
     selectedCheckout.workspaceRoot,
@@ -585,135 +599,12 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     [scripts, t3File.scripts],
   );
 
-  const persistScripts = useCallback(
-    async (
-      nextScripts: ReadonlyArray<ReturnType<typeof buildProjectScript>>,
-      keybinding: string | null | undefined,
-      keybindingCommand: ReturnType<typeof commandForProjectScript>,
-    ): Promise<AtomCommandResult<void, unknown>> => {
-      if (savingScriptsRef.current) {
-        return AsyncResult.failure(
-          Cause.fail(new Error("Another script change is still saving. Try again.")),
-        );
-      }
-      savingScriptsRef.current = true;
-      setIsSavingScripts(true);
-      try {
-        // Captured before the write so a cleared or deleted binding can be
-        // removed from the keybindings config afterwards.
-        const previousKeybinding = keybindingValueForCommand(keybindings, keybindingCommand);
-        const updateResult = mapAtomCommandResult(
-          await updateProject({
-            environmentId: selectedCheckout.environmentId,
-            input: { projectId: selectedCheckout.id, scripts: nextScripts },
-          }),
-          () => undefined,
-        );
-        if (updateResult._tag === "Failure") {
-          reportFailure("Failed to save scripts", updateResult);
-          return updateResult;
-        }
-
-        const keybindingRule = decodeProjectScriptKeybindingRule({
-          keybinding,
-          command: keybindingCommand,
-        });
-        if (!isElectron) return updateResult;
-        const environmentIds = [selectedCheckout.environmentId];
-        const previousTarget = previousKeybinding
-          ? decodeProjectScriptKeybindingRule({
-              keybinding: previousKeybinding,
-              command: keybindingCommand,
-            })
-          : null;
-        if (keybindingRule) {
-          // `replace` swaps the command's previous rule instead of appending a
-          // second one that would keep the old shortcut alive.
-          const input =
-            previousTarget && previousTarget.key !== keybindingRule.key
-              ? { ...keybindingRule, replace: previousTarget }
-              : keybindingRule;
-          for (const environmentId of environmentIds) {
-            const result = mapAtomCommandResult(
-              await upsertKeybinding({ environmentId, input }),
-              () => undefined,
-            );
-            if (result._tag === "Failure") {
-              reportFailure("Failed to save keybinding", result);
-              return result;
-            }
-          }
-        } else if (previousTarget) {
-          for (const environmentId of environmentIds) {
-            const result = mapAtomCommandResult(
-              await removeKeybinding({ environmentId, input: previousTarget }),
-              () => undefined,
-            );
-            if (result._tag === "Failure") {
-              reportFailure("Failed to remove keybinding", result);
-              return result;
-            }
-          }
-        }
-        return updateResult;
-      } finally {
-        savingScriptsRef.current = false;
-        setIsSavingScripts(false);
-      }
-    },
-    [
-      keybindings,
-      removeKeybinding,
-      reportFailure,
-      selectedCheckout.environmentId,
-      selectedCheckout.id,
-      updateProject,
-      upsertKeybinding,
-    ],
-  );
-
-  const submitScript = useCallback(
-    async (
-      scriptId: string | null,
-      input: NewProjectScriptInput,
-    ): Promise<AtomCommandResult<void, unknown>> => {
-      if (scriptId === null) {
-        const nextId = nextProjectScriptId(
-          input.name,
-          scripts.map((script) => script.id),
-        );
-        const nextScript = buildProjectScript(nextId, input);
-        const nextScripts = input.runOnWorktreeCreate
-          ? [
-              ...scripts.map((script) =>
-                script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-              ),
-              nextScript,
-            ]
-          : [...scripts, nextScript];
-        return persistScripts(nextScripts, input.keybinding, commandForProjectScript(nextId));
-      }
-
-      const updatedScript = buildProjectScript(scriptId, input);
-      const nextScripts = scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
-      return persistScripts(nextScripts, input.keybinding, commandForProjectScript(scriptId));
-    },
-    [persistScripts, scripts],
-  );
-
-  const deleteScript = useCallback(
-    (scriptId: string) => {
-      const nextScripts = scripts.filter((script) => script.id !== scriptId);
-      void persistScripts(nextScripts, null, commandForProjectScript(scriptId));
-    },
-    [persistScripts, scripts],
-  );
+  const deleteScript = (scriptId: string) =>
+    void persistScripts(
+      (current) => current.filter((script) => script.id !== scriptId),
+      scriptId,
+      null,
+    );
 
   const importFileScript = useCallback(
     async (fileScript: T3ProjectFileScript) => {
@@ -1142,10 +1033,23 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             <div className="min-w-0">
               <h3 className="text-base font-semibold text-foreground">Actions</h3>
               <p className="text-pretty text-sm text-muted-foreground">
-                Saved and run only in {selectedCheckoutLabel}.
+                {scriptsInherited
+                  ? "Inherits this machine’s default actions."
+                  : `Saved for ${selectedCheckoutLabel}.`}{" "}
+                Commands run in this checkout or its worktree.
               </p>
             </div>
             <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0 sm:justify-end">
+              {supportsActionDefaults && !scriptsInherited ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={isSavingScripts}
+                  onClick={() => void persistScripts(() => null)}
+                >
+                  Use machine defaults
+                </Button>
+              ) : null}
               {importableScripts.length > 0 ? (
                 <Menu>
                   <MenuTrigger
