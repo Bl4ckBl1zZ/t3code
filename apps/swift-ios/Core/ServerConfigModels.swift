@@ -440,6 +440,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     /// A present nil entry resets one model. Omitted models are unchanged.
     public var environmentIcon: String??
     public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
+    public var enableHermes: Bool?
     public var enableAgentBrowserAccess: Bool?
     /// Claude's auto-compaction threshold, as the string the server validates:
     /// an integer from 100000 to 1000000, or empty to fall back to Claude's own
@@ -468,6 +469,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
         if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
+        if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }
         if let enableAgentBrowserAccess {
             fields["enableAgentBrowserAccess"] = .bool(enableAgentBrowserAccess)
         }

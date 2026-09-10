@@ -1,17 +1,4 @@
-import {
-  AcpRegistrySettings,
-  ClaudeSettings,
-  CodexSettings,
-  CursorSettings,
-  GrokSettings,
-  HermesAcpSettings,
-  HermesSettings,
-  OpenClawSettings,
-  OpenCodeSettings,
-  ProviderDriverKind,
-  type ProviderInstanceConfig,
-} from "@t3tools/contracts";
-import type * as Schema from "effect/Schema";
+import { type ProviderDriverKind } from "@t3tools/contracts";
 import {
   ACPRegistryIcon,
   ClaudeAI,
@@ -24,159 +11,31 @@ import {
   OpenCodeIcon,
 } from "../Icons";
 
-type ProviderSettingsSchema = {
-  readonly fields: Readonly<Record<string, Schema.Top>>;
-} & Schema.Top;
+import {
+  PROVIDER_SETTINGS_DEFINITIONS,
+  type ProviderSettingsDefinition,
+} from "./providerSettingsDefinitions";
+export type { ProviderEnvironmentFieldDefinition } from "./providerSettingsDefinitions";
 
-/**
- * Browser-safe provider definition. This is deliberately shaped like the
- * future provider package client export: the core web app gets a schema with
- * field annotations plus provider-level presentation metadata, then renders
- * settings generically.
- */
-export interface ProviderClientDefinition {
-  readonly value: ProviderDriverKind;
-  readonly label: string;
+export interface ProviderClientDefinition extends ProviderSettingsDefinition {
   readonly icon: Icon;
-  readonly settingsSchema: ProviderSettingsSchema;
-  readonly environmentFields?: readonly ProviderEnvironmentFieldDefinition[];
-  /** Whether this driver has a built-in default instance backed by legacy settings. */
-  readonly hasDefaultInstance?: boolean;
-  /**
-   * Optional browser-safe default instance for built-in drivers that do not
-   * have a legacy `settings.providers.<kind>` mirror. The settings page shows
-   * this disabled template until the user edits it, at which point it is
-   * promoted into `providerInstances`.
-   */
-  readonly defaultInstance?: ProviderInstanceConfig;
-  /**
-   * Optional short label rendered as a `variant="warning"` badge next to
-   * the instance title. Used to flag drivers that still ship under an
-   * early-access or preview gate — the flag is a property of the driver
-   * kind (not a specific instance), so every instance of that driver —
-   * built-in default or custom — advertises the same marker.
-   */
-  readonly badgeLabel?: string;
 }
-
-export interface ProviderEnvironmentFieldDefinition {
-  readonly name: string;
-  readonly label: string;
-  readonly description?: string;
-  readonly placeholder?: string;
-  readonly sensitive?: boolean;
-}
-
-export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
-  {
-    value: ProviderDriverKind.make("codex"),
-    label: "Codex",
-    icon: OpenAI,
-    settingsSchema: CodexSettings,
-  },
-  {
-    value: ProviderDriverKind.make("claudeAgent"),
-    label: "Claude",
-    icon: ClaudeAI,
-    settingsSchema: ClaudeSettings,
-  },
-  {
-    value: ProviderDriverKind.make("cursor"),
-    label: "Cursor",
-    icon: CursorIcon,
-    settingsSchema: CursorSettings,
-    environmentFields: [
-      {
-        name: "CURSOR_API_KEY",
-        label: "Cursor API key",
-        description: "Required by the Cursor Agent SDK.",
-        placeholder: "Paste API key",
-        sensitive: true,
-      },
-    ],
-  },
-  {
-    value: ProviderDriverKind.make("grok"),
-    label: "Grok",
-    icon: GrokIcon,
-    settingsSchema: GrokSettings,
-  },
-  {
-    value: ProviderDriverKind.make("hermes"),
-    label: "Hermes",
-    icon: HermesIcon,
-    badgeLabel: "Preview",
-    settingsSchema: HermesSettings,
-    defaultInstance: {
-      driver: ProviderDriverKind.make("hermes"),
-      enabled: false,
-      config: {
-        endpoint: "",
-        remoteAccessEnabled: false,
-        profileKey: "default",
-        managedServerEnabled: true,
-        customModels: [],
-        importEnabled: false,
-        mcpEnabled: true,
-        attachmentsEnabled: true,
-        proactiveEnabled: true,
-        voiceEnabled: false,
-      },
-    },
-    environmentFields: [
-      {
-        name: "HERMES_GATEWAY_TOKEN",
-        label: "Hermes gateway token",
-        description:
-          "Shared only with the attached gateway or a Hermes Serve process launched by T3.",
-        placeholder: "Paste gateway token",
-        sensitive: true,
-      },
-    ],
-  },
-  {
-    value: ProviderDriverKind.make("openclaw"),
-    label: "OpenClaw",
-    icon: OpenClawIcon,
-    badgeLabel: "ACP",
-    settingsSchema: OpenClawSettings,
-    defaultInstance: {
-      driver: ProviderDriverKind.make("openclaw"),
-      enabled: false,
-      config: {
-        binaryPath: "openclaw",
-        url: "",
-        tokenFile: "",
-        passwordFile: "",
-        session: "",
-        resetSession: false,
-        customModels: [],
-      },
-    },
-  },
-  {
-    value: ProviderDriverKind.make("hermesAcp"),
-    label: "Hermes in Code",
-    icon: HermesIcon,
-    badgeLabel: "ACP",
-    settingsSchema: HermesAcpSettings,
-    hasDefaultInstance: false,
-  },
-  {
-    value: ProviderDriverKind.make("acpRegistry"),
-    label: "ACP Registry",
-    icon: ACPRegistryIcon,
-    badgeLabel: "V2 Preview",
-    settingsSchema: AcpRegistrySettings,
-    hasDefaultInstance: false,
-  },
-  {
-    value: ProviderDriverKind.make("opencode"),
-    label: "OpenCode",
-    icon: OpenCodeIcon,
-    settingsSchema: OpenCodeSettings,
-  },
-];
+const icons: Record<string, Icon> = {
+  codex: OpenAI,
+  claudeAgent: ClaudeAI,
+  cursor: CursorIcon,
+  grok: GrokIcon,
+  hermes: HermesIcon,
+  openclaw: OpenClawIcon,
+  hermesAcp: HermesIcon,
+  acpRegistry: ACPRegistryIcon,
+  opencode: OpenCodeIcon,
+};
+export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] =
+  PROVIDER_SETTINGS_DEFINITIONS.map((definition) => ({
+    ...definition,
+    icon: icons[definition.value]!,
+  }));
 
 export const PROVIDER_CLIENT_DEFINITION_BY_VALUE: Partial<
   Record<ProviderDriverKind, ProviderClientDefinition>

@@ -95,7 +95,9 @@ jobs:
       - name: Check the generated Swift contract fixture is current
         # The SwiftUI client mirrors packages/contracts by hand, so nothing else
         # makes a contract change fail its build. This is that signal.
-        run: node scripts/generate-swift-contract-fixtures.ts --check
+        run: |
+          node scripts/generate-swift-contract-fixtures.ts --check
+          node scripts/generate-swift-provider-settings.ts --check
 
       - name: Build desktop pipeline
         run: vp run build:desktop

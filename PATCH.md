@@ -804,3 +804,14 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   per new run. A selected linked PR can follow its replacement, but unrelated/manual selections
   win. The setting is searchable, resettable, off by default and restricted to inline desktop
   panels; native/compact clients keep explicit navigation rather than opening modal sheets.
+
+### Native provider account configuration
+
+The native Agents settings support add/edit/disable/remove for provider accounts,
+including server connection fields, account colors and redacted environment credentials.
+`generate-swift-provider-settings.ts` generates the native form catalogue from the same
+pure field annotations and driver definitions as web; CI checks freshness. Native writes
+re-read server settings, preserve unknown fields and other accounts, and reject conflicts
+in edited fields. Built-in account IDs remain stable. The custom-model-definition capability
+conservatively gates this editor on older paired servers, matching the native provider-map
+write boundary. No V1 runtime behavior is introduced.

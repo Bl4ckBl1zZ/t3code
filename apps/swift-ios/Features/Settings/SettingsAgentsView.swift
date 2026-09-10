@@ -1,17 +1,6 @@
 import SwiftUI
 
-/// Server-authoritative provider settings.
-///
-/// Web renders this whole tree from the settings schema's `providerSettingsForm`
-/// annotations; almost none of it is reachable from a phone (binary paths, CLI
-/// launch arguments, config directories), so this screen carries the fields a
-/// person would actually change from one — starting with Claude's
-/// auto-compaction threshold, which is what keeps a long-lived thread from
-/// burning usage on full history.
-///
-/// The write lands on one paired server. Without a connected environment there
-/// is nothing to write to, so the section stays out rather than offering a row
-/// that cannot save — the same rule the Browser section in Integrations follows.
+/// Provider accounts and model settings on the selected paired server.
 public struct SettingsAgentsView: View {
     private let serverSettings: any FeatureServerSettingsManaging
     private let initialEnvironmentID: String?
@@ -70,6 +59,14 @@ public struct SettingsAgentsView: View {
                                     Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(T3Colors.textTertiary)
                                 }.padding(SettingsMetrics.rowPadding).frame(minHeight: T3Metrics.minimumTapTarget)
                             }.buttonStyle(.plain)
+                        }
+                    }
+                    if let environmentID {
+                        SettingsSection(title: "New account") {
+                            NavigationLink {
+                                SettingsProviderAccountView(manager: serverSettings, environmentID: environmentID,
+                                    instanceID: nil, driver: nil, supported: accountsSupported(environmentID)) { await refreshAccounts(environmentID) }
+                            } label: { SettingsNavigationRow(title: "Add provider account", systemImage: "person.crop.circle.badge.plus") }
                         }
                     }
                 }
@@ -154,6 +151,12 @@ public struct SettingsAgentsView: View {
                     if let modelError { SettingsErrorBanner(message: modelError) }
                     Text(provider.message ?? (provider.enabled ? provider.status : "This account is disabled."))
                         .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                    SettingsSection(title: "Account") {
+                        NavigationLink {
+                            SettingsProviderAccountView(manager: serverSettings, environmentID: environmentID,
+                                instanceID: providerID, driver: provider.driver, supported: accountsSupported(environmentID)) { await refreshAccounts(environmentID) }
+                        } label: { SettingsNavigationRow(title: "Configuration", systemImage: "slider.horizontal.3") }
+                    }
                     SettingsSection(title: "Models") {
                         if models.isEmpty { Text("This account has no available built-in models.").padding(SettingsMetrics.rowPadding) }
                         else {
@@ -180,6 +183,20 @@ public struct SettingsAgentsView: View {
                 }.padding(18)
             }.background(T3Colors.background).navigationTitle(provider.displayName ?? provider.driver).navigationBarTitleDisplayMode(.inline)
         } else { ContentUnavailableView("Account unavailable", systemImage: "person.crop.circle.badge.questionmark") }
+    }
+
+    private func accountsSupported(_ environmentID: String) -> Bool {
+        environments.first { $0.id == environmentID }?.supportsCustomModelDefinitions == true
+    }
+
+    private func refreshAccounts(_ environmentID: String) async {
+        do {
+            let config = try await serverSettings.providerModelConfiguration(environmentID: environmentID)
+            guard self.environmentID == environmentID else { return }
+            modelConfiguration = config
+            savedAutoCompact[environmentID] = nil
+            modelError = nil
+        } catch { if self.environmentID == environmentID { modelError = error.localizedDescription } }
     }
 
     private func saveModels(_ providerID: String, hidden: Set<String>, environmentID: String) {
