@@ -1214,3 +1214,42 @@ if (process.argv.includes("--check")) {
 } else {
   NodeFS.writeFileSync(autoPullFixturePath, autoPullFixture);
 }
+
+const browserAccessFixturePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "projectBrowserAccess.json",
+);
+const browserAccessFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      enableAgentBrowserAccess: false,
+      projectAgentBrowserAccessOverrides: {
+        [ProjectId.make("off")]: false,
+        [ProjectId.make("reset")]: null,
+      },
+    }),
+    settings: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        enableAgentBrowserAccess: true,
+        projectAgentBrowserAccessOverrides: { off: false },
+      }),
+    ),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      projectBrowserAccess: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(browserAccessFixturePath) ||
+    NodeFS.readFileSync(browserAccessFixturePath, "utf8") !== browserAccessFixture
+  ) {
+    console.error("[swift-fixtures] projectBrowserAccess.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(browserAccessFixturePath, browserAccessFixture);
+}

@@ -12,6 +12,7 @@ import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
   resolveProjectAutoPull,
+  resolveProjectAgentBrowserAccess,
   extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
   normalizePersistedServerSettingString,
@@ -617,4 +618,27 @@ describe("project automatic pull preferences", () => {
       applyServerSettingsPatch(reset, { defaultAutoPull: true }).projectAutoPullOverrides[b],
     ).toBe(false);
   });
+});
+
+it("project browser overrides are sparse, reversible and preserve an explicit denial", () => {
+  const a = ProjectId.make("a"),
+    b = ProjectId.make("b");
+  const denied = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    projectAgentBrowserAccessOverrides: { [a]: false, [b]: true },
+  });
+  expect(resolveProjectAgentBrowserAccess(denied, a)).toBe(false);
+  expect(resolveProjectAgentBrowserAccess(denied, b)).toBe(true);
+  const reset = applyServerSettingsPatch(denied, {
+    projectAgentBrowserAccessOverrides: { [a]: null },
+    enableAgentBrowserAccess: false,
+  });
+  expect(reset.projectAgentBrowserAccessOverrides).toEqual({ [b]: true });
+  expect(resolveProjectAgentBrowserAccess(reset, a)).toBe(false);
+  expect(resolveProjectAgentBrowserAccess(reset, b)).toBe(true);
+  expect(
+    resolveProjectAgentBrowserAccess(
+      applyServerSettingsPatch(reset, { enableAgentBrowserAccess: true }),
+      a,
+    ),
+  ).toBe(true);
 });

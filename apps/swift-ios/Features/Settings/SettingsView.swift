@@ -121,7 +121,7 @@ public struct SettingsView: View {
             }
             .sheet(isPresented: $showingProjectDefaults) {
                 NavigationStack {
-                    SettingsProjectAutoPullView(model: model)
+                    SettingsProjectDefaultsView(model: model)
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingProjectDefaults = false } } }
                 }
             }
@@ -468,7 +468,7 @@ public struct SettingsView: View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
                 Button { showingProjectDefaults = true } label: {
-                    SettingsNavigationRow(title: "Automatic project pulls", systemImage: "arrow.down.circle")
+                    SettingsNavigationRow(title: "Project defaults", systemImage: "arrow.down.circle")
                 }.buttonStyle(.plain)
                 settingsDivider
 

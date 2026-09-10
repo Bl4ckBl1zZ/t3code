@@ -21,6 +21,15 @@ import {
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
 
+export function resolveProjectAgentBrowserAccess(
+  settings: Pick<ServerSettings, "enableAgentBrowserAccess" | "projectAgentBrowserAccessOverrides">,
+  projectId: ProjectId,
+): boolean {
+  return (
+    settings.projectAgentBrowserAccessOverrides[projectId] ?? settings.enableAgentBrowserAccess
+  );
+}
+
 /** Explicit project choices override the environment default; null patches restore inheritance. */
 export function resolveProjectAutoPull(
   settings: Pick<ServerSettings, "defaultAutoPull" | "projectAutoPullOverrides">,
@@ -143,6 +152,7 @@ export function applyServerSettingsPatch(
     backgroundActivity,
     usagePriceOverrides: pricePatch,
     projectAutoPullOverrides: autoPullPatch,
+    projectAgentBrowserAccessOverrides: browserAccessPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -191,10 +201,16 @@ export function applyServerSettingsPatch(
     if (enabled === null) delete projectAutoPullOverrides[projectId as ProjectId];
     else projectAutoPullOverrides[projectId as ProjectId] = enabled;
   }
+  const projectAgentBrowserAccessOverrides = { ...current.projectAgentBrowserAccessOverrides };
+  for (const [projectId, enabled] of Object.entries(browserAccessPatch ?? {})) {
+    if (enabled === null) delete projectAgentBrowserAccessOverrides[projectId as ProjectId];
+    else projectAgentBrowserAccessOverrides[projectId as ProjectId] = enabled;
+  }
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
     projectAutoPullOverrides,
+    projectAgentBrowserAccessOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

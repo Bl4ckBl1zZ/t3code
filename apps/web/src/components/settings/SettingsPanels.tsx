@@ -1,4 +1,4 @@
-import { ProjectAutoPullSettings } from "./ProjectAutoPullSettings";
+import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { type EnvironmentId } from "@t3tools/contracts";
 import { useEnvironments } from "../../state/environments";

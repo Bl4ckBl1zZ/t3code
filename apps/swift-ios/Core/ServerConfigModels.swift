@@ -266,6 +266,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let providerInstances: [String: JSONValue]
     public let providerDefinitions: [String: JSONValue]
     public let defaultAutoPull: Bool
+    public let projectAgentBrowserAccessOverrides: [String: Bool]
     public let projectAutoPullOverrides: [String: Bool]
     public let environmentIcon: String?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
@@ -311,6 +312,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         providerDefinitions: [String: JSONValue] = [:],
         defaultAutoPull: Bool = false,
         projectAutoPullOverrides: [String: Bool] = [:],
+        projectAgentBrowserAccessOverrides: [String: Bool] = [:],
         environmentIcon: String? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
@@ -329,6 +331,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
         self.defaultAutoPull = defaultAutoPull
+        self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
         self.environmentIcon = environmentIcon
         self.usagePriceOverrides = usagePriceOverrides
@@ -345,7 +348,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case providerInstances
-        case defaultAutoPull, projectAutoPullOverrides
+        case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
         case environmentIcon
         case usagePriceOverrides
         case defaultThreadEnvMode
@@ -374,6 +377,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
         defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
+        projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
@@ -417,6 +421,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providerInstances, forKey: .providerInstances)
         try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
+        try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
@@ -447,6 +452,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var defaultAutoPull: Bool?
+    public var projectAgentBrowserAccessOverrides: [String: Bool?]?
     public var projectAutoPullOverrides: [String: Bool?]?
     public var providerInstances: [String: JSONValue]?
     public var customModelsByDriver: [String: [JSONValue]]?
@@ -464,6 +470,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public init(
         defaultAutoPull: Bool? = nil,
         projectAutoPullOverrides: [String: Bool?]? = nil,
+        projectAgentBrowserAccessOverrides: [String: Bool?]? = nil,
         providerInstances: [String: JSONValue]? = nil,
         customModelsByDriver: [String: [JSONValue]]? = nil,
         environmentIcon: String?? = nil,
@@ -473,6 +480,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
         self.defaultAutoPull = defaultAutoPull
+        self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
         self.providerInstances = providerInstances
         self.customModelsByDriver = customModelsByDriver
@@ -486,6 +494,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
         if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
+        if let projectAgentBrowserAccessOverrides { fields["projectAgentBrowserAccessOverrides"] = .object(projectAgentBrowserAccessOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
         if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }

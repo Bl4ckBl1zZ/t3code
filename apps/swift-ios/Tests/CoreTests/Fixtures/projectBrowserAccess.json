@@ -1,7 +1,7 @@
 {
   "patch": {
-    "defaultAutoPull": true,
-    "projectAutoPullOverrides": {
+    "enableAgentBrowserAccess": false,
+    "projectAgentBrowserAccessOverrides": {
       "off": false,
       "reset": null
     }
@@ -12,11 +12,11 @@
     "enableRemoteHermes": false,
     "enableProviderUpdateChecks": true,
     "enableAgentBrowserAccess": true,
-    "projectAgentBrowserAccessOverrides": {},
-    "defaultAutoPull": true,
-    "projectAutoPullOverrides": {
+    "projectAgentBrowserAccessOverrides": {
       "off": false
     },
+    "defaultAutoPull": false,
+    "projectAutoPullOverrides": {},
     "backgroundActivity": {
       "schemaVersion": 1,
       "profile": "balanced",
@@ -114,7 +114,7 @@
     "usagePriceOverrides": {}
   },
   "capabilities": {
-    "projectAutoPull": true,
+    "projectBrowserAccess": true,
     "repositoryIdentity": true
   }
 }

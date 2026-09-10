@@ -27,8 +27,19 @@ per-project choice in project settings. **Machine default** restores inheritance
 **Off** remains off even when the default is on. Group changes apply to its
 checkouts on connected, supported machines. Offline machines retain their settings.
 
-On iOS, open **Settings → Automatic project pulls**, choose a machine, and change
+On iOS, open **Settings → Project defaults**, choose a machine, and change
 its default or individual project overrides. The choices are shared with other
 clients connected to that machine. Background refreshes respect the machine’s
 background activity policy; an explicit source-control refresh also checks for a
 pull. Enabled projects are also refreshed once when the server starts. The default is off.
+
+## Project browser access
+
+In project settings, **Agent browser access** can be **On**, **Off**, or
+**Machine default**. The project choice overrides the machine’s browser-access
+setting. On iOS, **Settings → Project defaults** contains both the machine default
+and project overrides. Choose **Machine default** to remove an override.
+
+Changes take effect when an agent’s next session is prepared. Turning access off
+withholds its browser tools while preserving its conversation and workspace tools.
+Your own browser panel remains available.

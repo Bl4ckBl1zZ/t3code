@@ -164,6 +164,7 @@ export const make = Effect.gen(function* () {
       customModelDefinitions: true,
       projectIcons: true,
       agentSessionImport: true,
+      projectBrowserAccess: true,
       projectAutoPull: true,
       fileDocumentPreviews: true,
       providerTerminalEnvironment: true,

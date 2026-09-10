@@ -991,3 +991,13 @@ on/off/inherit, guarded by `projectAutoPull` on older servers. Upstream's turn-e
 PR refresh and discovery remain separate ports. Startup refreshes enabled projects
 once after managed-update activation and before the V2 effect worker drains recovered
 provider work; no checkout mutation runs in an uncommitted update trial.
+
+## Project browser access overrides
+
+Upstream project-scoped agent browser access resolves through V2 thread shells and
+fresh server settings. Missing project identity or unreadable settings cannot bypass
+an override. The session manager receives a thread-scoped policy and retains its MCP
+credential reuse/rotation checks; only preview access changes. No V1 ProviderService
+or snapshot query is imported. Sparse null patches restore inheritance. Web/desktop
+project settings and Swift Project defaults expose on/off/inherit, guarded by
+`projectBrowserAccess`; the machine-wide preference is preserved.
