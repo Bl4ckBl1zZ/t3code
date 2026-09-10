@@ -1,3 +1,4 @@
+import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
   type EnvironmentId,
   type MessageId,
@@ -159,6 +160,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   threadRef: ScopedThreadRef | null;
@@ -214,6 +216,7 @@ const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
@@ -268,6 +271,7 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  onUseArtifactTemplate,
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
@@ -534,6 +538,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenWorkspaceFile,
       onCopyWorkspacePath,
+      onUseArtifactTemplate,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -558,6 +563,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenWorkspaceFile,
       onCopyWorkspacePath,
+      onUseArtifactTemplate,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -1417,6 +1423,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     <>
       <div className="relative min-w-0 px-1 py-0.5">
         <ChatMarkdown
+          onUseArtifactTemplate={ctx.onUseArtifactTemplate}
           text={messageText}
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
@@ -1885,6 +1892,7 @@ function V2EventTimelineRow({
           {presentation.detail ? (
             <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
               <ChatMarkdown
+                onUseArtifactTemplate={ctx.onUseArtifactTemplate}
                 text={presentation.detail}
                 cwd={ctx.markdownCwd}
                 threadRef={ctx.threadRef ?? undefined}
@@ -2370,6 +2378,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         {leadingWhitespace ? <span aria-hidden="true">{leadingWhitespace}</span> : null}
         {content ? (
           <ChatMarkdown
+            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
             text={content}
             cwd={props.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
@@ -2393,6 +2402,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             segment.text.trim().length > 0 ? (
               <div key={segment.id} className="wrap-break-word">
                 <ChatMarkdown
+                  onUseArtifactTemplate={ctx.onUseArtifactTemplate}
                   text={segment.text.trim()}
                   cwd={props.markdownCwd}
                   threadRef={ctx.threadRef ?? undefined}
@@ -2481,6 +2491,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     if (props.text.length > 0) {
       inlineNodes.push(
         <ChatMarkdown
+          onUseArtifactTemplate={ctx.onUseArtifactTemplate}
           key="user-message-terminal-context-inline-text"
           text={props.text}
           cwd={props.markdownCwd}
@@ -2508,6 +2519,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
   return (
     <ChatMarkdown
+      onUseArtifactTemplate={ctx.onUseArtifactTemplate}
       text={props.text}
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
@@ -2544,6 +2556,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
       )}
       {fenceLanguage !== "diff" && comment.diff.trim().length > 0 && (
         <ChatMarkdown
+          onUseArtifactTemplate={ctx.onUseArtifactTemplate}
           text={formatReviewCommentFence(fenceLanguage, comment.diff)}
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}

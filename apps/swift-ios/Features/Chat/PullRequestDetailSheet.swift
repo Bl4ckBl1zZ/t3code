@@ -138,8 +138,8 @@ struct PullRequestDetailSheet: View {
                         action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "merge", mergeMethods: capabilities.mergeMethods) })
                 }
                 if stack.layers.last?.number == displayedNumber,
-                   capabilities.actions.contains("update-branch"), viewer.actions.contains("update-branch"),
-                   capabilities.updateMethods?.contains("rebase") == true, viewer.updateMethods?.contains("rebase") == true {
+                   capabilities.actions.contains("update-branch"), viewer.stackRebase == true,
+                   capabilities.updateMethods?.contains("rebase") == true {
                     ThreadDetailsRow(systemImage: "arrow.triangle.branch", title: "Review stack rebase…",
                         action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "update-branch", mergeMethods: []) })
                 }

@@ -1,3 +1,4 @@
+import { PullRequestStackControl } from "./PullRequestStackControl";
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -1298,6 +1299,22 @@ export function PullRequestDetailPanel({
           </div>
         </div>
         <div className="mr-4 flex h-7 min-w-0 flex-nowrap items-center justify-end gap-1">
+          {detail ? (
+            <PullRequestStackControl
+              key={pullRequestKey}
+              environmentId={environmentId}
+              reference={reference}
+              detail={detail}
+              disabled={actionPending}
+              {...(composerDraftTarget && typeof composerDraftTarget !== "string"
+                ? { threadRef: composerDraftTarget }
+                : {})}
+              onActed={() => {
+                void refreshFromHost();
+                onActed?.();
+              }}
+            />
+          ) : null}
           {detail ? (
             <>
               {/* Checking a pull request out is the reason to open one here at all, so it is a

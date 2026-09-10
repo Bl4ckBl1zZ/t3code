@@ -1,3 +1,4 @@
+import { canonicalRepositoryKey } from "@t3tools/shared/sourceControl";
 import type {
   EnvironmentId,
   LocalApi,
@@ -228,8 +229,8 @@ export function findProjectForChangeRequest(
       (identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
     return (
       repository !== null &&
-      repository.toLowerCase() === link.repository.toLowerCase() &&
-      pullRequestHostOf(identity, kind) === link.host.toLowerCase()
+      canonicalRepositoryKey(`${pullRequestHostOf(identity, kind)}/${repository}`.toLowerCase()) ===
+        canonicalRepositoryKey(`${link.host}/${link.repository}`.toLowerCase())
     );
   });
 }

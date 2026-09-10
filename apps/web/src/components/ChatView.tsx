@@ -1,4 +1,9 @@
 import {
+  appendCodexArtifactTemplateUsePrompt,
+  type CodexArtifactTemplate,
+} from "@t3tools/client-runtime/codex-artifact-templates";
+import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
+import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type EnvironmentId,
@@ -3213,6 +3218,25 @@ function ChatViewContent(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const useArtifactTemplate = useCallback(
+    (template: CodexArtifactTemplate) => {
+      const composer = composerRef.current;
+      if (!composer) return;
+      const current = composer.getSendContext().prompt;
+      const next = appendCodexArtifactTemplateUsePrompt(current, template);
+      if (next !== current && !composer.insertTextAtEnd(next.slice(current.length))) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add template",
+          description: "The composer is busy. Try again once it is ready.",
+        });
+        return;
+      }
+      scheduleComposerFocus();
+    },
+    [composerRef, scheduleComposerFocus],
+  );
+
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       composerRef.current?.addTerminalContext(selection);
@@ -7499,6 +7523,7 @@ function ChatViewContent(props: ChatViewProps) {
               ? panelLayoutControls
               : null}
           <ChatHeader
+            threadRef={activeThreadRef}
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadTitle={activeThread.title}
             activeProjectName={activeProject?.title}
@@ -7509,6 +7534,7 @@ function ChatViewContent(props: ChatViewProps) {
           />
         </WorkspacePageHeader>
 
+        <LinkPullRequestDialogHost />
         <ThreadErrorBanner
           error={visibleThreadError}
           onDismiss={() => {
@@ -7556,6 +7582,7 @@ function ChatViewContent(props: ChatViewProps) {
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
+                onUseArtifactTemplate={useArtifactTemplate}
                 key={activeThread.id}
                 isWorking={isWorking}
                 activeTurnInProgress={isWorking || !latestRunSettled}

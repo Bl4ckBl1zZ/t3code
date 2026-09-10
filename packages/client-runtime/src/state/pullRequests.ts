@@ -98,6 +98,17 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       staleTimeMs: 15_000,
     }),
     activity,
+    stack: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:stack",
+      tag: WS_METHODS.pullRequestsStack,
+      staleTimeMs: 15_000,
+    }),
+    readDetail: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:read-detail",
+      tag: WS_METHODS.pullRequestsDetail,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     threadComments: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:thread-comments",
       tag: WS_METHODS.pullRequestsThreadComments,

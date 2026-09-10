@@ -3488,3 +3488,50 @@ it.effect("returns no stack and refuses stack mutations on unsupported hosts", (
     assert.equal(calls, 0);
   }),
 );
+
+it.effect("authorizes stack rebases separately from single-branch behind status", () =>
+  Effect.gen(function* () {
+    let stackRebase = true;
+    let taken = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            ...fakeProvider("github").capabilities,
+            actions: ["update-branch"],
+            updateMethods: ["rebase"],
+          },
+          getStack: () => Effect.succeed(null),
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: [],
+              stackRebase,
+              comment: true,
+              resolve: false,
+              verdicts: [],
+              requestReviewers: false,
+            }),
+          runAction: () =>
+            Effect.sync(() => {
+              taken++;
+            }),
+        }),
+      ],
+    });
+    const input = {
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 3,
+      action: "update-branch" as const,
+      updateMethod: "rebase" as const,
+      stackNumber: 50,
+      expectedStackHeads: [{ number: 3, headSha: "ccc" }],
+    };
+    yield* service.runAction(input);
+    assert.equal(taken, 1);
+    stackRebase = false;
+    assert.equal((yield* Effect.flip(service.runAction(input)))._tag, "PullRequestOperationError");
+    assert.equal(taken, 1);
+  }),
+);

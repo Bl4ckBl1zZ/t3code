@@ -52,3 +52,7 @@ and files, and the copy control beside a file heading to copy its path.
 The sidebar project filter supports searching project names. Open a project's settings
 from its gear button or with Shift+F10 while the project is highlighted. Desktop nightly
 release notes open on hover or keyboard focus; Tab reaches their full-release links.
+
+Codex file citations open the referenced file and line. Artifact-template results appear
+as cards on web, desktop, and iOS. Choose **Use template** to add a prompt to the
+composer, then edit and send it when ready.

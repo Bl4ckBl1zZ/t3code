@@ -464,6 +464,14 @@ public struct ThreadDetailView: View {
                     onOpenFile: openFile,
                     onOpenURL: { openURL($0) },
                     onOpenDiff: openDiff,
+                    onUseTemplate: { template in
+                        guard !isSending else { return }
+                        let prompt = template.prompt
+                        if !draft.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(prompt) {
+                            draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + prompt
+                        }
+                        composerFocused = true
+                    },
                     navigationRequest: turnNavigationRequest
                 )
                 // Container only: the transcript runs on under the glass
@@ -1630,6 +1638,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
+    var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var navigationRequest: Int = 0
 
     func makeCoordinator() -> Coordinator {
@@ -1690,7 +1699,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenThread: onOpenThread,
                 onOpenFile: onOpenFile,
                 onOpenURL: onOpenURL,
-                onOpenDiff: onOpenDiff
+                onOpenDiff: onOpenDiff,
+                onUseTemplate: onUseTemplate
             ),
             onLoadEarlier: onLoadEarlier,
             onDismissKeyboard: onDismissKeyboard,
@@ -1754,6 +1764,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
             var onOpenURL: (URL) -> Void = { _ in }
             var onOpenDiff: (String, String?) -> Void = { _, _ in }
+            var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
@@ -1848,6 +1859,14 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .id(entryID)
                     .environment(\.markdownMediaContext, context.markdownMedia)
                     .environment(\.markdownPullRequestContext, context.pullRequests)
+                    .environment(\.markdownTemplateAction, context.onUseTemplate)
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard let target = CodexMarkdownDirectives.fileTarget(url) else { return .systemAction }
+                        let root = context.workspaceRoot.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+                        let path = root.map { target.path.hasPrefix($0) ? String(target.path.dropFirst($0.count)) : target.path } ?? target.path
+                        context.onOpenFile(ThreadActivityFileOpenRequest(relativePath: path, line: target.line))
+                        return .handled
+                    })
                 }
                 .margins(.all, 0)
                 cell.backgroundConfiguration = UIBackgroundConfiguration.clear()

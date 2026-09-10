@@ -302,6 +302,10 @@
     "./favicon": {
       "types": "./src/favicon.ts",
       "import": "./src/favicon.ts"
+    },
+    "./changeRequestUrl": {
+      "types": "./src/changeRequestUrl.ts",
+      "import": "./src/changeRequestUrl.ts"
     }
   },
   "scripts": {

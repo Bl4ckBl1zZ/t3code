@@ -62,12 +62,12 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   file-attachment model (`bcb855a633`: a `files` array beside `images`, `composerFileNeedsReattach`,
   per-chip upload progress) is likewise not carried — the fork's composer already models
   image/file/pdf/video in one `images` array with its own upload queue.
-- Does not carry upstream's Codex citations and artifact templates in web chat (`c1e70b5f8c`).
-  The shared halves are carried and exported from `@t3tools/client-runtime`
-  (`codexFileCitations`, `codexArtifactTemplates`, `codexMarkdownDirectives`), but the renderer
-  half is written against upstream's inline `useMemo` component map, while the fork builds its
-  through `createChatMarkdownComponents` and keeps the `MarkdownMedia` image path. The
-  client-runtime modules stay so a later port has them; they have no fork consumer yet.
+- Codex file citations and artifact-template cards are now ported to web's stable
+  `createChatMarkdownComponents` wrappers, preserving the fork's MarkdownMedia/HTML embed paths.
+  Swift parses the two directives inside its existing block/inline render cache, routes cited
+  files into the native file viewer, and offers template prompts through the composer. Invalid
+  directives remain literal and code blocks are not interpreted as directives.
+
 - Does not carry upstream's provider-settings list/editor split (`e2d4d12a81`, `f276e632c5`,
   `5e63aea2df`) or its `ProviderInstanceCard` `mode: "list" | "editor"` restructure. The fork keeps
   `EnvironmentProviderSettings` inline in `SettingsPanels.tsx` with the card's own expand/collapse.
@@ -392,7 +392,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     `pullRequests.stack` and `pullRequestStackActions`. The standalone GitHub action implementation
     retains reviewed-head checks, per-branch permissions, partial-rebase reporting and remote-only
     operations. Confirmation holds the reviewed stack immutable; mutations invalidate every
-    reviewed PR's cached reads even after partial failure. Web/Expo stack controls remain unported.
+    reviewed PR's cached reads even after partial failure. Web stack controls now use the same V2 endpoint. Expo stack controls remain unported.
   - Restart-persistent PR summary/stack reads (`33242d0164`) remain excluded. Stack reads are
     on demand; the earlier V2 background PR-discovery/summary service is still missing. Carry a
     durable read cache with that service, including expiry and mutation/in-flight invalidation.
@@ -605,3 +605,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - Desktop release notes use the upstream focusable popover and bounded newest-first excerpts.
   Omission counts cross IPC as optional fields for older consumers. Links point at the fork's
   release feed, and the fork's automatic download/install state machine remains intact.
+
+- Web/desktop now edit explicit PR collections through V2 `linkPullRequest` /
+  `unlinkPullRequest`, including command-palette entry and cross-project links resolved within
+  the same environment. A host read validates additions; unlinking uses the saved identity
+  without requiring the host or project to remain available. Stack detail controls use the
+  native parity RPC and capture immutable reviewed heads before submitting merge/rebase.
+  Automatic discovery, source/tombstone metadata and persistent PR caches remain separate ports.

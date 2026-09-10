@@ -1,4 +1,5 @@
-import { type EnvironmentId } from "@t3tools/contracts";
+import { ThreadPullRequestsControl } from "../pullRequest/ThreadPullRequestsControl";
+import { type EnvironmentId, type ScopedThreadRef } from "@t3tools/contracts";
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";
@@ -6,6 +7,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface ChatHeaderProps {
+  threadRef: ScopedThreadRef | null;
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
@@ -16,6 +18,7 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader = memo(function ChatHeader({
+  threadRef,
   activeThreadEnvironmentId,
   activeThreadTitle,
   activeProjectName,
@@ -77,6 +80,7 @@ export const ChatHeader = memo(function ChatHeader({
           <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
         </Tooltip>
       </div>
+      {threadRef ? <ThreadPullRequestsControl threadRef={threadRef} /> : null}
     </div>
   );
 });

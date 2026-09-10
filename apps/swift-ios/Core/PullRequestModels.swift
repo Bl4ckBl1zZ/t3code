@@ -179,6 +179,7 @@ public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestViewerPermissions: Codable, Equatable, Sendable {
+    public let stackRebase: Bool?
     public let actions: [String]
     public let updateMethods: [String]?
 }

@@ -1,4 +1,4 @@
-# Linked pull requests on iOS
+# Linked pull requests
 
 Open a task's Details, then Version Control → Linked pull requests. Add a PR number
 or paste its URL to link a request from the task's repository. Add more requests
@@ -19,3 +19,13 @@ If a stack changed since you reviewed it, refresh before retrying. A rebase can
 stop after updating earlier layers; those completed updates remain on GitHub.
 If GitHub reports that a merge is still running, check its status before submitting
 another request. Stack controls require a server and host that support them.
+
+On web and desktop, the link button beside the thread title lists all linked requests.
+Choose **Link** there or **Link pull request** in the command palette. Bare numbers
+use the current project's repository; a full URL can link another repository with a
+readable project in the same environment. Unlinking removes the association without
+changing the request on its host.
+
+In GitHub PR details, open **Stack** to browse layers, refresh their state, or review
+a merge/rebase. The confirmation captures the revisions you reviewed. A failure
+requires closing and refreshing before another attempt.

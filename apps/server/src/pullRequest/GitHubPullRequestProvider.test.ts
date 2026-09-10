@@ -24,6 +24,7 @@ describe("gitHubViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      stackRebase: true,
     });
   });
 

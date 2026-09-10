@@ -1,5 +1,7 @@
 "use client";
 
+import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
+
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   canCreateProjectInEnvironment,
@@ -1528,6 +1530,22 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (
+    activeThread &&
+    serverConfigs.get(activeThread.environmentId)?.environment.capabilities.threadPullRequestsV2 ===
+      true
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:link-pull-request",
+      title: "Link pull request",
+      searchTerms: ["link", "pull request", "merge request", "pr", "thread"],
+      icon: <LinkIcon className={ITEM_ICON_CLASS} />,
+      run: async () =>
+        openLinkPullRequestDialog(scopeThreadRef(activeThread.environmentId, activeThread.id)),
+    });
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

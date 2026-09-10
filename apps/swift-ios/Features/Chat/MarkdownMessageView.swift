@@ -266,6 +266,9 @@ private struct MarkdownBlockView: View, Equatable {
         case let .htmlEmbed(html):
             HtmlEmbedView(html: html)
 
+        case let .artifactTemplate(template):
+            NativeArtifactTemplateCard(template: template)
+
         case .thematicBreak:
             Rectangle()
                 .fill(T3Colors.separator)
@@ -604,5 +607,35 @@ enum MarkdownGallery {
             default: []
             }
         }
+    }
+}
+
+private struct MarkdownTemplateActionKey: EnvironmentKey {
+    static let defaultValue: ((CodexArtifactTemplate) -> Void)? = nil
+}
+extension EnvironmentValues {
+    var markdownTemplateAction: ((CodexArtifactTemplate) -> Void)? {
+        get { self[MarkdownTemplateActionKey.self] }
+        set { self[MarkdownTemplateActionKey.self] = newValue }
+    }
+}
+
+private struct NativeArtifactTemplateCard: View {
+    let template: CodexArtifactTemplate
+    @SwiftUI.Environment(\.markdownTemplateAction) private var useTemplate
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.badge.gearshape").font(.title2).foregroundStyle(T3Colors.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(template.displayName).font(T3Typography.supportingStrong)
+                Text(template.label).font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            if let useTemplate {
+                Button("Use template") { useTemplate(template) }.buttonStyle(.bordered).font(T3Typography.supporting)
+            }
+        }
+        .padding(12).background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(T3Colors.border, lineWidth: 1))
+        .accessibilityElement(children: .contain)
     }
 }

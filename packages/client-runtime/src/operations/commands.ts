@@ -123,6 +123,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly clearTimeline?: true;
   /** Absent leaves the link alone; null unlinks. */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
+  readonly linkPullRequest?: ThreadLinkedPullRequest;
+  readonly unlinkPullRequest?: ThreadLinkedPullRequest;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -525,7 +527,9 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.pinned !== undefined ||
       input.workInboxRole !== undefined ||
       input.clearTimeline !== undefined ||
-      input.linkedPullRequest !== undefined
+      input.linkedPullRequest !== undefined ||
+      input.linkPullRequest !== undefined ||
+      input.unlinkPullRequest !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
@@ -541,6 +545,10 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
+        ...(input.linkPullRequest === undefined ? {} : { linkPullRequest: input.linkPullRequest }),
+        ...(input.unlinkPullRequest === undefined
+          ? {}
+          : { unlinkPullRequest: input.unlinkPullRequest }),
       });
     }
     if (input.modelSelection !== undefined) {

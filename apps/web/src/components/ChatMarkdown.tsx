@@ -1,3 +1,11 @@
+import { CodexArtifactTemplateCard } from "./CodexArtifactTemplateCard";
+import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import {
+  CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
+  artifactTemplateFromHastProperties,
+  remarkCodexDirectives,
+  renderCodexFileCitationsAsMarkdown,
+} from "@t3tools/client-runtime/codex-markdown-directives";
 import { useAtomValue } from "@effect/atom-react";
 import {
   CheckIcon,
@@ -138,6 +146,7 @@ import {
 } from "../browser/openFileInPreview";
 
 interface ChatMarkdownProps {
+  onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
@@ -246,6 +255,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     video: ["src", "controls", "muted", "loop", "playsInline", "poster", "preload"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
+    div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
   },
   protocols: {
     ...defaultSchema.protocols,
@@ -258,6 +268,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
+  remarkCodexDirectives,
   remarkPreserveCodeMeta,
   remarkNormalizeLinksAndTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
@@ -266,6 +277,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
+  remarkCodexDirectives,
   remarkBreaks,
   remarkPreserveCodeMeta,
   remarkNormalizeLinksAndTagInlineCode,
@@ -1615,6 +1627,7 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly onUseArtifactTemplate: ChatMarkdownProps["onUseArtifactTemplate"];
   readonly text: string;
   readonly cwd: string | undefined;
   readonly inlineCodeFileLinkMetaByText: ReadonlyMap<string, MarkdownFileLinkMeta>;
@@ -1662,6 +1675,7 @@ interface ChatMarkdownComponentsContext {
 const ChatMarkdownComponentsImplContext = React.createContext<Components | null>(null);
 
 const CHAT_MARKDOWN_COMPONENT_TAGS = [
+  "div",
   "p",
   "blockquote",
   "li",
@@ -1774,6 +1788,14 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
   };
 
   return {
+    div({ node, children, ...props }) {
+      const template = artifactTemplateFromHastProperties(node?.properties);
+      return template ? (
+        <CodexArtifactTemplateCard template={template} onUse={context.onUseArtifactTemplate} />
+      ) : (
+        <div {...props}>{children}</div>
+      );
+    },
     p({ node: _node, children, ...props }) {
       return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
     },
@@ -2070,6 +2092,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
 }
 
 function ChatMarkdown({
+  onUseArtifactTemplate,
   text,
   cwd,
   threadRef,
@@ -2144,7 +2167,7 @@ function ChatMarkdown({
       string,
       NonNullable<ReturnType<typeof resolveMarkdownFileLinkMeta>>
     >();
-    for (const href of extractMarkdownLinkHrefs(text)) {
+    for (const href of extractMarkdownLinkHrefs(renderCodexFileCitationsAsMarkdown(text))) {
       const normalizedHref = normalizeMarkdownLinkHrefKey(href);
       if (metaByHref.has(normalizedHref)) continue;
       const meta = resolveMarkdownFileLinkMeta(normalizedHref, cwd);
@@ -2334,6 +2357,7 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        onUseArtifactTemplate,
         text,
         cwd,
         inlineCodeFileLinkMetaByText,
@@ -2366,6 +2390,7 @@ function ChatMarkdown({
       isStreaming,
       markdownFileLinkMetaByHref,
       onTaskListChange,
+      onUseArtifactTemplate,
       openFileInPanel,
       openInPreferredEditor,
       openExternalLinkInPreview,
