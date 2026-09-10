@@ -1284,6 +1284,7 @@ struct HomeThreadRowContext: Equatable {
     /// a cache-key hint so icon changes reach existing rows.
     let projectFaviconPath: String?
     let environmentLabel: String?
+    var machineSymbol: String = "server.rack"
     let providerID: String
     let providerDriver: String
     let providerName: String
@@ -1358,6 +1359,7 @@ struct HomeThreadRowContext: Equatable {
                 projectWorkspaceRoot: project?.path,
                 projectFaviconPath: project?.faviconPath,
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
+                machineSymbol: environment?.machineSymbol ?? "server.rack",
                 providerID: providerID,
                 providerDriver: providerDriver,
                 providerName: providerName,
@@ -1723,7 +1725,7 @@ struct FeatureThreadRow: View, Equatable {
         case .disconnected:
             "wifi.slash"
         case .connected, nil:
-            "server.rack"
+            context.machineSymbol
         }
     }
 

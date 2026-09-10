@@ -1,3 +1,4 @@
+import { resolveEnvironmentMachineKind, type EnvironmentMachineKind } from "@t3tools/contracts";
 import { ComposerTasksContent } from "./chat/ComposerTasksBadge";
 import {
   appendCodexArtifactTemplateUsePrompt,
@@ -2127,6 +2128,7 @@ function ChatViewContent(props: ChatViewProps) {
       projectId: ProjectId;
       label: string;
       isPrimary: boolean;
+      machineKind: EnvironmentMachineKind;
     }> = [];
     for (const p of memberProjects) {
       if (seen.has(p.environmentId)) continue;
@@ -2138,6 +2140,9 @@ function ChatViewContent(props: ChatViewProps) {
         projectId: p.id,
         label,
         isPrimary,
+        machineKind: resolveEnvironmentMachineKind(
+          environmentById.get(p.environmentId)?.serverConfig ?? null,
+        ),
       });
     }
     // Sort: primary first, then alphabetical

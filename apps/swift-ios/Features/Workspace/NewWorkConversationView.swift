@@ -144,7 +144,7 @@ public struct NewWorkConversationView: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "server.rack")
+                Image(systemName: model.snapshot.environments.first { $0.id == activeTarget?.environmentID }?.machineSymbol ?? "server.rack")
                     .font(.system(size: 11, weight: .medium))
                 Text("on \(activeTarget.map { environmentName($0.environmentID) } ?? "…")")
                 if availableTargets.count > 1 {

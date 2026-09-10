@@ -1,3 +1,4 @@
+import { ConnectedEnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestStackControl } from "./PullRequestStackControl";
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -35,7 +36,6 @@ import {
   PanelRightIcon,
   PencilIcon,
   RefreshCwIcon,
-  ServerIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -257,7 +257,10 @@ function ActOnEnvironmentPicker({
             {/* The radio item lays its children out as one block, so the icon and the label
                 need their own row to share a line. */}
             <span className="flex min-w-0 items-center gap-2">
-              <ServerIcon className="size-3.5 shrink-0" />
+              <ConnectedEnvironmentMachineIcon
+                environmentId={environment.environmentId}
+                className="size-3.5 shrink-0"
+              />
               <span className="truncate">{environment.label}</span>
             </span>
           </MenuRadioItem>

@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { CloudIcon, MonitorIcon } from "lucide-react";
+import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { memo, useMemo } from "react";
 
 import type { EnvironmentOption } from "./BranchToolbar.logic";
@@ -62,19 +62,10 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         )}
         data-composer-context-control
       >
-        {activeEnvironment?.isPrimary ? (
-          <MonitorIcon
-            className={
-              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
-            }
-          />
-        ) : (
-          <CloudIcon
-            className={
-              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
-            }
-          />
-        )}
+        <EnvironmentMachineIcon
+          kind={activeEnvironment?.machineKind ?? "server"}
+          className={displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"}
+        />
         <span
           data-composer-label
           className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
@@ -107,19 +98,10 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         aria-label="Run on"
         data-composer-context-control
       >
-        {activeEnvironment?.isPrimary ? (
-          <MonitorIcon
-            className={
-              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
-            }
-          />
-        ) : (
-          <CloudIcon
-            className={
-              displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
-            }
-          />
-        )}
+        <EnvironmentMachineIcon
+          kind={activeEnvironment?.machineKind ?? "server"}
+          className={displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"}
+        />
         <span
           data-composer-label
           className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
@@ -145,11 +127,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           {availableEnvironments.map((env) => (
             <SelectItem key={env.environmentId} value={env.environmentId}>
               <span className="inline-flex items-center gap-1.5">
-                {env.isPrimary ? (
-                  <MonitorIcon className="size-3" />
-                ) : (
-                  <CloudIcon className="size-3" />
-                )}
+                <EnvironmentMachineIcon kind={env.machineKind ?? "server"} className="size-3.5" />
                 {env.label}
               </span>
             </SelectItem>

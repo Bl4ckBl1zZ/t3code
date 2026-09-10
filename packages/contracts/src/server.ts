@@ -1,7 +1,11 @@
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { ExecutionEnvironmentDescriptor, ServerSelfUpdateMethod } from "./environment.ts";
+import {
+  type EnvironmentMachineKind,
+  ExecutionEnvironmentDescriptor,
+  ServerSelfUpdateMethod,
+} from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
@@ -786,4 +790,11 @@ export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpd
   override get message(): string {
     return `Server update failed: ${this.reason}`;
   }
+}
+
+/** User override, host detection, then a generic server while disconnected. */
+export function resolveEnvironmentMachineKind(
+  config: Pick<ServerConfig, "environment" | "settings"> | null,
+): EnvironmentMachineKind {
+  return config?.settings.environmentIcon ?? config?.environment.platform.machine ?? "server";
 }

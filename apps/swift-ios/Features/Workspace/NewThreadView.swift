@@ -244,7 +244,7 @@ public struct NewThreadView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "server.rack")
+                    Image(systemName: model.snapshot.environments.first { $0.id == selectedProject?.environmentID }?.machineSymbol ?? "server.rack")
                         .font(.system(size: 11, weight: .medium))
                     Text("on \(environmentName)")
                     if creationEnvironments.count > 1 {

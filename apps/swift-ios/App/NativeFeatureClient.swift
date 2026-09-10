@@ -4177,7 +4177,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isActive: environment.id == activeID,
             connectionState: environmentConnectionStates[environment.id],
             connectionDetail: environmentConnectionDetails[environment.id],
-            supportsPullRequests: environment.descriptor?.capabilities.pullRequests
+            supportsPullRequests: environment.descriptor?.capabilities.pullRequests,
+            machineKind: serverConfigsByEnvironmentID[environment.id]?.settings?.environmentIcon.flatMap(EnvironmentMachineKind.init(rawValue:))?.rawValue ?? environment.descriptor?.platform.machine,
+            supportsEnvironmentIcon: environment.descriptor?.capabilities.environmentIcon
         )
     }
 
@@ -6314,6 +6316,10 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         environmentID: String,
         patch: ServerSettingsPatchInput
     ) async throws -> FeatureEnvironmentPreferences {
+        if patch.environmentIcon != nil,
+           (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.environmentIcon != true {
+            throw FeatureCapabilityUnavailable("Environment icons")
+        }
         if patch.usagePriceOverrides != nil,
            (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.usagePriceOverrides != true {
             throw FeatureCapabilityUnavailable("Custom model pricing")

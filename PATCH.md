@@ -632,3 +632,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - Web minimap previous/next-turn navigation uses the V2 timeline row positions.
   Keep the fork’s transform/opacity strip animations and skip unchanged scroll
   attributes; upstream width/background animations would regress scroll performance.
+
+- Environment machine icons use upstream's best-effort hardware detection and nullable
+  server setting, with a capability gate for older servers. Web/desktop and Swift show the
+  resolved glyph in environment selectors and thread context. Swift has a per-environment
+  settings screen; Automatic deletes the override. V2 thread state and migrations are untouched.

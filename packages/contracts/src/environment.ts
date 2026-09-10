@@ -1,7 +1,13 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -14,9 +20,28 @@ export type ExecutionEnvironmentPlatformOs = typeof ExecutionEnvironmentPlatform
 export const ExecutionEnvironmentPlatformArch = Schema.Literals(["arm64", "x64", "other"]);
 export type ExecutionEnvironmentPlatformArch = typeof ExecutionEnvironmentPlatformArch.Type;
 
+/**
+ * The curated set of machine shapes and OS identities an environment can wear as its icon.
+ * Servers detect one from the hardware they run on (`platform.machine`), and
+ * the `environmentIcon` server setting lets a user pick one instead.
+ */
+export const ENVIRONMENT_MACHINE_KINDS = [
+  "server",
+  "cloud",
+  "linux",
+  "desktop",
+  "laptop",
+  "mac-mini",
+  "mac-studio",
+] as const;
+export const EnvironmentMachineKind = Schema.Literals(ENVIRONMENT_MACHINE_KINDS);
+export type EnvironmentMachineKind = typeof EnvironmentMachineKind.Type;
+export const isEnvironmentMachineKind = Schema.is(EnvironmentMachineKind);
+
 export const ExecutionEnvironmentPlatform = Schema.Struct({
   os: ExecutionEnvironmentPlatformOs,
   arch: ExecutionEnvironmentPlatformArch,
+  machine: ForwardCompatibleOptional(EnvironmentMachineKind),
 });
 
 /**
@@ -76,6 +101,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       client reconnecting to one must drop published themes rather than keep
       showing a set nothing will ever update. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
+  environmentIcon: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),

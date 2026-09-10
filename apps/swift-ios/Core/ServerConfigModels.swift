@@ -261,6 +261,7 @@ public struct UsageModelPriceOverride: Codable, Equatable, Sendable {
 }
 
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
+    public let environmentIcon: String?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
     /// `packages/contracts`, applied when a server predates the setting.
@@ -300,6 +301,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultThemeSetAt: String
 
     public init(
+        environmentIcon: String? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
         newWorktreesStartFromOrigin: Bool = true,
@@ -314,6 +316,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultTheme: String = "",
         defaultThemeSetAt: String = ""
     ) {
+        self.environmentIcon = environmentIcon
         self.usagePriceOverrides = usagePriceOverrides
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
@@ -327,6 +330,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case environmentIcon
         case usagePriceOverrides
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
@@ -352,6 +356,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
         defaultThreadEnvMode = try container.decode(
             ServerThreadEnvironmentMode.self,
@@ -389,6 +394,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
         try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
         try container.encode(newWorktreesStartFromOrigin, forKey: .newWorktreesStartFromOrigin)
@@ -418,6 +424,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
     /// A present nil entry resets one model. Omitted models are unchanged.
+    public var environmentIcon: String??
     public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
     public var enableAgentBrowserAccess: Bool?
     /// Claude's auto-compaction threshold, as the string the server validates:
@@ -427,11 +434,13 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        environmentIcon: String?? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride?]? = nil,
         enableAgentBrowserAccess: Bool? = nil,
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.environmentIcon = environmentIcon
         self.usagePriceOverrides = usagePriceOverrides
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
@@ -440,6 +449,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
+        if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
         if let enableAgentBrowserAccess {
             fields["enableAgentBrowserAccess"] = .bool(enableAgentBrowserAccess)
         }

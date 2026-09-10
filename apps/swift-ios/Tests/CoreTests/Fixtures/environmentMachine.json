@@ -1,0 +1,14 @@
+{
+  "environmentId": "machine-environment",
+  "label": "Studio",
+  "platform": {
+    "os": "darwin",
+    "arch": "arm64",
+    "machine": "mac-studio"
+  },
+  "serverVersion": "0.0.38",
+  "capabilities": {
+    "repositoryIdentity": true,
+    "environmentIcon": true
+  }
+}

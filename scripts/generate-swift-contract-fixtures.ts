@@ -15,6 +15,8 @@
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  ExecutionEnvironmentDescriptor,
+  EnvironmentId,
   ServerProviderUsageLimits,
   PullRequestStack,
   PullRequestLabelCandidateList,
@@ -493,3 +495,25 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pricePath, priceSerialized);
+
+const machinePath = NodePath.join(NodePath.dirname(outputPath), "environmentMachine.json");
+const machineSerialized = `${JSON.stringify(
+  Schema.encodeSync(ExecutionEnvironmentDescriptor)({
+    environmentId: EnvironmentId.make("machine-environment"),
+    label: "Studio",
+    platform: { os: "darwin", arch: "arm64", machine: "mac-studio" },
+    serverVersion: "0.0.38",
+    capabilities: { repositoryIdentity: true, environmentIcon: true },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(machinePath) ||
+    NodeFS.readFileSync(machinePath, "utf8") !== machineSerialized
+  ) {
+    console.error("[swift-fixtures] environmentMachine.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(machinePath, machineSerialized);

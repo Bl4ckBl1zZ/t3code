@@ -1,3 +1,4 @@
+import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useReducer, type SyntheticEvent } from "react";
 import {
   filterSidebarProjectScopeItems,
@@ -69,7 +70,6 @@ import {
   PinOffIcon,
   PlusIcon,
   SearchIcon,
-  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -449,7 +449,10 @@ function SidebarThreadTooltip({
           ) : null}
           {environmentLabel ? (
             <div className="flex min-w-0 items-center gap-2">
-              <ServerIcon className="size-3 shrink-0 stroke-muted-foreground" />
+              <ConnectedEnvironmentMachineIcon
+                environmentId={thread.environmentId}
+                className="size-3 shrink-0 stroke-muted-foreground"
+              />
               <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
             </div>
           ) : null}
@@ -1752,7 +1755,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     >
       {isRemote ? (
         <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-          <ServerIcon aria-hidden className="size-3.5" />
+          <ConnectedEnvironmentMachineIcon
+            environmentId={props.thread.environmentId}
+            aria-hidden
+            className="size-3.5"
+          />
         </span>
       ) : null}
       {props.isPinned ? (
@@ -4381,7 +4388,10 @@ export default function Sidebar() {
                       />
                     }
                   >
-                    <ServerIcon className="size-4 shrink-0" />
+                    <ConnectedEnvironmentMachineIcon
+                      environmentId={workEnvironmentScopeId}
+                      className="size-4 shrink-0"
+                    />
                     <span className="min-w-0 flex-1 truncate">
                       {(workEnvironmentScopeId !== null
                         ? environmentLabelById.get(workEnvironmentScopeId)
@@ -4403,7 +4413,10 @@ export default function Sidebar() {
                           closeOnClick
                           className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
                         >
-                          <ServerIcon className="size-4 shrink-0" />
+                          <ConnectedEnvironmentMachineIcon
+                            environmentId={environment.environmentId}
+                            className="size-4 shrink-0"
+                          />
                           <span className="min-w-0 truncate text-sm">{environment.label}</span>
                         </MenuRadioItem>
                       ))}

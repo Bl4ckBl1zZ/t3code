@@ -39,6 +39,9 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// older cached descriptor that never reported the capability, which reads
     /// as unsupported: the sheet has nothing to ask such a server for.
     public var supportsPullRequests: Bool?
+    public var machineKind: String?
+    public var supportsEnvironmentIcon: Bool?
+    public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
     public init(
         id: String,
@@ -47,7 +50,9 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         isActive: Bool = false,
         connectionState: FeatureConnection.State? = nil,
         connectionDetail: String? = nil,
-        supportsPullRequests: Bool? = nil
+        supportsPullRequests: Bool? = nil,
+        machineKind: String? = nil,
+        supportsEnvironmentIcon: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -56,6 +61,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.connectionState = connectionState
         self.connectionDetail = connectionDetail
         self.supportsPullRequests = supportsPullRequests
+        self.machineKind = machineKind
+        self.supportsEnvironmentIcon = supportsEnvironmentIcon
     }
 }
 
@@ -1349,4 +1356,16 @@ public enum FeatureEvent: Sendable {
     case detail(FeatureThreadDetail)
     case detailDelta(FeatureThreadDetail, FeatureDetailDelta)
     case failure(String)
+}
+
+public enum EnvironmentMachineKind: String, CaseIterable, Sendable {
+    case server, cloud, linux, desktop, laptop
+    case macMini = "mac-mini"
+    case macStudio = "mac-studio"
+    public var label: String {
+        switch self { case .server: "Server"; case .cloud: "Cloud VM"; case .linux: "Linux/WSL"; case .desktop: "Desktop"; case .laptop: "Laptop"; case .macMini: "Mini PC"; case .macStudio: "Workstation" }
+    }
+    public var symbol: String {
+        switch self { case .server, .linux: "server.rack"; case .cloud: "cloud"; case .desktop: "desktopcomputer"; case .laptop: "laptopcomputer"; case .macMini: "macmini"; case .macStudio: "macstudio" }
+    }
 }

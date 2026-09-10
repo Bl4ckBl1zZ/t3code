@@ -8,6 +8,7 @@ public struct SettingsView: View {
     @State private var showingDisconnect = false
     @State private var showingAddEnvironment = false
     @State private var showingDevices = false
+    @State private var showingEnvironmentIcons = false
     @State private var showingT3Connect = false
     @State private var showingIntegrations = false
     @State private var showingAgents = false
@@ -115,6 +116,12 @@ public struct SettingsView: View {
                         showingAddEnvironment = false
                     }
                 )
+            }
+            .sheet(isPresented: $showingEnvironmentIcons) {
+                NavigationStack {
+                    SettingsEnvironmentIconsView(model: model)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingEnvironmentIcons = false } } }
+                }
             }
             .sheet(isPresented: $showingDevices) {
                 NavigationStack {
@@ -311,6 +318,11 @@ public struct SettingsView: View {
                     }
                 }
 
+                settingsDivider
+
+                Button { showingEnvironmentIcons = true } label: {
+                    SettingsNavigationRow(title: "Environment icons", systemImage: "server.rack")
+                }.buttonStyle(.plain)
                 settingsDivider
 
                 Button {
@@ -572,7 +584,7 @@ public struct SettingsView: View {
                 let activeIsConnected = environment.isActive
                     && model.snapshot.connection.state == .connected
                 SettingsRowIcon(
-                    systemName: activeIsConnected ? "checkmark.circle.fill" : "desktopcomputer",
+                    systemName: environment.machineSymbol,
                     color: activeIsConnected ? T3Colors.success : T3Colors.textTertiary
                 )
 

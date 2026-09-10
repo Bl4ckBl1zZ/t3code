@@ -235,7 +235,7 @@ struct ThreadDetailsSheet: View {
     private var workspaceSection: some View {
         ThreadDetailsSection(title: "Workspace") {
             ThreadDetailsRow(
-                systemImage: "server.rack",
+                systemImage: environment?.machineSymbol ?? "server.rack",
                 title: environment?.name ?? thread.environmentName ?? "This environment",
                 subtitle: ThreadDetailsConnection.label(connectionState)
             ) {

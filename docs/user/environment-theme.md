@@ -91,3 +91,11 @@ A theme with no usable colors is not listed on that client.
 Write each file atomically — write a temporary file beside it and rename — so T3 Code never reads
 a half-written theme. An unreadable or invalid file is simply not published; the machine's other
 themes are unaffected.
+
+## Environment icons
+
+Each server detects its machine type when it starts. Its icon appears beside environment
+names in thread lists, new-thread controls, and pull-request controls. In Settings → Connections,
+choose a different icon or select Automatic to restore detection. On iOS, open Settings →
+Environment icons and choose the server first. The choice is saved on that server and follows
+it across connected clients. Changing it requires permission to change the server's settings.
