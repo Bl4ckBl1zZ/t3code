@@ -46,3 +46,7 @@ limit can set a lower ceiling.
 An empty new-thread draft follows updated project or machine defaults until you
 choose a model or adjust its options. Your explicit choice survives reopening the
 draft and moving its unfinished prompt to another project.
+
+In the hosted web app, settings that require a primary server are dimmed with an
+explanation. Use the desktop app or that server's own web address for those controls.
+Settings with a machine selector can still be changed for the selected machine.

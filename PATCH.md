@@ -1065,3 +1065,14 @@ sessions; invested drafts, real threads, and instance-scoped sticky preferences
 remain intact. V2 persisted thread selections still outrank browser composer state.
 Swift already records `selectionIsExplicit` and persists only explicit draft model
 choices, so this port aligns web behavior without changing its native composer.
+
+## Settings availability and navigation
+
+The grouped settings shell now uses upstream's tighter page spacing, explicit
+scroll targets, optional destination highlighting, and a common unavailable-group
+presentation. Primary-server controls are inert with a keyboard-reachable explanation
+on hosted clients that have no primary. Attempted primary-only writes report that
+nothing was saved. The fork's machine-targeted settings continue to write to their
+explicit environment; no arbitrary remote becomes the primary fallback. The same
+rule covers fork-owned worktree-retention controls. Client-local auto-settlement
+preferences remain editable pending their separate V2 server lifecycle port.

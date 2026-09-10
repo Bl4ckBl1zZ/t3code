@@ -93,6 +93,7 @@ export function WorktreeRetentionSettingsSection() {
   return (
     <>
       <SettingsRow
+        serverScoped
         {...searchableSetting("worktree-retention")}
         title="Worktree retention"
         description="Let the server report or remove old worktrees. It only considers clean, inactive, unshared worktrees that are safely identified as Git worktrees. Unknown state is skipped."
@@ -131,6 +132,7 @@ export function WorktreeRetentionSettingsSection() {
       />
 
       <SettingsRow
+        serverScoped
         className="bg-muted/20 sm:pl-9"
         title="Maximum age"
         description="Delete or report a worktree once it is older than this. Leave disabled to omit the age rule."
@@ -173,6 +175,7 @@ export function WorktreeRetentionSettingsSection() {
       />
 
       <SettingsRow
+        serverScoped
         className="bg-muted/20 sm:pl-9"
         title="Inactive for"
         description="Delete or report a worktree after this long without observed activity. Leave disabled to omit the inactivity rule."
@@ -215,6 +218,7 @@ export function WorktreeRetentionSettingsSection() {
       />
 
       <SettingsRow
+        serverScoped
         className="bg-muted/20 sm:pl-9"
         title="Delete after pull request merge"
         description="When enabled, a merged pull request is an additional deletion rule. It still must pass every safety check."
@@ -230,6 +234,7 @@ export function WorktreeRetentionSettingsSection() {
       />
 
       <SettingsRow
+        serverScoped
         className="bg-muted/20 sm:pl-9"
         title="Scan interval"
         description="How often the server evaluates the retention policy while it is running."

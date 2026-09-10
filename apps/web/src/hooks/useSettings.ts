@@ -25,6 +25,8 @@ import {
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { toastManager } from "~/components/ui/toast";
+import { isHostedStaticApp } from "~/hostedPairing";
 import { ensureLocalApi } from "~/localApi";
 import {
   getThemeDefinition,
@@ -392,6 +394,20 @@ export function usePrimarySettings<T = UnifiedSettings>(
   return useMergedSettings(useAtomValue(primaryServerSettingsAtom), selector);
 }
 
+export const PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE =
+  "This setting is saved on a server, and the hosted app is not anchored to one. Change it from the desktop app or from the server's own address.";
+
+/**
+ * Whether primary-scoped server settings have a server to live on. The
+ * hosted app connects to every environment as a remote, so it has no primary:
+ * `usePrimarySettings` reads schema defaults there and writes have nowhere
+ * to go. Desktop and server-served web always have one.
+ */
+export function usePrimarySettingsAvailable(): boolean {
+  const primaryEnvironment = usePrimaryEnvironment();
+  return primaryEnvironment !== null || typeof window === "undefined" || !isHostedStaticApp();
+}
+
 /**
  * Returns an updater that routes each key to the correct backing store.
  *
@@ -412,6 +428,14 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           void persistServerSettings({
             environmentId,
             input: { patch: serverPatch },
+          });
+        } else {
+          toastManager.add({
+            type: "warning",
+            title: "Setting not saved",
+            description: isHostedStaticApp()
+              ? PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE
+              : "Server settings are not available yet. Reconnect to the environment and try again.",
           });
         }
       }

@@ -2213,6 +2213,7 @@ function LegacyFeaturesSection() {
               }
             />
             <SettingsRow
+              serverScoped
               {...searchableSetting("legacy-token-streaming")}
               description="Paints assistant output token by token instead of in complete chunks. Not recommended: it is significantly slower, and long responses become harder to follow. Kept only for compatibility with the old behavior."
               control={
@@ -2548,6 +2549,7 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("provider-update-checks")}
           description="Check installed provider CLIs for newer available versions."
           resetAction={
@@ -2575,6 +2577,7 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
           title={
             <span className="inline-flex items-center gap-1.5">
               Background activity
@@ -2736,6 +2739,7 @@ export function GeneralSettingsPanel() {
         <ProjectAutoPullSettings />
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("new-threads")}
           description="Pick the default workspace mode for newly created draft threads."
           resetAction={
@@ -2781,6 +2785,7 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
           className="bg-muted/20 sm:pl-9"
           title={searchableSetting("start-from-origin").title}
           description="Creates the worktree from the latest matching branch on origin instead of your local branch."
@@ -2812,6 +2817,7 @@ export function GeneralSettingsPanel() {
         <WorktreeRetentionSettingsSection />
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("add-project-starts-in")}
           description='Leave empty to use "~/" when the Add Project browser opens.'
           resetAction={
@@ -2942,6 +2948,7 @@ export function GeneralSettingsPanel() {
         ) : null}
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("text-generation-model")}
           description="Default model for generated text like thread titles and source control content. Source control settings can override it with a dedicated source control writer model."
           resetAction={
