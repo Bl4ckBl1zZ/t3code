@@ -85,3 +85,30 @@ public final class NewTaskProjectMemoryStore: @unchecked Sendable {
         return memory
     }
 }
+
+
+extension NewTaskProjectMemoryStore {
+    private func fastKey(_ environment: String, _ provider: String) -> String {
+        "\(key).fast.\(environment.utf8.count):\(environment)\(provider.utf8.count):\(provider)"
+    }
+    func rememberFastMode(_ selection: FeatureSelection?, environmentID: String) {
+        guard let selection else { return }
+        let options = selection.options.filter { $0.id == "fast" || $0.id == "fastMode" }
+        guard !options.isEmpty, let data = try? JSONEncoder().encode(options) else { return }
+        lock.withLock { defaults.set(data, forKey: fastKey(environmentID, selection.providerID)) }
+    }
+
+    func applyingFastMode(to selection: FeatureSelection?, environmentID: String) -> FeatureSelection? {
+        guard var selection,
+              let data = lock.withLock({ defaults.data(forKey: fastKey(environmentID, selection.providerID)) }),
+              let remembered = try? JSONDecoder().decode([FeatureModelOptionSelection].self, from: data)
+        else { return selection }
+        // Materialized selections contain only the options this model supports.
+        for option in remembered {
+            if let index = selection.options.firstIndex(where: { $0.id == option.id }) {
+                selection.options[index] = option
+            }
+        }
+        return selection
+    }
+}

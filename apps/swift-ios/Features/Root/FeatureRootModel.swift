@@ -40,6 +40,23 @@ public final class FeatureRootModel {
 
     let client: any FeatureClient
     private let outboxStore: FeatureOutboxStore
+    public var outboxCount: Int { pendingSubmissionsByID.count }
+    public var outboxSubmissions: [FeatureQueuedSubmission] { pendingSubmissionsByID.values.sorted { $0.identity.createdAt < $1.identity.createdAt } }
+    private var failedOutboxIDs: Set<String> = []
+    private var sendingOutboxIDs: Set<String> = []
+
+    public func outboxStatus(_ submission: FeatureQueuedSubmission) -> String {
+        if failedOutboxIDs.contains(submission.id) { return "Send failed · Retry" }
+        if sendingOutboxIDs.contains(submission.id) { return submission.attachments.isEmpty ? "Sending" : "Uploading and sending" }
+        return "Queued"
+    }
+
+    public func retryOutbox() { failedOutboxIDs.removeAll(); scheduleOutboxDrain() }
+    public func cancelOutbox(_ id: String) async {
+        guard !sendingOutboxIDs.contains(id), let submission = pendingSubmissionsByID[id] else { return }
+        _ = await discardQueuedSubmission(submission)
+        failedOutboxIDs.remove(id)
+    }
     private var pendingSubmissionsByID: [String: FeatureQueuedSubmission] = [:]
     private var pendingThreadsByID: [String: FeatureThread] = [:]
     private var pendingCompletionSubmissionIDs: Set<String> = []
@@ -244,47 +261,10 @@ public final class FeatureRootModel {
         guard await enqueue(queued) else { return nil }
         installPendingCreation(queued, project: project)
 
-        isPerformingAction = true
-        defer { isPerformingAction = false }
-        do {
-            let thread = try await client.createThreadAndSend(
-                projectID: request.projectID,
-                prompt: prompt,
-                selection: request.selection,
-                runtimeMode: request.runtimeMode.mobileNormalized,
-                interactionMode: request.interactionMode.mobileNormalized,
-                workspaceMode: request.workspaceMode,
-                branch: request.branch,
-                worktreePath: request.worktreePath,
-                startFromOrigin: request.startFromOrigin,
-                attachments: uploads,
-                identity: identity
-            )
-            if !(await completeQueuedSubmission(queued)) {
-                scheduleOutboxRetry()
-            }
-            if thread.id != queued.threadID {
-                removeThread(id: queued.threadID)
-                removeDetail(id: queued.threadID)
-            }
-            upsert(thread)
-            return thread
-        } catch {
-            if Self.shouldQueue(error, environmentID: project.environmentID, snapshot: snapshot) {
-                if isEnvironmentConnected(project.environmentID) {
-                    scheduleOutboxRetry()
-                }
-                return pendingThreadsByID[threadID]
-            }
-            let discarded = await discardQueuedSubmission(queued)
-            if !discarded {
-                scheduleOutboxRetry()
-            }
-            if discarded, !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
-            }
-            return nil
-        }
+        // The durable enqueue is the submission boundary. Delivery continues in
+        // the outbox while the user enters the optimistic thread immediately.
+        scheduleOutboxDrain()
+        return pendingThreadsByID[threadID]
     }
 
     public func workspaceBranches(
@@ -362,6 +342,15 @@ public final class FeatureRootModel {
                     $0.snoozedAt = nil
                 }
             }
+        }
+    }
+
+    public func setActiveOrder(_ id: String, key: String?) async -> Bool {
+        let environment = currentEnvironmentIdentity
+        return await perform {
+            try await client.setActiveOrder(id: id, key: key)
+            guard currentEnvironmentIdentity == environment else { return }
+            mutateThread(id: id) { $0.activeOrderKey = key }
         }
     }
 
@@ -571,10 +560,10 @@ public final class FeatureRootModel {
         }
     }
 
-    public func resolveUserInput(_ id: String, answers: [String: FeatureInputAnswer]) async {
+    public func resolveUserInput(_ id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]] = [:], dismiss: Bool = false) async {
         let environment = currentEnvironmentIdentity
         await perform {
-            try await client.resolveUserInput(id: id, answers: answers)
+            try await client.resolveUserInput(id: id, answers: answers, attachments: attachments, dismiss: dismiss)
             guard currentEnvironmentIdentity == environment else { return }
             for key in Array(details.keys)
                 where details[key]?.userInputs.contains(where: { $0.id == id }) == true {
@@ -1166,6 +1155,10 @@ public final class FeatureRootModel {
         }
     }
 
+    func waitForCurrentOutboxDelivery() async {
+        await outboxDrainTask?.value
+    }
+
     private func stopOutboxDrain() async {
         outboxGeneration &+= 1
         guard let task = outboxDrainTask else { return }
@@ -1218,6 +1211,9 @@ public final class FeatureRootModel {
                 // Avoid a permanent timer while the owning device is offline.
                 continue
             case .send:
+                if failedOutboxIDs.contains(submission.id) { continue }
+                sendingOutboxIDs.insert(submission.id)
+                defer { sendingOutboxIDs.remove(submission.id) }
                 do {
                     guard pendingSubmissionsByID[submission.id] != nil,
                           snapshot.environments.contains(where: {
@@ -1230,8 +1226,8 @@ public final class FeatureRootModel {
                             projectID: creation.projectID,
                             prompt: submission.text,
                             selection: submission.selection,
-                            runtimeMode: .fullAccess,
-                            interactionMode: .standard,
+                            runtimeMode: submission.runtimeMode,
+                            interactionMode: submission.interactionMode,
                             workspaceMode: creation.workspaceMode,
                             branch: creation.branch,
                             worktreePath: creation.worktreePath,
@@ -1271,16 +1267,15 @@ public final class FeatureRootModel {
                     ) {
                         needsRetry = true
                     } else {
-                        if !(await discardQueuedSubmission(submission)) {
-                            needsRetry = true
-                        } else {
-                            errorMessage = error.localizedDescription
-                        }
+                        failedOutboxIDs.insert(submission.id)
+                        errorMessage = error.localizedDescription
                     }
                 }
             }
         }
-        return needsRetry
+        // A second draft may have been submitted while the first upload awaited.
+        let attempted = Set(submissions.map(\.id))
+        return needsRetry || pendingSubmissionsByID.keys.contains { !attempted.contains($0) }
     }
 
     private func isEnvironmentConnected(_ environmentID: String) -> Bool {

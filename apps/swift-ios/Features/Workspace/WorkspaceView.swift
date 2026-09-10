@@ -41,10 +41,15 @@ public struct WorkspaceView: View {
     @AppStorage("workspace.archive-expanded") private var isArchiveExpanded = false
     @State private var settledLimit = 12
     @State private var showingNewTask = false
+    @State private var newTaskDraftID: String?
+    @State private var showingDrafts = false
+    @State private var openingDraft = false
+    @State private var newTaskDrafts: [FeatureComposerDraftStore.NewTaskDraftSummary] = []
     @State private var showingNewWorkConversation = false
     @State private var newTaskInitialProjectID: String?
     @State private var showingAddProject = false
     @State private var showingSettings = false
+    @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
     @State private var sidebarBoundaryNow = Date.now
@@ -89,26 +94,7 @@ public struct WorkspaceView: View {
         self.model = model
         self.navigationRequest = navigationRequest
         self.onNavigationRequestConsumed = onNavigationRequestConsumed
-        self.submitNewTask = submitNewTask ?? { request in
-            do {
-                let thread = try await model.client.createThreadAndSend(
-                    projectID: request.projectID,
-                    prompt: request.trimmedPrompt,
-                    selection: request.selection,
-                    runtimeMode: request.runtimeMode,
-                    interactionMode: request.interactionMode,
-                    workspaceMode: request.workspaceMode,
-                    branch: request.branch,
-                    worktreePath: request.worktreePath,
-                    startFromOrigin: request.startFromOrigin,
-                    attachments: request.attachments.map(\.uploadValue)
-                )
-                await model.reload(reason: "thread-created")
-                return thread
-            } catch {
-                return nil
-            }
-        }
+        self.submitNewTask = submitNewTask ?? { request in await model.startTask(request) }
         self.submitMessage = submitMessage ?? { submission in
             if submission.attachments.isEmpty {
                 return await model.sendMessage(
@@ -148,6 +134,7 @@ public struct WorkspaceView: View {
             do {
                 for await keys in try await FeatureComposerDraftStore.shared.draftPresence() {
                     draftKeys = keys
+                    newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
                 }
             } catch { noticeAlert = ThreadListActionAlert(title: "Drafts unavailable", message: error.localizedDescription) }
         }
@@ -176,8 +163,60 @@ public struct WorkspaceView: View {
                     showingNewTask = false
                 },
                 onCreateProject: openProjectCreation,
-                initialProjectID: newTaskInitialProjectID
+                initialProjectID: newTaskInitialProjectID,
+                draftID: newTaskDraftID
             )
+        }
+        .sheet(isPresented: $showingDrafts, onDismiss: {
+            if openingDraft { openingDraft = false; showingNewTask = true }
+        }) {
+            NavigationStack {
+                List {
+                    if model.outboxCount > 0 {
+                        Section("Outbox") {
+                            Button("Retry queued messages") { model.retryOutbox() }
+                            ForEach(model.outboxSubmissions) { submission in
+                                VStack(alignment: .leading) {
+                                    Text(submission.text).lineLimit(2)
+                                    Text(model.outboxStatus(submission)).font(.caption).foregroundStyle(T3Colors.textSecondary)
+                                }
+                                .swipeActions { Button("Cancel", role: .destructive) { Task { await model.cancelOutbox(submission.id) } } }
+                            }
+                        }
+                    }
+                    Button("New draft", systemImage: "square.and.pencil") {
+                        newTaskDraftID = UUID().uuidString
+                        newTaskInitialProjectID = activeProjectFilterID
+                        openingDraft = true
+                        showingDrafts = false
+                    }
+                    ForEach(newTaskDrafts) { draft in
+                        Button {
+                            newTaskDraftID = draft.draftID
+                            newTaskInitialProjectID = draft.projectID
+                            openingDraft = true
+                        showingDrafts = false
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(draft.title).lineLimit(2)
+                                Text(model.snapshot.projects.first(where: { $0.id == draft.projectID })?.name ?? "Project")
+                                    .font(.caption).foregroundStyle(T3Colors.textSecondary)
+                            }
+                        }
+                    }.onDelete { offsets in
+                        let removed = offsets.map { newTaskDrafts[$0] }
+                        Task {
+                            do {
+                                for draft in removed { try await FeatureComposerDraftStore.shared.removeDraft(for: draft.id) }
+                                newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
+                            } catch { noticeAlert = ThreadListActionAlert(title: "Could not delete draft", message: error.localizedDescription) }
+                        }
+                    }
+                }
+                .navigationTitle("Drafts")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { newTaskInitialProjectID = nil; showingDrafts = false } } }
+                .t3NavigationChrome()
+            }
         }
         .sheet(isPresented: $showingNewWorkConversation) {
             NewWorkConversationView(
@@ -224,6 +263,9 @@ public struct WorkspaceView: View {
             Button("OK") { noticeAlert = nil }
         } message: { notice in
             Text(notice.message)
+        }
+        .sheet(isPresented: $showingArrangement) {
+            ActiveThreadArrangementSheet(model: model, workspace: workspace, projectID: activeProjectFilterID)
         }
         .confirmationDialog(
             pendingUnpinThread.map { "Unpin \($0.title)?" } ?? "Unpin thread?",
@@ -324,6 +366,22 @@ public struct WorkspaceView: View {
             if WorkspaceSwitcher.showsProjectFilter(workspace) {
                 projectFilter
             }
+            if workspace != .chat && presentation.active.contains(where: { $0.supportsActiveOrder == true }) {
+                Button("Arrange threads", systemImage: "arrow.up.arrow.down") { showingArrangement = true }
+                    .font(T3Typography.homeMetadata)
+                    .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .trailing)
+                    .padding(.horizontal, 18)
+            }
+            HStack {
+                Button("Drafts (\(newTaskDrafts.count))", systemImage: "doc.text") {
+                    Task {
+                        do { newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects); showingDrafts = true }
+                        catch { noticeAlert = ThreadListActionAlert(title: "Could not read drafts", message: error.localizedDescription) }
+                    }
+                }
+                Spacer()
+                if model.outboxCount > 0 { Button("\(model.outboxCount) queued") { showingDrafts = true } }
+            }.font(T3Typography.homeMetadata).padding(.horizontal, 18).frame(minHeight: T3Metrics.minimumTapTarget)
             if isSelecting { batchBar }
             HomeThreadCollectionView(
                 presentation: presentation,
@@ -907,6 +965,7 @@ public struct WorkspaceView: View {
     }
 
     private func openNewTaskOrProjectCreation(initialProjectID: String?) {
+        newTaskDraftID = nil
         let intent = WorkspaceSwitcher.newTaskIntent(
             workspace: workspace,
             selectedProjectID: initialProjectID,
@@ -1437,6 +1496,10 @@ struct FeatureThreadRow: View, Equatable {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(T3Colors.textSecondary)
                 }
+                Text(FeatureAccountLabel.display(context.providerName, fallback: context.providerDriver))
+                    .font(T3Typography.homeMetadata)
+                    .lineLimit(1)
+                    .foregroundStyle(T3Colors.textSecondary)
                 providerIcon(size: 16)
             }
             .font(T3Typography.homeMetadata)
@@ -1751,7 +1814,7 @@ struct FeatureThreadRow: View, Equatable {
             return values.joined(separator: ". ")
         case .rich, .slim:
             var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
-            values.append("Harness \(context.providerName)")
+            values.append("Account \(FeatureAccountLabel.display(context.providerName, fallback: context.providerDriver))")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
@@ -1833,6 +1896,79 @@ private struct ProjectBadge: View {
         case 1: Color(red: 0.93, green: 0.91, blue: 1)
         case 2: Color(red: 1, green: 0.95, blue: 0.78)
         default: Color(red: 0.82, green: 0.9, blue: 1)
+        }
+    }
+}
+
+
+private struct ActiveThreadArrangementSheet: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    @Bindable var model: FeatureRootModel
+    let workspace: MobileWorkspace
+    let projectID: String?
+    @State private var rows: [FeatureThread] = []
+    @State private var saving = false
+    @State private var error: String?
+
+    private var active: [FeatureThread] {
+        HomePresentation(snapshot: model.snapshot, workspace: workspace, query: "", projectID: projectID, now: .now,
+            changeRequests: model.changeRequestsByThreadID).active.filter { $0.supportsActiveOrder == true }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let error { SettingsErrorBanner(message: error) }
+                ForEach(rows) { thread in
+                    Text(thread.title)
+                        .accessibilityAction(named: "Move up") { move(thread.id, offset: -1) }
+                        .accessibilityAction(named: "Move down") { move(thread.id, offset: 1) }
+                }.onMove { source, destination in
+                    guard !saving, let index = source.first else { return }
+                    let id = rows[index].id
+                    rows.move(fromOffsets: source, toOffset: destination)
+                    save(movedID: id)
+                }
+                Button("Reset to newest first") {
+                    guard !saving else { return }
+                    saving = true
+                    Task {
+                        for row in rows where row.activeOrderKey != nil {
+                            if !(await model.setActiveOrder(row.id, key: nil)) { error = "Could not reset all threads. Try again."; break }
+                        }
+                        rows = active
+                        saving = false
+                    }
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .disabled(saving)
+            .navigationTitle("Arrange threads")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(saving) } }
+            .onAppear { rows = active }
+            .onChange(of: active) { _, next in if !saving { rows = next } }
+            .interactiveDismissDisabled(saving)
+            .t3NavigationChrome()
+        }
+    }
+
+    private func move(_ id: String, offset: Int) {
+        guard !saving, let index = rows.firstIndex(where: { $0.id == id }), rows.indices.contains(index + offset) else { return }
+        rows.swapAt(index, index + offset)
+        save(movedID: id)
+    }
+
+    private func save(movedID: String) {
+        let writes = ThreadActiveOrder.assignments(ordered: rows, movedID: movedID, retained: model.snapshot.threads)
+        saving = true
+        error = nil
+        Task {
+            for (id, key) in writes {
+                if !(await model.setActiveOrder(id, key: key)) { error = "Could not save the complete order. Try again."; break }
+            }
+            saving = false
+            rows = active
         }
     }
 }

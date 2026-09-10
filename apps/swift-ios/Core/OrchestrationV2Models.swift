@@ -891,6 +891,7 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let settledAt: OrchestrationV2Timestamp?
     /// See `OrchestrationV2ThreadShell.unsettledAt`.
     public let unsettledAt: OrchestrationV2Timestamp?
+    public var activeOrderKey: String? = nil
     public let pinnedAt: OrchestrationV2Timestamp?
     public let workInboxRole: String?
     public let timelineClearedAt: OrchestrationV2Timestamp?
@@ -968,6 +969,7 @@ public struct OrchestrationV2RuntimeRequest: Codable, Equatable, Sendable, Ident
     public let id: String
     public let kind: String
     public let status: String
+    public var responseMode: String? = nil
     public let responseCapability: OrchestrationV2ResponseCapability?
 }
 
@@ -1331,6 +1333,7 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// top instead of sinking back to its creation slot. Absent on servers
     /// that predate the stamp, which sorts them by creation as before.
     public var unsettledAt: OrchestrationV2Timestamp?
+    public var activeOrderKey: String? = nil
     public var pinnedAt: OrchestrationV2Timestamp?
     public var workInboxRole: String?
     public var timelineClearedAt: OrchestrationV2Timestamp?

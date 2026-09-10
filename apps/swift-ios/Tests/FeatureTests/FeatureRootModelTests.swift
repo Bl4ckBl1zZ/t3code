@@ -640,7 +640,9 @@ struct FeatureRootModelTests {
             )
         )
 
-        #expect(result == created)
+        #expect(result?.title == "Ship the native app")
+        #expect(model.outboxCount == 1)
+        await model.waitForCurrentOutboxDelivery()
         #expect(client.startedPrompt == "Ship the native app")
         #expect(client.startedAttachments.map(\.name) == ["reference.jpg"])
         #expect(client.startedWorkspaceMode == .worktree)

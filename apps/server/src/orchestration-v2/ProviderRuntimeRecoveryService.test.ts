@@ -87,6 +87,13 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
         status: "pending",
         responseCapability: { type: "not_resumable", reason: "old process" },
       },
+      {
+        id: RuntimeRequestId.make("request_async"),
+        nodeId: NodeId.make("node_async"),
+        status: "pending",
+        responseMode: "message",
+        responseCapability: { type: "live" },
+      },
     ],
     providerSessions: [],
     providerThreads: [],
@@ -121,6 +128,7 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
     const command = committedInput;
     assert.isNotNull(command);
     if (command === null) return;
+    assert.equal(command?.events.length, 1);
     assert.equal(command?.events[0]?.type, "runtime-request.updated");
     if (command?.events[0]?.type === "runtime-request.updated") {
       assert.equal(command.events[0].payload.status, "expired");
@@ -412,7 +420,14 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
     null;
   const projection = {
     thread: { id: threadId },
-    runtimeRequests: [],
+    runtimeRequests: [
+      {
+        id: RuntimeRequestId.make("durable-question"),
+        nodeId: NodeId.make("durable-question-node"),
+        status: "pending",
+        responseMode: "message",
+      },
+    ],
     providerSessions: [],
     providerThreads: [],
     providerTurns: [],
@@ -424,10 +439,18 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
       },
     ],
     attempts: [],
-    nodes: [],
+    nodes: [{ id: NodeId.make("durable-question-node"), runId, status: "waiting" }],
     subagents: [],
     messages: [],
-    turnItems: [],
+    turnItems: [
+      {
+        id: TurnItemId.make("durable-question-item"),
+        nodeId: NodeId.make("durable-question-node"),
+        runId,
+        type: "user_input_request",
+        status: "waiting",
+      },
+    ],
     ...({ contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
@@ -463,6 +486,10 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
     const summary =
       yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
     assert.equal(summary.terminalizedRuns, 1);
+    assert.deepEqual(
+      committedInput?.events.map((event) => event.type),
+      ["run.updated"],
+    );
     const runEvent = committedInput?.events.find((event) => event.type === "run.updated");
     assert.equal(runEvent?.type === "run.updated" ? runEvent.payload.status : null, "cancelled");
   }).pipe(Effect.provide(layer));

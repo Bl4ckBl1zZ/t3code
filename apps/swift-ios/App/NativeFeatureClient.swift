@@ -1247,6 +1247,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    func setActiveOrder(id: String, key: String?) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(
+            threadID: route.wireID, fields: ["activeOrderKey": key.map(JSONValue.string) ?? .null]))
+    }
+
     func setThreadPinned(id: String, pinned: Bool) async throws {
         let route = try threadRoute(for: id)
         _ = try await route.client.pin(threadID: route.wireID, pinned: pinned)
@@ -1689,14 +1695,24 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws {
+        try await resolveUserInput(id: id, answers: answers, attachments: [:], dismiss: false)
+    }
+
+    func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws {
         guard let request = inputRoutes[id] else {
             throw NativeFeatureClientError.inputRequestNotFound
         }
         let route = try threadRoute(for: request.threadID)
+        var persisted: [String: JSONValue] = [:]
+        for (questionID, files) in attachments where !files.isEmpty {
+            persisted[questionID] = .array(try await route.client.persistAttachments(
+                threadID: route.wireID, messageID: "question-response:\(request.wireID)",
+                attachments: try makeUploadAttachments(files)))
+        }
         _ = try await route.client.respondToUserInput(
             threadID: route.wireID,
             requestID: request.wireID,
-            answers: answers.mapValues(\.jsonValue)
+            answers: answers.mapValues(\.jsonValue), attachmentsByQuestionID: persisted, dismiss: dismiss
         )
         inputRoutes[id] = nil
         removeCachedInput(id: id, threadID: route.uiID)
@@ -4181,8 +4197,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     threadID: threadID,
                     wireID: requestID
                 )
-                userInputs.append(
-                    FeatureUserInput(
+                var featureInput = FeatureUserInput(
                         id: uiID,
                         wireID: requestID,
                         threadID: threadID,
@@ -4197,7 +4212,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                             )
                         }
                     )
-                )
+                featureInput.allowsAttachments = environment.descriptor?.capabilities.threadQuestionActionsV2 == true
+                featureInput.allowsDismiss = featureInput.allowsAttachments == true && projection.runtimeRequests.first(where: { $0.id == requestID })?.responseMode == "message"
+                userInputs.append(featureInput)
 
             default:
                 if let message = mapTurnItem(item, environmentID: environment.id) {
@@ -4565,6 +4582,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            activeOrderKey: thread.activeOrderKey,
+            supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
             supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
@@ -4688,6 +4707,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            activeOrderKey: thread.activeOrderKey,
+            supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
             supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             // The two fields the workspaces sort on: `workInboxRole` is what
@@ -6216,6 +6237,11 @@ extension NativeFeatureClient: FeatureHermesInboxManaging {
 /// touched rather than to the active one: Settings lists every paired server,
 /// and a write has to land on the one it was made against.
 extension NativeFeatureClient: FeatureServerSettingsManaging {
+    func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.serverConfig()
+    }
+
     @discardableResult
     func updateServerSettings(
         environmentID: String,

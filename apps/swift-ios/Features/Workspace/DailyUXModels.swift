@@ -312,7 +312,15 @@ struct DailyUXSidebarIndex {
     /// only moves when a thread enters or leaves the active list. Reopening is
     /// such a transition, so the row hoists rather than returning to its
     /// creation slot where the user would never find it.
-    private static func activeOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
+    static func activeOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
+        if lhs.pinnedAt == nil && rhs.pinnedAt == nil {
+            switch (lhs.activeOrderKey, rhs.activeOrderKey) {
+            case let (left?, right?) where left != right: return left < right
+            case (nil, _?): return true
+            case (_?, nil): return false
+            default: break
+            }
+        }
         let lhsAnchor = activeAnchor(lhs)
         let rhsAnchor = activeAnchor(rhs)
         if lhsAnchor != rhsAnchor {
@@ -875,5 +883,66 @@ enum DailyUXModelOptions {
             return true
         }
         return model.supportsImages
+    }
+}
+
+/// Same fractional alphabet as client-runtime/threadSort. Only a moved row
+/// needs a write once the initial keyless list has been materialized.
+enum ThreadActiveOrder {
+    static let digits = Array("abcdefghijklmnopqrstuvwxyz")
+
+    static func between(_ before: String?, _ after: String?) -> String? {
+        let a = before ?? "", b = after ?? ""
+        func valid(_ key: String) -> Bool {
+            key.isEmpty || (key.last != "a" && key.allSatisfy { digits.contains($0) })
+        }
+        guard valid(a), valid(b), b.isEmpty || a < b else { return nil }
+        func midpoint(_ a: [Character], _ b: [Character]) -> [Character] {
+            if !b.isEmpty {
+                var n = 0
+                while n < b.count && (n < a.count ? a[n] : "a") == b[n] { n += 1 }
+                if n > 0 { return Array(b.prefix(n)) + midpoint(Array(a.dropFirst(n)), Array(b.dropFirst(n))) }
+            }
+            let left = a.first.flatMap { digits.firstIndex(of: $0) } ?? 0
+            let right = b.first.flatMap { digits.firstIndex(of: $0) } ?? digits.count
+            if right - left > 1 { return [digits[Int((Double(left + right) / 2).rounded())]] }
+            if b.count > 1 { return [b[0]] }
+            return [digits[left]] + midpoint(Array(a.dropFirst()), [])
+        }
+        return String(midpoint(Array(a), Array(b)))
+    }
+
+    static func assignments(ordered: [FeatureThread], movedID: String, retained: [FeatureThread]) -> [(String, String)] {
+        guard let index = ordered.firstIndex(where: { $0.id == movedID }) else { return [] }
+        let before = index > 0 ? ordered[index - 1] : nil
+        let after = index + 1 < ordered.count ? ordered[index + 1] : nil
+        let visible = Set(ordered.map(\.id))
+        let reserved = Set(retained.filter { !visible.contains($0.id) }.compactMap(\.activeOrderKey))
+        if (before == nil || before?.activeOrderKey != nil), (after == nil || after?.activeOrderKey != nil) {
+            var key = between(before?.activeOrderKey, after?.activeOrderKey)
+            while let value = key, reserved.contains(value) { key = between(value, after?.activeOrderKey) }
+            if let key { return [(movedID, key)] }
+        }
+        // Even spacing keeps initial materialization bounded, including large lists.
+        var capacity = digits.count
+        var width = 1
+        let slots = ordered.count + reserved.count + 1
+        while capacity < slots * 2 { capacity *= digits.count; width += 1 }
+        let stride = max(1, capacity / slots)
+        var value = 0
+        func key(_ value: Int) -> String {
+            var remainder = value
+            var chars = Array(repeating: Character("a"), count: width)
+            for index in chars.indices.reversed() {
+                chars[index] = digits[remainder % digits.count]
+                remainder /= digits.count
+            }
+            return String(chars) + "n"
+        }
+        return ordered.map { thread in
+            value += stride
+            while reserved.contains(key(value)) { value += stride }
+            return (thread.id, key(value))
+        }
     }
 }

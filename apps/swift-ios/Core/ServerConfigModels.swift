@@ -401,13 +401,16 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     /// an integer from 100000 to 1000000, or empty to fall back to Claude's own
     /// default. Empty is a meaningful value here, so it is not the same as nil.
     public var claudeAutoCompactWindow: String?
+    public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
         enableAgentBrowserAccess: Bool? = nil,
-        claudeAutoCompactWindow: String? = nil
+        claudeAutoCompactWindow: String? = nil,
+        hiddenModelsByProvider: [String: [String]]? = nil
     ) {
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
+        self.hiddenModelsByProvider = hiddenModelsByProvider
     }
 
     public var json: JSONValue {
@@ -423,6 +426,11 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
                     "autoCompactWindow": .string(claudeAutoCompactWindow),
                 ]),
             ])
+        }
+        if let hiddenModelsByProvider {
+            fields["providerModelPreferences"] = .object(hiddenModelsByProvider.mapValues {
+                .object(["hiddenModels": .array($0.map(JSONValue.string))])
+            })
         }
         return .object(fields)
     }

@@ -43,6 +43,8 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let threadSettlement: Bool?
         public let threadSnooze: Bool?
         public let threadPinning: Bool?
+        public let threadActiveOrderV2: Bool?
+        public let threadQuestionActionsV2: Bool?
         public let threadTitleRegeneration: Bool?
         /// Whether `thread.metadata.update` persists a pull request reference.
         /// Absent on older servers, so the link action stays hidden rather than
@@ -57,7 +59,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case connectionProbe
             case threadSettlement
             case threadSnooze
-            case threadPinning
+            case threadPinning, threadActiveOrderV2, threadQuestionActionsV2
             case threadTitleRegeneration
             case threadPullRequestLinking
             case pullRequests
@@ -73,6 +75,8 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
             threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
             threadPinning = try container.decodeIfPresent(Bool.self, forKey: .threadPinning)
+            threadQuestionActionsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadQuestionActionsV2)
+            threadActiveOrderV2 = try container.decodeIfPresent(Bool.self, forKey: .threadActiveOrderV2)
             threadTitleRegeneration = try container.decodeIfPresent(
                 Bool.self,
                 forKey: .threadTitleRegeneration

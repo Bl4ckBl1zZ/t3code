@@ -245,6 +245,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var snoozedAt: Date?
     public var pinnedAt: Date?
     public var supportsPinning: Bool?
+    public var activeOrderKey: String?
+    public var supportsActiveOrder: Bool?
     /// Whether the thread's environment supports the settled lifecycle at all.
     /// Unlike ``supportsPinning``, absence is treated as "no": see
     /// ``canShelveSettled``.
@@ -314,6 +316,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
         supportsPinning: Bool? = nil,
+        activeOrderKey: String? = nil,
+        supportsActiveOrder: Bool? = nil,
         supportsSettlement: Bool? = nil,
         supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
@@ -359,6 +363,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
         self.supportsPinning = supportsPinning
+        self.activeOrderKey = activeOrderKey
+        self.supportsActiveOrder = supportsActiveOrder
         self.supportsSettlement = supportsSettlement
         self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
@@ -635,6 +641,8 @@ public struct FeatureUserInput: Identifiable, Sendable, Equatable, Hashable, Cod
     /// The provider request identifier sent over the wire.
     public var wireID: String?
     public var threadID: String
+    public var allowsDismiss: Bool? = nil
+    public var allowsAttachments: Bool? = nil
     public var questions: [FeatureInputQuestion]
 
     public init(

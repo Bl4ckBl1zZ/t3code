@@ -649,13 +649,15 @@ public actor T3Client {
     public func respondToUserInput(
         threadID: String,
         requestID: String,
-        answers: [String: JSONValue]
+        answers: [String: JSONValue],
+        attachmentsByQuestionID: [String: JSONValue] = [:],
+        dismiss: Bool = false
     ) async throws -> DispatchResult {
         try await dispatch(
             OrchestrationCommands.respondToUserInput(
                 threadID: threadID,
                 requestID: requestID,
-                answers: answers
+                answers: answers, attachmentsByQuestionID: attachmentsByQuestionID, dismiss: dismiss
             )
         )
     }
@@ -2402,18 +2404,18 @@ public enum OrchestrationCommands {
     }
 
     public static func respondToUserInput(
-        threadID: String,
-        requestID: String,
-        answers: [String: JSONValue],
+        threadID: String, requestID: String, answers: [String: JSONValue],
+        attachmentsByQuestionID: [String: JSONValue] = [:], dismiss: Bool = false,
         commandID: String = UUID().uuidString
     ) -> JSONValue {
-        .object([
-            "type": .string("runtime-request.respond"),
-            "commandId": .string(commandID),
-            "threadId": .string(threadID),
-            "requestId": .string(requestID),
-            "answers": .object(answers),
-        ])
+        var value: [String: JSONValue] = [
+            "type": .string("runtime-request.respond"), "commandId": .string(commandID),
+            "threadId": .string(threadID), "requestId": .string(requestID)
+        ]
+        if dismiss { value["dismiss"] = .bool(true) }
+        else { value["answers"] = .object(answers) }
+        if !attachmentsByQuestionID.isEmpty { value["attachmentsByQuestionId"] = .object(attachmentsByQuestionID) }
+        return .object(value)
     }
 
     public static func settle(

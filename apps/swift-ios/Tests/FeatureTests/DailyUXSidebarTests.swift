@@ -6,6 +6,32 @@ import Testing
 struct DailyUXSidebarTests {
     private let now = Date(timeIntervalSince1970: 2_000_000)
 
+    @Test func manualOrderKeepsNewAndReopenedThreadsFirst() {
+        var old = thread(id: "old", created: -500, updated: -500)
+        var recent = thread(id: "recent", created: -100, updated: -100)
+        old.activeOrderKey = "g"
+        recent.activeOrderKey = "n"
+        let incoming = thread(id: "incoming", created: -50, updated: -50)
+        #expect(makeIndex([recent, old, incoming]).active.map(\.id) == ["incoming", "old", "recent"])
+        let moved = ThreadActiveOrder.assignments(ordered: [recent, old], movedID: recent.id, retained: [old, recent])
+        #expect(moved.count == 1)
+        #expect(moved[0].1 < "g")
+    }
+
+    @Test func materializationHasBoundedUniqueKeysAndPreservesHiddenSlots() {
+        let rows = (0..<1000).map { thread(id: "\($0)", created: -100, updated: -100) }
+        var hidden = thread(id: "hidden", created: -100, updated: -100)
+        hidden.activeOrderKey = "aan"
+        let writes = ThreadActiveOrder.assignments(ordered: rows, movedID: "0", retained: rows + [hidden])
+        let keys = writes.map { $0.1 }
+        #expect(writes.count == rows.count)
+        #expect(Set(keys).count == rows.count)
+        #expect(keys == keys.sorted())
+        #expect(!keys.contains("aan"))
+        #expect(keys.allSatisfy { $0.count < 8 })
+        #expect(!writes.contains { $0.0 == "hidden" })
+    }
+
     @Test
     func activeOrderUsesCreationTimeAndDoesNotJumpWithActivity() {
         let olderCreationRecentActivity = thread(

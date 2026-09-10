@@ -4,6 +4,23 @@ import Testing
 
 @Suite("Composer draft persistence")
 struct ComposerDraftStoreTests {
+    @Test func independentDraftsSurviveReloadAndDelete() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("drafts.json")
+        let project = FeatureProject(id: "p", environmentID: "e", name: "Project", path: "/project")
+        let store = FeatureComposerDraftStore(fileURL: url)
+        let first = FeatureComposerDraftStore.newTaskKey(project: project)
+        let second = FeatureComposerDraftStore.newTaskKey(project: project, draftID: "second")
+        try await store.setDraft(FeatureComposerDraft(text: "One"), for: first)
+        try await store.setDraft(FeatureComposerDraft(text: "Two"), for: second)
+        let reloaded = FeatureComposerDraftStore(fileURL: url)
+        #expect(try await reloaded.newTaskDrafts(projects: [project]).count == 2)
+        try await reloaded.setDraft(FeatureComposerDraft(), for: first)
+        #expect(try await reloaded.newTaskDrafts(projects: [project]).map(\.title) == ["Two"])
+        #expect(try await reloaded.draft(for: second)?.text == "Two")
+    }
+
     @Test func publishesDraftPresenceAndExplicitDiscardWithoutCountingStashes() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

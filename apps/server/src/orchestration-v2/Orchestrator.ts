@@ -1,6 +1,7 @@
 import {
   type ChatAttachment,
   CommandId,
+  MessageId,
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2AppThread,
@@ -1522,7 +1523,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (projection.runs.some((run) =>
         ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
       ) ||
-        projection.runtimeRequests.some((request) => request.status === "pending"))
+        projection.runtimeRequests.some(
+          (request) => request.status === "pending" && request.responseMode !== "message",
+        ))
     ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -1567,7 +1570,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} snooze wake time ${command.snoozedUntil} is not in the future.`,
         });
       }
-      if (projection.runtimeRequests.some((request) => request.status === "pending")) {
+      if (
+        projection.runtimeRequests.some(
+          (request) => request.status === "pending" && request.responseMode !== "message",
+        )
+      ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -1642,6 +1649,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             // active keeps its stamp: re-running the same un-settle is not a
             // fresh re-entry and must not reorder the list.
             unsettledAt: alreadyPinnedActive ? (thread.unsettledAt ?? null) : now,
+            activeOrderKey: alreadyPinnedActive ? (thread.activeOrderKey ?? null) : null,
             updatedAt: alreadyPinnedActive ? thread.updatedAt : now,
           };
         }
@@ -1718,6 +1726,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : { pinOrderKey: null }),
                 }),
             ...(command.pinOrderKey === undefined ? {} : { pinOrderKey: command.pinOrderKey }),
+            ...(command.activeOrderKey === undefined
+              ? {}
+              : { activeOrderKey: command.activeOrderKey }),
             // Absent leaves the link alone; null unlinks.
             ...(command.linkedPullRequest === undefined
               ? {}
@@ -2908,6 +2919,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...projection.thread,
           settledOverride: null,
           settledAt: null,
+          activeOrderKey:
+            projection.thread.settledOverride === "active"
+              ? (projection.thread.activeOrderKey ?? null)
+              : null,
           // A thread already pinned active keeps its re-entry stamp: the
           // activity reset that clears the pin is not a re-entry and must not
           // reorder the list.
@@ -5124,19 +5139,51 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
       }
-      if (runtimeRequest.responseCapability.type !== "live") {
+      const isMessageResponse = runtimeRequest.responseMode === "message";
+      const questionItem = projection.turnItems.find(
+        (item) => item.type === "user_input_request" && item.requestId === command.requestId,
+      );
+      const questionAttachments = command.attachmentsByQuestionId ?? {};
+      const attachments = Object.values(questionAttachments).flat();
+      if (
+        attachments.length > 8 ||
+        (command.dismiss === true && !isMessageResponse) ||
+        ((attachments.length > 0 || isMessageResponse) &&
+          questionItem?.type !== "user_input_request") ||
+        (questionItem?.type === "user_input_request" &&
+          Object.keys(questionAttachments).some(
+            (id) => !questionItem.questions.some((question) => question.id === id),
+          ))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Invalid question response or dismissal.",
+        });
+      }
+      if (command.dismiss === true && (attachments.length > 0 || command.answers !== undefined)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Dismissal cannot include an answer.",
+        });
+      }
+      if (!isMessageResponse && runtimeRequest.responseCapability.type !== "live") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: runtimeRequest.responseCapability.reason,
         });
       }
-      const providerSessionId = runtimeRequest.responseCapability.providerSessionId;
+      const providerSessionId =
+        runtimeRequest.responseCapability.type === "live"
+          ? runtimeRequest.responseCapability.providerSessionId
+          : null;
 
       const providerSession = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
-      if (providerSession === undefined) {
+      if (!isMessageResponse && providerSession === undefined) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -5144,16 +5191,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
+      const responseActor =
+        providerSession === undefined
+          ? { providerInstanceId: projection.thread.providerInstanceId }
+          : {
+              driver: providerSession.driver,
+              providerInstanceId: providerSession.providerInstanceId,
+            };
       const now = yield* DateTime.now;
       const resolvedRequest = {
         ...runtimeRequest,
-        status: "resolved" as const,
+        status: command.dismiss === true ? ("cancelled" as const) : ("resolved" as const),
         resolvedAt: now,
       };
       const emitEvent = emit(events, command);
       const requestNode = projection.nodes.find((node) => node.id === runtimeRequest.nodeId);
       const resolvedNodeStatus =
-        command.decision === "decline" || command.decision === "cancel"
+        command.dismiss === true || command.decision === "decline" || command.decision === "cancel"
           ? ("cancelled" as const)
           : ("completed" as const);
       yield* emitEvent({
@@ -5161,8 +5215,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         threadId: command.threadId,
         ...(requestNode?.runId == null ? {} : { runId: requestNode.runId }),
         nodeId: runtimeRequest.nodeId,
-        driver: providerSession.driver,
-        providerInstanceId: providerSession.providerInstanceId,
+        ...responseActor,
         occurredAt: now,
         payload: resolvedRequest,
       });
@@ -5172,8 +5225,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           ...(requestNode.runId === null ? {} : { runId: requestNode.runId }),
           nodeId: requestNode.id,
-          driver: providerSession.driver,
-          providerInstanceId: providerSession.providerInstanceId,
+          ...responseActor,
           occurredAt: now,
           payload: {
             ...requestNode,
@@ -5194,8 +5246,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           ...(approvalTurnItem.runId === null ? {} : { runId: approvalTurnItem.runId }),
           ...(approvalTurnItem.nodeId === null ? {} : { nodeId: approvalTurnItem.nodeId }),
-          driver: providerSession.driver,
-          providerInstanceId: providerSession.providerInstanceId,
+          ...responseActor,
           occurredAt: now,
           payload: {
             ...approvalTurnItem,
@@ -5205,6 +5256,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
         });
       }
+      if (command.dismiss === true) return;
+      if (isMessageResponse || attachments.length > 0) {
+        const text =
+          questionItem?.type === "user_input_request"
+            ? questionItem.questions
+                .map((question) => {
+                  const answer = command.answers?.[question.id];
+                  const rendered =
+                    typeof answer === "string"
+                      ? answer
+                      : JSON.stringify(answer ?? "See attached files.");
+                  const files = (questionAttachments[question.id] ?? [])
+                    .map((file) => file.name)
+                    .join(", ");
+                  return `${question.question}\n${rendered}${files ? `\nFiles: ${files}` : ""}`;
+                })
+                .join("\n\n")
+            : "Question response";
+        yield* dispatchMessage(
+          {
+            type: "message.dispatch",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            messageId: MessageId.make(`question-response:${command.requestId}`),
+            text,
+            attachments,
+            createdBy: "user",
+            creationSource: "mobile",
+            dispatchMode: { type: "queue_after_active" },
+          },
+          events,
+          effects,
+        );
+        if (isMessageResponse) return;
+      }
       yield* Ref.update(effects, (existing) => [
         ...existing,
         {
@@ -5213,7 +5299,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           request: {
             type: "runtime-request.respond",
-            providerSessionId,
+            providerSessionId: providerSessionId!,
             requestId: command.requestId,
             ...(command.decision === undefined ? {} : { decision: command.decision }),
             ...(command.answers === undefined ? {} : { answers: command.answers }),

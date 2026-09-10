@@ -29,6 +29,7 @@ public struct ThreadDetailView: View {
     /// in a run. See `pendingHandoffItem`.
     @State private var pendingProviderSwitch: PendingProviderSwitch?
     @State private var isSending = false
+    @State private var turnNavigationRequest = 0
     @State private var isLoading = true
     @State private var sendFailed = false
     /// The provider's answer to `/feedback`: the id it filed the report under,
@@ -76,6 +77,17 @@ public struct ThreadDetailView: View {
             }
         }
         .background(T3Colors.background)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let submission = model.outboxSubmissions.first(where: { $0.threadID == thread.id }) {
+                Label(model.outboxStatus(submission), systemImage: "tray.and.arrow.up")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(T3Colors.subtle)
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false)
         .t3NavigationChrome()
@@ -451,12 +463,25 @@ public struct ThreadDetailView: View {
                     onOpenThread: openRelatedThread,
                     onOpenFile: openFile,
                     onOpenURL: { openURL($0) },
-                    onOpenDiff: openDiff
+                    onOpenDiff: openDiff,
+                    navigationRequest: turnNavigationRequest
                 )
                 // Container only: the transcript runs on under the glass
                 // composer to the screen edge, but still rises for the
                 // keyboard.
                 .ignoresSafeArea(.container, edges: .bottom)
+                .overlay(alignment: .bottomTrailing) {
+                    HStack(spacing: 16) {
+                        Button("Previous turn", systemImage: "arrow.up") { turnNavigationRequest -= 1 }
+                        Button("Next turn", systemImage: "arrow.down") { turnNavigationRequest += 1 }
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    .padding(10)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, composerHeight + 12)
+                    .padding(.trailing, 18)
+                }
             }
         }
         .overlay(alignment: .top) {
@@ -643,8 +668,8 @@ public struct ThreadDetailView: View {
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },
-            onUserInputSubmit: { id, answers in
-                Task { await model.resolveUserInput(id, answers: answers) }
+            onUserInputSubmit: { id, answers, files, dismiss in
+                Task { await model.resolveUserInput(id, answers: answers, attachments: files, dismiss: dismiss) }
             }
         )
         .simultaneousGesture(composerKeyboardDismissGesture)
@@ -1605,6 +1630,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
+    var navigationRequest: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -1670,6 +1696,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             onDismissKeyboard: onDismissKeyboard,
             in: collectionView
         )
+        context.coordinator.navigate(request: navigationRequest, in: collectionView)
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -1732,6 +1759,37 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
         private var entriesByID: [String: ThreadTimelineEntry] = [:]
         private var orderedIDs: [String] = []
+        private var lastNavigationRequest = 0
+        private var pendingPreviousTurn = false
+
+        func navigate(request: Int, in collectionView: UICollectionView) {
+            guard request != lastNavigationRequest else { return }
+            let forward = request > lastNavigationRequest
+            lastNavigationRequest = request
+            navigateTurn(forward: forward, in: collectionView)
+        }
+
+        private func navigateTurn(forward: Bool, in collectionView: UICollectionView, allowLoad: Bool = true) {
+            guard let dataSource else { return }
+            collectionView.layoutIfNeeded()
+            let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+            let candidates = orderedIDs.compactMap { id -> (IndexPath, CGFloat)? in
+                guard case let .message(message) = entriesByID[id], message.role == .user, !message.isAgentAuthored,
+                      let path = dataSource.indexPath(for: id),
+                      let frame = collectionView.layoutAttributesForItem(at: path)?.frame else { return nil }
+                return (path, frame.minY)
+            }
+            let target = forward ? candidates.first { $0.1 > top + 2 } : candidates.last { $0.1 < top - 2 }
+            if let target {
+                pendingPreviousTurn = false
+                (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
+                collectionView.scrollToItem(at: target.0, at: .top, animated: !UIAccessibility.isReduceMotionEnabled)
+            } else if allowLoad && !forward && currentCanLoadEarlier && !currentIsLoadingEarlier {
+                pendingPreviousTurn = true
+                onLoadEarlier?()
+            } else if forward { scrollToBottom(collectionView, animated: !UIAccessibility.isReduceMotionEnabled) }
+        }
+
         private var currentThreadID: String?
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
@@ -1937,6 +1995,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         )
                     } else if let prependAnchor {
                         self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
+                    }
+                    if self.pendingPreviousTurn && !self.currentIsLoadingEarlier {
+                        self.pendingPreviousTurn = false
+                        self.navigateTurn(forward: false, in: collectionView, allowLoad: false)
                     }
                 }
             }
@@ -2724,7 +2786,13 @@ private struct FeatureMessageAttachmentsView: View {
                 }
             }
             .fullScreenCover(item: $previewedAttachment) { attachment in
-                FeatureImagePreviewSheet(url: attachment.url, title: attachment.name)
+                let images = attachments.compactMap { item -> MarkdownInlineImage? in
+                    guard item.mimeType.hasPrefix("image/"), let url = item.url else { return nil }
+                    return MarkdownInlineImage(alt: item.name, src: url.absoluteString)
+                }
+                if let url = attachment.url {
+                    MarkdownGallerySheet(images: images, initial: MarkdownInlineImage(alt: attachment.name, src: url.absoluteString), context: nil)
+                }
             }
         }
     }

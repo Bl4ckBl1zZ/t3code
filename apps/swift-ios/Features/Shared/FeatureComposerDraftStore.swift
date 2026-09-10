@@ -308,9 +308,30 @@ public actor FeatureComposerDraftStore {
         return "environment:\(environment):thread:\(threadID)"
     }
 
-    public static func newTaskKey(project: FeatureProject) -> String {
+    public static func newTaskKey(project: FeatureProject, draftID: String? = nil) -> String {
         let projectID = project.wireID ?? project.id
-        return "environment:\(project.environmentID):new-task:\(projectID)"
+        return "environment:\(project.environmentID):new-task:\(projectID)" + (draftID.map { ":draft:" + $0 } ?? "")
+    }
+
+    public struct NewTaskDraftSummary: Identifiable, Sendable {
+        public let id: String
+        public let projectID: String
+        public let draftID: String?
+        public let title: String
+    }
+
+    public func newTaskDrafts(projects: [FeatureProject]) throws -> [NewTaskDraftSummary] {
+        let drafts = try loadIfNeeded()
+        return projects.flatMap { project in
+            let prefix = Self.newTaskKey(project: project)
+            return drafts.compactMap { key, saved -> NewTaskDraftSummary? in
+                guard key == prefix || key.hasPrefix(prefix + ":draft:"),
+                      !saved.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !saved.attachments.isEmpty else { return nil }
+                return NewTaskDraftSummary(id: key, projectID: project.id,
+                    draftID: key == prefix ? nil : String(key.dropFirst((prefix + ":draft:").count)),
+                    title: saved.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Attachments" : String(saved.text.prefix(90)))
+            }
+        }.sorted { $0.id < $1.id }
     }
 
     private func loadIfNeeded() throws -> [String: PersistedDraft] {

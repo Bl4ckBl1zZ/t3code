@@ -9,6 +9,7 @@ public struct NewThreadView: View {
     private let draftStore: FeatureComposerDraftStore
     private let projectMemoryStore: NewTaskProjectMemoryStore
     private let initialProjectID: String?
+    private let draftID: String?
 
     @State private var projectID = ""
     @State private var prompt = ""
@@ -45,6 +46,7 @@ public struct NewThreadView: View {
         onCreated: @escaping (FeatureThread) -> Void,
         onCreateProject: @escaping @MainActor () -> Void = {},
         initialProjectID: String? = nil,
+        draftID: String? = nil,
         draftStore: FeatureComposerDraftStore = .shared,
         projectMemoryStore: NewTaskProjectMemoryStore = .shared
     ) {
@@ -53,6 +55,7 @@ public struct NewThreadView: View {
         self.onCreated = onCreated
         self.onCreateProject = onCreateProject
         self.initialProjectID = initialProjectID
+        self.draftID = draftID
         self.draftStore = draftStore
         self.projectMemoryStore = projectMemoryStore
         _projectMemory = State(initialValue: projectMemoryStore.memory())
@@ -440,8 +443,16 @@ public struct NewThreadView: View {
             get: { selection },
             set: { value in
                 selectionIsExplicit = true
-                selection = value
-                preferredSelection = value
+                var next = value
+                if let project = selectedProject {
+                    if selection?.providerID != value?.providerID || selection?.modelID != value?.modelID {
+                        next = projectMemoryStore.applyingFastMode(to: value, environmentID: project.environmentID)
+                    } else {
+                        projectMemoryStore.rememberFastMode(value, environmentID: project.environmentID)
+                    }
+                }
+                selection = next
+                preferredSelection = next
             }
         )
     }
@@ -657,6 +668,7 @@ public struct NewThreadView: View {
             ),
             in: providers
         )
+        selection = projectMemoryStore.applyingFastMode(to: selection, environmentID: project.environmentID)
         selectionIsExplicit = carriedSelection != nil
         let preferences = DailyUXCreationContext.environmentPreferences(
             for: project,
@@ -722,7 +734,7 @@ public struct NewThreadView: View {
               !requestedProjectID.isEmpty else {
             return
         }
-        let key = FeatureComposerDraftStore.newTaskKey(project: project)
+        let key = FeatureComposerDraftStore.newTaskKey(project: project, draftID: draftID)
         let pendingImmediateSave = immediateDraftSaveTasks[key]
         await NewTaskDraftWriteFence.wait(pendingImmediateSave)
         guard !Task.isCancelled,
@@ -780,7 +792,7 @@ public struct NewThreadView: View {
 
     private var currentDraftKey: String? {
         guard let project = selectedProject else { return nil }
-        return FeatureComposerDraftStore.newTaskKey(project: project)
+        return FeatureComposerDraftStore.newTaskKey(project: project, draftID: draftID)
     }
 
     private var composerDraft: FeatureComposerDraft {

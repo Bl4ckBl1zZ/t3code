@@ -20,6 +20,9 @@ public struct SettingsAgentsView: View {
     private let preferences: FeatureEnvironmentPreferences?
 
     @State private var isEditingAutoCompact = false
+    @State private var modelConfiguration: ServerConfigSnapshot?
+    @State private var modelError: String?
+    @State private var isSavingModels = false
 
     public init(
         serverSettings: any FeatureServerSettingsManaging,
@@ -38,6 +41,32 @@ public struct SettingsAgentsView: View {
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
+                if let modelError { SettingsErrorBanner(message: modelError) }
+                if let config = modelConfiguration, let environmentID {
+                    ForEach(config.providers.filter(\.enabled), id: \.instanceId) { provider in
+                        let models = provider.models.filter { !$0.isCustom }
+                        let hidden = Set(config.settings?.providerModelPreferences[provider.instanceId]?.hiddenModels ?? [])
+                        SettingsSection(title: "\(provider.displayName ?? provider.driver) models") {
+                            if !models.isEmpty {
+                                Button(models.allSatisfy { hidden.contains($0.slug) } ? "Enable all" : "Disable all") {
+                                    let slugs = Set(models.map(\.slug))
+                                    saveModels(provider.instanceId, hidden: models.allSatisfy { hidden.contains($0.slug) }
+                                        ? hidden.subtracting(slugs) : hidden.union(slugs), environmentID: environmentID)
+                                }.frame(minHeight: T3Metrics.minimumTapTarget)
+                                ForEach(models) { model in
+                                    Toggle(model.name, isOn: Binding(
+                                        get: { !hidden.contains(model.slug) },
+                                        set: { enabled in
+                                            var next = hidden
+                                            if enabled { next.remove(model.slug) } else { next.insert(model.slug) }
+                                            saveModels(provider.instanceId, hidden: next, environmentID: environmentID)
+                                        }
+                                    )).padding(.horizontal, SettingsMetrics.rowPadding)
+                                }
+                            }
+                        }.disabled(isSavingModels)
+                    }
+                }
                 if let environmentID, preferences != nil {
                     SettingsSection(
                         title: "Claude",
@@ -93,8 +122,34 @@ public struct SettingsAgentsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(T3Colors.background)
+        .task(id: environmentID) {
+            modelConfiguration = nil
+            modelError = nil
+            guard let environmentID else { return }
+            do {
+                let config = try await serverSettings.providerModelConfiguration(environmentID: environmentID)
+                guard !Task.isCancelled, self.environmentID == environmentID else { return }
+                modelConfiguration = config
+            }
+            catch { if !Task.isCancelled { modelError = error.localizedDescription } }
+        }
         .navigationTitle("Agents")
         .navigationBarTitleDisplayMode(.inline)
+    }
+    private func saveModels(_ providerID: String, hidden: Set<String>, environmentID: String) {
+        guard !isSavingModels else { return }
+        isSavingModels = true
+        modelError = nil
+        Task {
+            defer { isSavingModels = false }
+            do {
+                try await serverSettings.updateServerSettings(environmentID: environmentID,
+                    patch: ServerSettingsPatchInput(hiddenModelsByProvider: [providerID: hidden.sorted()]))
+                let config = try await serverSettings.providerModelConfiguration(environmentID: environmentID)
+                guard self.environmentID == environmentID else { return }
+                modelConfiguration = config
+            } catch { if self.environmentID == environmentID { modelError = "Could not save models: \(error.localizedDescription)" } }
+        }
     }
 }
 

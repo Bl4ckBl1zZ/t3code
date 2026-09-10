@@ -215,6 +215,59 @@ function applyCodex0151DefinitionCompatibility(
   definitionSchema: Schema.Json,
 ): Schema.Json {
   if (
+    definitionName === "ThreadItem" &&
+    definitionSchema !== null &&
+    typeof definitionSchema === "object" &&
+    !Array.isArray(definitionSchema)
+  ) {
+    const variants = (definitionSchema as Readonly<Record<string, Schema.Json>>).oneOf;
+    if (Array.isArray(variants))
+      return {
+        ...definitionSchema,
+        oneOf: variants.map((variant) => {
+          if (variant === null || typeof variant !== "object" || Array.isArray(variant))
+            return variant;
+          const properties = variant.properties;
+          if (properties === null || typeof properties !== "object" || Array.isArray(properties))
+            return variant;
+          const type = properties.type;
+          if (
+            type === null ||
+            typeof type !== "object" ||
+            Array.isArray(type) ||
+            !Array.isArray(type.enum) ||
+            !type.enum.includes("agentMessage")
+          )
+            return variant;
+          return {
+            ...variant,
+            properties: {
+              ...properties,
+              delivery: { type: ["string", "null"] },
+              questions: {
+                anyOf: [
+                  {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      required: ["title"],
+                      properties: {
+                        title: { type: "string" },
+                        options: {
+                          anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+                        },
+                      },
+                    },
+                  },
+                  { type: "null" },
+                ],
+              },
+            },
+          };
+        }),
+      };
+  }
+  if (
     !CodexErrorInfoCompatibilityExports.has(exportName) ||
     definitionName !== "CodexErrorInfo" ||
     typeof definitionSchema !== "object"

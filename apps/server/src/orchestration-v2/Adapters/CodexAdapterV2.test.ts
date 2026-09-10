@@ -24,6 +24,7 @@ import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -1113,10 +1114,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
       });
       const events: Array<ProviderAdapterV2Event> = [];
+      const terminalReceipt = yield* Deferred.make<void>();
       yield* runtime.events.pipe(
         Stream.runForEach((event) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             events.push(event);
+            if (event.type === "turn.terminal") yield* Deferred.succeed(terminalReceipt, undefined);
           }),
         ),
         Effect.forkScoped,
@@ -1142,6 +1145,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         events,
         continuationRequests,
         terminalEvents,
+        awaitTerminal: Deferred.await(terminalReceipt),
         subagentUpdates,
         hasPendingBackgroundWork,
       };
@@ -1152,6 +1156,84 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
         event.type === "message.updated" && event.message.role === "assistant",
     );
+
+  it.effect("projects async questions without holding the provider turn open", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-async-question";
+        const nativeThreadId = "native-async-thread";
+        const nativeTurnId = "native-async-turn";
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Ask me a question." }),
+            {
+              type: "emit_inbound",
+              label: "item/completed/async",
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622465500,
+                  item: {
+                    type: "agentMessage",
+                    id: "async-item",
+                    text: "Which spec should I use?",
+                    phase: "commentary",
+                    delivery: "async",
+                    questions: [{ title: "Which spec?", options: ["Current", "New"] }],
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("async-attempt"),
+            text: "Ask me a question.",
+          }),
+        );
+        yield* harness.awaitTerminal;
+        const events = harness.events;
+        const request = events.find((event) => event.type === "runtime_request.updated");
+        assert.equal(request?.type, "runtime_request.updated");
+        if (request?.type === "runtime_request.updated") {
+          assert.equal(request.runtimeRequest.responseMode, "message");
+          assert.equal(request.runtimeRequest.status, "pending");
+        }
+        const item = events.find(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+        );
+        assert.equal(item?.type, "turn_item.updated");
+        if (item?.type === "turn_item.updated" && item.turnItem.type === "user_input_request") {
+          assert.equal(item.turnItem.questions[0]?.question, "Which spec?");
+          assert.deepEqual(
+            item.turnItem.questions[0]?.options.map((option) => option.label),
+            ["Current", "New"],
+          );
+        }
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
 
   it.effect("projects retryable app-server errors and resolves the same item after recovery", () =>
     Effect.scoped(
