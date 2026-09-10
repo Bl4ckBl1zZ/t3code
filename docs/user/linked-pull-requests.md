@@ -82,3 +82,8 @@ freshness and enabled auto-merge status appear below the PR heading.
 
 **Refresh from host** reloads current details and code. Pulling down in the PR workspace refreshes
 its host listings, including the signed-in identity and change counts.
+
+On iOS, **Edit pull request** changes the title or description when your host and permissions allow
+it. Saving one leaves the other untouched, and an empty description clears it. In **Timeline**, use
+**Add comment** to post a remark. Your own editable remarks have **Edit comment**, including those
+inside review conversations. Failed saves keep the editor’s text so you can retry.

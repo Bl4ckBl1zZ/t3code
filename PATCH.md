@@ -759,3 +759,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   as off. Merge/close/update/auto-merge use concrete review sheets; reverse actions remain reachable.
   Explicit workspace/detail/Code refreshes invalidate the appropriate server cache, while normal
   browsing retains cache sharing. Identity preflight invalidates before reading current host metadata.
+
+- Native PR title/description editing follows upstream host/ownership rules; each save sends only
+  the opened field, and an empty description explicitly clears it. Comment editing requires the
+  viewer’s own issue/review remark and never rewrites a review summary. Timeline and paginated
+  review-conversation comments share the editor; loaded-page edits survive the subsequent refresh.
+  New top-level comments use the host comment endpoint. Failed saves keep editor text and show the
+  error, and every write validates current repository identity before submission.

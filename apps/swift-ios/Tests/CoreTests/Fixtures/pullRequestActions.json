@@ -37,6 +37,10 @@
       "reviewers": {
         "request": true,
         "listCandidates": true
+      },
+      "edit": {
+        "changeRequest": true,
+        "comment": true
       }
     },
     "viewerPermissions": {
@@ -105,5 +109,17 @@
     "number": 42,
     "action": "update-branch",
     "updateMethod": "merge"
+  },
+  "titleUpdate": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "title": "New title"
+  },
+  "clearDescription": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "body": ""
   }
 }

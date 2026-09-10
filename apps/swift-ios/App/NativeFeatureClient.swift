@@ -2141,6 +2141,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, resolved: resolved)
     }
 
+    func updatePullRequestText(scope: FeaturePullRequestScope, number: Int, expectedURL: String, update: PullRequestTextUpdate) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.updatePullRequestText(projectID: route.projectID, repository: route.repository, number: number, update: update)
+        pullRequestPreviewCache.removeAll(keepingCapacity: true)
+    }
+
+    func updatePullRequestComment(scope: FeaturePullRequestScope, number: Int, expectedURL: String, commentID: String, kind: String, body: String) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.updatePullRequestComment(projectID: route.projectID, repository: route.repository, number: number, commentID: commentID, kind: kind, body: body)
+    }
+
+    func commentOnPullRequest(scope: FeaturePullRequestScope, number: Int, expectedURL: String, body: String) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.commentOnPullRequest(projectID: route.projectID, repository: route.repository, number: number, body: body)
+    }
+
     func runPullRequestAction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestActionRequest) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.runPullRequestAction(projectID: route.projectID, repository: route.repository, number: number, request: request)

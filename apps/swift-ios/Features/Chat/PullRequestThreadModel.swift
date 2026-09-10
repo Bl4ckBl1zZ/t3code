@@ -16,6 +16,10 @@ final class PullRequestThreadModel {
         threadID = thread.id; comments = thread.comments; cursor = thread.nextCommentsCursor; resolved = thread.isResolved
     }
 
+    func updateComment(id: String, body: String) {
+        if let index = comments.firstIndex(where: { $0.id == id }) { comments[index].body = body }
+    }
+
     func reconcile(_ thread: PullRequestReviewThread) {
         guard thread.id == threadID else { return }
         let freshIDs = Set(thread.comments.map(\.id))

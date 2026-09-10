@@ -18,6 +18,7 @@ struct PullRequestDetailSheet: View {
 
     @State private var editingLabels = false
     @State private var reviewing = false
+    @State private var textEdit: PullRequestTextEdit?
     @State private var selectedAction: NativePullRequestAction?
     @State private var actionPending = false
     @State private var hostRefreshRevision = 0
@@ -79,6 +80,11 @@ struct PullRequestDetailSheet: View {
                 PullRequestReviewSheet(draft: draft, verdicts: PullRequestReviewDraftModel.verdicts(capabilities: detail.capabilities, viewer: detail.viewerPermissions), submit: { try await submit(displayedNumber, detail.url, $0) }) {
                     Task { await load() }
                 }
+            }
+        }
+        .sheet(item: $textEdit) { edit in
+            if let detail = overview?.detail, let editing = access.editing?(displayedNumber, detail.url) {
+                PullRequestTextEditor(edit: edit, access: editing) { await load(preserveContent: true) }
             }
         }
         .sheet(item: $selectedAction) { action in
@@ -159,6 +165,12 @@ struct PullRequestDetailSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(overview.detail)
+                if access.editing != nil, PullRequestEditingLogic.canEditChangeRequest(overview.detail) {
+                    Menu("Edit pull request", systemImage: "pencil") {
+                        Button("Edit title") { textEdit = .title(overview.detail.title) }
+                        Button("Edit description") { textEdit = .description(overview.detail.body) }
+                    }.frame(minHeight: 44)
+                }
                 if access.runAction != nil, !PullRequestActionLogic.offered(overview.detail).isEmpty {
                     Menu {
                         ForEach(PullRequestActionLogic.offered(overview.detail)) { action in
@@ -202,6 +214,9 @@ struct PullRequestDetailSheet: View {
                 case .summary:
                     summary(overview.detail, activity: overview.activity)
                 case .timeline:
+                    if access.editing != nil, overview.detail.capabilities?.comment == true, overview.detail.viewerPermissions?.comment == true {
+                        Button("Add comment", systemImage: "text.bubble") { textEdit = .newComment }.frame(minHeight: 44)
+                    }
                     timeline(overview.activity)
                     if let activity = overview.activity, !activity.reviewThreads.isEmpty {
                         section("Review conversations") {
@@ -211,6 +226,8 @@ struct PullRequestDetailSheet: View {
                                         access: access.threads?(displayedNumber, overview.detail.url),
                                         canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
                                         canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
+                                        editing: access.editing?(displayedNumber, overview.detail.url),
+                                        canEditComment: { PullRequestEditingLogic.canEditComment(detail: overview.detail, author: $0.author, kind: "review-comment") },
                                         onReplied: { await load(preserveContent: true) })
                                 }
                             }
@@ -226,6 +243,8 @@ struct PullRequestDetailSheet: View {
                                 access: access.threads?(displayedNumber, overview.detail.url),
                                 canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
                                 canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
+                                editing: access.editing?(displayedNumber, overview.detail.url),
+                                canEditComment: { PullRequestEditingLogic.canEditComment(detail: overview.detail, author: $0.author, kind: "review-comment") },
                                 refresh: { await load(preserveContent: true) }),
                             canComment: access.submitReview != nil && overview.detail.capabilities?.review?.inlineComment == true && overview.detail.viewerPermissions?.comment == true && !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty)
                             .id(displayedNumber)
@@ -521,6 +540,11 @@ struct PullRequestDetailSheet: View {
                 if !comment.body.isEmpty {
                     MarkdownMessageView(comment.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let detail = overview?.detail, access.editing != nil,
+                   PullRequestEditingLogic.canEditComment(detail: detail, author: comment.author, kind: comment.kind.rawValue) {
+                    Button("Edit comment", systemImage: "pencil") { textEdit = .comment(id: comment.id, kind: comment.kind.rawValue, body: comment.body) }
+                        .font(T3Typography.supporting).frame(minHeight: 44)
                 }
             }
             .padding(12)

@@ -65,7 +65,7 @@ public struct PullRequestCommit: Codable, Equatable, Sendable {
 public struct PullRequestThreadComment: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let author: PullRequestActor?
-    public let body: String
+    public var body: String
     public let createdAt: String
     public let url: String?
 }
@@ -175,6 +175,8 @@ public struct PullRequestStack: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
+    public var comment: Bool? = nil
+    public var edit: NativePullRequestEditCapabilities? = nil
     public var diff: Bool? = nil
     public var review: NativePullRequestReviewCapabilities? = nil
     public var labels: Bool? = nil

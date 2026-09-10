@@ -34,6 +34,7 @@ import {
   PullRequestThreadCommentsResult,
   PullRequestDetail,
   PullRequestActionInput,
+  PullRequestUpdateInput,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -831,7 +832,14 @@ const pullRequestActionsPath = NodePath.join(
   "pullRequestActions.json",
 );
 const pullRequestActionsSerialized = `${JSON.stringify(
-  Schema.encodeSync(Schema.Struct({ detail: PullRequestDetail, input: PullRequestActionInput }))({
+  Schema.encodeSync(
+    Schema.Struct({
+      detail: PullRequestDetail,
+      input: PullRequestActionInput,
+      titleUpdate: PullRequestUpdateInput,
+      clearDescription: PullRequestUpdateInput,
+    }),
+  )({
     detail: {
       provider: "github",
       projectId,
@@ -864,6 +872,7 @@ const pullRequestActionsSerialized = `${JSON.stringify(
       behindBy: 3,
       autoMergeEnabled: false,
       capabilities: {
+        edit: { changeRequest: true, comment: true },
         diff: true,
         comment: true,
         actions: [
@@ -905,6 +914,8 @@ const pullRequestActionsSerialized = `${JSON.stringify(
         updateMethods: ["merge"],
       },
     },
+    titleUpdate: { projectId, repository: "owner/repo", number: 42, title: "New title" },
+    clearDescription: { projectId, repository: "owner/repo", number: 42, body: "" },
     input: {
       projectId,
       repository: "owner/repo",

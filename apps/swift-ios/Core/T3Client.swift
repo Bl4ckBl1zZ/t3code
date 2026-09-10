@@ -841,6 +841,26 @@ public actor T3Client {
         let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object([:]), as: JSONValue.self)
     }
 
+    public func updatePullRequestText(projectID: String, repository: String, number: Int, update: PullRequestTextUpdate) async throws {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
+        if let title = update.title { payload["title"] = .string(title) }
+        if let body = update.body { payload["body"] = .string(body) }
+        let _: JSONValue = try await rpc.request("pullRequests.update", payload: .object(payload), as: JSONValue.self)
+    }
+
+    public func updatePullRequestComment(projectID: String, repository: String, number: Int, commentID: String, kind: String, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.updateComment", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "commentId": .string(commentID), "kind": .string(kind), "body": .string(body),
+        ]), as: JSONValue.self)
+    }
+
+    public func commentOnPullRequest(projectID: String, repository: String, number: Int, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.comment", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "body": .string(body),
+        ]), as: JSONValue.self)
+    }
+
     public func runPullRequestAction(projectID: String, repository: String, number: Int, request: PullRequestActionRequest) async throws {
         var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "action": .string(request.action)]
         if let method = request.mergeMethod { payload["mergeMethod"] = .string(method) }

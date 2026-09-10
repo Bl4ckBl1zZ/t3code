@@ -5,12 +5,15 @@ struct PullRequestThreadCard: View {
     let access: FeaturePullRequestThreadAccess?
     let canReply: Bool
     let canResolve: Bool
+    let editing: FeaturePullRequestEditingAccess?
+    let canEditComment: (PullRequestThreadComment) -> Bool
     let onReplied: () async -> Void
+    @State private var textEdit: PullRequestTextEdit?
     @State private var model: PullRequestThreadModel
     @State private var expanded: Bool
 
-    init(thread: PullRequestReviewThread, access: FeaturePullRequestThreadAccess?, canReply: Bool, canResolve: Bool, onReplied: @escaping () async -> Void) {
-        self.thread = thread; self.access = access; self.canReply = canReply; self.canResolve = canResolve; self.onReplied = onReplied
+    init(thread: PullRequestReviewThread, access: FeaturePullRequestThreadAccess?, canReply: Bool, canResolve: Bool, editing: FeaturePullRequestEditingAccess?, canEditComment: @escaping (PullRequestThreadComment) -> Bool, onReplied: @escaping () async -> Void) {
+        self.thread = thread; self.access = access; self.canReply = canReply; self.canResolve = canResolve; self.editing = editing; self.canEditComment = canEditComment; self.onReplied = onReplied
         _model = State(initialValue: PullRequestThreadModel(thread: thread))
         _expanded = State(initialValue: !thread.isResolved)
     }
@@ -32,6 +35,10 @@ struct PullRequestThreadCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(comment.author?.login ?? "Unknown").font(T3Typography.supportingStrong)
                         MarkdownMessageView(comment.body)
+                        if editing != nil, canEditComment(comment) {
+                            Button("Edit comment", systemImage: "pencil") { textEdit = .comment(id: comment.id, kind: "review-comment", body: comment.body) }
+                                .font(T3Typography.supporting).frame(minHeight: 44)
+                        }
                     }
                     Divider()
                 }
@@ -54,6 +61,15 @@ struct PullRequestThreadCard: View {
             }
         }
         .padding(12).background(T3Colors.subtle, in: RoundedRectangle(cornerRadius: 12))
+        .sheet(item: $textEdit) { edit in
+            if let editing {
+                PullRequestTextEditor(edit: edit, access: FeaturePullRequestEditingAccess(update: editing.update,
+                    updateComment: { id, kind, body in
+                        try await editing.updateComment(id, kind, body)
+                        model.updateComment(id: id, body: body)
+                    }, comment: editing.comment), completed: onReplied)
+            }
+        }
         .onChange(of: thread) { _, latest in model.reconcile(latest) }
         .accessibilityElement(children: .contain)
     }
@@ -65,5 +81,7 @@ struct PullRequestConversationContext {
     let access: FeaturePullRequestThreadAccess?
     let canReply: Bool
     let canResolve: Bool
+    let editing: FeaturePullRequestEditingAccess?
+    let canEditComment: (PullRequestThreadComment) -> Bool
     let refresh: () async -> Void
 }

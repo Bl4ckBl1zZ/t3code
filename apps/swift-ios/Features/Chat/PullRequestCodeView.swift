@@ -209,7 +209,7 @@ private struct PullRequestCodeFileView: View {
 
     private func conversation(_ thread: PullRequestReviewThread) -> some View {
         PullRequestThreadCard(thread: thread, access: conversations.access, canReply: conversations.canReply,
-            canResolve: conversations.canResolve, onReplied: conversations.refresh)
+            canResolve: conversations.canResolve, editing: conversations.editing, canEditComment: conversations.canEditComment, onReplied: conversations.refresh)
     }
 
 }

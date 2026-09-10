@@ -39,7 +39,7 @@ final class PullRequestReviewDraftModel {
 
     func remove(_ id: UUID) { comments.removeAll { $0.id == id }; persist() }
 
-    static func validBody(_ body: String) -> Bool {
+    nonisolated static func validBody(_ body: String) -> Bool {
         !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && body.utf16.count <= 65_536
     }
 
