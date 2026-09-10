@@ -634,3 +634,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   attached banner stack keeps task activity in front and retains urgent fork notices;
   Swift adds an expandable task row beside, outside, the voice composer's gesture tree.
   Approval controls use compact web styling while preserving V2 non-resumable guards.
+
+- Web minimap previous/next-turn navigation uses the V2 timeline row positions.
+  Keep the fork’s transform/opacity strip animations and skip unchanged scroll
+  attributes; upstream width/background animations would regress scroll performance.

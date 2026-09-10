@@ -163,3 +163,7 @@ While an agent works through a task list, the composer shows the current task an
 completion count. Expand the row to see the full list. Other notices stay accessible
 above it; on web, use the notice peek or keyboard focus to reveal them and Escape to
 collapse the stack.
+
+On web and desktop, the timeline minimap includes **Previous turn** and **Next turn**
+buttons. They follow the turn at your reading position; keyboard focus on the rail
+starts there too. iPhone and iPad offer the same navigation in the thread menu.
