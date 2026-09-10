@@ -7664,14 +7664,40 @@ function ChatViewContent(props: ChatViewProps) {
               ? panelLayoutControls
               : null}
           <ChatHeader
-            threadRef={activeThreadRef}
             activeThreadEnvironmentId={activeThread.environmentId}
+            activeThreadId={activeThread.id}
             activeThreadTitle={activeThread.title}
-            activeProjectName={activeProject?.title}
-            activeProjectCwd={activeProject?.workspaceRoot ?? null}
-            activeProjectFaviconPath={activeProject?.faviconPath ?? null}
+            isServerThread={isServerThread}
+            activeProject={isHermesConversation ? null : (activeProject ?? null)}
+            {...(draftId ? { draftId } : {})}
+            openInCwd={gitCwd}
+            gitCwd={gitCwd}
+            activeProjectScripts={isHermesConversation ? undefined : activeProject?.scripts}
+            preferredScriptId={threadDetailsPanelProps.preferredScriptId}
+            keybindings={keybindings}
+            availableEditors={availableEditors}
+            onRunProjectScript={runProjectScript}
+            onAddProjectScript={saveProjectScript}
+            onUpdateProjectScript={updateProjectScript}
+            onDeleteProjectScript={deleteProjectScript}
+            onOpenPullRequest={threadDetailsPanelProps.onOpenPullRequest}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
             onNewThreadInProject={handleNewThreadInActiveProject}
+            onOpenProjectSettings={
+              activeProject
+                ? () => {
+                    const grouping = buildPhysicalToLogicalProjectKeyMap({
+                      projects: allProjects,
+                      settings: projectGroupingSettings,
+                      primaryEnvironmentId,
+                    });
+                    const projectKey =
+                      grouping.get(derivePhysicalProjectKey(activeProject)) ??
+                      deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
+                    void navigate({ to: "/projects/$projectKey", params: { projectKey } });
+                  }
+                : undefined
+            }
           />
         </WorkspacePageHeader>
 

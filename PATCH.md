@@ -269,9 +269,11 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `classifyMarkdownImageSource` renderer (`77c9d1eb5`, `5a7a7cf29`, `55c909334`). The fork's path
   already resolves workspace files through signed asset URLs and additionally handles browser
   artifacts and video, which upstream's image-only renderer does not.
-- Does not carry upstream's `useThreadActionMenu`-based "double-click chat header title to rename"
-  (`837f6b871`): the fork replaced that module with `useThreadActions.ts` plus inline menu items,
-  and its `ChatHeader.tsx` is a presentational breadcrumb with no menu of its own.
+- Ports upstream's chat-header title menu and double-click rename (`837f6b871`) through
+  `useHeaderThreadActions`, using the fork's V2 `useThreadActions` mutations and capability
+  checks. Settlement uses the same cached PR identity and age policy as the sidebar. Rename
+  state is scoped to both environment and thread. Compact headers keep project tools in the
+  details panel, preserving room for the fork's linked-PR and panel controls.
 - Runs CI as one self-hosted `verify` job, so upstream's test sharding, split Rust job, and
   macOS-gated `apps/mobile` native lint (`d7b9a689f`, `8f7da3b99`) have no fork counterpart. The
   PR-assets guard from `9f12eab38` is carried. `release.yml` adopts upstream's split

@@ -62,3 +62,5 @@ manual order for the displayed active threads. Pinned threads retain their separ
 On web and desktop, drop files onto a thread row or search result to open that thread and attach
 the files to its draft. This works in either sidebar layout. Files use the same validation and
 upload controls as files dropped onto the conversation; dropping never sends a message.
+
+The chat header also offers thread actions from its title menu. Double-click the title to rename it; Enter saves and Escape cancels. The menu includes the supported pin, settle, snooze, copy, archive, and delete actions. Click the project breadcrumb to open project settings.
