@@ -28,7 +28,7 @@ export function PullRequestMarkdown({
 }) {
   const segments = splitPullRequestBody(text);
   return (
-    <div className={cn("space-y-3", className)}>
+    <div className={cn("space-y-3", className)} data-image-gallery>
       {segments.map((segment) => {
         if (segment.kind === "markdown") {
           return (

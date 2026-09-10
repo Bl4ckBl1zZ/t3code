@@ -946,3 +946,12 @@ The migration-journal reconciliation marker is registered alongside this fork-ow
 clients gate the new operations against older servers. Swift decodes real schema-generated
 fixtures for scan results, import counts and capability flags. Expo remains on its existing
 onboarding UI and can decode the additive contracts; its V1 importer is not introduced.
+
+### Markdown image gallery (2026-09-10 parity port)
+
+The upstream lazy, document-ordered Markdown gallery is adapted to the fork's `MarkdownMedia`
+renderer and existing zoom dialog. PR descriptions share a gallery across their Markdown/media
+segments. Linked badges remain links; remote image links open their full-size target. Weak DOM
+keys release signed URLs when images unmount. Repeated images retain the clicked occurrence,
+and navigation wraps correctly after any number of backward steps. The native Markdown
+renderer already supplies a paged gallery with adjacent-page loading and needs no duplicate UI.

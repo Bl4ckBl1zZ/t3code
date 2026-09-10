@@ -30,3 +30,8 @@ export function buildExpandedImagePreview(
     index: selectedIndex,
   };
 }
+
+/** JavaScript's remainder is negative after enough backward gallery steps. */
+export function expandedImageIndex(initial: number, offset: number, count: number): number {
+  return count > 0 ? (((initial + offset) % count) + count) % count : 0;
+}

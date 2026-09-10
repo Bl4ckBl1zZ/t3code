@@ -11,6 +11,8 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import type { AssetResource, ScopedThreadRef } from "@t3tools/contracts";
 import { isWorkspaceVideoPreviewPath } from "@t3tools/shared/filePreview";
 import { memo, useState } from "react";
+import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
+import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { createPortal } from "react-dom";
 
 import { useAssetUrlState } from "../../assets/assetUrls";
@@ -105,7 +107,7 @@ function ResolvedMedia({
   asset?: { environmentId: ScopedThreadRef["environmentId"]; resource: AssetResource };
   onRetry?: () => Promise<void>;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState<ExpandedImagePreview | null>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
   if (isVideo) {
@@ -142,9 +144,23 @@ function ResolvedMedia({
           type="button"
           className="block max-w-full cursor-zoom-in"
           aria-label={`Expand image ${name}`}
-          onClick={() => setExpanded(true)}
+          onClick={(event) => {
+            const image = event.currentTarget.querySelector("img");
+            const preview = image ? markdownImageGallery(image) : null;
+            if (!preview) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setExpanded(preview);
+          }}
         >
           <img
+            ref={(image) => {
+              if (!image) return;
+              markdownImageItems.set(image, { src: url, name });
+              return () => {
+                markdownImageItems.delete(image);
+              };
+            }}
             src={url}
             alt={name}
             loading="lazy"
@@ -155,10 +171,7 @@ function ResolvedMedia({
       </MediaActions>
       {expanded &&
         createPortal(
-          <ExpandedImageDialog
-            preview={{ images: [{ src: url, name }], index: 0 }}
-            onClose={() => setExpanded(false)}
-          />,
+          <ExpandedImageDialog preview={expanded} onClose={() => setExpanded(null)} />,
           document.body,
         )}
     </>

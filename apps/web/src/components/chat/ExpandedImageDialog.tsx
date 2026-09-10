@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
-import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { expandedImageIndex, type ExpandedImagePreview } from "./ExpandedImagePreview";
 
 import { ZoomableImage, type ZoomableImageHandle } from "./ZoomableImage";
 
@@ -51,7 +51,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 }: ExpandedImageDialogProps) {
   const [imageOffset, setImageOffset] = useState(0);
   const zoomableImageRef = useRef<ZoomableImageHandle>(null);
-  const index = (preview.index + imageOffset + preview.images.length) % preview.images.length;
+  const index = expandedImageIndex(preview.index, imageOffset, preview.images.length);
 
   const navigateImage = useCallback((direction: -1 | 1) => {
     setImageOffset((current) => current + direction);
