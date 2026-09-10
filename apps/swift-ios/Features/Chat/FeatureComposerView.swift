@@ -67,6 +67,8 @@ struct FeatureComposerView: View {
     private let historyDraftStore: FeatureComposerDraftStore
     private let onWillStash: () async -> Void
     private let onDidStash: () -> Void
+    private let externalFileDrop: ThreadFileDropBatch?
+    private let onExternalFileDropConsumed: (UUID) -> Void
     @State private var historyGeneration = UUID()
     @State private var promptHistory = ComposerPromptHistory()
     @State private var stashedDrafts: [FeatureComposerStashEntry] = []
@@ -103,6 +105,8 @@ struct FeatureComposerView: View {
         historyDraftStore: FeatureComposerDraftStore = .shared,
         onWillStash: @escaping () async -> Void = {},
         onDidStash: @escaping () -> Void = {},
+        externalFileDrop: ThreadFileDropBatch? = nil,
+        onExternalFileDropConsumed: @escaping (UUID) -> Void = { _ in },
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)? = nil
     ) {
@@ -130,6 +134,8 @@ struct FeatureComposerView: View {
         self.historyDraftStore = historyDraftStore
         self.onWillStash = onWillStash
         self.onDidStash = onDidStash
+        self.externalFileDrop = externalFileDrop
+        self.onExternalFileDropConsumed = onExternalFileDropConsumed
         self.onApprovalDecision = onApprovalDecision
         self.onUserInputSubmit = onUserInputSubmit
     }
@@ -166,6 +172,7 @@ struct FeatureComposerView: View {
             .alert("Attach files", isPresented: Binding(get: { fileDropError != nil }, set: { if !$0 { fileDropError = nil } })) {
                 Button("OK") { fileDropError = nil }
             } message: { Text(fileDropError ?? "") }
+            .task(id: readyExternalFileDropID) { await receiveExternalFileDrop() }
             .task(id: historyDraftKey) {
                 historyGeneration = UUID()
                 promptHistory = ComposerPromptHistory()
@@ -268,6 +275,7 @@ struct FeatureComposerView: View {
                 attachVoice()
             }
             .onDisappear {
+                historyGeneration = UUID()
                 caret.stopTracking()
                 voice.detach(identity: powerFeatures.voiceComposerIdentity)
             }
@@ -434,6 +442,47 @@ struct FeatureComposerView: View {
                 }
             }
         }
+    }
+
+    private var readyExternalFileDropID: UUID? {
+        guard !isSending, !isStashing, !voice.state.isBusy,
+            externalFileDrop?.draftKey == historyDraftKey else { return nil }
+        return externalFileDrop?.id
+    }
+
+    private func receiveExternalFileDrop() async {
+        guard readyExternalFileDropID != nil, let batch = externalFileDrop else { return }
+        let remaining = max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
+        let accepted = min(remaining, batch.providers.count - batch.nextIndex)
+        let endIndex = batch.nextIndex + accepted
+        let operation = attachmentPreparation.begin(itemCount: accepted)
+        defer { attachmentPreparation.finish(operation) }
+        var failures: [String] = []
+        while batch.nextIndex < endIndex {
+            let index = batch.nextIndex
+            let provider = batch.providers[index]
+            do {
+                guard let type = ThreadFileDropBatch.supportedType(provider) else { throw CocoaError(.fileReadUnsupportedScheme) }
+                let attachment = try await FeatureDroppedAttachment.load(provider, typeIdentifier: type)
+                guard !Task.isCancelled, historyDraftKey == batch.draftKey else { return }
+                guard batch.nextIndex == index else { continue }
+                guard attachments.count < 8 else { break }
+                attachments.append(attachment)
+                batch.advance(expectedIndex: index)
+            } catch {
+                guard !Task.isCancelled, historyDraftKey == batch.draftKey else { return }
+                failures.append(error.localizedDescription)
+                batch.advance(expectedIndex: index)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        if !batch.isComplete || batch.omittedCount > 0 {
+            failures.append("A message can contain up to 8 attachments. Extra files were not added.")
+        }
+        batch.finish()
+        onExternalFileDropConsumed(batch.id)
+        if !failures.isEmpty { fileDropError = failures.joined(separator: "\n") }
+        focused.wrappedValue = true
     }
 
     /// Resolve each provider while its temporary file is valid, then append only

@@ -74,3 +74,11 @@ automatic ordering. Pinned threads have their own order, and Work’s main threa
 
 Older servers keep local-only drag ordering. If a section mixes older servers with threads that
 already have synced positions, update those servers before reordering the section.
+
+## Drop files onto a native thread
+
+On iPad, drag files from another app onto a thread row to open its composer with those files.
+Existing text and attachments stay in place, and the message remains unsent. Preparation uses
+the same file-size and eight-attachment limits as the composer. If you leave while files are
+being prepared, return to that thread to finish adding the pending files during this app session.
+Archived rows and batch-selection mode do not accept drops.

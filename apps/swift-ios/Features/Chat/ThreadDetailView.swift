@@ -710,6 +710,10 @@ public struct ThreadDetailView: View {
                 await pending?.value
             },
             onDidStash: { isSwappingDraft = false },
+            externalFileDrop: didRestoreDraft && !isSwappingDraft ? model.pendingThreadFileDrops[thread.id] : nil,
+            onExternalFileDropConsumed: { id in
+                if model.pendingThreadFileDrops[thread.id]?.id == id { model.pendingThreadFileDrops[thread.id] = nil }
+            },
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },

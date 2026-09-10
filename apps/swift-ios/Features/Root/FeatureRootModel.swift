@@ -15,6 +15,8 @@ struct FeatureDetailRenderUpdate: Equatable {
 @MainActor
 @Observable
 public final class FeatureRootModel {
+    var pendingThreadFileDrops: [String: ThreadFileDropBatch] = [:]
+
     var pendingPullRequestPrompts: [String: PendingPullRequestPrompt] = [:]
 
     func stagePullRequestTask(scope: FeaturePullRequestScope, overview: FeaturePullRequestOverview, kind: PullRequestHandoffKind, mode: PullRequestCheckoutMode, selection: PullRequestHandoffSelection? = nil) async throws -> String {
@@ -421,6 +423,7 @@ public final class FeatureRootModel {
         return await perform {
             try await client.deleteThread(id: id)
             guard currentEnvironmentIdentity == environment else { return }
+            pendingThreadFileDrops[id] = nil
             removeThread(id: id)
             removeDetail(id: id)
             // A deleted thread is the one thing that should drop a review

@@ -44,6 +44,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     var batchSelection: Set<String> = []
     var onToggleSelection: (String) -> Void = { _ in }
     var onDiscardDraft: (FeatureThread) -> Void = { _ in }
+    var onDropFiles: ((FeatureThread, [NSItemProvider]) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -68,6 +69,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         collectionView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
         collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
         collectionView.delegate = context.coordinator
+        collectionView.dropDelegate = context.coordinator
         context.coordinator.configure(collectionView)
         context.coordinator.themeRefresh = T3ThemeRefresh { [weak collectionView] in
             collectionView?.backgroundColor = T3Colors.uiBackground
@@ -82,10 +84,11 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     static func dismantleUIView(_ collectionView: UICollectionView, coordinator: Coordinator) {
         coordinator.invalidateTimer()
         collectionView.delegate = nil
+        collectionView.dropDelegate = nil
     }
 
     @MainActor
-    final class Coordinator: NSObject, UICollectionViewDelegate {
+    final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDropDelegate {
         private enum Section: Hashable {
             case main
         }
@@ -180,6 +183,29 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         func invalidateTimer() {
             timer?.invalidate()
             timer = nil
+        }
+
+        func collectionView(_ collectionView: UICollectionView, canHandle session: UIDropSession) -> Bool {
+            parent.onDropFiles != nil && !parent.isSelecting && session.localDragSession == nil &&
+                session.items.contains { ThreadFileDropBatch.supportedType($0.itemProvider) != nil }
+        }
+
+        private func fileDropTarget(_ collectionView: UICollectionView, session: UIDropSession) -> (IndexPath, FeatureThread)? {
+            guard !parent.isSelecting,
+                let indexPath = collectionView.indexPathForItem(at: session.location(in: collectionView)),
+                case let .thread(thread, _, _, _, _) = item(at: indexPath), !thread.isArchived else { return nil }
+            return (indexPath, thread)
+        }
+
+        func collectionView(_ collectionView: UICollectionView, dropSessionDidUpdate session: UIDropSession, withDestinationIndexPath destinationIndexPath: IndexPath?) -> UICollectionViewDropProposal {
+            guard fileDropTarget(collectionView, session: session) != nil else { return UICollectionViewDropProposal(operation: .forbidden) }
+            return UICollectionViewDropProposal(operation: .copy, intent: .insertIntoDestinationIndexPath)
+        }
+
+        func collectionView(_ collectionView: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
+            guard let (indexPath, thread) = fileDropTarget(collectionView, session: coordinator.session),
+                parent.onDropFiles?(thread, coordinator.items.map { $0.dragItem.itemProvider }) == true else { return }
+            for item in coordinator.items { coordinator.drop(item.dragItem, toItemAt: indexPath) }
         }
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

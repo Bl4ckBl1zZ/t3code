@@ -462,7 +462,8 @@ public struct WorkspaceView: View {
                     isSelecting = true
                     if !batchSelection.insert(id).inserted { batchSelection.remove(id) }
                 },
-                onDiscardDraft: { draftToDiscard = $0 }
+                onDiscardDraft: { draftToDiscard = $0 },
+                onDropFiles: receiveThreadFileDrop
             )
         }
         .background(T3Colors.background)
@@ -983,6 +984,25 @@ public struct WorkspaceView: View {
     private var selectedProjectIsAvailable: Bool {
         guard let selectedProjectID else { return true }
         return filterableProjects.contains { $0.id == selectedProjectID }
+    }
+
+    private func receiveThreadFileDrop(_ thread: FeatureThread, providers: [NSItemProvider]) -> Bool {
+        guard !isSelecting, !thread.isArchived,
+            model.snapshot.threads.contains(where: { $0.id == thread.id && !$0.isArchived }) else { return false }
+        let supported = providers.filter { ThreadFileDropBatch.supportedType($0) != nil }
+        guard !supported.isEmpty else { return false }
+        guard model.pendingThreadFileDrops[thread.id] == nil else {
+            noticeAlert = ThreadListActionAlert(title: "Files are being prepared", message: "Finish adding the previous drop before dropping more files on this thread.")
+            openThread(thread.id)
+            return false
+        }
+        guard model.pendingThreadFileDrops.count < 8 else {
+            noticeAlert = ThreadListActionAlert(title: "Pending file drops", message: "Open the threads with pending files before adding more.")
+            return false
+        }
+        model.pendingThreadFileDrops[thread.id] = ThreadFileDropBatch(draftKey: FeatureComposerDraftStore.threadKey(thread), providers: supported)
+        openThread(thread.id)
+        return true
     }
 
     private func openThread(_ id: String) {

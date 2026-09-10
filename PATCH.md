@@ -863,3 +863,14 @@ follow an already-visible end; status/output replacements do not re-arm followin
 transcript coordinators own a bounded observable history cache and restore a stable tool-row
 anchor with SwiftUI scroll targets, preserving expansion across recycled cells. Native
 intra-row text offsets are not yet restored. This uses V2 item IDs, not the retired V1 work log.
+
+### Native sidebar file drops
+
+Native Home's UIKit collection accepts external file drops into thread rows across Code,
+Work, Chat and search, opens the scoped thread, and queues providers until draft restoration.
+The composer acknowledges each prepared file only after appending it; cancellation retains
+unconsumed providers for that destination, while late callbacks cannot skip files. Existing
+text/attachments and signed upload behavior are preserved. Eight-file batches, at most eight
+pending destinations, file-size validation and visible overflow/errors bound the handoff.
+Archived rows, links and selection mode reject drops. Queue state is session-local; received
+attachments use the existing persisted composer draft. No provider or V1 runtime changes.
