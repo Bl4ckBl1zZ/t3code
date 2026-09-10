@@ -22,6 +22,8 @@ protocol FeatureProjectPullRequestManaging: AnyObject, Sendable {
 /// project. A workspace browse never creates a dummy thread just to read a PR.
 @MainActor
 struct FeaturePullRequestAccess {
+    let draftKey: String
+    let submitReview: ((Int, String, PullRequestReviewSubmission) async throws -> Void)?
     let diff: ((Int, String?, String?) async throws -> PullRequestDiffResult)?
     let overview: (Int) async throws -> FeaturePullRequestOverview
     let labels: (Int) async throws -> PullRequestLabelCandidateList
@@ -30,6 +32,10 @@ struct FeaturePullRequestAccess {
     let runStackAction: (Int, PullRequestStack, String, String?) async throws -> Void
 
     init(client: any FeatureClient, threadID: String) {
+        draftKey = "thread:\(threadID)"
+        if let reviewer = client as? any FeaturePullRequestReviewWriting {
+            submitReview = { try await reviewer.submitPullRequestReview(scope: .thread(threadID), number: $0, expectedURL: $1, submission: $2) }
+        } else { submitReview = nil }
         if let reader = client as? any FeaturePullRequestCodeReading {
             diff = { try await reader.pullRequestDiff(scope: .thread(threadID), number: $0, cursor: $1, commit: $2) }
         } else { diff = nil }
@@ -41,6 +47,10 @@ struct FeaturePullRequestAccess {
     }
 
     init(manager: any FeatureProjectPullRequestManaging, scope: FeaturePullRequestProjectScope) {
+        draftKey = "project:\(scope.projectID):\(scope.canonicalKey)"
+        if let reviewer = manager as? any FeaturePullRequestReviewWriting {
+            submitReview = { try await reviewer.submitPullRequestReview(scope: .project(scope), number: $0, expectedURL: $1, submission: $2) }
+        } else { submitReview = nil }
         if let reader = manager as? any FeaturePullRequestCodeReading {
             diff = { try await reader.pullRequestDiff(scope: .project(scope), number: $0, cursor: $1, commit: $2) }
         } else { diff = nil }
@@ -61,4 +71,9 @@ enum FeaturePullRequestScope: Sendable {
 @MainActor
 protocol FeaturePullRequestCodeReading: AnyObject, Sendable {
     func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult
+}
+
+@MainActor
+protocol FeaturePullRequestReviewWriting: AnyObject, Sendable {
+    func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws
 }

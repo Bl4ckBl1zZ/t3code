@@ -810,6 +810,13 @@ public actor T3Client {
         )
     }
 
+    public func submitPullRequestReview(projectID: String, repository: String, number: Int, submission: PullRequestReviewSubmission) async throws {
+        let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(submission))
+        guard case var .object(payload) = encoded else { throw CocoaError(.coderInvalidValue) }
+        payload["projectId"] = .string(projectID); payload["repository"] = .string(repository); payload["number"] = .number(Double(number))
+        let _: JSONValue = try await rpc.request("pullRequests.submitReview", payload: .object(payload), as: JSONValue.self)
+    }
+
     public func pullRequestDiff(projectID: String, repository: String, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
         var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
         if let cursor { payload["cursor"] = .string(cursor) }

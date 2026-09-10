@@ -6,6 +6,8 @@ struct PullRequestCodeView: View {
     let updatedAt: String
     let commits: [PullRequestCommit]
     let load: (Int, String?, String?) async throws -> PullRequestDiffResult
+    let reviewDraft: PullRequestReviewDraftModel?
+    let canComment: Bool
     @State private var model = PullRequestCodeModel()
     @State private var selectedCommit: String?
     @State private var search = ""
@@ -27,6 +29,10 @@ struct PullRequestCodeView: View {
                 .pickerStyle(.menu)
                 .frame(minHeight: 44)
             }
+            if selectedCommit != nil && canComment {
+                Text("Choose All commits to add line comments against the current pull request.")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+            }
             TextField("Filter changed files", text: $search)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(12).background(T3Colors.subtle, in: RoundedRectangle(cornerRadius: 10))
@@ -45,7 +51,7 @@ struct PullRequestCodeView: View {
                     Group {
                         if let file = row.file {
                             NavigationLink {
-                                PullRequestCodeFileView(file: file)
+                                PullRequestCodeFileView(file: file, reviewDraft: reviewDraft, canComment: canComment && selectedCommit == nil)
                             } label: {
                                 FeatureReviewFileRow(file: file).frame(minHeight: 52)
                             }
@@ -103,6 +109,9 @@ struct PullRequestCodeView: View {
 
 private struct PullRequestCodeFileView: View {
     let file: FeatureReviewFile
+    let reviewDraft: PullRequestReviewDraftModel?
+    let canComment: Bool
+    @State private var commentingLine: FeatureDiffLine?
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 6) {
@@ -119,7 +128,8 @@ private struct PullRequestCodeFileView: View {
                     ScrollView([.horizontal, .vertical]) {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(file.lines) { line in
-                                FeatureDiffLineRow(line: line, isSelected: false, minimumWidth: geometry.size.width)
+                                FeatureDiffLineRow(line: line, isSelected: false, minimumWidth: geometry.size.width,
+                                    select: canComment && PullRequestReviewDraftModel.position(line) != nil ? { commentingLine = line } : nil)
                             }
                         }
                     }
@@ -127,6 +137,9 @@ private struct PullRequestCodeFileView: View {
             }
         }
         .background(T3Colors.background)
+        .sheet(item: $commentingLine) { line in
+            if let reviewDraft { PullRequestLineCommentSheet(file: file, line: line, draft: reviewDraft) }
+        }
         .navigationTitle(file.path.split(separator: "/").last.map(String.init) ?? file.path)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

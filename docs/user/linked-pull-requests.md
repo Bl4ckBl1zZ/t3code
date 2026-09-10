@@ -58,3 +58,8 @@ Filter by path, choose all commits or a single commit, then tap a file to read i
 Use **Copy path** in the file toolbar. **Load more files** continues large diffs; a notice identifies
 hunks or binary contents withheld by the host. File counts retain the host’s reported values even
 when its patch omits the text. Refresh retries failed reads without changing the local checkout.
+
+On iOS, tap a changed line in **Code → All commits** to add a private line comment. Choose
+**Review** to edit or remove pending comments, write a summary, and submit a comment, approval,
+or request for changes where your host and account allow it. Drafts stay on this device when you
+close the sheet. Failed submissions preserve them; successful submissions clear only what was sent.

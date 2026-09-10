@@ -174,6 +174,7 @@ public struct PullRequestStack: Codable, Equatable, Sendable {
 
 public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
     public var diff: Bool? = nil
+    public var review: NativePullRequestReviewCapabilities? = nil
     public var labels: Bool? = nil
     public let actions: [String]
     public let mergeMethods: [String]
@@ -181,6 +182,9 @@ public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestViewerPermissions: Codable, Equatable, Sendable {
+    public var comment: Bool? = nil
+    public var resolve: Bool? = nil
+    public var verdicts: [String]? = nil
     public var labels: Bool? = nil
     public let stackRebase: Bool?
     public let actions: [String]

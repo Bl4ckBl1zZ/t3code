@@ -1,0 +1,36 @@
+{
+  "projectId": "project-v2",
+  "repository": "owner/repo",
+  "number": 42,
+  "verdict": "comment",
+  "body": "  Markdown  ",
+  "comments": [
+    {
+      "path": "new.swift",
+      "oldPath": "old.swift",
+      "position": {
+        "kind": "added",
+        "newLine": 4
+      },
+      "body": "addition"
+    },
+    {
+      "path": "old.swift",
+      "position": {
+        "kind": "deleted",
+        "oldLine": 9
+      },
+      "body": "deletion"
+    },
+    {
+      "path": "file.swift",
+      "position": {
+        "kind": "context",
+        "oldLine": 8,
+        "newLine": 10,
+        "side": "right"
+      },
+      "body": "context"
+    }
+  ]
+}

@@ -28,6 +28,7 @@ import {
   PullRequestListStatsResult,
   PullRequestDiffInput,
   PullRequestDiffResult,
+  PullRequestSubmitReviewInput,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -739,3 +740,39 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestDiffPath, pullRequestDiffSerialized);
+
+const pullRequestReviewPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestReview.json");
+const pullRequestReviewSerialized = `${JSON.stringify(
+  Schema.encodeSync(PullRequestSubmitReviewInput)({
+    projectId,
+    repository: "owner/repo",
+    number: 42,
+    verdict: "comment",
+    body: "  Markdown  ",
+    comments: [
+      {
+        path: "new.swift",
+        oldPath: "old.swift",
+        position: { kind: "added", newLine: 4 },
+        body: "addition",
+      },
+      { path: "old.swift", position: { kind: "deleted", oldLine: 9 }, body: "deletion" },
+      {
+        path: "file.swift",
+        position: { kind: "context", oldLine: 8, newLine: 10, side: "right" },
+        body: "context",
+      },
+    ],
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestReviewPath) ||
+    NodeFS.readFileSync(pullRequestReviewPath, "utf8") !== pullRequestReviewSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestReview.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestReviewPath, pullRequestReviewSerialized);

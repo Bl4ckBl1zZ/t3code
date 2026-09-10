@@ -17,6 +17,8 @@ struct PullRequestDetailSheet: View {
     }
 
     @State private var editingLabels = false
+    @State private var reviewing = false
+    @State private var reviewDraft: PullRequestReviewDraftModel?
     @State private var selectedNumber: Int?
     @State private var stack: PullRequestStack?
     @State private var stackError: String?
@@ -63,6 +65,13 @@ struct PullRequestDetailSheet: View {
         .sheet(isPresented: $editingLabels, onDismiss: { Task { await load() } }) {
             PullRequestLabelPickerSheet(access: access, number: displayedNumber)
         }
+        .sheet(isPresented: $reviewing) {
+            if let draft = reviewDraft, let submit = access.submitReview, let detail = overview?.detail {
+                PullRequestReviewSheet(draft: draft, verdicts: PullRequestReviewDraftModel.verdicts(capabilities: detail.capabilities, viewer: detail.viewerPermissions), submit: { try await submit(displayedNumber, detail.url, $0) }) {
+                    Task { await load() }
+                }
+            }
+        }
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
 
@@ -75,6 +84,10 @@ struct PullRequestDetailSheet: View {
         do {
             let result = try await access.overview(requestedNumber)
             guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+            let draftKey = "\(access.draftKey):\(result.detail.url)"
+            if reviewDraft?.key != "swift-ios.pullRequests.reviewDraft.\(draftKey)" {
+                reviewDraft = PullRequestReviewDraftModel(key: draftKey)
+            }
             overview = result
             do {
                 let loadedStack = try await access.stack(requestedNumber)
@@ -126,6 +139,12 @@ struct PullRequestDetailSheet: View {
                 }
                 .pickerStyle(.segmented)
 
+                if access.submitReview != nil,
+                   !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty {
+                    Button("Review · \(reviewDraft?.comments.count ?? 0) pending comments", systemImage: "text.bubble") { reviewing = true }
+                        .frame(minHeight: 44)
+                }
+
                 switch tab {
                 case .summary:
                     summary(overview.detail, activity: overview.activity)
@@ -133,7 +152,8 @@ struct PullRequestDetailSheet: View {
                     timeline(overview.activity)
                 case .code:
                     if overview.detail.capabilities?.diff == true, let diff = access.diff {
-                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff)
+                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff, reviewDraft: reviewDraft,
+                            canComment: access.submitReview != nil && overview.detail.capabilities?.review?.inlineComment == true && overview.detail.viewerPermissions?.comment == true && !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty)
                             .id(displayedNumber)
                     } else {
                         Text("This host does not provide code diffs.").foregroundStyle(T3Colors.textSecondary)

@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeatureWorkspaceAssetResolving,
+    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -2082,11 +2082,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return (route, repository)
     }
 
-    func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
+    private func pullRequestRoute(scope: FeaturePullRequestScope) throws -> (client: T3Client, projectID: String, repository: String) {
         switch scope {
         case let .project(scope):
             let (route, repository) = try projectPullRequestRoute(scope)
-            return try await route.client.pullRequestDiff(projectID: route.wireID, repository: repository, number: number, cursor: cursor, commit: commit)
+            return (route.client, route.wireID, repository)
         case let .thread(threadID):
             let route = try threadRoute(for: threadID)
             guard let shell = shellsByEnvironmentID[route.environmentID],
@@ -2095,8 +2095,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                   let repository = project.repositoryIdentity?.displayName, !repository.isEmpty else {
                 throw NativeFeatureClientError.repositoryIdentityUnavailable
             }
-            return try await route.client.pullRequestDiff(projectID: project.id, repository: repository, number: number, cursor: cursor, commit: commit)
+            return (route.client, project.id, repository)
         }
+    }
+
+    func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
+        let route = try pullRequestRoute(scope: scope)
+        return try await route.client.pullRequestDiff(projectID: route.projectID, repository: route.repository, number: number, cursor: cursor, commit: commit)
+    }
+
+    func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws {
+        let route = try pullRequestRoute(scope: scope)
+        let current = try await route.client.pullRequestDetail(projectID: route.projectID, repository: route.repository, number: number)
+        guard current.url == expectedURL else { throw FeatureCapabilityUnavailable("The pull request repository changed. Reopen the review") }
+        try await route.client.submitPullRequestReview(projectID: route.projectID, repository: route.repository, number: number, submission: submission)
     }
 
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {
