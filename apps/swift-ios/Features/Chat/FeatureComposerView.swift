@@ -66,7 +66,8 @@ struct FeatureComposerView: View {
     private let onDidStash: () -> Void
     @State private var historyGeneration = UUID()
     @State private var promptHistory = ComposerPromptHistory()
-    @State private var stashedDraft: FeatureComposerDraft?
+    @State private var stashedDrafts: [FeatureComposerStashEntry] = []
+    @State private var showsStash = false
     @State private var isStashing = false
     @State private var historyError: String?
     private let onSend: () -> Void
@@ -132,6 +133,19 @@ struct FeatureComposerView: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if !stashedDrafts.isEmpty {
+                HStack {
+                    Spacer()
+                    Button { showsStash = true } label: {
+                        Label("Stash \(stashedDrafts.count)", systemImage: "bookmark")
+                            .font(T3Typography.supportingStrong)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: T3Metrics.minimumTapTarget)
+                            .background(T3Colors.surfaceRaised, in: Capsule())
+                    }.buttonStyle(.plain).disabled(!historyAvailable)
+                    .accessibilityIdentifier("composer-stash")
+                }
+            }
             if !AssistantCitation.matches(in: storedText).isEmpty {
                 AssistantCitationChips(text: $storedText).disabled(isSending || isStashing)
             }
@@ -140,15 +154,25 @@ struct FeatureComposerView: View {
             .task(id: historyDraftKey) {
                 historyGeneration = UUID()
                 promptHistory = ComposerPromptHistory()
-                guard let historyDraftKey else { stashedDraft = nil; return }
+                stashedDrafts = []
+                showsStash = false
+                guard let historyDraftKey else { stashedDrafts = []; return }
                 do {
-                    let saved = try await historyDraftStore.stashedDraft(for: historyDraftKey)
+                    let saved = try await historyDraftStore.stashEntries(for: historyDraftKey)
                     guard !Task.isCancelled, self.historyDraftKey == historyDraftKey else { return }
-                    stashedDraft = saved
+                    stashedDrafts = saved
                 }
                 catch { historyError = error.localizedDescription }
             }
-            .alert("Prompt history", isPresented: Binding(get: { historyError != nil }, set: { if !$0 { historyError = nil } })) {
+            .sheet(isPresented: $showsStash) {
+                NavigationStack {
+                    ComposerStashSheet(entries: stashedDrafts, busy: isStashing, error: historyError,
+                        restore: { entry in mutateStash(restoring: entry.id) },
+                        remove: { entry in removeStash(entry.id) })
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsStash = false } } }
+                }
+            }
+            .alert("Prompt history", isPresented: Binding(get: { historyError != nil && !showsStash }, set: { if !$0 { historyError = nil } })) {
                 Button("OK") { historyError = nil }
             } message: { Text(historyError ?? "") }
             .overlay(alignment: .top) {
@@ -645,26 +669,55 @@ struct FeatureComposerView: View {
             && pendingApprovals.isEmpty && pendingUserInputs.isEmpty && !isAttachMenuOpen
     }
 
+    private func mutateStash(restoring id: String? = nil) {
+        guard let historyDraftKey, historyAvailable else { return }
+        let current = FeatureComposerDraft(text: storedText, attachments: attachments)
+        let generation = historyGeneration
+        isStashing = true
+        Task {
+            defer { isStashing = false; onDidStash() }
+            await onWillStash()
+            do {
+                let restored: FeatureComposerDraft
+                if let id { restored = try await historyDraftStore.restoreStash(id: id, replacing: current, for: historyDraftKey) }
+                else {
+                    _ = try await historyDraftStore.stashDraft(current, for: historyDraftKey)
+                    restored = FeatureComposerDraft()
+                }
+                let entries = try await historyDraftStore.stashEntries(for: historyDraftKey)
+                guard generation == historyGeneration else { return }
+                stashedDrafts = entries
+                storedText = restored.text
+                attachments = restored.attachments
+                promptHistory = ComposerPromptHistory()
+                showsStash = false
+            } catch { historyError = error.localizedDescription }
+        }
+    }
+
+    private func removeStash(_ id: String) {
+        guard let historyDraftKey, !isStashing else { return }
+        let generation = historyGeneration
+        isStashing = true
+        Task {
+            defer { isStashing = false }
+            do {
+                let entries = try await historyDraftStore.removeStash(id: id, for: historyDraftKey)
+                guard generation == historyGeneration else { return }
+                stashedDrafts = entries
+            } catch { historyError = error.localizedDescription }
+        }
+    }
+
     private var historyMenu: some View {
         Menu {
-            if let historyDraftKey {
-                Button(stashedDraft == nil ? "Stash draft" : (storedText.isEmpty && attachments.isEmpty ? "Restore stashed draft" : "Swap with stashed draft")) {
-                    let current = FeatureComposerDraft(text: storedText, attachments: attachments)
-                    let generation = historyGeneration
-                    isStashing = true
-                    Task {
-                        defer { isStashing = false; onDidStash() }
-                        await onWillStash()
-                        do {
-                            let restored = try await historyDraftStore.swapStash(current, for: historyDraftKey)
-                            guard generation == historyGeneration else { return }
-                            stashedDraft = current.text.isEmpty && current.attachments.isEmpty ? nil : current
-                            storedText = restored.text
-                            attachments = restored.attachments
-                            promptHistory = ComposerPromptHistory()
-                        } catch { historyError = error.localizedDescription }
-                    }
-                }.disabled(stashedDraft == nil && storedText.isEmpty && attachments.isEmpty)
+            if historyDraftKey != nil {
+                Button("Stash draft", systemImage: "bookmark") { mutateStash() }
+                    .disabled(storedText.isEmpty && attachments.isEmpty)
+                    .keyboardShortcut("s", modifiers: .command)
+                if !stashedDrafts.isEmpty {
+                    Button("Browse stash (\(stashedDrafts.count))", systemImage: "tray.full") { showsStash = true }
+                }
             }
             let entries = ComposerPromptHistory.entries(historyMessages())
             if !entries.isEmpty {

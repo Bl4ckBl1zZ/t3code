@@ -45,7 +45,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   existing composer form. The shell and context strip use one surface model and the
   fork's theme tokens. Tasks no longer occupy a notice slot that could obscure another
   notice. Approval actions keep the V2 live/non-resumable response gate. Swift keeps
-  native task/approval surfaces outside its push-to-talk gesture hierarchy.
+  native task/approval surfaces outside its push-to-talk gesture hierarchy. Its stash tab
+  and list also remain outside that hierarchy; an atomic local queue preserves legacy
+  single-slot stashes and swaps unsent content into the queue during restoration.
   The remaining timeline ports are live-activity focus and interim turn folding
   (`17c48f7fc1`), which must use V2 runs and attempts rather than V1 activities.
   Ordinary failed tools use a muted circle alert on web and Swift, while typed runtime

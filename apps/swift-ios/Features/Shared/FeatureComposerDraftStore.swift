@@ -23,6 +23,22 @@ public struct FeatureComposerDraft: Sendable, Equatable {
     }
 }
 
+public struct FeatureComposerStashEntry: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let draft: FeatureComposerDraft
+}
+
+public enum FeatureComposerStashError: LocalizedError, Sendable {
+    case missing
+    case full
+    public var errorDescription: String? {
+        switch self {
+        case .missing: "This stashed draft is no longer available."
+        case .full: "The stash holds 20 drafts. Restore or remove one before saving another."
+        }
+    }
+}
+
 public struct FeatureComposerWorkspaceDraft: Sendable, Equatable {
     public var mode: FeatureWorkspaceMode
     public var branch: String?
@@ -65,6 +81,15 @@ public actor FeatureComposerDraftStore {
     private struct Document: Codable {
         let version: Int
         var drafts: [String: PersistedDraft]
+        var stashes: [String: [PersistedStash]]?
+    }
+
+    private struct PersistedStash: Codable {
+        var id: String
+        var draft: PersistedDraft
+        var featureValue: FeatureComposerStashEntry {
+            FeatureComposerStashEntry(id: id, draft: draft.featureValue)
+        }
     }
 
     private struct PersistedDraft: Codable {
@@ -143,6 +168,7 @@ public actor FeatureComposerDraftStore {
 
     public let fileURL: URL
     private var loadedDrafts: [String: PersistedDraft]?
+    private var loadedStashes: [String: [PersistedStash]] = [:]
 
     public init(fileURL: URL? = nil) {
         if let fileURL {
@@ -179,6 +205,70 @@ public actor FeatureComposerDraftStore {
         Set(drafts.compactMap { key, draft in
             !key.hasPrefix("stash:") && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty) ? key : nil
         })
+    }
+
+    public func stashEntries(for key: String) throws -> [FeatureComposerStashEntry] {
+        let drafts = try loadIfNeeded()
+        return stashQueue(for: key, drafts: drafts).map(\.featureValue)
+    }
+
+    /// Reads the previous single-slot format without writing during a read.
+    private func stashQueue(for key: String, drafts: [String: PersistedDraft]) -> [PersistedStash] {
+        var queue = loadedStashes[key] ?? []
+        if let legacy = drafts["stash:" + key], !queue.contains(where: { $0.id == "legacy" }) {
+            queue.insert(PersistedStash(id: "legacy", draft: legacy), at: 0)
+        }
+        return queue
+    }
+
+    public func stashDraft(_ current: FeatureComposerDraft, for key: String) throws -> [FeatureComposerStashEntry] {
+        var drafts = try loadIfNeeded()
+        var queue = stashQueue(for: key, drafts: drafts)
+        guard !current.text.isEmpty || !current.attachments.isEmpty else { return queue.map(\.featureValue) }
+        guard queue.count < 20 else { throw FeatureComposerStashError.full }
+        queue.append(PersistedStash(id: UUID().uuidString, draft: PersistedDraft(current)))
+        var cleared = drafts[key] ?? PersistedDraft(current)
+        cleared.text = ""
+        cleared.attachments = []
+        drafts[key] = cleared
+        try commitStash(queue, for: key, drafts: drafts)
+        return queue.map(\.featureValue)
+    }
+
+    /// The selected entry leaves the queue; unsent composer content joins it in
+    /// the same atomic write, so restoring never discards another draft.
+    public func restoreStash(id: String, replacing current: FeatureComposerDraft, for key: String) throws -> FeatureComposerDraft {
+        var drafts = try loadIfNeeded()
+        var queue = stashQueue(for: key, drafts: drafts)
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { throw FeatureComposerStashError.missing }
+        let restored = queue.remove(at: index).draft
+        if !current.text.isEmpty || !current.attachments.isEmpty {
+            queue.append(PersistedStash(id: UUID().uuidString, draft: PersistedDraft(current)))
+        }
+        var next = drafts[key] ?? PersistedDraft(current)
+        next.text = restored.text
+        next.attachments = restored.attachments
+        drafts[key] = next
+        try commitStash(queue, for: key, drafts: drafts)
+        return next.featureValue
+    }
+
+    public func removeStash(id: String, for key: String) throws -> [FeatureComposerStashEntry] {
+        let drafts = try loadIfNeeded()
+        let queue = stashQueue(for: key, drafts: drafts).filter { $0.id != id }
+        try commitStash(queue, for: key, drafts: drafts)
+        return queue.map(\.featureValue)
+    }
+
+    private func commitStash(_ queue: [PersistedStash], for key: String, drafts input: [String: PersistedDraft]) throws {
+        var drafts = input
+        drafts.removeValue(forKey: "stash:" + key)
+        var stashes = loadedStashes
+        if queue.isEmpty { stashes.removeValue(forKey: key) }
+        else { stashes[key] = queue }
+        try persist(drafts, stashes: stashes)
+        loadedDrafts = drafts
+        loadedStashes = stashes
     }
 
     public func stashedDraft(for key: String) throws -> FeatureComposerDraft? {
@@ -298,8 +388,10 @@ public actor FeatureComposerDraftStore {
         var drafts = try loadIfNeeded()
         let environmentPrefix = "environment:\(environmentID):"
         drafts = drafts.filter { !$0.key.hasPrefix(environmentPrefix) && !$0.key.hasPrefix("stash:" + environmentPrefix) }
-        try persist(drafts)
+        let stashes = loadedStashes.filter { !$0.key.hasPrefix(environmentPrefix) }
+        try persist(drafts, stashes: stashes)
         loadedDrafts = drafts
+        loadedStashes = stashes
     }
 
     public static func threadKey(_ thread: FeatureThread) -> String {
@@ -346,6 +438,7 @@ public actor FeatureComposerDraftStore {
         guard document.version == 1 || document.version == Self.documentVersion else {
             throw CocoaError(.fileReadCorruptFile)
         }
+        loadedStashes = document.stashes ?? [:]
         var drafts = document.drafts
         if document.version == 1 {
             // Version 1 wrote resolved project/environment defaults into every
@@ -362,12 +455,12 @@ public actor FeatureComposerDraftStore {
         return drafts
     }
 
-    private func persist(_ drafts: [String: PersistedDraft]) throws {
+    private func persist(_ drafts: [String: PersistedDraft], stashes: [String: [PersistedStash]]? = nil) throws {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let document = Document(version: Self.documentVersion, drafts: drafts)
+        let document = Document(version: Self.documentVersion, drafts: drafts, stashes: stashes ?? loadedStashes)
         try JSONEncoder.t3.encode(document).write(to: fileURL, options: .atomic)
         let presence = contentKeys(drafts)
         if presence != publishedPresence {

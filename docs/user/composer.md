@@ -182,3 +182,8 @@ error treatment. Open a failed row to inspect its output.
 On web and desktop, task progress and stashed prompts appear as tabs attached above the composer.
 Expand Tasks to inspect the current plan. Approval requests and questions open in the same
 attached area, with their actions beside the request. Notices keep their own stack.
+
+On native iOS, use **Prompt history → Stash draft** to save up to 20 drafts for the current
+thread. The Stash tab opens the saved list. Restoring moves any unsent text and attachments
+into the stash first. Removing a saved draft asks for confirmation. Existing single-slot
+stashes remain available after updating.
