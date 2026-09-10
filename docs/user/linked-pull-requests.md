@@ -52,3 +52,9 @@ older work can still appear in those groups. Unavailable hosts show an explanati
 results remain readable. Some hosts search only loaded rows; the list identifies those hosts.
 Unknown change sizes stay blank until loaded. Long-press a row to copy its link or open its host.
 Tap a row for the existing summary, conversation, labels and reviewed stack actions.
+
+On hosts that provide diffs, the iOS **Code** tab shows changed files in a collapsible folder tree.
+Filter by path, choose all commits or a single commit, then tap a file to read its line diff.
+Use **Copy path** in the file toolbar. **Load more files** continues large diffs; a notice identifies
+hunks or binary contents withheld by the host. File counts retain the host’s reported values even
+when its patch omits the text. Refresh retries failed reads without changing the local checkout.

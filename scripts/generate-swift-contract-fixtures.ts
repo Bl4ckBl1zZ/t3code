@@ -26,6 +26,8 @@ import {
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListStatsResult,
+  PullRequestDiffInput,
+  PullRequestDiffResult,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -707,3 +709,33 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestWorkspacePath, pullRequestWorkspaceSerialized);
+
+const pullRequestDiffPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestDiff.json");
+const pullRequestDiffSerialized = `${JSON.stringify(
+  Schema.encodeSync(Schema.Struct({ input: PullRequestDiffInput, result: PullRequestDiffResult }))({
+    input: {
+      projectId,
+      repository: "owner/repo",
+      number: 42,
+      cursor: "opaque/next",
+      commit: "abc123",
+    },
+    result: {
+      patch: "",
+      truncated: true,
+      nextCursor: "opaque/last",
+      omittedFileStats: [{ path: "large.txt", additions: 1200, deletions: 87 }],
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestDiffPath) ||
+    NodeFS.readFileSync(pullRequestDiffPath, "utf8") !== pullRequestDiffSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestDiff.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestDiffPath, pullRequestDiffSerialized);

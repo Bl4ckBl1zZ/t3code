@@ -810,6 +810,13 @@ public actor T3Client {
         )
     }
 
+    public func pullRequestDiff(projectID: String, repository: String, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
+        if let cursor { payload["cursor"] = .string(cursor) }
+        if let commit { payload["commit"] = .string(commit) }
+        return try await rpc.request("pullRequests.diff", payload: .object(payload), as: PullRequestDiffResult.self)
+    }
+
     public func pullRequestLabelCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestLabelCandidateList {
         try await rpc.request("pullRequests.labelCandidates", payload: .object([
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),

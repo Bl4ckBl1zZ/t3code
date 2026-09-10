@@ -119,7 +119,9 @@ struct PullRequestDetailSheet: View {
 
                 Picker("Section", selection: $tab) {
                     ForEach(PullRequestDetailTab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
+                        if tab != .code || (overview.detail.capabilities?.diff == true && access.diff != nil) {
+                            Text(tab.rawValue).tag(tab)
+                        }
                     }
                 }
                 .pickerStyle(.segmented)
@@ -129,6 +131,13 @@ struct PullRequestDetailSheet: View {
                     summary(overview.detail, activity: overview.activity)
                 case .timeline:
                     timeline(overview.activity)
+                case .code:
+                    if overview.detail.capabilities?.diff == true, let diff = access.diff {
+                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff)
+                            .id(displayedNumber)
+                    } else {
+                        Text("This host does not provide code diffs.").foregroundStyle(T3Colors.textSecondary)
+                    }
                 }
             }
             .padding(.horizontal, 16)

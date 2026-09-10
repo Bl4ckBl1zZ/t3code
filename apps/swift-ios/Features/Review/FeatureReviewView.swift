@@ -268,7 +268,7 @@ public struct FeatureReviewView: View {
     }
 }
 
-private struct FeatureReviewFileRow: View {
+struct FeatureReviewFileRow: View {
     let file: FeatureReviewFile
 
     var body: some View {
@@ -578,11 +578,11 @@ private struct FeatureDiffView: View {
     }
 }
 
-private struct FeatureDiffLineRow: View {
+struct FeatureDiffLineRow: View {
     let line: FeatureDiffLine
     let isSelected: Bool
     let minimumWidth: CGFloat
-    let select: () -> Void
+    var select: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -619,8 +619,7 @@ private struct FeatureDiffLineRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: select)
-        .accessibilityAction(named: "Add review comment", select)
+        .modifier(FeatureDiffLineInteraction(select: select))
     }
 
     private func lineNumber(_ value: Int?) -> some View {
@@ -680,5 +679,14 @@ private struct FeatureDiffLineRow: View {
         case .hunk: Color.blue.opacity(0.08)
         case .context: Color.clear
         }
+    }
+}
+
+private struct FeatureDiffLineInteraction: ViewModifier {
+    let select: (() -> Void)?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let select {
+            content.onTapGesture(perform: select).accessibilityAction(named: "Add review comment", select)
+        } else { content }
     }
 }

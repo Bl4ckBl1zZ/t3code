@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeatureWorkspaceAssetResolving,
+    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -2080,6 +2080,23 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             throw NativeFeatureClientError.repositoryIdentityUnavailable
         }
         return (route, repository)
+    }
+
+    func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
+        switch scope {
+        case let .project(scope):
+            let (route, repository) = try projectPullRequestRoute(scope)
+            return try await route.client.pullRequestDiff(projectID: route.wireID, repository: repository, number: number, cursor: cursor, commit: commit)
+        case let .thread(threadID):
+            let route = try threadRoute(for: threadID)
+            guard let shell = shellsByEnvironmentID[route.environmentID],
+                  let thread = shell.threads.first(where: { $0.id == route.wireID }),
+                  let project = shell.projects.first(where: { $0.id == thread.projectId }),
+                  let repository = project.repositoryIdentity?.displayName, !repository.isEmpty else {
+                throw NativeFeatureClientError.repositoryIdentityUnavailable
+            }
+            return try await route.client.pullRequestDiff(projectID: project.id, repository: repository, number: number, cursor: cursor, commit: commit)
+        }
     }
 
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {

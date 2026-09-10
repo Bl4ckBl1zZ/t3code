@@ -724,4 +724,12 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   cannot replace a newer search. Native detail, label and stack screens accept project context
   without creating a thread, and reject a project whose repository changed since the list was read.
   Responsive label pills, update times and diff palette roles use native theme tokens. Native PR
-  file/code review and checkout actions remain separate parity work; this does not claim them.
+  review submission and checkout actions remain separate parity work.
+
+- Native PR details expose a capability-gated Code tab from both thread links and the global
+  workspace. Host-backed slices retain opaque cursors, per-commit scope, reported omitted-file
+  counts and partial-read errors. A native collapsible file tree, path filter/copy and lazy line
+  diff use the fork’s diff color tokens. The shared unified-patch parser now decodes Git C-quoted
+  paths and distinguishes file metadata from code beginning with `---`/`+++`. Local working-tree
+  hydration and agent-prompt comments are not used for host PR code. Full-file context and inline
+  host review submissions remain separate parity work.
