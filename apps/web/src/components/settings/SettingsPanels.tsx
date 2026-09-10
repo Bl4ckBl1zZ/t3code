@@ -2964,9 +2964,8 @@ function EnvironmentProviderSettings(
   const updateSettings: typeof persistSettings = (patch) => {
     if (!readOnly) persistSettings(patch);
   };
-  const serverProviders =
-    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
-    EMPTY_SERVER_PROVIDERS;
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const serverProviders = serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
   const targetEnvironment = useMemo(
     () => ({ environmentId: props.environmentId }),
     [props.environmentId],
@@ -3359,6 +3358,9 @@ function EnvironmentProviderSettings(
             : undefined
         }
         mode={mode}
+        supportsCustomModelDefinitions={
+          serverConfig?.environment.capabilities.customModelDefinitions === true
+        }
         selected={selectedRow?.instanceId === row.instanceId}
         onSelect={() => setSelectedInstanceId(row.instanceId)}
         readOnly={readOnly}

@@ -170,6 +170,12 @@ public struct SettingsAgentsView: View {
                             }
                         }
                     }.disabled(isSavingModels)
+                    SettingsSection(title: "Custom models") {
+                        NavigationLink {
+                            SettingsCustomModelsView(manager: serverSettings, environmentID: environmentID, provider: provider,
+                                supported: environments.first { $0.id == environmentID }?.supportsCustomModelDefinitions == true)
+                        } label: { SettingsNavigationRow(title: "Names and options", systemImage: "slider.horizontal.3") }
+                    }
                     if isSavingModels { ProgressView("Saving models…") }
                 }.padding(18)
             }.background(T3Colors.background).navigationTitle(provider.displayName ?? provider.driver).navigationBarTitleDisplayMode(.inline)

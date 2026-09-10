@@ -9,6 +9,7 @@
   "serverVersion": "0.0.38",
   "capabilities": {
     "repositoryIdentity": true,
-    "environmentIcon": true
+    "environmentIcon": true,
+    "customModelDefinitions": true
   }
 }

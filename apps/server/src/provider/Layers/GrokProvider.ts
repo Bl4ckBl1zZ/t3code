@@ -1,3 +1,4 @@
+import type { CustomModelSetting } from "@t3tools/contracts";
 import {
   type GrokSettings,
   type ModelCapabilities,
@@ -96,7 +97,7 @@ export function buildInitialGrokProviderSnapshot(
 }
 
 function grokModelsFromSettings(
-  customModels: ReadonlyArray<string> | undefined,
+  customModels: ReadonlyArray<CustomModelSetting> | undefined,
   builtInModels: ReadonlyArray<ServerProviderModel> = GROK_BUILT_IN_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
   return providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES);

@@ -10,3 +10,15 @@ but cannot change their settings or update provider software.
 On iOS, open Settings → Agents, select an environment, then open an account to
 choose its visible models. Enable all and Disable all affect that account's
 built-in models. Claude's auto-compaction setting applies to the selected environment.
+
+Custom models can have a display name and their own composer options. On web,
+add a model ID in the account's model list and use Edit to customize it. On iOS,
+open the account's Custom models screen. Both editors let you copy options from
+an available model, start with a provider preset, or define choice and toggle
+controls. Select one default per choice control. Save applies the whole edit;
+Cancel leaves the saved model unchanged.
+
+The model ID must exist at your provider. Renaming its display label does not
+change which model runs. Custom options replace that model's default option set;
+only option IDs supported by the provider affect requests. Servers that predate
+custom model definitions need an update before these editors can save them.

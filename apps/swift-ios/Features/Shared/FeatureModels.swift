@@ -41,6 +41,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var supportsPullRequests: Bool?
     public var machineKind: String?
     public var supportsEnvironmentIcon: Bool?
+    public var supportsCustomModelDefinitions: Bool? = nil
     public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
     public init(
@@ -52,7 +53,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         connectionDetail: String? = nil,
         supportsPullRequests: Bool? = nil,
         machineKind: String? = nil,
-        supportsEnvironmentIcon: Bool? = nil
+        supportsEnvironmentIcon: Bool? = nil,
+        supportsCustomModelDefinitions: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -63,6 +65,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.supportsPullRequests = supportsPullRequests
         self.machineKind = machineKind
         self.supportsEnvironmentIcon = supportsEnvironmentIcon
+        self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
     }
 }
 

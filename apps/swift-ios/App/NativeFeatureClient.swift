@@ -4186,7 +4186,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             connectionDetail: environmentConnectionDetails[environment.id],
             supportsPullRequests: environment.descriptor?.capabilities.pullRequests,
             machineKind: serverConfigsByEnvironmentID[environment.id]?.settings?.environmentIcon.flatMap(EnvironmentMachineKind.init(rawValue:))?.rawValue ?? environment.descriptor?.platform.machine,
-            supportsEnvironmentIcon: environment.descriptor?.capabilities.environmentIcon
+            supportsEnvironmentIcon: environment.descriptor?.capabilities.environmentIcon,
+            supportsCustomModelDefinitions: environment.descriptor?.capabilities.customModelDefinitions
         )
     }
 
@@ -6323,6 +6324,10 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         environmentID: String,
         patch: ServerSettingsPatchInput
     ) async throws -> FeatureEnvironmentPreferences {
+        if patch.providerInstances != nil || patch.customModelsByDriver != nil,
+           (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.customModelDefinitions != true {
+            throw FeatureCapabilityUnavailable("Custom model definitions")
+        }
         if patch.environmentIcon != nil,
            (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.environmentIcon != true {
             throw FeatureCapabilityUnavailable("Environment icons")

@@ -35,6 +35,30 @@ const OPENCODE_CUSTOM_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabil
 });
 
 describe("providerModelsFromSettings", () => {
+  it("publishes custom names and replaces options without overriding built-in models", () => {
+    const defaults = createModelCapabilities({ optionDescriptors: [] });
+    const builtIn = { slug: "built-in", name: "Official", isCustom: false, capabilities: defaults };
+    const models = providerModelsFromSettings(
+      [builtIn],
+      [
+        { slug: "built-in", name: "Override", capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES },
+        { slug: "private", name: "My model", capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES },
+        "legacy",
+      ],
+      defaults,
+    );
+    expect(models).toEqual([
+      builtIn,
+      {
+        slug: "private",
+        name: "My model",
+        isCustom: true,
+        capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES,
+      },
+      { slug: "legacy", name: "legacy", isCustom: true, capabilities: defaults },
+    ]);
+  });
+
   it("applies the provided capabilities to custom models", () => {
     const models = providerModelsFromSettings(
       [],

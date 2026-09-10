@@ -1,3 +1,4 @@
+import { providerModelsFromSettings } from "../providerSnapshot.ts";
 import {
   AcpRegistrySettings,
   ProviderDriverKind,
@@ -51,7 +52,6 @@ const makeSnapshot = (input: {
   readonly continuationKey: string;
   readonly checkedAt: string;
 }): ServerProvider => {
-  const modelIds = Array.from(new Set(["default", ...input.settings.customModels]));
   return {
     instanceId: input.instanceId,
     driver: DRIVER_KIND,
@@ -64,12 +64,11 @@ const makeSnapshot = (input: {
     status: input.enabled ? "ready" : "disabled",
     auth: { status: "unknown" },
     checkedAt: input.checkedAt,
-    models: modelIds.map((model) => ({
-      slug: model,
-      name: model,
-      isCustom: model !== "default",
-      capabilities: null,
-    })),
+    models: providerModelsFromSettings(
+      [{ slug: "default", name: "default", isCustom: false, capabilities: null }],
+      input.settings.customModels,
+      { optionDescriptors: [] },
+    ),
     slashCommands: [],
     skills: [],
   };

@@ -1,6 +1,12 @@
 "use client";
 
 import {
+  type CustomModelDefinition,
+  readCustomModelEntries,
+  toCustomModelSetting,
+} from "@t3tools/shared/model";
+
+import {
   ArrowUpCircleIcon,
   ChevronDownIcon,
   CopyIcon,
@@ -78,17 +84,11 @@ function makeEnvironmentDraftRow(
   };
 }
 
-/**
- * Read a string[] at `key` from the opaque config blob, filtering out
- * non-string entries. Used for `customModels`, which is always typed as
- * `string[]` by the concrete driver schemas but arrives here as
- * `Schema.Unknown`.
- */
-function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
-  if (config === null || typeof config !== "object") return [];
-  const value = (config as Record<string, unknown>)[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+/** Read bare model IDs and structured definitions from opaque driver configuration. */
+function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
+  return config !== null && typeof config === "object"
+    ? readCustomModelEntries((config as Record<string, unknown>).customModels)
+    : [];
 }
 
 /**
@@ -161,7 +161,7 @@ export function nextProviderEnvironmentWithFieldValue(
 
 export function deriveProviderModelsForDisplay(input: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<string>;
+  readonly customModels: ReadonlyArray<CustomModelDefinition>;
 }): ReadonlyArray<ServerProviderModel> {
   const liveCustomModelsBySlug = new Map(
     Arr.filterMap(input.liveModels ?? [], (model) =>
@@ -169,15 +169,13 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      },
-  );
+  const customModels = input.customModels.map((entry) => ({
+    slug: entry.slug,
+    name: entry.name,
+    isCustom: true,
+    capabilities:
+      entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
+  }));
   return [...serverModels, ...customModels];
 }
 
@@ -422,6 +420,7 @@ interface ProviderInstanceCardProps {
   readonly liveProvider: ServerProvider | undefined;
   /** Effective enabled state after any driver-wide rollout gate is applied. */
   readonly effectiveEnabled?: boolean | undefined;
+  readonly supportsCustomModelDefinitions?: boolean;
   readonly mode?: "list" | "editor";
   readonly selected?: boolean;
   readonly onSelect?: () => void;
@@ -485,6 +484,7 @@ export function ProviderInstanceCard({
   isExpanded,
   onExpandedChange,
   mode,
+  supportsCustomModelDefinitions = false,
   selected = false,
   onSelect,
   readOnly = false,
@@ -549,7 +549,7 @@ export function ProviderInstanceCard({
     ? instance.driver
     : null;
 
-  const customModels = readConfigStringArray(instance.config, "customModels");
+  const customModels = readConfigCustomModels(instance.config);
   const environmentFields = driverOption?.environmentFields ?? [];
   const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
   const genericEnvironment = providerEnvironmentWithoutNames(
@@ -597,8 +597,12 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateCustomModels = (next: ReadonlyArray<string>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
+    const nextConfig = nextConfigBlobWithValue(
+      instance.config,
+      "customModels",
+      next.map(toCustomModelSetting),
+    );
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
@@ -973,6 +977,7 @@ export function ProviderInstanceCard({
                 driverKind={driverKind}
                 models={modelsForDisplay}
                 customModels={customModels}
+                supportsCustomModelDefinitions={supportsCustomModelDefinitions}
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}

@@ -15,6 +15,7 @@
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  CustomModelSetting,
   ExecutionEnvironmentDescriptor,
   EnvironmentId,
   ServerProviderUsageLimits,
@@ -503,7 +504,7 @@ const machineSerialized = `${JSON.stringify(
     label: "Studio",
     platform: { os: "darwin", arch: "arm64", machine: "mac-studio" },
     serverVersion: "0.0.38",
-    capabilities: { repositoryIdentity: true, environmentIcon: true },
+    capabilities: { repositoryIdentity: true, environmentIcon: true, customModelDefinitions: true },
   }),
   null,
   2,
@@ -517,3 +518,37 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(machinePath, machineSerialized);
+
+const customModelsPath = NodePath.join(NodePath.dirname(outputPath), "customModels.json");
+const customModelsSerialized = `${JSON.stringify(
+  Schema.encodeSync(Schema.Array(CustomModelSetting))([
+    "legacy-model",
+    {
+      slug: "private/model",
+      name: "Private model",
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [{ id: "high", label: "High", isDefault: true }],
+            currentValue: "high",
+          },
+          { id: "thinking", label: "Thinking", type: "boolean", currentValue: true },
+        ],
+      },
+    },
+  ]),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(customModelsPath) ||
+    NodeFS.readFileSync(customModelsPath, "utf8") !== customModelsSerialized
+  ) {
+    console.error("[swift-fixtures] customModels.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(customModelsPath, customModelsSerialized);

@@ -55,6 +55,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public struct FileAttachments: Codable, Equatable, Sendable { public let maxUploadBytes: Int }
         public let attachmentUploads: Bool?
         public let fileAttachments: FileAttachments?
+        public let customModelDefinitions: Bool?
         public let environmentIcon: Bool?
         public let usagePriceOverrides: Bool?
         public let pullRequestStackActions: Bool?
@@ -72,6 +73,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadPullRequestLinking
             case threadPullRequestsV2
             case attachmentUploads, fileAttachments
+            case customModelDefinitions
             case environmentIcon
             case usagePriceOverrides
             case pullRequestStackActions
@@ -97,6 +99,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             threadPullRequestsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestsV2)
             attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
             fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
+            customModelDefinitions = try container.decodeIfPresent(Bool.self, forKey: .customModelDefinitions)
             environmentIcon = try container.decodeIfPresent(Bool.self, forKey: .environmentIcon)
             usagePriceOverrides = try container.decodeIfPresent(Bool.self, forKey: .usagePriceOverrides)
             pullRequestStackActions = try container.decodeIfPresent(Bool.self, forKey: .pullRequestStackActions)

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 
 import {
+  readCustomModelEntries,
+  toCustomModelSetting,
   applyClaudePromptEffortPrefix,
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
@@ -208,5 +210,42 @@ describe("applyClaudePromptEffortPrefix", () => {
     expect(applyClaudePromptEffortPrefix("/home/theo/app.ts crashed on load", "ultrathink")).toBe(
       "Ultrathink:\n/home/theo/app.ts crashed on load",
     );
+  });
+});
+
+describe("custom model settings", () => {
+  it("normalizes mixed settings without alias expansion and keeps the first exact ID", () => {
+    expect(
+      readCustomModelEntries([
+        null,
+        12,
+        " ",
+        " opus ",
+        { slug: "opus", name: "Duplicate" },
+        {
+          slug: "private/model",
+          name: " Private model ",
+          capabilities: { optionDescriptors: "bad" },
+        },
+      ]),
+    ).toEqual([
+      { slug: "opus", name: "opus", capabilities: null },
+      { slug: "private/model", name: "Private model", capabilities: null },
+    ]);
+  });
+
+  it("round trips custom names and options while retaining compact legacy IDs", () => {
+    const settings = [
+      "legacy",
+      { slug: "private/model", name: "Private", capabilities: codexCaps },
+    ];
+    expect(readCustomModelEntries(settings).map(toCustomModelSetting)).toEqual(settings);
+    expect(
+      toCustomModelSetting({
+        slug: "empty",
+        name: "empty",
+        capabilities: createModelCapabilities({ optionDescriptors: [] }),
+      }),
+    ).toBe("empty");
   });
 });

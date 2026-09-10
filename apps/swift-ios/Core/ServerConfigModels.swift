@@ -261,6 +261,9 @@ public struct UsageModelPriceOverride: Codable, Equatable, Sendable {
 }
 
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
+    /// Opaque envelopes preserve unknown driver fields while editing one account's models.
+    public let providerInstances: [String: JSONValue]
+    public let providerDefinitions: [String: JSONValue]
     public let environmentIcon: String?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
@@ -301,6 +304,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultThemeSetAt: String
 
     public init(
+        providerInstances: [String: JSONValue] = [:],
+        providerDefinitions: [String: JSONValue] = [:],
         environmentIcon: String? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
@@ -316,6 +321,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultTheme: String = "",
         defaultThemeSetAt: String = ""
     ) {
+        self.providerInstances = providerInstances
+        self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
         self.environmentIcon = environmentIcon
         self.usagePriceOverrides = usagePriceOverrides
         self.defaultThreadEnvMode = defaultThreadEnvMode
@@ -330,6 +337,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case providerInstances
         case environmentIcon
         case usagePriceOverrides
         case defaultThreadEnvMode
@@ -356,6 +364,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
         defaultThreadEnvMode = try container.decode(
@@ -385,6 +394,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             ProvidersContainer.self,
             forKey: .providers
         )?.claudeAgent?.autoCompactWindow ?? ""
+        let rawProviders = try container.decodeIfPresent([String: JSONValue].self, forKey: .providers) ?? [:]
+        providerDefinitions = rawProviders.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : rawProviders
         defaultTheme = try container.decodeIfPresent(String.self, forKey: .defaultTheme) ?? ""
         defaultThemeSetAt = try container.decodeIfPresent(
             String.self,
@@ -394,6 +405,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(providerInstances, forKey: .providerInstances)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
         try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
@@ -406,10 +418,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(enableAgentBrowserAccess, forKey: .enableAgentBrowserAccess)
         // Round-tripped under the same nested key the server sends, so an
         // encoded snapshot decodes back to itself.
-        try container.encode(
-            ProvidersContainer(claudeAgent: .init(autoCompactWindow: claudeAutoCompactWindow)),
-            forKey: .providers
-        )
+        if providerDefinitions.isEmpty {
+            try container.encode(ProvidersContainer(claudeAgent: .init(autoCompactWindow: claudeAutoCompactWindow)), forKey: .providers)
+        } else { try container.encode(providerDefinitions, forKey: .providers) }
         try container.encode(defaultTheme, forKey: .defaultTheme)
         try container.encode(defaultThemeSetAt, forKey: .defaultThemeSetAt)
     }
@@ -423,6 +434,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// whatever another client changed in between. Add a field here — and one line
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
+    public var providerInstances: [String: JSONValue]?
+    public var customModelsByDriver: [String: [JSONValue]]?
     /// A present nil entry resets one model. Omitted models are unchanged.
     public var environmentIcon: String??
     public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
@@ -434,12 +447,16 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        providerInstances: [String: JSONValue]? = nil,
+        customModelsByDriver: [String: [JSONValue]]? = nil,
         environmentIcon: String?? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride?]? = nil,
         enableAgentBrowserAccess: Bool? = nil,
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.providerInstances = providerInstances
+        self.customModelsByDriver = customModelsByDriver
         self.environmentIcon = environmentIcon
         self.usagePriceOverrides = usagePriceOverrides
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
@@ -461,6 +478,18 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
                     "autoCompactWindow": .string(claudeAutoCompactWindow),
                 ]),
             ])
+        }
+        if let providerInstances { fields["providerInstances"] = .object(providerInstances) }
+        if let customModelsByDriver {
+            var providers: [String: JSONValue] = [:]
+            if case let .object(existing) = fields["providers"] { providers = existing }
+            for (driver, models) in customModelsByDriver {
+                var config: [String: JSONValue] = [:]
+                if case let .object(existing) = providers[driver] { config = existing }
+                config["customModels"] = .array(models)
+                providers[driver] = .object(config)
+            }
+            fields["providers"] = .object(providers)
         }
         if let usagePriceOverrides { fields["usagePriceOverrides"] = .object(usagePriceOverrides.mapValues { $0?.json ?? .null }) }
         if let hiddenModelsByProvider {

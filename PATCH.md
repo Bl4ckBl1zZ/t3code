@@ -72,8 +72,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   `SettingsPanels.tsx` and `ProviderInstanceCard`, preserving dedicated provider environment
   fields and the Hermes rollout gate. Environment tabs scope reads, writes, additions and
   updates; read-only sessions retain account navigation. Native Agents uses account navigation
-  and per-environment model visibility editing. Custom descriptors, setup terminals and the
-  remaining native provider configuration controls are separate ports.
+  and per-environment model visibility editing. Custom model names and option descriptors are
+  ported through the existing V2 providers, including fork-only providers, without adopting
+  upstream's V1 Claude catalog. Built-in model IDs and capabilities remain authoritative.
+  Web and Swift offer local draft editors, copied options, provider presets and explicit saves;
+  the optional `customModelDefinitions` capability gates structured writes to older servers.
+  Swift preserves unknown account configuration and other accounts when editing custom models.
+  Setup terminals and the remaining native provider configuration controls are separate ports.
 
 - Does not carry upstream's pinned-block drag-to-reorder in the web sidebar (the
   `optimisticPinnedOrder` / `handlePinnedDragEnd` block) because the fork keeps its client-local whole-list manual order. The searchable project-filter
@@ -457,8 +462,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   dedicated human-reviewed ports. Advancing the squash-sync marker does not mean these features
   are supported. Do not import their client flags or schemas without implementing the matching
   V2/server behavior and auditing the hand-maintained Swift contracts:
-  - Custom model names/option descriptors and imported custom-provider selection
-    (`5a433244d0`, `d92dca74eb`) need a V2 provider-option/adapter audit.
+  - Custom model names/option descriptors (`5a433244d0`, `d92dca74eb`) are now ported
+    through the fork's existing provider snapshots and V2 option selection, as detailed above.
+    Imported custom-provider selection still needs a dedicated importer audit.
   - Shared project defaults and scoped overrides (`9f40b2f563`) need the retained project
     aggregate, fork-owned migration numbers, and Swift settings parity. Connection load balancing
     (`420fd76f60`) needs V2 launch selection and an explicit multi-machine workspace policy.

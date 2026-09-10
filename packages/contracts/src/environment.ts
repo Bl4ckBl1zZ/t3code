@@ -102,6 +102,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       showing a set nothing will ever update. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
+  /** Custom model entries can include names and composer option descriptors. */
+  customModelDefinitions: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),
