@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct FeatureComposerView: View {
     /// True while the attachment picker has a camera, photo, or file source on
@@ -7,6 +8,8 @@ struct FeatureComposerView: View {
     /// resulting focus loss would collapse the footer, and the composer needs
     /// to know a presentation it just opened is the reason focus went away.
     @State private var isPickingAttachment = false
+    @State private var isFileDropTargeted = false
+    @State private var fileDropError: String?
     /// The in-pill attachment menu the plus morphs the composer into.
     @State private var isAttachMenuOpen = false
     /// The in-pill camera / photo-library window. Files stay on the native
@@ -151,6 +154,18 @@ struct FeatureComposerView: View {
             }
             composerSurface
         }
+            .onDrop(of: [UTType.data], isTargeted: $isFileDropTargeted, perform: receiveDroppedFiles)
+            .overlay {
+                if isFileDropTargeted {
+                    RoundedRectangle(cornerRadius: 24)
+                        .strokeBorder(T3Colors.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .alert("Attach files", isPresented: Binding(get: { fileDropError != nil }, set: { if !$0 { fileDropError = nil } })) {
+                Button("OK") { fileDropError = nil }
+            } message: { Text(fileDropError ?? "") }
             .task(id: historyDraftKey) {
                 historyGeneration = UUID()
                 promptHistory = ComposerPromptHistory()
@@ -419,6 +434,45 @@ struct FeatureComposerView: View {
                 }
             }
         }
+    }
+
+    /// Resolve each provider while its temporary file is valid, then append only
+    /// to the composer that accepted the drop. The existing upload queue owns sending.
+    private func receiveDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
+        guard !isSending, !isStashing, !voice.state.isBusy else { return false }
+        let remaining = max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
+        let accepted = providers.compactMap { provider -> (NSItemProvider, String)? in
+            guard let type = provider.registeredTypeIdentifiers.first(where: {
+                UTType($0)?.conforms(to: .data) == true
+            }) else { return nil }
+            return (provider, type)
+        }
+        guard !accepted.isEmpty else { return false }
+        guard remaining > 0 else {
+            fileDropError = "A message can contain up to 8 attachments."
+            return false
+        }
+        let destination = historyDraftKey
+        let generation = historyGeneration
+        let operation = attachmentPreparation.begin(itemCount: min(remaining, accepted.count))
+        Task { @MainActor in
+            defer { attachmentPreparation.finish(operation) }
+            for (provider, type) in accepted.prefix(remaining) {
+                do {
+                    let attachment = try await FeatureDroppedAttachment.load(provider, typeIdentifier: type)
+                    guard historyDraftKey == destination, historyGeneration == generation else { return }
+                    guard attachments.count < 8 else { break }
+                    attachments.append(attachment)
+                } catch {
+                    guard historyDraftKey == destination, historyGeneration == generation else { return }
+                    fileDropError = error.localizedDescription
+                }
+            }
+            if accepted.count > remaining {
+                fileDropError = "Only the first \(remaining) files were added. A message can contain up to 8 attachments."
+            }
+        }
+        return true
     }
 
     private var editorContent: some View {

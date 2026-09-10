@@ -670,3 +670,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   Merge-readiness sorting preserves involvement groups; duplicate repository checkouts
   collapse only within one environment. Review-tab identity includes the host when known,
   while the server still resolves reads through the selected project's repository identity.
+
+- Native composers accept file representations dropped from other apps through the existing
+  attachment processors and upload queue. Preparation reserves attachment slots, reads temporary
+  provider files before their callback expires, and discards results after composer navigation.
+  This does not yet add drop-to-open behavior to native sidebar rows.

@@ -701,3 +701,31 @@ enum FeatureDocumentAttachmentError: LocalizedError, Equatable {
         }
     }
 }
+
+/// NSItemProvider deletes its temporary file as soon as the callback returns.
+/// Read and process inside that callback, never pass the temporary URL to a Task.
+enum FeatureDroppedAttachment {
+    static func load(_ provider: NSItemProvider, typeIdentifier: String) async throws -> FeatureDraftAttachment {
+        try await withCheckedThrowingContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                do {
+                    if let error { throw error }
+                    guard let url else { throw CocoaError(.fileReadUnknown) }
+                    let maximum = 50 * 1_024 * 1_024
+                    let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                    guard values.isRegularFile == true else { throw CocoaError(.fileReadUnsupportedScheme) }
+                    guard (values.fileSize ?? 0) <= maximum else {
+                        throw FeatureDocumentAttachmentError.tooLarge(name: url.lastPathComponent, maximumBytes: maximum)
+                    }
+                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                    let document = try FeatureDocumentProcessor.attachment(from: data, url: url)
+                    if ComposerAttachments.classify(mimeType: document.mimeType, name: document.filename) == .image {
+                        continuation.resume(returning: try FeatureImageProcessor.attachment(from: data, ordinal: 1, sourceMIMEType: document.mimeType))
+                    } else {
+                        continuation.resume(returning: document)
+                    }
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+}
