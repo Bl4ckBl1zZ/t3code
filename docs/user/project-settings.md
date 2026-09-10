@@ -43,3 +43,15 @@ and project overrides. Choose **Machine default** to remove an override.
 Changes take effect when an agent’s next session is prepared. Turning access off
 withholds its browser tools while preserving its conversation and workspace tools.
 Your own browser panel remains available.
+
+## Defaults for new threads
+
+On web and desktop, open **Settings → Projects**. Select **Project defaults**
+to choose a default model and workspace mode, or select a project to override them.
+Use the machine filter when your machines have different installed agents or models.
+A change across machines requires the model to be available on each target.
+
+On iOS, open **Settings → Project defaults**, select a machine, and choose the
+model or **Local** / **New worktree** workspace. **Use automatic model selection**
+clears the machine's model preference. Your project default and explicit draft
+choices take priority; changing defaults does not change running threads.

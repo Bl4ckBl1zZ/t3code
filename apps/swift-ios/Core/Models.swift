@@ -57,6 +57,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let fileAttachments: FileAttachments?
         public let assistantCitations: Bool?
         public let customModelDefinitions: Bool?
+        public let projectDefaults: Bool?
         public let projectBrowserAccess: Bool?
         public let projectAutoPull: Bool?
         public let fileDocumentPreviews: Bool?
@@ -81,6 +82,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadPullRequestsV2
             case attachmentUploads, fileAttachments
             case assistantCitations
+            case projectDefaults
             case projectBrowserAccess
             case projectAutoPull
             case fileDocumentPreviews
@@ -113,6 +115,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
             fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
             assistantCitations = try container.decodeIfPresent(Bool.self, forKey: .assistantCitations)
+            projectDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectDefaults)
             projectBrowserAccess = try container.decodeIfPresent(Bool.self, forKey: .projectBrowserAccess)
             projectAutoPull = try container.decodeIfPresent(Bool.self, forKey: .projectAutoPull)
             fileDocumentPreviews = try container.decodeIfPresent(Bool.self, forKey: .fileDocumentPreviews)

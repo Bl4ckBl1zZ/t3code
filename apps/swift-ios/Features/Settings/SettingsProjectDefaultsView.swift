@@ -11,6 +11,7 @@ struct SettingsProjectDefaultsView: View {
     private var manager: any FeatureServerSettingsManaging {
         (model.client as? any FeatureServerSettingsManaging) ?? EmptyFeatureServerSettingsManager.shared
     }
+    private var defaultsEnabled: Bool { !loading && !saving && config?.environment?.capabilities.projectDefaults == true }
     private var enabled: Bool { !loading && !saving && config?.environment?.capabilities.projectAutoPull == true }
     private var browserEnabled: Bool { !loading && !saving && config?.environment?.capabilities.projectBrowserAccess == true }
     private var projects: [FeatureProject] { model.snapshot.projects.filter { $0.environmentID == environmentID } }
@@ -31,6 +32,27 @@ struct SettingsProjectDefaultsView: View {
                     Text("Connect a current server to configure automatic pulls.")
                         .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
                 }
+                ThreadDetailsSection(title: "New threads") {
+                    ProviderModelPicker(
+                        providers: model.snapshot.providersByEnvironment?[environmentID] ?? [],
+                        selection: Binding(get: { modelDefault }, set: { selection in
+                            Task { await save(.init(defaultModelSelection: .some(selection.map(coreSelection)))) }
+                        }),
+                        materializesDefaultSelection: false
+                    ).padding(14)
+                    Button("Use automatic model selection") {
+                        Task { await save(.init(defaultModelSelection: .some(nil))) }
+                    }.padding(14).disabled(config?.settings?.defaultModelSelection == nil)
+                    Picker("Workspace", selection: Binding(
+                        get: { config?.settings?.defaultThreadEnvMode ?? .local },
+                        set: { value in Task { await save(.init(defaultThreadEnvMode: value)) } }
+                    )) {
+                        Text("Local").tag(ServerThreadEnvironmentMode.local)
+                        Text("New worktree").tag(ServerThreadEnvironmentMode.worktree)
+                    }.padding(14)
+                    Text("Project defaults and choices made in a draft take priority. These defaults apply to new threads on this machine.")
+                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(14)
+                }.disabled(!defaultsEnabled)
                 ThreadDetailsSection(title: "Machine default") {
                     Toggle("Automatically pull", isOn: Binding(
                         get: { config?.settings?.defaultAutoPull ?? false },
@@ -87,6 +109,27 @@ struct SettingsProjectDefaultsView: View {
         .task(id: environmentID) { await load() }
     }
 
+    private var modelDefault: FeatureSelection? {
+        guard let value = config?.settings?.defaultModelSelection else { return nil }
+        return FeatureSelection(providerID: value.instanceId, modelID: value.model, options: (value.options ?? []).compactMap { option in
+            switch option.value {
+            case let .string(value): return FeatureModelOptionSelection(id: option.id, value: .string(value))
+            case let .bool(value): return FeatureModelOptionSelection(id: option.id, value: .boolean(value))
+            default: return nil
+            }
+        })
+    }
+    private func coreSelection(_ selection: FeatureSelection) -> ModelSelection {
+        let options = selection.options.map { option in
+            let value: JSONValue
+            switch option.value {
+            case let .string(raw): value = .string(raw)
+            case let .boolean(raw): value = .bool(raw)
+            }
+            return ModelSelection.OptionSelection(id: option.id, value: value)
+        }
+        return ModelSelection(instanceId: selection.providerID, model: selection.modelID, options: options.isEmpty ? nil : options)
+    }
     private func selection(for project: FeatureProject) -> String {
         guard let value = config?.settings?.projectAutoPullOverrides[project.wireID ?? project.id] else { return "inherit" }
         return value ? "on" : "off"
@@ -110,14 +153,15 @@ struct SettingsProjectDefaultsView: View {
     }
     private func save(_ patch: ServerSettingsPatchInput) async {
         let isBrowser = patch.projectAgentBrowserAccessOverrides != nil || patch.enableAgentBrowserAccess != nil
-        guard isBrowser ? browserEnabled : enabled else { return }
+        let isDefault = patch.defaultModelSelection != nil || patch.defaultThreadEnvMode != nil
+        guard isDefault ? defaultsEnabled : (isBrowser ? browserEnabled : enabled) else { return }
         saving = true
         let requestedID = environmentID
         defer { saving = false }
         do {
             // Recheck the capability before sending a sparse patch to a reconnected server.
             let current = try await manager.providerModelConfiguration(environmentID: requestedID)
-            let supported = isBrowser ? current.environment?.capabilities.projectBrowserAccess : current.environment?.capabilities.projectAutoPull
+            let supported = isDefault ? current.environment?.capabilities.projectDefaults : (isBrowser ? current.environment?.capabilities.projectBrowserAccess : current.environment?.capabilities.projectAutoPull)
             guard supported == true else { throw FeatureCapabilityUnavailable("Project defaults") }
             try await manager.updateServerSettings(environmentID: requestedID, patch: patch)
             await load()

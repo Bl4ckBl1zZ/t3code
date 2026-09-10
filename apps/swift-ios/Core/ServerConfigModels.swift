@@ -265,6 +265,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// Opaque envelopes preserve unknown driver fields while editing one account's models.
     public let providerInstances: [String: JSONValue]
     public let providerDefinitions: [String: JSONValue]
+    public let defaultModelSelection: ModelSelection?
     public let defaultAutoPull: Bool
     public let projectAgentBrowserAccessOverrides: [String: Bool]
     public let projectAutoPullOverrides: [String: Bool]
@@ -310,6 +311,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public init(
         providerInstances: [String: JSONValue] = [:],
         providerDefinitions: [String: JSONValue] = [:],
+        defaultModelSelection: ModelSelection? = nil,
         defaultAutoPull: Bool = false,
         projectAutoPullOverrides: [String: Bool] = [:],
         projectAgentBrowserAccessOverrides: [String: Bool] = [:],
@@ -330,6 +332,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     ) {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
+        self.defaultModelSelection = defaultModelSelection
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
@@ -348,6 +351,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case providerInstances
+        case defaultModelSelection
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
         case environmentIcon
         case usagePriceOverrides
@@ -376,6 +380,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
+        defaultModelSelection = try container.decodeIfPresent(ModelSelection.self, forKey: .defaultModelSelection)
         defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
         projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
@@ -420,6 +425,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providerInstances, forKey: .providerInstances)
+        try container.encode(defaultModelSelection, forKey: .defaultModelSelection)
         try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
         try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
@@ -451,6 +457,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// whatever another client changed in between. Add a field here — and one line
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
+    /// Outer nil omits the field; a present nil restores automatic selection.
+    public var defaultModelSelection: ModelSelection??
+    public var defaultThreadEnvMode: ServerThreadEnvironmentMode?
     public var defaultAutoPull: Bool?
     public var projectAgentBrowserAccessOverrides: [String: Bool?]?
     public var projectAutoPullOverrides: [String: Bool?]?
@@ -468,6 +477,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        defaultModelSelection: ModelSelection?? = nil,
+        defaultThreadEnvMode: ServerThreadEnvironmentMode? = nil,
         defaultAutoPull: Bool? = nil,
         projectAutoPullOverrides: [String: Bool?]? = nil,
         projectAgentBrowserAccessOverrides: [String: Bool?]? = nil,
@@ -479,6 +490,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.defaultModelSelection = defaultModelSelection
+        self.defaultThreadEnvMode = defaultThreadEnvMode
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
@@ -493,6 +506,14 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
+        if let defaultModelSelection {
+            if let selection = defaultModelSelection {
+                var value: [String: JSONValue] = ["instanceId": .string(selection.instanceId), "model": .string(selection.model)]
+                if let options = selection.options { value["options"] = .array(options.map { .object(["id": .string($0.id), "value": $0.value]) }) }
+                fields["defaultModelSelection"] = .object(value)
+            } else { fields["defaultModelSelection"] = .null }
+        }
+        if let defaultThreadEnvMode { fields["defaultThreadEnvMode"] = .string(defaultThreadEnvMode.rawValue) }
         if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
         if let projectAgentBrowserAccessOverrides { fields["projectAgentBrowserAccessOverrides"] = .object(projectAgentBrowserAccessOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }

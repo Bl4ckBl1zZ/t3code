@@ -234,6 +234,9 @@ export function applyServerSettingsPatch(
     ...(patch.providerModelPreferences !== undefined
       ? { providerModelPreferences: patch.providerModelPreferences }
       : {}),
+    ...(patch.defaultModelSelection !== undefined
+      ? { defaultModelSelection: patch.defaultModelSelection }
+      : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),

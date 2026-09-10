@@ -2,6 +2,7 @@ import { isElectron } from "~/env";
 import { isWindowsPlatform } from "~/lib/utils";
 
 export type SettingsPath =
+  | "/settings/projects"
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
@@ -32,6 +33,7 @@ export interface SettingsSearchItem {
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
+  "/settings/projects": "Projects",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
@@ -49,6 +51,12 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "project-defaults",
+    title: "Project defaults",
+    to: "/settings/projects",
+    searchTerms: ["model", "workspace", "machine", "browser", "checkout"],
+  },
   {
     id: "automatic-project-pull",
     title: "Automatically pull",

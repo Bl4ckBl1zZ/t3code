@@ -296,7 +296,7 @@ struct DailyUXNewTaskTests {
     }
 
     @Test
-    func appDefaultWinsAndExplicitModelCarriesAcrossCompatibleProjects() throws {
+    func projectOrMachineDefaultWinsAndExplicitModelCarriesAcrossCompatibleProjects() throws {
         let appDefault = FeatureSelection(providerID: "codex", modelID: "gpt-5.6-sol")
         let explicit = FeatureSelection(providerID: "codex", modelID: "gpt-5.6-luna")
         let project = FeatureProject(
@@ -322,7 +322,7 @@ struct DailyUXNewTaskTests {
             settings: .init(defaultSelection: appDefault)
         )
 
-        #expect(DailyUXCreationContext.initialSelection(for: project, in: snapshot) == appDefault)
+        #expect(DailyUXCreationContext.initialSelection(for: project, in: snapshot) == project.defaultSelection)
         #expect(
             DailyUXCreationContext.selection(
                 carrying: explicit,

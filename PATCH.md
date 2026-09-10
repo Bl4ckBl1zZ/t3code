@@ -1001,3 +1001,14 @@ credential reuse/rotation checks; only preview access changes. No V1 ProviderSer
 or snapshot query is imported. Sparse null patches restore inheritance. Web/desktop
 project settings and Swift Project defaults expose on/off/inherit, guarded by
 `projectBrowserAccess`; the machine-wide preference is preserved.
+
+## Machine-scoped project defaults
+
+Server settings carry a nullable default model selection, replaced atomically so
+options from a previous model cannot leak into a new selection. The `projectDefaults`
+capability gates machine-scoped editing on web/desktop and Swift. New threads resolve
+explicit choices, project defaults, then the destination machine's default; legacy
+servers retain their existing fallback. Existing draft reuse and navigation-race
+guards remain fork-owned. Settings → Projects supports project and machine scope,
+with grouped settings rows; project model fan-out checks target catalog availability.
+Shared action defaults are a separate port and are not advertised by this capability.

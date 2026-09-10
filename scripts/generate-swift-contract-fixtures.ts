@@ -1253,3 +1253,41 @@ if (process.argv.includes("--check")) {
 } else {
   NodeFS.writeFileSync(browserAccessFixturePath, browserAccessFixture);
 }
+
+const projectDefaultsFixturePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "projectDefaults.json",
+);
+const projectDefaultsFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      defaultModelSelection: null,
+      defaultThreadEnvMode: "worktree",
+    }),
+    settings: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        defaultModelSelection: {
+          instanceId: "codex",
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+        defaultThreadEnvMode: "worktree",
+      }),
+    ),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      projectDefaults: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(projectDefaultsFixturePath) ||
+    NodeFS.readFileSync(projectDefaultsFixturePath, "utf8") !== projectDefaultsFixture
+  ) {
+    console.error("[swift-fixtures] projectDefaults.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(projectDefaultsFixturePath, projectDefaultsFixture);

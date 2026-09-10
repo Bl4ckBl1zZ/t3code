@@ -28,6 +28,7 @@
     "defaultTheme": "",
     "defaultThemeSetAt": "",
     "environmentIcon": null,
+    "defaultModelSelection": null,
     "defaultThreadEnvMode": "local",
     "newWorktreesStartFromOrigin": true,
     "worktreeRetention": {

@@ -115,15 +115,19 @@ export function useRelativeTimeTick(intervalMs = 1_000) {
 
 export function SettingsSection({
   title,
+  hideTitle = false,
   icon,
   headerAction,
+  variant = "grouped",
   children,
   className,
   ...sectionProps
 }: ComponentPropsWithoutRef<"section"> & {
   title: string;
+  hideTitle?: boolean;
   icon?: ReactNode;
   headerAction?: ReactNode;
+  variant?: "grouped" | "plain";
   children: ReactNode;
 }) {
   const targetRef = useSettingsSearchTarget<HTMLElement>(sectionProps.id);
@@ -133,16 +137,35 @@ export function SettingsSection({
       {...sectionProps}
       ref={targetRef}
       tabIndex={sectionProps.id ? -1 : sectionProps.tabIndex}
-      className={cn("space-y-3", className)}
+      className={cn(!hideTitle && "space-y-2.5", className)}
     >
-      <div className="flex min-h-8 items-center justify-between gap-4 px-3 sm:px-4">
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.025em] text-foreground">
-          {icon}
-          {title}
-        </h2>
-        <div className="flex min-h-7 min-w-7 items-center justify-end">{headerAction}</div>
+      {hideTitle ? (
+        <h2 className="sr-only">{title}</h2>
+      ) : (
+        <div
+          data-settings-scroll-target
+          className="flex min-h-7 items-start justify-between gap-4 px-3 sm:px-4"
+        >
+          <div className="min-w-0">
+            <h2 className="flex min-h-7 items-center gap-2 text-sm font-normal tracking-[-0.005em] text-foreground/70">
+              {icon}
+              {title}
+            </h2>
+          </div>
+          <div className="flex min-h-7 min-w-7 items-center justify-end">{headerAction}</div>
+        </div>
+      )}
+      <div
+        data-settings-scroll-target={hideTitle ? "" : undefined}
+        className={cn(
+          "relative overflow-visible text-foreground",
+          variant === "grouped"
+            ? "rounded-xl border border-border/60 bg-card/40 shadow-xs/5 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none"
+            : "space-y-1",
+        )}
+      >
+        {children}
       </div>
-      <div className="relative space-y-1 overflow-visible text-foreground">{children}</div>
     </section>
   );
 }
@@ -171,7 +194,12 @@ export function SettingsRow({
       {...rowProps}
       ref={targetRef}
       tabIndex={rowProps.id ? -1 : rowProps.tabIndex}
-      className={cn("rounded-xl px-3 sm:px-4", children ? "pt-3 pb-1" : "py-3", className)}
+      data-slot="settings-row"
+      className={cn(
+        "rounded-xl px-3 sm:px-4 aria-disabled:opacity-50 aria-disabled:[&_*]:text-muted-foreground",
+        children ? "pt-3 pb-1" : "py-3",
+        className,
+      )}
     >
       <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] sm:items-center sm:gap-8">
         <div className="min-w-0 flex-1 space-y-1">
@@ -201,10 +229,12 @@ export function SettingsRow({
 
 export function SettingResetButton({
   label,
+  tooltip = "Reset to default",
   disabled = false,
   onClick,
 }: {
   label: string;
+  tooltip?: string;
   disabled?: boolean;
   onClick: () => void;
 }) {
@@ -226,7 +256,7 @@ export function SettingResetButton({
           </Button>
         }
       />
-      <TooltipPopup side="top">Reset to default</TooltipPopup>
+      <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -267,3 +297,6 @@ export function scrollToSettingsTarget(targetId: string): boolean {
   scrollAndFocusSettingsTarget(target);
   return true;
 }
+
+export const SETTINGS_PICKER_TRIGGER_CLASSNAME =
+  "h-8 min-h-8 min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground sm:h-7 sm:min-h-7";

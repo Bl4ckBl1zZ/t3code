@@ -4387,7 +4387,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     name: project.title,
                     path: project.workspaceRoot,
                     threadCount: threadCountByProjectID[uiID, default: 0],
-                    defaultSelection: project.defaultModelSelection.map(mapSelection),
+                    defaultSelection: (project.defaultModelSelection ?? serverConfigsByEnvironmentID[environment.id]?.settings?.defaultModelSelection).map(mapSelection),
                     scripts: project.scripts,
                     previewUrl: pinnedPreviewURLs[uiID],
                     faviconPath: project.faviconPath,
@@ -5403,6 +5403,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         shell: OrchestrationV2ShellSnapshot?
     ) -> ModelSelection {
         let config = serverConfigsByEnvironmentID[environmentID]
+        if let configured = config?.settings?.defaultModelSelection,
+           let config, configSupports(mapSelection(configured), config: config) {
+            return configured
+        }
         let appSelection = loadSettings().defaultSelection
         if let selection = appSelection, let config {
             if configSupports(selection, config: config) {

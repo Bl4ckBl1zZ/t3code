@@ -188,8 +188,8 @@ enum DailyUXCreationContext {
         in snapshot: FeatureSnapshot
     ) -> FeatureSelection? {
         let providers = providers(for: project, in: snapshot)
-        return DailyUXModelOptions.validated(snapshot.settings.defaultSelection, in: providers)
-            ?? DailyUXModelOptions.validated(project?.defaultSelection, in: providers)
+        return DailyUXModelOptions.validated(project?.defaultSelection, in: providers)
+            ?? DailyUXModelOptions.validated(snapshot.settings.defaultSelection, in: providers)
             ?? DailyUXModelOptions.preferredSelection(in: providers)
     }
 

@@ -17,6 +17,7 @@ import {
   selectProjectGroupingSettings,
 } from "../../logicalProject";
 import type {
+  EnvironmentId,
   ContextMenuItem,
   ModelSelection,
   ProviderDriverKind,
@@ -44,7 +45,7 @@ import { isElectron } from "../../env";
 import {
   useClientSettings,
   useUpdateClientSettings,
-  usePrimarySettings,
+  useEnvironmentSettings,
 } from "../../hooks/useSettings";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
@@ -73,7 +74,7 @@ import {
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
-import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
@@ -245,41 +246,59 @@ function ProjectSettingsBreadcrumb({ projectKey }: { projectKey: string }) {
   );
 }
 
-export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
+export function ProjectSettingsPanel({
+  projectKey,
+  environmentId = null,
+}: {
+  projectKey: string;
+  environmentId?: EnvironmentId | null;
+}) {
   const groups = useSettingsProjectGroups();
   const navigate = useNavigate();
 
   const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
+  const members = useMemo(
+    () =>
+      selected?.memberProjects.filter(
+        (member) => environmentId === null || member.environmentId === environmentId,
+      ) ?? [],
+    [selected, environmentId],
+  );
 
   // Remember the members of the last rendered group so a grouping-rule change
   // (which changes the group key) can follow the project to its new group.
-  const lastSelectionRef = useRef<{ key: string; memberKeys: string[] } | null>(null);
+  const lastSelectionRef = useRef<{
+    key: string;
+    environmentId: EnvironmentId | null;
+    memberKeys: string[];
+  } | null>(null);
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || members.length === 0) return;
     lastSelectionRef.current = {
       key: selected.projectKey,
-      memberKeys: selected.memberProjects.map((member) => member.physicalProjectKey),
+      environmentId,
+      memberKeys: members.map((member) => member.physicalProjectKey),
     };
-  }, [selected]);
+  }, [selected, members, environmentId]);
 
   // A grouping-rule change replaces the group key mid-visit; follow the
   // project to its new key instead of parking on the not-found state.
   useEffect(() => {
-    if (selected !== null) return;
+    if (members.length > 0) return;
     const last = lastSelectionRef.current;
-    if (last?.key !== projectKey) return;
+    if (last?.key !== projectKey || last.environmentId !== environmentId) return;
     const successor = groups.find((group) =>
       group.memberProjects.some((member) => last.memberKeys.includes(member.physicalProjectKey)),
     );
     if (successor) {
       void navigate({
-        to: "/projects/$projectKey",
-        params: { projectKey: successor.projectKey },
+        to: "/settings/projects",
+        search: { project: successor.projectKey, machine: environmentId ?? undefined },
         replace: true,
         hashScrollIntoView: false,
       });
     }
-  }, [groups, navigate, projectKey, selected]);
+  }, [groups, navigate, projectKey, members.length, environmentId]);
 
   if (!selected) {
     return (
@@ -290,16 +309,36 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
       </div>
     );
   }
-  return <ProjectDetail key={selected.projectKey} group={selected} />;
+  if (members.length === 0)
+    return (
+      <p className="p-8 text-sm text-muted-foreground">
+        This project has no checkout on this machine.
+      </p>
+    );
+  const scopedGroup = {
+    ...selected,
+    memberProjects: members,
+    environmentId: members[0]!.environmentId,
+    id: members[0]!.id,
+  };
+  return (
+    <ProjectDetail key={`${selected.projectKey}:${environmentId ?? "all"}`} group={scopedGroup} />
+  );
 }
 
 function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
+  const allServerConfigs = useAtomValue(environmentServerConfigsAtom);
+  const representative =
+    group.memberProjects.find((member) => allServerConfigs.has(member.environmentId)) ??
+    group.memberProjects[0]!;
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const settings = usePrimarySettings();
+  const settings = useEnvironmentSettings(representative.environmentId);
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const serverProviders =
+    useAtomValue(serverEnvironment.providersValueAtom(representative.environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
@@ -325,13 +364,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     },
   });
 
-  const representative =
-    group.memberProjects.find(
-      (member) => member.environmentId === group.environmentId && member.id === group.id,
-    ) ?? group.memberProjects[0]!;
   const faviconPath = representative.faviconPath ?? null;
   const projectIcon = representative.projectIcon ?? null;
-  const allServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const supportsProjectIcons = group.memberProjects.every(
     (member) =>
       allServerConfigs.get(member.environmentId)?.environment.capabilities.projectIcons === true,
@@ -428,7 +462,10 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
 
   // ----- default model -----
   const storedSelection = representative.defaultModelSelection;
-  const resolvedSelection = resolveDefaultProviderModelSelection(serverProviders, storedSelection);
+  const resolvedSelection = resolveDefaultProviderModelSelection(
+    serverProviders,
+    storedSelection ?? settings.defaultModelSelection,
+  );
   const instanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
@@ -444,9 +481,39 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     (entry) => entry.instanceId === resolvedSelection?.instanceId,
   );
   const setDefaultModel = useCallback(
-    (selection: ModelSelection | null) =>
-      void updateAllMembers({ defaultModelSelection: selection }, "Failed to update default model"),
-    [updateAllMembers],
+    (selection: ModelSelection | null) => {
+      if (selection) {
+        for (const member of group.memberProjects) {
+          const config = allServerConfigs.get(member.environmentId);
+          const entry =
+            config &&
+            applyProviderInstanceSettings(
+              deriveProviderInstanceEntries(config.providers),
+              config.settings,
+            ).find((candidate) => candidate.instanceId === selection.instanceId);
+          const options =
+            config &&
+            getCustomModelOptionsByInstance(
+              { ...settings, ...config.settings },
+              config.providers,
+            ).get(selection.instanceId);
+          if (
+            !entry?.enabled ||
+            !entry.isAvailable ||
+            !options?.some((option) => option.slug === selection.model && !option.isUnavailable)
+          ) {
+            toastManager.add({
+              type: "error",
+              title: "Default model not saved",
+              description: `This model is unavailable on ${member.environmentLabel ?? "one of this project's machines"}. Select that machine to configure its default separately.`,
+            });
+            return;
+          }
+        }
+      }
+      void updateAllMembers({ defaultModelSelection: selection }, "Failed to update default model");
+    },
+    [allServerConfigs, group.memberProjects, settings, updateAllMembers],
   );
 
   // ----- new-thread workspace mode -----
@@ -732,10 +799,6 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
 
       const draftStore = useComposerDraftStore.getState();
       for (const member of members) {
-        const memberThreads = projectThreads.filter(
-          (thread) =>
-            thread.environmentId === member.environmentId && thread.projectId === member.id,
-        );
         const result = mapAtomCommandResult(
           await deleteProject({
             environmentId: member.environmentId,

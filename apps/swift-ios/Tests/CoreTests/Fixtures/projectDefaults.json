@@ -1,10 +1,7 @@
 {
   "patch": {
-    "enableAgentBrowserAccess": false,
-    "projectAgentBrowserAccessOverrides": {
-      "off": false,
-      "reset": null
-    }
+    "defaultModelSelection": null,
+    "defaultThreadEnvMode": "worktree"
   },
   "settings": {
     "enableLegacyTokenStreaming": false,
@@ -12,9 +9,7 @@
     "enableRemoteHermes": false,
     "enableProviderUpdateChecks": true,
     "enableAgentBrowserAccess": true,
-    "projectAgentBrowserAccessOverrides": {
-      "off": false
-    },
+    "projectAgentBrowserAccessOverrides": {},
     "defaultAutoPull": false,
     "projectAutoPullOverrides": {},
     "backgroundActivity": {
@@ -28,8 +23,17 @@
     "defaultTheme": "",
     "defaultThemeSetAt": "",
     "environmentIcon": null,
-    "defaultModelSelection": null,
-    "defaultThreadEnvMode": "local",
+    "defaultModelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-5.6-sol",
+      "options": [
+        {
+          "id": "reasoningEffort",
+          "value": "high"
+        }
+      ]
+    },
+    "defaultThreadEnvMode": "worktree",
     "newWorktreesStartFromOrigin": true,
     "worktreeRetention": {
       "schemaVersion": 1,
@@ -115,7 +119,7 @@
     "usagePriceOverrides": {}
   },
   "capabilities": {
-    "projectBrowserAccess": true,
+    "projectDefaults": true,
     "repositoryIdentity": true
   }
 }
