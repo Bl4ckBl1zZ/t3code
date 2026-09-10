@@ -2313,6 +2313,15 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection title="General">
         <SettingsRow
+          title="Set up T3 Code"
+          description="Connect computers, configure agents, and import CLI projects and conversations."
+          control={
+            <Button variant="outline" size="sm" render={<Link to="/welcome" />}>
+              Open setup
+            </Button>
+          }
+        />
+        <SettingsRow
           {...searchableSetting("project-grouping")}
           description="Combine matching repositories across environments."
           resetAction={

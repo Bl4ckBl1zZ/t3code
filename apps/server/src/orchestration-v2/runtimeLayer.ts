@@ -1,3 +1,5 @@
+import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -332,7 +334,16 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   threadFeedbackServiceProvided,
 );
 
+const agentSessionScannerProvided = AgentSessionScanner.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+);
+const agentSessionImporterProvided = AgentSessionImporter.layer.pipe(
+  Layer.provide(Layer.mergeAll(agentSessionScannerProvided, eventSinkProvided, idAllocatorLayer)),
+);
+
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
+  agentSessionScannerProvided,
+  agentSessionImporterProvided,
   OrchestrationLayerLive,
   OrchestrationV2LayerLive,
   threadTitleRegenerationWorkerProvided,

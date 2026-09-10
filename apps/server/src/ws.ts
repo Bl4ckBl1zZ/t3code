@@ -1,3 +1,5 @@
+import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
+import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
 import * as DateTime from "effect/DateTime";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
@@ -713,6 +715,8 @@ const makeWsRpcLayer = (
       const hermesCron = yield* HermesCron.HermesCron;
       const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
+      const agentSessionScanner = yield* AgentSessionScanner;
+      const agentSessionImporter = yield* AgentSessionImporter;
       const hermesProactiveInbox = yield* HermesProactiveInbox;
       // Shared with the server, which owns the sweep fiber. Building one here
       // would give every connected client its own residency loop and its own
@@ -2287,6 +2291,16 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",
           }),
+        [WS_METHODS.agentSessionsScan]: () =>
+          observeRpcEffect(WS_METHODS.agentSessionsScan, agentSessionScanner.scan, {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.agentSessionsImport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentSessionsImport,
+            agentSessionImporter.importRecent(input),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           observeRpcEffect(
             WS_METHODS.filesystemBrowse,

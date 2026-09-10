@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
+    FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -454,6 +454,58 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func addProject(environmentID: String, path: String) async throws {
         let client = try await projectCreationClient(environmentID: environmentID)
         try await createProject(client: client, path: path)
+    }
+
+    func refreshSetupProviders(environmentID: String) async throws -> [ServerProviderSnapshot] {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.refreshProviderSnapshots()
+    }
+
+    func makeAgentSetupTerminal(environmentID: String, providerInstanceID: String) async throws -> any FeatureAgentSetupTerminal {
+        let client = try await environmentClient(id: environmentID)
+        let config = try await client.serverConfig()
+        guard config.environment?.capabilities.providerTerminalEnvironment == true,
+              let provider = config.providers.first(where: { $0.instanceId == providerInstanceID }), provider.enabled,
+              let cwd = config.cwd else { throw FeatureCapabilityUnavailable("Agent setup") }
+        let instance = config.settings?.providerInstances[providerInstanceID]
+        let binary = instance != nil ? instance?["config"]?["binaryPath"]?.stringValue : config.settings?.providerDefinitions[provider.driver]?["binaryPath"]?.stringValue
+        guard let command = AgentSetupCommand.resolve(driver: provider.driver, installed: provider.installed, binaryPath: binary, platform: config.environment?.platform.os ?? "unknown") else { throw FeatureCapabilityUnavailable("Agent setup") }
+        return NativeAgentSetupTerminal(client: client, cwd: cwd, providerInstanceID: providerInstanceID, command: command)
+    }
+
+    func scanAgentSessions(environmentID: String) async throws -> AgentSessionScanResult {
+        let client = try await environmentClient(id: environmentID)
+        guard try await client.serverConfig().environment?.capabilities.agentSessionImport == true else { throw FeatureCapabilityUnavailable("CLI history import; update this server") }
+        return try await client.scanAgentSessions()
+    }
+
+    func importAgentSessions(environmentID: String, candidate: AgentSessionProjectCandidate, proposedProjectID: String) async throws -> AgentSessionImportResult {
+        let client = try await environmentClient(id: environmentID)
+        try await requireScope("orchestration:operate", client: client)
+        guard try await client.serverConfig().environment?.capabilities.agentSessionImport == true else { throw FeatureCapabilityUnavailable("CLI history import; update this server") }
+        let shell = try await client.shellSnapshot()
+        let existing = shell.projects.first {
+            ProjectCreationPath.normalizedForComparison($0.workspaceRoot) == ProjectCreationPath.normalizedForComparison(candidate.path)
+        }
+        var projectID = candidate.projectId ?? existing?.id ?? proposedProjectID
+        if candidate.projectId == nil && existing == nil {
+            do {
+                try await client.createProject(projectID: projectID, title: candidate.title, workspaceRoot: candidate.path)
+            } catch {
+                // A lost create response can still have committed. Reconcile the stable
+                // attempted ID before allowing a retry to create another project.
+                guard await recoverCreatedProject(client: client, projectID: projectID, path: candidate.path) else { throw error }
+                // A concurrent creation may have chosen another ID for the same folder.
+                let recovered = try await client.shellSnapshot()
+                guard let project = recovered.projects.first(where: {
+                    ProjectCreationPath.normalizedForComparison($0.workspaceRoot) == ProjectCreationPath.normalizedForComparison(candidate.path)
+                }) else { throw error }
+                projectID = project.id
+            }
+        }
+        let result = try await client.importAgentSessions(projectID: projectID, expectedWorkspaceRoot: candidate.path)
+        try? await refresh(client: client)
+        return result
     }
 
     func browseProjectFolders(

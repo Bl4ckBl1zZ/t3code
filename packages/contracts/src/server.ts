@@ -684,6 +684,9 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
+  bootstrapProjectCreated: Schema.optional(Schema.Boolean),
+  bootstrapThreadCreated: Schema.optional(Schema.Boolean),
+  bootstrapStatus: Schema.optional(Schema.Literals(["pending", "complete"])),
 });
 export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
 

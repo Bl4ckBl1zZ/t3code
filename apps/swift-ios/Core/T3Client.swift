@@ -1102,6 +1102,16 @@ public actor T3Client {
         )
     }
 
+    public func scanAgentSessions() async throws -> AgentSessionScanResult {
+        try await rpc.request(RPCMethod.agentSessionsScan.rawValue, payload: .object([:]), as: AgentSessionScanResult.self)
+    }
+
+    public func importAgentSessions(projectID: String, expectedWorkspaceRoot: String) async throws -> AgentSessionImportResult {
+        try await rpc.request(RPCMethod.agentSessionsImport.rawValue, payload: .object([
+            "projectId": .string(projectID), "expectedWorkspaceRoot": .string(expectedWorkspaceRoot),
+        ]), as: AgentSessionImportResult.self)
+    }
+
     public func browseFilesystem(
         partialPath: String,
         cwd: String? = nil
@@ -1474,9 +1484,10 @@ public actor T3Client {
         worktreePath: String? = nil,
         columns: Int? = nil,
         rows: Int? = nil,
-        environmentVariables: [String: String]? = nil
+        environmentVariables: [String: String]? = nil,
+        providerInstanceID: String? = nil
     ) async throws -> TerminalSessionSnapshot {
-        let payload = try terminalPayload(
+        var payload = try terminalPayloadObject(
             threadID: threadID,
             terminalID: terminalID,
             cwd: cwd,
@@ -1485,9 +1496,10 @@ public actor T3Client {
             rows: rows,
             environmentVariables: environmentVariables
         )
+        if let providerInstanceID { payload["providerInstanceId"] = .string(providerInstanceID) }
         return try await rpc.request(
             RPCMethod.terminalOpen.rawValue,
-            payload: payload,
+            payload: .object(payload),
             as: TerminalSessionSnapshot.self
         )
     }
@@ -1969,6 +1981,8 @@ public enum RPCMethod: String, Sendable {
     case projectsReadFile = "projects.readFile"
     case projectsWriteFile = "projects.writeFile"
     case filesystemBrowse = "filesystem.browse"
+    case agentSessionsScan = "agentSessions.scan"
+    case agentSessionsImport = "agentSessions.import"
     case assetsCreateURL = "assets.createUrl"
     case serverGetUsageSummary = "server.getUsageSummary"
     case assetsPersistChatAttachments = "assets.persistChatAttachments"

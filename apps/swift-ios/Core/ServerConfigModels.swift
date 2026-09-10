@@ -512,6 +512,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
 /// Narrow decode view of the much larger `ServerConfig` RPC result.
 public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
+    public var environment: EnvironmentDescriptor? = nil
+    public var cwd: String? = nil
     public let providers: [ServerProviderSnapshot]
     public let settings: ServerSettingsSnapshot?
     /// The server's dedicated non-project workspace for projectless T3 Work
@@ -544,12 +546,14 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case providers, settings, t3WorkDirectory
+        case providers, settings, t3WorkDirectory, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        environment = try container.decodeIfPresent(EnvironmentDescriptor.self, forKey: .environment)
         providers = try container.decode(
             [LossyDecodableElement<ServerProviderSnapshot>].self,
             forKey: .providers
@@ -572,6 +576,8 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encodeIfPresent(environment, forKey: .environment)
         try container.encode(providers, forKey: .providers)
         try container.encodeIfPresent(settings, forKey: .settings)
         try container.encodeIfPresent(t3WorkDirectory, forKey: .t3WorkDirectory)

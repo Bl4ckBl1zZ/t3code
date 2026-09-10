@@ -310,6 +310,10 @@
     "./assistantCitations": {
       "types": "./src/assistantCitations.ts",
       "import": "./src/assistantCitations.ts"
+    },
+    "./testing/symlinks": {
+      "types": "./src/testing/symlinks.ts",
+      "import": "./src/testing/symlinks.ts"
     }
   },
   "scripts": {

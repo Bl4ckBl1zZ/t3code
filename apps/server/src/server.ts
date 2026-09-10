@@ -361,6 +361,7 @@ const CheckpointStoreLayerLive = CheckpointStore.layer.pipe(
 const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
 
 const TerminalLayerLive = TerminalManager.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
   Layer.provide(PtyAdapterLive),
   Layer.provide(PortScannerLayerLive),
 );

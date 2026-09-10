@@ -12,6 +12,7 @@ public struct SettingsView: View {
     @State private var showingT3Connect = false
     @State private var showingIntegrations = false
     @State private var showingAgents = false
+    @State private var showingSetup = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
@@ -150,6 +151,7 @@ public struct SettingsView: View {
                 }
                 .presentationDragIndicator(.visible)
             }
+            .sheet(isPresented: $showingSetup) { AgentSetupView(model: model) }
             .sheet(isPresented: $showingAgents) {
                 NavigationStack {
                     SettingsAgentsView(
@@ -458,6 +460,11 @@ public struct SettingsView: View {
     private var configurationSection: some View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
+                Button { showingSetup = true } label: {
+                    SettingsNavigationRow(title: "Set up T3 Code", systemImage: "checklist")
+                }.buttonStyle(.plain)
+                settingsDivider
+
                 Button {
                     showingAgents = true
                 } label: {

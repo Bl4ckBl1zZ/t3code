@@ -53,6 +53,15 @@ describe("normalizeGitRemoteUrl", () => {
 });
 
 describe("parseGitHubRepositoryNameWithOwnerFromRemoteUrl", () => {
+  it("recognizes SSH remotes with or without the conventional user", () => {
+    for (const url of [
+      "ssh://github.com/T3Tools/T3Code.git",
+      "ssh://git@github.com/T3Tools/T3Code.git",
+    ]) {
+      expect(parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url)).toBe("T3Tools/T3Code");
+    }
+  });
+
   it("extracts the owner and repository from common GitHub remote shapes", () => {
     expect(
       parseGitHubRepositoryNameWithOwnerFromRemoteUrl("git@github.com:T3Tools/T3Code.git"),

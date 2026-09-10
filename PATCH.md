@@ -462,7 +462,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   - New minimap turn navigation, PR merge defaults/videos/link routing, sidebar file drops,
     composer focus/multiline/footer transitions, usage account layout,
     and their follow-ups need dedicated adaptation to the fork's timeline, inline settings,
-    unified attachments and panel stores. Previously deferred onboarding, shared settings,
+    unified attachments and panel stores. Previously deferred shared settings,
     auto-balancing, galleries, reset credits and browser-profile import stay deferred.
     The removed settings section-navigation machinery was never adopted by the fork.
   - Expo-only UI, outbox, drag handles and Android appearance/notification changes stay excluded
@@ -479,7 +479,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   - Shared project defaults and scoped overrides (`9f40b2f563`) need the retained project
     aggregate, fork-owned migration numbers, and Swift settings parity. Connection load balancing
     (`420fd76f60`) needs V2 launch selection and an explicit multi-machine workspace policy.
-  - The welcome wizard (`09aac71563`) depends on upstream's V1 importer/provider setup.
+  - The welcome wizard (`09aac71563`) is now ported onto the V2 importer and account-specific
+    setup terminals, as detailed below.
     Server-side PR discovery (`223ff4490f`) and actual PR terminal timestamps (`050690d1bc`)
     need a V2 background service and JSON settlement projection. Upstream migration
     `048_ProjectionThreadBranchPullRequest` is not carried; existing client-driven V2 PR
@@ -918,3 +919,30 @@ are retained, rather than importing upstream V1 panel data. Sidebar, terminal dr
 panel, sheet, header/footer breakpoint fades and PR workspace use the shared setting. Resize
 and maximize changes suppress width transitions. This is a web/desktop layout preference;
 native Swift keeps its own platform transitions and push-to-talk gesture tree.
+
+### Welcome setup and CLI history import (2026-09-10 parity port)
+
+Web/desktop now offer the reviewed upstream three-step welcome wizard, available again in
+Settings. Fresh-workspace detection uses explicit startup provenance and waits for durable
+client settings and live V2 shells; an existing workspace is never inferred to be fresh from
+its folder name alone. Failed settings reads and completion writes remain retryable.
+Swift has a native Computers / Agents / Projects setup flow after first pairing and in Settings,
+using its existing navigation shell and terminal renderer. Neither client runs install/login
+commands until the user presses Enter. Terminals resolve the selected provider account's
+current environment and home on the server, including secret-backed values and Codex shadow
+homes. Each wizard terminal owns and cleans up only its unique terminal ID.
+
+The bounded upstream Codex/Claude transcript scanner is carried with project lookup adapted
+to the retained project aggregate. History import is implemented directly with V2 events and
+provider native references, without starting a provider or importing V1 runtime services.
+Imported conversations begin settled and resume through V2. A native session already owned
+by another thread/project/account is never reassigned. Retries and copied transcript files
+reuse the original conversation rather than overwrite history the user has continued.
+Fork migration **060** stores only import ownership and source fingerprints; conversation
+state remains the V2 JSON projection. Import receipts, events and fingerprints commit atomically.
+The migration-journal reconciliation marker is registered alongside this fork-owned number.
+
+`agentSessionImport` and `providerTerminalEnvironment` advertise these implementations;
+clients gate the new operations against older servers. Swift decodes real schema-generated
+fixtures for scan results, import counts and capability flags. Expo remains on its existing
+onboarding UI and can decode the additive contracts; its V1 importer is not introduced.

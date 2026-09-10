@@ -1,3 +1,7 @@
+import {
+  AgentSessionScanResult,
+  AgentSessionImportResult,
+} from "../packages/contracts/src/agentSessions.ts";
 import { formatAssistantCitationHref } from "../packages/shared/src/assistantCitations.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Codegen tooling runs from plain node before an Effect runtime exists.
 /**
@@ -21,6 +25,7 @@ import {
   AssistantCitation,
   CustomModelSetting,
   ExecutionEnvironmentDescriptor,
+  ExecutionEnvironmentCapabilities,
   EnvironmentId,
   ServerProviderUsageLimits,
   ServerProvider,
@@ -1082,3 +1087,61 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(providerContextReportingPath, providerContextReportingSerialized);
+
+const agentSessionFixturePath = NodePath.join(NodePath.dirname(outputPath), "agentSessions.json");
+const agentSessionFixture = `${JSON.stringify(
+  {
+    scan: Schema.encodeSync(AgentSessionScanResult)({
+      candidates: [
+        {
+          path: "/work/app",
+          title: "app",
+          sources: ["codex", "claudeAgent"],
+          threadCount: 4,
+          lastActiveAt: "2026-09-10T12:00:00.000Z",
+          alreadyImported: false,
+          git: { remoteKey: "github.com/team/app", repository: "team/app" },
+        },
+        {
+          path: "/work/notes",
+          title: "notes",
+          projectId: ProjectId.make("project-notes"),
+          sources: ["codex"],
+          threadCount: 5,
+          lastActiveAt: "2026-09-10T12:00:00Z",
+          alreadyImported: true,
+          git: null,
+        },
+        {
+          path: "/work/legacy",
+          title: "legacy",
+          sources: ["claudeAgent"],
+          threadCount: 3,
+          lastActiveAt: "2026-09-10T12:00:00Z",
+          alreadyImported: false,
+        },
+      ],
+      scannedAt: "2026-09-10T13:00:00Z",
+      truncated: true,
+    }),
+    imported: Schema.encodeSync(AgentSessionImportResult)({ importedCount: 3, skippedCount: 1 }),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      agentSessionImport: true,
+      providerTerminalEnvironment: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(agentSessionFixturePath) ||
+    NodeFS.readFileSync(agentSessionFixturePath, "utf8") !== agentSessionFixture
+  ) {
+    console.error("[swift-fixtures] agentSessions.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(agentSessionFixturePath, agentSessionFixture);
+}

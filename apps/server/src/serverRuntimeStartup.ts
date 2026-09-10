@@ -197,6 +197,8 @@ export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
 interface AutoBootstrapWelcomeTargets {
   readonly bootstrapProjectId?: ProjectId;
   readonly bootstrapThreadId?: ThreadId;
+  readonly bootstrapProjectCreated?: boolean;
+  readonly bootstrapThreadCreated?: boolean;
 }
 
 export const resolveWelcomeBase = Effect.gen(function* () {
@@ -221,16 +223,19 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
 
   let bootstrapProjectId: ProjectId | undefined;
   let bootstrapThreadId: ThreadId | undefined;
+  let bootstrapProjectCreated = false;
+  let bootstrapThreadCreated = false;
 
   if (serverConfig.autoBootstrapProjectFromCwd) {
     const defaultModelSelection = getAutoBootstrapDefaultModelSelection();
-    const { project } = yield* projects.bootstrap({
+    const { project, created } = yield* projects.bootstrap({
       commandId: CommandId.make(yield* randomUUID),
       projectId: ProjectId.make(yield* randomUUID),
       title: path.basename(serverConfig.cwd) || "project",
       workspaceRoot: serverConfig.cwd,
       defaultModelSelection,
     });
+    bootstrapProjectCreated = created;
     const shell = yield* threads.getShellSnapshot();
     const existingThread = shell.threads.find(
       (thread) =>
@@ -250,6 +255,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       });
       bootstrapProjectId = project.id;
       bootstrapThreadId = launched.threadId;
+      bootstrapThreadCreated = true;
     } else {
       bootstrapProjectId = project.id;
       bootstrapThreadId = existingThread.id;
@@ -257,8 +263,8 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   }
 
   return {
-    ...(bootstrapProjectId ? { bootstrapProjectId } : {}),
-    ...(bootstrapThreadId ? { bootstrapThreadId } : {}),
+    ...(bootstrapProjectId ? { bootstrapProjectId, bootstrapProjectCreated } : {}),
+    ...(bootstrapThreadId ? { bootstrapThreadId, bootstrapThreadCreated } : {}),
   } satisfies AutoBootstrapWelcomeTargets;
 });
 
@@ -700,6 +706,7 @@ export const make = (options?: StartupOptions) =>
             environment,
             ...welcomeBase,
             ...bootstrapTargets,
+            bootstrapStatus: "complete",
           },
         }),
       );

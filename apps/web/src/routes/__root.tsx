@@ -1,3 +1,4 @@
+import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -98,6 +99,10 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const returningFromWelcomeRef = useRef(pathname === "/welcome");
+  useEffect(() => {
+    if (pathname === "/welcome") returningFromWelcomeRef.current = true;
+  }, [pathname]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -114,6 +119,27 @@ function RootRouteView() {
         <DocumentTitleSync />
         <Outlet />
       </>
+    );
+  }
+
+  // Show onboarding over the workspace, keeping automatic thread navigation
+  // and other startup dialogs suspended until setup finishes.
+  if (pathname === "/welcome") {
+    return (
+      <ToastProvider>
+        <AnchoredToastProvider>
+          <DocumentTitleSync />
+          <ContrastAppearanceSync />
+          <EnvironmentThemeSync />
+          <GlassAppearanceSync />
+          <FontAppearanceSync />
+          <CommandPalette>
+            <AppSidebarLayout>
+              <Outlet />
+            </AppSidebarLayout>
+          </CommandPalette>
+        </AnchoredToastProvider>
+      </ToastProvider>
     );
   }
 
@@ -142,22 +168,29 @@ function RootRouteView() {
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
-        {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-        <RelayClientInstallDialog />
-        <ConnectOnboardingDialog />
-        <SshPasswordPromptDialog />
-        <ConfirmDialogHost />
-        <SlowRpcRequestToastCoordinator />
-        {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
-        <HostedStaticEnvironmentBootstrap />
-        {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-        {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
-        {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        {primaryEnvironmentAuthenticated ? <ProviderModelPreferencesMigration /> : null}
-        {appShell}
-        {/* Above the router: a theme draft is judged by walking the app, so the
+        <FirstRunGate
+          enabled={primaryEnvironmentAuthenticated}
+          hostedStatic={authGateState.status === "hosted-static"}
+        >
+          {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+          <RelayClientInstallDialog />
+          <ConnectOnboardingDialog />
+          <SshPasswordPromptDialog />
+          <ConfirmDialogHost />
+          <SlowRpcRequestToastCoordinator />
+          {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
+          <HostedStaticEnvironmentBootstrap />
+          {primaryEnvironmentAuthenticated ? (
+            <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
+          ) : null}
+          {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
+          {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+          {primaryEnvironmentAuthenticated ? <ProviderModelPreferencesMigration /> : null}
+          {appShell}
+          {/* Above the router: a theme draft is judged by walking the app, so the
             editor has to survive navigation away from settings. */}
-        <ThemeEditorHost />
+          <ThemeEditorHost />
+        </FirstRunGate>
       </AnchoredToastProvider>
     </ToastProvider>
   );
@@ -387,7 +420,12 @@ function AuthenticatedTracingBootstrap() {
   return null;
 }
 
-function EventRouter() {
+function EventRouter({
+  skipInitialBootstrapNavigation,
+}: {
+  readonly skipInitialBootstrapNavigation: boolean;
+}) {
+  const skipInitialBootstrapNavigationRef = useRef(skipInitialBootstrapNavigation);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -428,6 +466,10 @@ function EventRouter() {
         );
       useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
 
+      if (skipInitialBootstrapNavigationRef.current) {
+        skipInitialBootstrapNavigationRef.current = false;
+        return;
+      }
       if (readPathname() !== "/") {
         return;
       }

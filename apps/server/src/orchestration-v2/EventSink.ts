@@ -119,6 +119,10 @@ export interface EventSinkV2Shape {
     readonly threadId: ThreadId;
     readonly commandType: string;
     readonly acceptedAt: DateTime.Utc;
+    /** Persist command-specific state atomically before events, after reserving a new receipt.
+     * Must use the sink's SQL client and perform no external effects. Publication happens only
+     * after this transaction commits. Retries of an existing receipt do not run it again. */
+    readonly prepareTransaction?: Effect.Effect<void, unknown>;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
     readonly cancelUnsettledEffects?: {
@@ -480,6 +484,7 @@ const baseLayer: Layer.Layer<
             return { ...existing, committed: false as const, cancelledEffectIds: [] };
           }
 
+          if (input.prepareTransaction !== undefined) yield* input.prepareTransaction;
           const normalized = yield* normalizeEvents(input.events);
           const storedEvents = yield* eventStore.append({
             commandId: input.commandId,

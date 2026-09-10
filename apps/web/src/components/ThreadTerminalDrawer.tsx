@@ -338,6 +338,7 @@ export function shouldHandleTerminalExit(
 }
 
 interface TerminalViewportProps {
+  providerInstanceId?: import("@t3tools/contracts").ProviderInstanceId;
   advancedTypography: boolean;
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
@@ -363,6 +364,7 @@ interface TerminalLaunchLocation {
 }
 
 export function TerminalViewport({
+  providerInstanceId,
   advancedTypography,
   threadRef,
   threadId,
@@ -441,6 +443,7 @@ export function TerminalViewport({
     terminal: {
       threadId,
       terminalId,
+      ...(providerInstanceId === undefined ? {} : { providerInstanceId }),
       cwd,
       ...(worktreePath !== undefined ? { worktreePath } : {}),
       ...(runtimeEnv ? { env: runtimeEnv } : {}),

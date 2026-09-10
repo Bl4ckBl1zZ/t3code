@@ -163,6 +163,8 @@ export const make = Effect.gen(function* () {
       environmentIcon: true,
       customModelDefinitions: true,
       projectIcons: true,
+      agentSessionImport: true,
+      providerTerminalEnvironment: true,
       assistantCitations: true,
       threadPinning: true,
       threadActiveOrderV2: true,
