@@ -1,3 +1,4 @@
+import { UsageLimits } from "./UsageLimits";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import type { UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
@@ -44,6 +45,15 @@ const WINDOW_OPTIONS = [
 ] as const;
 
 export function UsagePage() {
+  const [view, setView] = useState<"usage" | "limits">("usage");
+  return view === "limits" ? (
+    <UsageLimits onShowUsage={() => setView("usage")} />
+  ) : (
+    <UsageHistoryPage onShowLimits={() => setView("limits")} />
+  );
+}
+
+function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
   const [pricesOpen, setPricesOpen] = useState(false);
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
@@ -154,6 +164,9 @@ export function UsagePage() {
             </Toggle>
           ))}
         </ToggleGroup>
+        <Button size="sm" variant="ghost" onClick={onShowLimits}>
+          Limits
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
           Model prices
         </Button>
@@ -200,6 +213,9 @@ export function UsagePage() {
             ))}
           </SelectPopup>
         </Select>
+        <Button size="sm" variant="ghost" onClick={onShowLimits}>
+          Limits
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
           Model prices
         </Button>

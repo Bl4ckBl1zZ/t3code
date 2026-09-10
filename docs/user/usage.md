@@ -12,10 +12,10 @@ Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. 
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
 headline and chart, and refreshing rescans every connected environment.
 
-## Subscription limits on iPhone and iPad
+## Subscription limits
 
-In **Settings → Usage**, choose **Limits** to see Codex and Claude subscription windows,
-percent used, reset times, and when each report was checked. Choose which environments to
+Open **Limits** from Usage (or **Settings → Usage limits** on iPhone and iPad) to see Codex and Claude subscription windows,
+quota remaining, reset times, and when each report was checked. Choose which environments to
 include, then use **Refresh limits** to request fresh reports.
 
 The same known account on multiple environments appears once, using its freshest report.

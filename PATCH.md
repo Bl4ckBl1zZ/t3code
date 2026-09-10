@@ -506,8 +506,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   The native parity follow-up ports the read-only part of `19d8ab2ae9` through optional per-instance
   `usageLimits` snapshots: bounded Codex/Claude probes, explicit failures, and Swift account pooling.
   It does not restore V1 ingestion or turn-driven quota events; Limits refreshes the existing
-  provider registry and timestamps its reports. No migration is needed. Other clients tolerate
-  the optional snapshot field but do not gain a new Limits UI from this native change;
+  provider registry and timestamps its reports. No migration is needed. Web and desktop now expose the same reports in Usage → Limits, including
+  account deduplication, equal-weight pools separated by window kind, reset ordering,
+  aligned account columns, and explicit unavailable/stale reports;
   automatic clean-default-branch pulls (`ba3cb07738`) and customizable
   project icons (`f6c04c552c`) need project-aggregate ports plus fork-owned migration numbers;
   desktop browser-profile import (`134d51096e`, `39449e53e3`, `ff5843410d`, `498ab9c399`) conflicts

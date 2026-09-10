@@ -7736,16 +7736,7 @@ function ChatViewContent(props: ChatViewProps) {
                         }
                       />
                     </div>
-                  ) : (
-                    <ComposerBannerStack
-                      className="relative z-0"
-                      items={
-                        composerTasksNotice === null
-                          ? composerBannerItems
-                          : [composerTasksNotice, ...composerBannerItems]
-                      }
-                    />
-                  )}
+                  ) : null}
                   {isServerThread ? (
                     <BackgroundProcessesControl
                       timelineEntries={timelineEntries}
@@ -7757,6 +7748,16 @@ function ChatViewContent(props: ChatViewProps) {
                       environmentId={activeThread.environmentId}
                       threadId={activeThread.id}
                       optimisticMessages={optimisticUserMessages}
+                    />
+                  ) : null}
+                  {!isDraftHeroState ? (
+                    <ComposerBannerStack
+                      className="relative z-0"
+                      items={
+                        composerTasksNotice === null
+                          ? composerBannerItems
+                          : [composerTasksNotice, ...composerBannerItems]
+                      }
                     />
                   ) : null}
                   <div
