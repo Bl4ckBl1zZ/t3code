@@ -681,3 +681,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   their run; resource reconciliation never counts as a manual choice. The proactive panel API
   gives linked PRs precedence over automatic plan/diff panels. Automatic PR discovery and
   completed-run diff opening remain separate integrations.
+
+- Ports lazy diff workers (`b3e1d88590`, readiness follow-up `ce4712d5b0`) at code-view
+  boundaries instead of wrapping the entire chat. Concurrent views share a pool, quick reopen
+  retains its cache, and the last closed pool expires after 30 seconds. File reveals retain the
+  fork’s mount-aware callbacks. All highlighter creation paths use upstream’s Oniguruma WASM
+  preference (`feb3ea7ebf`) to avoid JavaScript-regex backtracking freezes.

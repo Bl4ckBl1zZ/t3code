@@ -1,3 +1,5 @@
+import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import type { AssistantCitation } from "@t3tools/contracts";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import {
@@ -2727,15 +2729,17 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
       )}
       {renderablePatch?.kind === "files" &&
         renderablePatch.files.map((fileDiff) => (
-          <FileDiff
-            key={resolveFileDiffPath(fileDiff)}
-            fileDiff={fileDiff}
-            options={{
-              collapsed: false,
-              diffStyle: "unified",
-              theme: resolveDiffThemeName(ctx.resolvedTheme),
-            }}
-          />
+          <DiffWorkerPoolProvider key={resolveFileDiffPath(fileDiff)}>
+            <FileDiff
+              fileDiff={fileDiff}
+              options={{
+                collapsed: false,
+                diffStyle: "unified",
+                theme: resolveDiffThemeName(ctx.resolvedTheme),
+                preferredHighlighter: PREFERRED_HIGHLIGHTER,
+              }}
+            />
+          </DiffWorkerPoolProvider>
         ))}
       {renderablePatch?.kind === "raw" && (
         <pre className="overflow-x-auto rounded-md bg-muted/40 p-2 text-xs">
