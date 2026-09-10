@@ -854,3 +854,12 @@ keys remain until projection acknowledgement, with concurrent-change/failure rel
 an active position sends null without changing lifecycle state. Legacy keyless servers retain
 local ordering; mixed durable/legacy sections require upgrading before a reorder. Pin entry
 points share the existing top-of-pinned-run placement. No V1 reorder command or migration is used.
+
+### Tool-history reading state
+
+Web retains per-group/per-entry expansion and measured row-plus-offset anchors outside
+virtualized rows, scoped to a conversation and bounded to 1,000 entries. Only appended calls
+follow an already-visible end; status/output replacements do not re-arm following. Native
+transcript coordinators own a bounded observable history cache and restore a stable tool-row
+anchor with SwiftUI scroll targets, preserving expansion across recycled cells. Native
+intra-row text offsets are not yet restored. This uses V2 item IDs, not the retired V1 work log.

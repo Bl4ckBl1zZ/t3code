@@ -739,31 +739,6 @@ public enum ChangedFilesPreview {
 /// *lock*. The preference only decides rows the reader has not touched; a row
 /// they closed stays closed while it is on, and a row they opened stays open
 /// after it is turned off.
-public struct ThreadWorkLogExpansion: Equatable, Sendable {
-    private var openedIDs: Set<String> = []
-    private var closedIDs: Set<String> = []
-
-    public init() {}
-
-    public func isExpanded(_ id: String, expandedByDefault: Bool) -> Bool {
-        if closedIDs.contains(id) { return false }
-        return expandedByDefault || openedIDs.contains(id)
-    }
-
-    /// Records what the reader asked for, against what they can currently see:
-    /// toggling a row the preference opened has to register as a close, not as
-    /// the absence of an open.
-    public mutating func toggle(_ id: String, expandedByDefault: Bool) {
-        if isExpanded(id, expandedByDefault: expandedByDefault) {
-            openedIDs.remove(id)
-            closedIDs.insert(id)
-        } else {
-            closedIDs.remove(id)
-            openedIDs.insert(id)
-        }
-    }
-}
-
 // MARK: - Views
 
 /// Additions and deletions, the first thing a reader looks for on a file row.
@@ -812,11 +787,14 @@ struct ThreadWorkLog: View {
     var alwaysExpandActivity: Bool = false
 
     /// `nil` until the reader touches the fold, so the preference decides it.
-    @State private var overflowExpanded: Bool?
-    @State private var expansion = ThreadWorkLogExpansion()
+    @SwiftUI.Environment(\.threadWorkLogHistory) private var sharedHistory
+    @State private var localHistory = ThreadWorkLogHistoryStore()
+    private var history: ThreadWorkLogHistory {
+        (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
+    }
     @State private var copiedRowID: String?
 
-    private var isExpanded: Bool { overflowExpanded ?? alwaysExpandActivity }
+    private var isExpanded: Bool { history.groupExpanded ?? alwaysExpandActivity }
 
     private var visibleCandidates: [ThreadWorkLogRow] { ThreadWorkLogRow.visible(rows) }
 
@@ -848,7 +826,7 @@ struct ThreadWorkLog: View {
                 }
 
                 if let focus = visibleCandidates.first(where: { $0.id == liveEntryID }) {
-                    Button { overflowExpanded = !isExpanded } label: {
+                    Button { history.groupExpanded = !isExpanded } label: {
                         HStack(spacing: 8) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
                             Image(systemName: focus.icon.symbolName)
@@ -858,14 +836,12 @@ struct ThreadWorkLog: View {
                     }.buttonStyle(.plain).accessibilityLabel("\(focus.summary), \(visibleCandidates.count) tool calls")
                         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
                     if isExpanded {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 1) { ForEach(visibleCandidates) { rowView($0) } }
-                        }.frame(maxHeight: 320)
+                        expandedHistory
                     } else {
                         ForEach(visibleCandidates.filter(\.isLiveBackgroundCommand)) { rowView($0) }
                     }
                 } else if let summary = historicalSummary {
-                    Button { overflowExpanded = !isExpanded } label: {
+                    Button { history.groupExpanded = !isExpanded } label: {
                         HStack(spacing: 8) {
                             Image(systemName: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
                             Text(summary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
@@ -873,7 +849,7 @@ struct ThreadWorkLog: View {
                         }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
                     }.buttonStyle(.plain).accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
                     if isExpanded {
-                        ScrollView { LazyVStack(alignment: .leading, spacing: 1) { ForEach(visibleCandidates) { rowView($0) } } }.frame(maxHeight: 320)
+                        expandedHistory
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 1) {
@@ -887,6 +863,22 @@ struct ThreadWorkLog: View {
                 }
             }
             .padding(.bottom, 12)
+        }
+    }
+
+    private var expandedHistory: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                ForEach(visibleCandidates) { rowView($0) }
+            }.scrollTargetLayout()
+        }
+        .scrollPosition(id: Binding(
+            get: { history.anchorID },
+            set: { if let id = $0 { history.anchorID = id } }
+        ), anchor: .top)
+        .frame(maxHeight: 320)
+        .onChange(of: visibleCandidates.map(\.id), initial: true) { _, ids in
+            if let anchor = history.anchorID, !ids.contains(anchor) { history.anchorID = nil }
         }
     }
 
@@ -964,7 +956,7 @@ struct ThreadWorkLog: View {
         let noun = ThreadWorkLogRow.overflowNoun(onlyToolRows: onlyToolRows, count: hiddenCount)
         let stats = ThreadWorkLogRow.totalDiffStat(hiddenRows)
         return Button {
-            overflowExpanded = !isExpanded
+            history.groupExpanded = !isExpanded
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -991,11 +983,11 @@ struct ThreadWorkLog: View {
     }
 
     private func isRowExpanded(_ id: String) -> Bool {
-        expansion.isExpanded(id, expandedByDefault: alwaysExpandActivity)
+        history.rowExpansion.isExpanded(id, expandedByDefault: alwaysExpandActivity)
     }
 
     private func toggleRow(_ id: String) {
-        expansion.toggle(id, expandedByDefault: alwaysExpandActivity)
+        history.rowExpansion.toggle(id, expandedByDefault: alwaysExpandActivity)
     }
 
     private func copy(_ row: ThreadWorkLogRow) {

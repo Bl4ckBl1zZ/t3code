@@ -1884,6 +1884,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             rebuildForFold?()
         }
         private let citationHighlight = AssistantCitationHighlight()
+        private let workLogHistory = ThreadWorkLogHistoryStore()
         private var citationRequest: AssistantCitationNavigationRequest?
         private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
         private var citationPages = Set<String>()
@@ -2006,6 +2007,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
                 let context = rowContext
                 let highlight = citationHighlight
+                let toolHistory = workLogHistory
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -2029,6 +2031,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.markdownPullRequestContext, context.pullRequests)
                     .environment(\.assistantCitationContext, context.citationContext)
                     .environment(\.assistantCitationHighlight, highlight)
+                    .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in
                         if let citation = AssistantCitation.parse(url.absoluteString) {

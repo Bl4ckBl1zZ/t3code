@@ -1,3 +1,9 @@
+import {
+  WorkGroupHistoryState,
+  captureWorkGroupAnchor,
+  restoreWorkGroupAnchor,
+  shouldFollowWorkGroupAppend,
+} from "./workGroupHistoryState";
 import { HammerIcon } from "lucide-react";
 import { resolveHistoricalWorkSummary } from "./MessagesTimeline.logic";
 import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
@@ -176,6 +182,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  workGroupHistory: WorkGroupHistoryState;
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
@@ -586,8 +593,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onManualNavigation,
   });
 
+  const workGroupHistory = useMemo(() => new WorkGroupHistoryState(), [routeThreadKey]);
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      workGroupHistory,
       citationRequest: citationTarget.target,
       listRef,
       timestampFormat,
@@ -614,6 +623,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       alwaysExpandActivity,
     }),
     [
+      workGroupHistory,
       citationTarget.target,
       listRef,
       alwaysExpandActivity,
@@ -2155,6 +2165,93 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 // re-render only the affected row, not the entire list.
 // ---------------------------------------------------------------------------
 
+/** Reader choices survive both group collapse and the outer timeline virtualizer. */
+function useWorkHistoryExpansion(key: string, defaultExpanded: boolean) {
+  const { workGroupHistory } = use(TimelineRowCtx);
+  const [choice, setChoice] = useState(() => ({ key, value: workGroupHistory.get(key)?.expanded }));
+  if (choice.key !== key) setChoice({ key, value: workGroupHistory.get(key)?.expanded });
+  const expanded =
+    (choice.key === key ? choice.value : workGroupHistory.get(key)?.expanded) ?? defaultExpanded;
+  const toggle = useCallback(() => {
+    workGroupHistory.set(key, { expanded: !expanded });
+    setChoice({ key, value: !expanded });
+  }, [expanded, key, workGroupHistory]);
+  return [expanded, toggle] as const;
+}
+
+function ExpandedToolHistory({
+  entries,
+  anchorKey,
+  label,
+}: {
+  entries: TimelineWorkEntry[];
+  anchorKey: string;
+  label: string;
+}) {
+  const { workGroupHistory, workspaceRoot } = use(TimelineRowCtx);
+  const listRef = useRef<LegendListRef>(null);
+  const [initialScrollIndex] = useState(() =>
+    restoreWorkGroupAnchor(entries, workGroupHistory.get(anchorKey)?.anchor),
+  );
+  const [restoring, setRestoring] = useState(initialScrollIndex !== undefined);
+  const atEnd = useRef(false);
+  const [append, setAppend] = useState({ entries, follow: false });
+  if (append.entries !== entries)
+    setAppend({
+      entries,
+      follow: shouldFollowWorkGroupAppend(append.entries, entries, atEnd.current),
+    });
+  const savePosition = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const state = list.getState();
+    const anchor = captureWorkGroupAnchor(state);
+    if (anchor) workGroupHistory.set(anchorKey, { anchor });
+    const node = list.getScrollableNode();
+    if (node) atEnd.current = node.scrollHeight - node.clientHeight - node.scrollTop <= 1;
+  }, [anchorKey, workGroupHistory]);
+  const handleLoad = useCallback(() => {
+    const list = listRef.current;
+    const node = list?.getScrollableNode();
+    if (list && node && initialScrollIndex) {
+      const offset = Math.max(
+        0,
+        Math.min(list.getState().scroll, node.scrollHeight - node.clientHeight),
+      );
+      if (Math.abs(node.scrollTop - offset) > 1)
+        void list.scrollToOffset({ offset, animated: false });
+    }
+    setRestoring(false);
+    savePosition();
+  }, [initialScrollIndex, savePosition]);
+  return (
+    <div className="overflow-hidden rounded-md border border-border/50">
+      <LegendList
+        ref={listRef}
+        data={entries}
+        keyExtractor={(item) => item.id}
+        estimatedItemSize={40}
+        style={{ height: Math.min(320, Math.max(80, entries.length * 40)) }}
+        {...(initialScrollIndex ? { initialScrollIndex } : {})}
+        {...(restoring && initialScrollIndex
+          ? { alwaysRender: { indices: [initialScrollIndex.index] } }
+          : {})}
+        maintainVisibleContentPosition
+        maintainScrollAtEnd={append.follow ? { animated: false, on: { dataChange: true } } : false}
+        onLoad={handleLoad}
+        onScroll={savePosition}
+        tabIndex={0}
+        role="region"
+        aria-label={label}
+        className="scrollbar-gutter-stable focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        renderItem={({ item }) => (
+          <SimpleWorkEntryRow workEntry={item} workspaceRoot={workspaceRoot} />
+        )}
+      />
+    </div>
+  );
+}
+
 /** One current operation, with its history mounted only on explicit expansion. */
 function LiveWorkGroupSection({
   groupedEntries,
@@ -2165,8 +2262,9 @@ function LiveWorkGroupSection({
   entry: TimelineWorkEntry;
   startedAt: string | null;
 }) {
-  const { workspaceRoot } = use(TimelineRowCtx);
-  const [expanded, setExpanded] = useState(false);
+  const { workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
+  const anchorKey = `group:${groupedEntries[0]?.id ?? entry.id}`;
+  const [expanded, toggleExpanded] = useWorkHistoryExpansion(anchorKey, alwaysExpandActivity);
   const visible = useMemo(() => groupedEntries.filter(workLogEntryIsVisible), [groupedEntries]);
   const background = useMemo(
     () =>
@@ -2182,7 +2280,7 @@ function LiveWorkGroupSection({
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={toggleExpanded}
         className="flex min-h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
       >
         <ChevronRightIcon
@@ -2208,21 +2306,11 @@ function LiveWorkGroupSection({
         )}
       </button>
       {expanded ? (
-        <div
-          className="overflow-hidden rounded-md border border-border/50"
-          role="region"
-          aria-label="Tool activity history"
-        >
-          <LegendList
-            data={visible}
-            keyExtractor={(item) => item.id}
-            estimatedItemSize={40}
-            style={{ height: Math.min(320, Math.max(80, visible.length * 40)) }}
-            renderItem={({ item }) => (
-              <SimpleWorkEntryRow workEntry={item} workspaceRoot={workspaceRoot} />
-            )}
-          />
-        </div>
+        <ExpandedToolHistory
+          entries={visible}
+          anchorKey={anchorKey}
+          label="Tool activity history"
+        />
       ) : (
         background.map((item) => (
           <SimpleWorkEntryRow key={item.id} workEntry={item} workspaceRoot={workspaceRoot} />
@@ -2239,14 +2327,11 @@ const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
   const { workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
-  const [isExpanded, setIsExpanded] = useState(alwaysExpandActivity);
-  // Flipping the setting has to reach groups that are already mounted, while
-  // still leaving a per-group toggle that outlives the next render.
-  const [appliedAlwaysExpand, setAppliedAlwaysExpand] = useState(alwaysExpandActivity);
-  if (appliedAlwaysExpand !== alwaysExpandActivity) {
-    setAppliedAlwaysExpand(alwaysExpandActivity);
-    setIsExpanded(alwaysExpandActivity);
-  }
+  const anchorKey = `group:${groupedEntries[0]?.id ?? "empty"}`;
+  const [isExpanded, toggleHistoryExpanded] = useWorkHistoryExpansion(
+    anchorKey,
+    alwaysExpandActivity,
+  );
   const sectionRef = useRef<HTMLElement>(null);
   const anchorBottomBeforeToggleRef = useRef<number | null>(null);
   const nonEmptyEntries = useMemo(
@@ -2308,7 +2393,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
   const toggleExpanded = () => {
     anchorBottomBeforeToggleRef.current =
       sectionRef.current?.getBoundingClientRect().bottom ?? null;
-    setIsExpanded((v) => !v);
+    toggleHistoryExpanded();
   };
 
   if (nonEmptyEntries.length === 0) return null;
@@ -2320,7 +2405,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
           <button
             type="button"
             aria-expanded={isExpanded}
-            onClick={() => setIsExpanded((value) => !value)}
+            onClick={toggleHistoryExpanded}
             className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
           >
             <WorkEntryIconSvg
@@ -2341,21 +2426,11 @@ const WorkGroupSection = memo(function WorkGroupSection({
             />
           </button>
           {isExpanded && (
-            <div
-              className="overflow-hidden rounded-md border border-border/50"
-              role="region"
-              aria-label="Completed tool activity"
-            >
-              <LegendList
-                data={nonEmptyEntries}
-                keyExtractor={(item) => item.id}
-                estimatedItemSize={40}
-                style={{ height: Math.min(320, Math.max(80, nonEmptyEntries.length * 40)) }}
-                renderItem={({ item }) => (
-                  <SimpleWorkEntryRow workEntry={item} workspaceRoot={workspaceRoot} />
-                )}
-              />
-            </div>
+            <ExpandedToolHistory
+              entries={nonEmptyEntries}
+              anchorKey={anchorKey}
+              label="Completed tool activity"
+            />
           )}
         </>
       ) : (
@@ -3239,7 +3314,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
   const ctx = use(TimelineRowCtx);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, toggleExpanded] = useWorkHistoryExpansion(
+    `entry:${workEntry.id}`,
+    ctx.alwaysExpandActivity,
+  );
   const backgroundItem = backgroundProcessItemFromWorkEntry(workEntry);
   if (backgroundItem !== null) {
     // A command detached from its turn cannot be a one-line tool row: the row
@@ -3299,11 +3377,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         role: "button" as const,
         tabIndex: 0 as const,
         "aria-label": displayText,
-        onClick: () => setExpanded((v) => !v),
+        onClick: toggleExpanded,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setExpanded((v) => !v);
+            toggleExpanded();
           }
         },
       }
