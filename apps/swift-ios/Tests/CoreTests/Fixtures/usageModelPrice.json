@@ -1,0 +1,5 @@
+{
+  "inputCostPerMillionTokens": 2,
+  "outputCostPerMillionTokens": 8,
+  "cacheReadCostPerMillionTokens": 0
+}

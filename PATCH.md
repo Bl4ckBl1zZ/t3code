@@ -623,3 +623,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
 - Inline video recovery uses the fork's asset URLs and range streaming. Web previews
   preserve an active playhead across URL renewal, prepare a first frame only while idle,
   and provide explicit save/copy actions. Swift offers retry and pauses when backgrounded.
+
+- Custom usage prices are server-authoritative, keyed by exact model ID, with sparse
+  per-model replacement/deletion. Usage scans capture price settings and reprice cached
+  transcript records, including provider-reported costs. Web supports multi-environment
+  edits with per-environment retry; Swift exposes per-environment model-price editing.

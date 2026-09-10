@@ -19,7 +19,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageService from "./UsageService.ts";
 
-function claudeLine(id: number, outputTokens: number): string {
+function claudeLine(id: number, outputTokens: number, model = "claude-fable-5"): string {
   return `${JSON.stringify({
     type: "assistant",
     timestamp: "2026-08-01T10:00:00Z",
@@ -27,7 +27,7 @@ function claudeLine(id: number, outputTokens: number): string {
     sessionId: "session-1",
     message: {
       id: `msg_${id}`,
-      model: "claude-fable-5",
+      model,
       usage: { input_tokens: 10, output_tokens: outputTokens },
     },
   })}\n`;
@@ -92,6 +92,49 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 }
 
 describe("UsageService", () => {
+  it.live("reprices unchanged transcripts when custom prices are added, edited, or removed", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5, "example-model")));
+
+      yield* Effect.gen(function* () {
+        const settingsService = yield* ServerSettings.ServerSettingsService;
+        const service = yield* UsageService.make;
+
+        const original = yield* service.readSummary(WINDOW);
+        assert.strictEqual(original.buckets[0]?.costUsd, 0);
+        assert.strictEqual(original.buckets[0]?.unpricedRecords, 1);
+
+        yield* settingsService.updateSettings({
+          usagePriceOverrides: {
+            "example-model": { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 },
+          },
+        });
+        const overridden = yield* service.readSummary(WINDOW);
+        assert.closeTo(overridden.buckets[0]?.costUsd ?? -1, 0.00006, 1e-12);
+        assert.strictEqual(overridden.buckets[0]?.costSource, "modelPriced");
+        assert.strictEqual(overridden.buckets[0]?.unpricedRecords, 0);
+        assert.deepStrictEqual(overridden.buckets[0]?.totals, original.buckets[0]?.totals);
+
+        yield* settingsService.updateSettings({
+          usagePriceOverrides: {
+            "example-model": { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 16 },
+          },
+        });
+        const edited = yield* service.readSummary(WINDOW);
+        assert.closeTo(edited.buckets[0]?.costUsd ?? -1, 0.00012, 1e-12);
+
+        yield* settingsService.updateSettings({ usagePriceOverrides: { "example-model": null } });
+        const restored = yield* service.readSummary(WINDOW);
+        assert.deepStrictEqual(restored.buckets, original.buckets);
+      }).pipe(
+        Effect.provide(
+          serviceLayers({ prefix: "usage-service-price-overrides-test", home, settings }),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live("counts appended usage on a rescan of a grown transcript", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;

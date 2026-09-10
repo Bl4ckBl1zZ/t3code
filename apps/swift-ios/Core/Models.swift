@@ -51,6 +51,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// sending a command the server will reject.
         public let threadPullRequestLinking: Bool?
         public let threadPullRequestsV2: Bool?
+        public let usagePriceOverrides: Bool?
         public let pullRequestStackActions: Bool?
         public let pullRequests: Bool?
         public let serverSelfUpdate: String?
@@ -65,6 +66,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadTitleRegeneration
             case threadPullRequestLinking
             case threadPullRequestsV2
+            case usagePriceOverrides
             case pullRequestStackActions
             case pullRequests
             case serverSelfUpdate
@@ -86,6 +88,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 forKey: .threadTitleRegeneration
             )
             threadPullRequestsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestsV2)
+            usagePriceOverrides = try container.decodeIfPresent(Bool.self, forKey: .usagePriceOverrides)
             pullRequestStackActions = try container.decodeIfPresent(Bool.self, forKey: .pullRequestStackActions)
             threadPullRequestLinking = try container.decodeIfPresent(
                 Bool.self,

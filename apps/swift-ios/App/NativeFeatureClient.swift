@@ -6309,6 +6309,10 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         environmentID: String,
         patch: ServerSettingsPatchInput
     ) async throws -> FeatureEnvironmentPreferences {
+        if patch.usagePriceOverrides != nil,
+           (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.usagePriceOverrides != true {
+            throw FeatureCapabilityUnavailable("Custom model pricing")
+        }
         let client = try await environmentClient(id: environmentID)
         let settings = try await client.updateServerSettings(patch: patch)
         // Fold the server's answer into the cached config now. The active

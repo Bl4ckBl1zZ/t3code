@@ -1,3 +1,4 @@
+import type { UsageModelPriceOverride } from "@t3tools/contracts";
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
@@ -42,7 +43,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { parseRateTable, type RateTable } from "./usagePricing.ts";
+import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -376,7 +377,10 @@ export const make = Effect.gen(function* () {
     return scanned;
   });
 
-  const scanSummary = Effect.fn("UsageService.scanSummary")(function* (input: UsageSummaryInput) {
+  const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
+    input: UsageSummaryInput,
+    prices: Readonly<Record<string, UsageModelPriceOverride>>,
+  ) {
     if (input.sinceDay > input.untilDay) {
       return yield* new UsageReadError({
         reason: "invalidWindow",
@@ -436,6 +440,7 @@ export const make = Effect.gen(function* () {
       resolution: input.resolution ?? "day",
       ...hourlyWindow,
       rates,
+      priceOverrides: createOverrideRateTable(prices),
     });
 
     const sources: UsageSource[] = [];
@@ -531,7 +536,10 @@ export const make = Effect.gen(function* () {
    */
   const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
 
-  const scanKey = (input: UsageSummaryInput): string =>
+  const scanKey = (
+    input: UsageSummaryInput,
+    prices: Readonly<Record<string, UsageModelPriceOverride>>,
+  ): string =>
     JSON.stringify([
       input.timeZone,
       input.sinceDay,
@@ -539,10 +547,21 @@ export const make = Effect.gen(function* () {
       input.resolution ?? "day",
       input.sinceTime ?? null,
       input.untilTime ?? null,
+      prices,
     ]);
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
-    const key = scanKey(input);
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.mapError(
+        (cause) =>
+          new UsageReadError({
+            reason: "scanFailed",
+            detail: "Server settings could not be read.",
+            cause,
+          }),
+      ),
+    );
+    const key = scanKey(input, settings.usagePriceOverrides);
     const deferred = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const existing = inflightScans.get(key);
@@ -554,7 +573,7 @@ export const make = Effect.gen(function* () {
         inflightScans.set(key, created);
         // Detached so one departing client cannot tear the scan out from under
         // the fibers awaiting it; a finished scan warms the cache either way.
-        yield* scanSummary(input).pipe(
+        yield* scanSummary(input, settings.usagePriceOverrides).pipe(
           Effect.onExit((exit) =>
             Effect.sync(() => inflightScans.delete(key)).pipe(
               Effect.andThen(Deferred.done(created, exit)),

@@ -132,6 +132,7 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval,
     backgroundActivityProfile,
     backgroundActivity,
+    usagePriceOverrides: pricePatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -170,8 +171,14 @@ export function applyServerSettingsPatch(
           }
         : undefined;
   const next = deepMerge(current, patchForMerge);
+  const usagePriceOverrides = { ...current.usagePriceOverrides };
+  for (const [model, price] of Object.entries(pricePatch ?? {})) {
+    if (price === null) delete usagePriceOverrides[model];
+    else usagePriceOverrides[model] = price;
+  }
   const nextWithReplacementsBase = {
     ...next,
+    usagePriceOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

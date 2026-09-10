@@ -1009,6 +1009,20 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+const UsageModelTokenPrice = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+
+/** USD per million tokens. Omitted cache rates use the input rate. */
+export const UsageModelPriceOverride = Schema.Struct({
+  inputCostPerMillionTokens: UsageModelTokenPrice,
+  outputCostPerMillionTokens: UsageModelTokenPrice,
+  cacheReadCostPerMillionTokens: Schema.optionalKey(UsageModelTokenPrice),
+  cacheWriteCostPerMillionTokens: Schema.optionalKey(UsageModelTokenPrice),
+});
+export type UsageModelPriceOverride = typeof UsageModelPriceOverride.Type;
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -1136,6 +1150,9 @@ export const ServerSettings = Schema.Struct({
   // deleted.
   projectFileBackfillApplied: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
@@ -1359,6 +1376,9 @@ export const ServerSettingsPatch = Schema.Struct({
   providerModelPreferencesMigrated: Schema.optionalKey(Schema.Boolean),
   hermesProactiveDefaultApplied: Schema.optionalKey(Schema.Boolean),
   projectFileBackfillApplied: Schema.optionalKey(Schema.Boolean),
+  usagePriceOverrides: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

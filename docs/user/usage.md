@@ -32,3 +32,15 @@ Account names appear in the comparison and task list without displaying email ad
 
 In **Settings → Agents**, toggle individual models or enable/disable all built-in models for
 an account. These choices are saved to that environment and control its model picker.
+
+## Custom model prices
+
+Open **Model prices** from Usage to override an exact model ID’s rates in USD per
+million tokens. These rates recalculate past and future usage, including estimates
+that previously used provider-reported costs. Blank cache rates use the input rate;
+enter `0` for free tokens. Reset a model to return to automatic pricing.
+
+Web and desktop can apply edits to several environments. Mixed cells keep each
+environment’s existing rate until you change them. If some saves fail, retry applies
+only to those environments. On iPhone and iPad, choose an environment before editing
+its model prices. A connected server with pricing support and write access is required.

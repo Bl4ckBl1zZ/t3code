@@ -43,6 +43,12 @@ public struct SettingsUsageView: View {
                 .padding(.horizontal, SettingsMetrics.cardInset)
                 if showsLimits { SettingsUsageLimitsView(model: model, refreshTrigger: limitsRefreshID) }
                 else {
+                NavigationLink {
+                    SettingsModelPricesView(model: model).onDisappear { Task { await reload() } }
+                } label: {
+                    Label("Model prices", systemImage: "dollarsign.circle")
+                        .font(T3Typography.threadBody).padding(.horizontal, SettingsMetrics.cardInset)
+                }
                 windowSection
 
                 switch state {

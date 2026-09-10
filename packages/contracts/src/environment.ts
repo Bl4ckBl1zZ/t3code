@@ -92,6 +92,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   /** V2 atomic metadata link/unlink operations and a linkedPullRequests collection. */
   threadPullRequestsV2: Schema.optionalKey(Schema.Boolean),
+  usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows

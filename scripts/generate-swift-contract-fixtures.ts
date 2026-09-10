@@ -18,6 +18,7 @@ import {
   ServerProviderUsageLimits,
   PullRequestStack,
   PullRequestLabelCandidateList,
+  UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
   ContextHandoffId,
@@ -470,3 +471,20 @@ if (process.argv.includes("--check")) {
 } else {
   NodeFS.writeFileSync(labelsPath, labelsSerialized);
 }
+
+const pricePath = NodePath.join(NodePath.dirname(outputPath), "usageModelPrice.json");
+const priceSerialized = `${JSON.stringify(
+  Schema.encodeSync(UsageModelPriceOverride)({
+    inputCostPerMillionTokens: 2,
+    outputCostPerMillionTokens: 8,
+    cacheReadCostPerMillionTokens: 0,
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (!NodeFS.existsSync(pricePath) || NodeFS.readFileSync(pricePath, "utf8") !== priceSerialized) {
+    console.error("[swift-fixtures] usageModelPrice.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pricePath, priceSerialized);

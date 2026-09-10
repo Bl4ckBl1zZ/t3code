@@ -565,3 +565,26 @@ describe("serverSettings helpers", () => {
     expect(resolved.pauseWhenOnBattery).toBe(false);
   });
 });
+
+it("patches model prices per entry and replaces optional cache rates", () => {
+  const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    usagePriceOverrides: {
+      one: {
+        inputCostPerMillionTokens: 2,
+        outputCostPerMillionTokens: 8,
+        cacheReadCostPerMillionTokens: 1,
+      },
+      two: { inputCostPerMillionTokens: 3, outputCostPerMillionTokens: 9 },
+    },
+  });
+  const second = applyServerSettingsPatch(first, {
+    usagePriceOverrides: {
+      one: { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 10 },
+    },
+  });
+  expect(second.usagePriceOverrides.one?.cacheReadCostPerMillionTokens).toBeUndefined();
+  expect(second.usagePriceOverrides.two).toEqual(first.usagePriceOverrides.two);
+  expect(
+    applyServerSettingsPatch(second, { usagePriceOverrides: { one: null } }).usagePriceOverrides,
+  ).toEqual({ two: first.usagePriceOverrides.two });
+});

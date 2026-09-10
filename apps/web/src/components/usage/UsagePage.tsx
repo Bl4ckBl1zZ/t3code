@@ -1,3 +1,4 @@
+import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import type { UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -43,6 +44,7 @@ const WINDOW_OPTIONS = [
 ] as const;
 
 export function UsagePage() {
+  const [pricesOpen, setPricesOpen] = useState(false);
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
     window: makeWindow(30),
@@ -152,6 +154,9 @@ export function UsagePage() {
             </Toggle>
           ))}
         </ToggleGroup>
+        <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
+          Model prices
+        </Button>
         <Button onClick={refreshWindow} aria-label="Refresh usage" size="icon-sm" variant="ghost">
           <RefreshCwIcon className="size-3.5" />
         </Button>
@@ -195,6 +200,9 @@ export function UsagePage() {
             ))}
           </SelectPopup>
         </Select>
+        <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
+          Model prices
+        </Button>
         <Button onClick={refreshWindow} aria-label="Refresh usage" size="icon-sm" variant="ghost">
           <RefreshCwIcon className="size-3.5" />
         </Button>
@@ -204,6 +212,16 @@ export function UsagePage() {
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
+      {pricesOpen && (
+        <UsagePriceOverrides
+          usage={environments}
+          initialSelectedEnvironmentIds={null}
+          onOpenChange={(open) => {
+            setPricesOpen(open);
+            if (!open) refresh();
+          }}
+        />
+      )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <WorkspacePageHeader electron={isElectron}>{topbarContent}</WorkspacePageHeader>
 

@@ -245,7 +245,23 @@ public struct ProviderModelPreferencesSnapshot: Codable, Equatable, Sendable {
 
 /// New-thread preferences are server-authoritative, so every saved environment
 /// can resolve these differently even though they share one mobile client.
+public struct UsageModelPriceOverride: Codable, Equatable, Sendable {
+    public let inputCostPerMillionTokens: Double
+    public let outputCostPerMillionTokens: Double
+    public let cacheReadCostPerMillionTokens: Double?
+    public let cacheWriteCostPerMillionTokens: Double?
+
+    public var json: JSONValue {
+        var fields: [String: JSONValue] = ["inputCostPerMillionTokens": .number(inputCostPerMillionTokens),
+            "outputCostPerMillionTokens": .number(outputCostPerMillionTokens)]
+        if let cacheReadCostPerMillionTokens { fields["cacheReadCostPerMillionTokens"] = .number(cacheReadCostPerMillionTokens) }
+        if let cacheWriteCostPerMillionTokens { fields["cacheWriteCostPerMillionTokens"] = .number(cacheWriteCostPerMillionTokens) }
+        return .object(fields)
+    }
+}
+
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
+    public let usagePriceOverrides: [String: UsageModelPriceOverride]?
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
     /// `packages/contracts`, applied when a server predates the setting.
     public static let defaultSidebarAutoSettleAfterDays: Double = 3
@@ -284,6 +300,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultThemeSetAt: String
 
     public init(
+        usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
         newWorktreesStartFromOrigin: Bool = true,
         sidebarAutoSettleAfterDays: Double? = ServerSettingsSnapshot
@@ -297,6 +314,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultTheme: String = "",
         defaultThemeSetAt: String = ""
     ) {
+        self.usagePriceOverrides = usagePriceOverrides
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
@@ -309,6 +327,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case usagePriceOverrides
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
         case sidebarAutoSettleAfterDays
@@ -333,6 +352,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
         defaultThreadEnvMode = try container.decode(
             ServerThreadEnvironmentMode.self,
             forKey: .defaultThreadEnvMode
@@ -369,6 +389,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
         try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
         try container.encode(newWorktreesStartFromOrigin, forKey: .newWorktreesStartFromOrigin)
         // Encoded as explicit null so "never" survives a round trip instead of
@@ -396,6 +417,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// whatever another client changed in between. Add a field here — and one line
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
+    /// A present nil entry resets one model. Omitted models are unchanged.
+    public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
     public var enableAgentBrowserAccess: Bool?
     /// Claude's auto-compaction threshold, as the string the server validates:
     /// an integer from 100000 to 1000000, or empty to fall back to Claude's own
@@ -404,10 +427,12 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        usagePriceOverrides: [String: UsageModelPriceOverride?]? = nil,
         enableAgentBrowserAccess: Bool? = nil,
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.usagePriceOverrides = usagePriceOverrides
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
         self.hiddenModelsByProvider = hiddenModelsByProvider
@@ -427,6 +452,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
                 ]),
             ])
         }
+        if let usagePriceOverrides { fields["usagePriceOverrides"] = .object(usagePriceOverrides.mapValues { $0?.json ?? .null }) }
         if let hiddenModelsByProvider {
             fields["providerModelPreferences"] = .object(hiddenModelsByProvider.mapValues {
                 .object(["hiddenModels": .array($0.map(JSONValue.string))])
