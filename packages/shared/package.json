@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./threadPullRequests": {
+      "types": "./src/threadPullRequests.ts",
+      "import": "./src/threadPullRequests.ts"
+    },
     "./themePalettes": {
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"

@@ -357,6 +357,44 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   ownership, ordinary failures do not abort the batch, and failed/unprocessed threads stay
   selected. Navigation and worktree-cleanup failures are reported separately from a completed
   deletion, including the fork's archived-thread deletion path.
+- The 2026-09-10 sync (`e16b8b059c..0f602b3372`, 13 upstream commits) carries seven
+  independent changes and retains the following boundaries:
+  - Linked-PR search (`f0401c6290`) runs on the existing V2 `linkedPullRequest` in web's
+    sidebar and command palette. The shared `threadPullRequestSearchTerms` exposes the PR
+    number, repository and URL without host reads. It does not introduce the upstream
+    multi-link projection, title snapshots or frozen Expo changes.
+  - Image zoom/pan (`8d8189e67d`) uses the fork's `ExpandedImageDialog` gallery, keeping its
+    original download handling. Zoom resets on navigation, arrow keys pan while zoomed,
+    and modal presence blocks type-to-focus. The standalone image component tolerates SSR.
+  - Composer model labels use available width (`b7b3ef1e6f`, web half); touch devices expose
+    user-message copy controls (`385cc0a4c6`, assistant controls were already visible).
+    PR list diff counts move to the title's trailing edge (`addfb1390e`) within the existing
+    row layout; review/check metadata already lives on the second line.
+  - Linux/BSD middle-click pastes the terminal's own selection (`d1eeb16247`) through the
+    existing paste race/bracketed-paste path. VT mouse reporting keeps priority; the fork's
+    modifier-click links, native copy, selection and split-pane activation remain intact.
+    Zed remote SSH links (`0f602b3372`) use the shared editor catalog and the fork's Electron
+    external-link validator. No new runtime capability or migration is needed.
+  - Duplicate-command expansion (`50f918c57a`) is already covered by V2's
+    `buildToolCallExpandedBody` / projected-item disclosure; the fork has no
+    `commandMatchesVisibleLabel` expansion guard. Android feed positioning (`75e4ceb964`)
+    and glass backing (`383cc40f4d`) remain excluded under the Expo freeze.
+  - Multiple linked PRs (`afb84898be`) remain deferred for a coordinated V2/Swift port:
+    upstream introduces host-level link identity, stack-dismissal tombstones, cached snapshots,
+    multi-PR settlement, automatic linking after creation, and credential-scoped MCP tools.
+    These must land together on V2's JSON projection and existing MCP capability model.
+    `050_ProjectionThreadPullRequests` targets V1 tables and collides with a fork-owned number;
+    it is dropped. The `threadPullRequests` capability, V1 link/unlink commands, RPCs,
+    provider instructions, client-runtime commands and dependent UI are not advertised/carried.
+  - GitHub stack navigation/merge/rebase (`de37964db2`) remains deferred with the multi-PR
+    stack service. A dedicated port must retain reviewed-head checks, branch permissions,
+    partial-rebase reporting and remote-only operations, then adapt the fork's panel stores
+    and native client. The `pullRequestStackActions` capability is not carried.
+  - Restart-persistent PR reads (`33242d0164`) cache the upstream `summary` / `stack` service
+    methods that the fork does not have (its earlier PR-discovery port is also deferred).
+    Do not add an unused cache layer or replace the fork's detail-cache semantics by inference.
+    Carry this with the missing service, including expiry and mutation/in-flight invalidation.
+    Advancing this sync marker records review of these deferred commits, not feature support.
 - The 2026-09-09 sync (`223ff4490f..e16b8b059c`, 185 upstream commits) manually carries
   independent correctness fixes while retaining the boundaries above:
   - `thread.stop` (`09e8de9c65`) uses web/desktop's existing V2 `interruptThreadTurn` path.

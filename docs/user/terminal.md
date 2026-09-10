@@ -8,3 +8,7 @@ These limits apply when you reconnect and when T3 Code restores saved terminal
 history. A client can show less scrollback than the server keeps.
 
 On Windows and Linux, **Ctrl+Insert** copies the current terminal selection.
+
+On Linux and BSD, middle-click pastes the selection from that terminal. With no terminal
+selection, it does nothing; it does not paste the system clipboard. Applications that
+capture mouse input still receive the click themselves.

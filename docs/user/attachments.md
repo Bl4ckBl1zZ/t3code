@@ -36,3 +36,10 @@ Deleting a thread deletes that thread's uploads.
 After you send a message, each attachment shows the path it was saved to. Click the path to open the file, or use the menu to copy it.
 
 Conversations that have no project attached show no path — there is nowhere to save the file, so its contents are sent with the message as before. If T3 Code had a project but could not write to it (a read-only checkout, for example), the attachment is marked **Not saved to the workspace** and its contents are sent with the message instead. Either way the message still goes through.
+
+## Zooming image previews
+
+In web and desktop, open an image from the conversation, then click it to zoom in or return
+to fit. Scroll to zoom and drag to pan. With the image focused, **+** and **−** change zoom
+and **0** returns to fit. Arrow keys pan while zoomed and move between images while fitted.
+Downloading still saves the original image.

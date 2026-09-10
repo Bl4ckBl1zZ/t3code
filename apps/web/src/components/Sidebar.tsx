@@ -165,7 +165,7 @@ import {
   resolveSettledTimestamp,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
-  searchSidebarThreadsByTitle,
+  searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
   resolveWorkInboxBadge,
@@ -2765,7 +2765,7 @@ export default function Sidebar() {
     [activeThreads, settledThreads, snoozedThreads],
   );
   const threadSearchResults = useMemo(
-    () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
+    () => searchSidebarThreads(searchableThreads, threadSearchQuery),
     [searchableThreads, threadSearchQuery],
   );
   const threadSearchResultOrderKey = threadSearchResults
@@ -4053,8 +4053,8 @@ export default function Sidebar() {
                     setActiveSearchResultIndex(0);
                   }}
                   onKeyDown={handleThreadSearchKeyDown}
-                  placeholder="Search"
-                  aria-label="Search threads"
+                  placeholder="Search threads or PRs"
+                  aria-label="Search threads or PRs"
                   role="combobox"
                   aria-autocomplete="list"
                   aria-expanded={isSearchingThreads && threadSearchResults.length > 0}

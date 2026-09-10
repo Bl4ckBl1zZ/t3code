@@ -439,6 +439,11 @@ export function isTerminalSelectAllShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+/** Linux/BSD middle-click uses the terminal selection, never the clipboard. */
+function isMiddleClickPastePlatform(): boolean {
+  return /linux|bsd/i.test(navigator.platform);
+}
+
 export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
   return (
     event.inputType === "" ||
@@ -1362,6 +1367,14 @@ export class GhosttyTerminalSurface {
       this.canvas.setPointerCapture(event.pointerId);
       return;
     }
+    if (event.button === 1 && isMiddleClickPastePlatform()) {
+      // Keep mousedown bubbling so the containing split pane is activated.
+      const selection = this.getSelection();
+      if (selection.length > 0) {
+        void this.pasteFromClipboard(() => Promise.resolve(selection));
+      }
+      return;
+    }
     if (event.button !== 0) return;
     if (isTerminalLinkPointerGesture(event)) {
       event.preventDefault();
@@ -1574,6 +1587,10 @@ export class GhosttyTerminalSurface {
     if (this.canvas.hasPointerCapture(event.pointerId)) {
       this.canvas.releasePointerCapture(event.pointerId);
     }
+    if (event.button === 1 && isMiddleClickPastePlatform()) {
+      event.preventDefault();
+      return;
+    }
     if (event.button !== 0) return;
     if (!this.selectionMoved && this.selectionMode === "cell") {
       this.clearSelection();
@@ -1610,8 +1627,15 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onMouseDown = (event: MouseEvent) => {
-    if (event.button === 0) event.preventDefault();
+    if (event.button === 0 || (event.button === 1 && isMiddleClickPastePlatform())) {
+      event.preventDefault();
+    }
     this.focus();
+  };
+
+  // Suppress Chromium’s native PRIMARY paste into the focused hidden textarea.
+  private readonly onMouseUp = (event: MouseEvent) => {
+    if (event.button === 1 && isMiddleClickPastePlatform()) event.preventDefault();
   };
 
   private readonly onContextMenu = (event: MouseEvent) => {
@@ -1703,6 +1727,7 @@ export class GhosttyTerminalSurface {
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
     this.canvas.addEventListener("mousedown", this.onMouseDown);
+    this.canvas.addEventListener("mouseup", this.onMouseUp);
     this.canvas.addEventListener("contextmenu", this.onContextMenu);
     this.scrollbar.addEventListener("pointerdown", this.onScrollbarPointerDown);
     this.scrollbar.addEventListener("pointermove", this.onScrollbarPointerMove);
@@ -1728,6 +1753,7 @@ export class GhosttyTerminalSurface {
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
+    this.canvas.removeEventListener("mouseup", this.onMouseUp);
     this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.scrollbar.removeEventListener("pointerdown", this.onScrollbarPointerDown);
     this.scrollbar.removeEventListener("pointermove", this.onScrollbarPointerMove);

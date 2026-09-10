@@ -156,3 +156,12 @@ Control settings**.
 - [GitHub CLI](https://cli.github.com/)
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli)
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/)
+
+## Finding a thread by its linked pull request
+
+On web and desktop, sidebar search and the command palette match the linked PR number
+(such as **#287**), repository plus number, or URL. This searches links already attached to
+threads; it does not query the source-control host.
+
+Remote **Open in editor** also supports Zed over SSH when the environment advertises an
+SSH target and Zed is installed on the client machine.
