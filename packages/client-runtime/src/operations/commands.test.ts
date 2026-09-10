@@ -614,6 +614,44 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect("writes and resets durable V2 order without changing pin or lifecycle state", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      for (const metadata of [
+        { activeOrderKey: "mn" },
+        { activeOrderKey: null },
+        { pinOrderKey: "bn" },
+      ]) {
+        yield* updateThreadMetadata({
+          commandId: CommandId.make("order"),
+          threadId: v2ThreadId,
+          ...metadata,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      }
+      expect(commands).toEqual([
+        {
+          type: "thread.metadata.update",
+          commandId: "order",
+          threadId: v2ThreadId,
+          activeOrderKey: "mn",
+        },
+        {
+          type: "thread.metadata.update",
+          commandId: "order",
+          threadId: v2ThreadId,
+          activeOrderKey: null,
+        },
+        {
+          type: "thread.metadata.update",
+          commandId: "order",
+          threadId: v2ThreadId,
+          pinOrderKey: "bn",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("routes Hermes discovery, import, and reset through their capability-gated RPCs", () =>
     Effect.gen(function* () {
       const rpcCalls: Array<{ readonly method: string; readonly input: unknown }> = [];

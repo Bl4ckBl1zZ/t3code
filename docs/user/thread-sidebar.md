@@ -55,7 +55,7 @@ history does not remove worktree files from the environment.
 
 On supporting environments, choose **Arrange threads** above the Code or Work task list. Drag
 the handles, or use VoiceOver's **Move up** and **Move down** actions. The order is saved to the
-environment, so other native iOS devices see it too. Project filters leave other threads alone.
+environment, so other connected devices see it too. Project filters leave other threads alone.
 New and reopened threads appear above arranged threads. **Reset to newest first** removes the
 manual order for the displayed active threads. Pinned threads retain their separate order.
 
@@ -64,3 +64,13 @@ the files to its draft. This works in either sidebar layout. Files use the same 
 upload controls as files dropped onto the conversation; dropping never sends a message.
 
 The chat header also offers thread actions from its title menu. Double-click the title to rename it; Enter saves and Escape cancels. The menu includes the supported pin, settle, snooze, copy, archive, and delete actions. Click the project breadcrumb to open project settings.
+
+## Arrange active threads on web and desktop
+
+Drag an active thread within its section to choose its position. On current servers, the order
+is saved to the environment and shared with native iOS. New and reopened threads appear above
+arranged active threads. Choose **Reset thread position** from a thread’s menu to return it to
+automatic ordering. Pinned threads have their own order, and Work’s main thread stays fixed.
+
+Older servers keep local-only drag ordering. If a section mixes older servers with threads that
+already have synced positions, update those servers before reordering the section.

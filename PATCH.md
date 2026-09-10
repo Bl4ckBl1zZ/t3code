@@ -843,3 +843,14 @@ Markdown documents. List/table separators match native citation capture. Ambiguo
 repeated text is never guessed; unique text can recover after offsets shift. Highlights
 expire after three seconds without continuous animation and remain scoped to the source
 message and transcript coordinator.
+
+### Web durable sidebar order
+
+Web carries `activeOrderKey` through its V2 shell projection and writes pinned/active positions
+with `thread.metadata.update`, using existing `threadPinReorder`/`threadActiveOrderV2` capabilities.
+The shared base-26 order preserves Swift's keyless-active-first and keyed-pin-first behavior;
+first-time materialization supports large histories and reserves hidden thread keys. Optimistic
+keys remain until projection acknowledgement, with concurrent-change/failure release. Resetting
+an active position sends null without changing lifecycle state. Legacy keyless servers retain
+local ordering; mixed durable/legacy sections require upgrading before a reorder. Pin entry
+points share the existing top-of-pinned-run placement. No V1 reorder command or migration is used.

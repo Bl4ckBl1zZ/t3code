@@ -1,4 +1,8 @@
 import {
+  applyDurableThreadOrder,
+  planDurableThreadReorder,
+} from "@t3tools/client-runtime/state/thread-sort";
+import {
   useSidebarFileDropNavigation,
   useSidebarFileDropTarget,
 } from "../hooks/useSidebarFileDrop";
@@ -178,7 +182,6 @@ import {
   isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
-  planPinnedReorder,
   resolveAdjacentThreadId,
   resolveWorkspaceSwitchNavigation,
   resolveSettledTimestamp,
@@ -2120,6 +2123,39 @@ export default function Sidebar() {
   const threadOrder = useUiStateStore((store) => store.threadOrder);
   const reorderThreads = useUiStateStore((store) => store.reorderThreads);
   const threads = useThreadShells();
+  const reorderInFlight = useRef(false);
+  const [pendingOrder, setPendingOrder] = useState<{
+    readonly pinned: boolean;
+    readonly keys: ReadonlyMap<string, string>;
+    readonly original: ReadonlyMap<string, string | null | undefined>;
+  } | null>(null);
+  useEffect(() => {
+    if (pendingOrder === null) return;
+    const canonical = new Map(
+      threads.map((thread) => [
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        thread,
+      ]),
+    );
+    let complete = true;
+    for (const [id, expected] of pendingOrder.keys) {
+      const thread = canonical.get(id);
+      const actual = pendingOrder.pinned ? thread?.pinOrderKey : thread?.activeOrderKey;
+      if (
+        !thread ||
+        thread.archivedAt != null ||
+        thread.deletedAt != null ||
+        (thread.pinnedAt != null) !== pendingOrder.pinned ||
+        (actual !== expected && (actual ?? null) !== (pendingOrder.original.get(id) ?? null))
+      ) {
+        setPendingOrder(null);
+        return;
+      }
+      if (actual !== expected) complete = false;
+    }
+    if (complete) setPendingOrder(null);
+  }, [pendingOrder, threads]);
+
   const pinnedThreadKeySet = useMemo(
     () =>
       new Set(
@@ -2141,6 +2177,8 @@ export default function Sidebar() {
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
+    pinThread,
+    unpinThread,
     settleThread,
     unsettleThread,
     snoozeThread,
@@ -2174,13 +2212,7 @@ export default function Sidebar() {
             return;
           }
         }
-        const result = await updateThreadMetadata({
-          environmentId: threadRef.environmentId,
-          input: {
-            threadId: threadRef.threadId,
-            pinned: nextPinned,
-          },
-        });
+        const result = await (nextPinned ? pinThread(threadRef) : unpinThread(threadRef));
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
           toastManager.add(
@@ -2193,7 +2225,7 @@ export default function Sidebar() {
         }
       })();
     },
-    [confirmThreadUnpin, pinnedThreadKeySet, updateThreadMetadata],
+    [confirmThreadUnpin, pinnedThreadKeySet, pinThread, unpinThread],
   );
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
@@ -2707,11 +2739,23 @@ export default function Sidebar() {
     const isPinnedThread = (thread: EnvironmentThreadShell) =>
       pinnedThreadKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
     return {
-      activeThreads: applyManualThreadOrderForSidebarV2(
-        sortThreadsForSidebar(active, isPinnedThread),
-        threadOrder,
-        (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      activeThreads: applyDurableThreadOrder(
+        applyManualThreadOrderForSidebarV2(
+          sortThreadsForSidebar(active, isPinnedThread),
+          threadOrder,
+          (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          isPinnedThread,
+        ),
+        (thread) => {
+          const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+          const pinned = isPinnedThread(thread);
+          return (
+            (pendingOrder?.pinned === pinned ? pendingOrder.keys.get(key) : undefined) ??
+            (pinned ? thread.pinOrderKey : thread.activeOrderKey)
+          );
+        },
         isPinnedThread,
+        (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       ),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
@@ -2723,6 +2767,7 @@ export default function Sidebar() {
       snoozeNow: preciseNow,
     };
   }, [
+    pendingOrder,
     autoSettleAfterDays,
     autoSettleOnMerge,
     changeRequestSnapshotByKey,
@@ -2836,9 +2881,130 @@ export default function Sidebar() {
       if (activeSection === undefined || activeSection !== activeSectionByKey.get(overKey)) {
         return;
       }
-      reorderThreads(sortableThreadKeys, [activeKey], [overKey]);
+      if (reorderInFlight.current || pendingOrder !== null || activeSection === "main") return;
+      if (
+        activeThreads.some(
+          (thread) =>
+            thread.workInboxRole === "main" &&
+            [activeKey, overKey].includes(
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+            ),
+        )
+      )
+        return;
+      const pinned = pinnedThreadKeySet.has(activeKey);
+      if (pinned !== pinnedThreadKeySet.has(overKey)) return;
+      const fixedKeys = new Set(
+        activeThreads
+          .filter((thread) => thread.workInboxRole === "main")
+          .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      );
+      const orderedIds = sortableThreadKeys.filter(
+        (key) =>
+          !fixedKeys.has(key) &&
+          activeSectionByKey.get(key) === activeSection &&
+          pinnedThreadKeySet.has(key) === pinned,
+      );
+      const refs = orderedIds.map(parseScopedThreadKey);
+      if (refs.some((ref) => ref === null)) return;
+      if (
+        refs.some((ref) => {
+          const caps = ref && serverConfigs.get(ref.environmentId)?.environment.capabilities;
+          return !caps || (pinned ? caps.threadPinReorder : caps.threadActiveOrderV2) !== true;
+        })
+      ) {
+        // Older environments retain their local-only ordering. A mixed section
+        // with durable keys cannot safely mix two incompatible order sources.
+        if (
+          activeThreads.some(
+            (thread) =>
+              orderedIds.includes(
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              ) && (pinned ? thread.pinOrderKey : thread.activeOrderKey) != null,
+          )
+        ) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Update connected servers to reorder this section",
+            }),
+          );
+          return;
+        }
+        reorderThreads(sortableThreadKeys, [activeKey], [overKey]);
+        return;
+      }
+      const from = orderedIds.indexOf(activeKey),
+        to = orderedIds.indexOf(overKey);
+      if (from < 0 || to < 0) return;
+      orderedIds.splice(from, 1);
+      orderedIds.splice(to, 0, activeKey);
+      const original = new Map(
+        threads
+          .filter((thread) => (thread.pinnedAt != null) === pinned)
+          .map((thread) => [
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+            pinned ? thread.pinOrderKey : thread.activeOrderKey,
+          ]),
+      );
+      const keys = planDurableThreadReorder(orderedIds, activeKey, original);
+      if (keys.size === 0) return;
+      reorderInFlight.current = true;
+      setPendingOrder({ pinned, keys, original });
+      void (async () => {
+        try {
+          for (const [id, key] of keys) {
+            const ref = parseScopedThreadKey(id);
+            if (!ref) throw new Error("Thread is no longer available.");
+            const latest = readThreadShell(ref);
+            const currentKey = pinned ? latest?.pinOrderKey : latest?.activeOrderKey;
+            if (
+              !latest ||
+              latest.archivedAt != null ||
+              latest.deletedAt != null ||
+              (latest.pinnedAt != null) !== pinned ||
+              ((currentKey ?? null) !== (original.get(id) ?? null) && currentKey !== key)
+            ) {
+              throw new Error("The thread order changed on another device. Try the move again.");
+            }
+            const result = await updateThreadMetadata({
+              environmentId: ref.environmentId,
+              input: {
+                threadId: ref.threadId,
+                ...(pinned ? { pinOrderKey: key } : { activeOrderKey: key }),
+              },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          }
+        } catch (error) {
+          setPendingOrder(null);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not save thread order",
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "Some positions may have saved. Try the move again.",
+            }),
+          );
+        } finally {
+          reorderInFlight.current = false;
+        }
+      })();
     },
-    [activeSectionByKey, finishThreadDrag, reorderThreads, sortableThreadKeys],
+    [
+      activeSectionByKey,
+      activeThreads,
+      finishThreadDrag,
+      pendingOrder,
+      pinnedThreadKeySet,
+      reorderThreads,
+      serverConfigs,
+      sortableThreadKeys,
+      threads,
+      updateThreadMetadata,
+    ],
   );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -3730,6 +3896,18 @@ export default function Sidebar() {
                     },
                   ]
                 : []),
+              ...(!isPinned &&
+              thread.activeOrderKey != null &&
+              serverConfigs.get(thread.environmentId)?.environment.capabilities
+                .threadActiveOrderV2 === true
+                ? [
+                    {
+                      id: "reset-active-order",
+                      label: "Reset thread position",
+                      icon: "list-restart",
+                    },
+                  ]
+                : []),
               { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
               ...(supportsTitleRegeneration
                 ? [
@@ -3821,6 +3999,23 @@ export default function Sidebar() {
           case "rename":
             startThreadRename(threadRef, thread.title);
             return;
+          case "reset-active-order": {
+            const result = await updateThreadMetadata({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId, activeOrderKey: null },
+            });
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not reset thread position",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "regenerate-title": {
             if (isRegeneratingTitle) return;
             const result = await updateThreadMetadata({

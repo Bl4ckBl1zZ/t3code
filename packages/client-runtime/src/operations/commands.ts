@@ -121,6 +121,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   /** Kick off an async title regeneration for the thread. */
   readonly regenerateTitle?: boolean;
   readonly pinned?: boolean;
+  readonly pinOrderKey?: string;
+  readonly activeOrderKey?: string | null;
   readonly workInboxRole?: "main" | "chat" | null;
   readonly clearTimeline?: true;
   /** Absent leaves the link alone; null unlinks. */
@@ -528,6 +530,8 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
       input.pinned !== undefined ||
+      input.pinOrderKey !== undefined ||
+      input.activeOrderKey !== undefined ||
       input.workInboxRole !== undefined ||
       input.clearTimeline !== undefined ||
       input.linkedPullRequest !== undefined ||
@@ -543,6 +547,8 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath }),
         ...(input.regenerateTitle === undefined ? {} : { regenerateTitle: input.regenerateTitle }),
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
+        ...(input.pinOrderKey === undefined ? {} : { pinOrderKey: input.pinOrderKey }),
+        ...(input.activeOrderKey === undefined ? {} : { activeOrderKey: input.activeOrderKey }),
         ...(input.workInboxRole === undefined ? {} : { workInboxRole: input.workInboxRole }),
         ...(input.clearTimeline === undefined ? {} : { clearTimeline: input.clearTimeline }),
         ...(input.linkedPullRequest === undefined
