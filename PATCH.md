@@ -40,32 +40,21 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   items built inline in `Sidebar.tsx`. Upstream changes to those retired modules resolve to the
   fork: port the menu feature itself (new items, handlers) into `Sidebar.tsx`/`useThreadActions.ts`
   instead of merging the files.
-- Does not carry upstream's three large web-client redesigns that are written against the V1
-  activity model: "collapse tool activity into one line" (`4a9edff4c1`, the `work-toggle` row,
-  `deriveToolLifecycleCollapseKey`, and the `live-activity-focus` CSS) and "attach composer state
-  drawers" (`792a1404f6`, the shoulder tabs, `ComposerTasksBadge`, `chat-composer-*-drawer`
-  surfaces, and the micro approval actions). The fork's timeline renders orchestration V2
-  `timelineEntries` and already collapses work rows through its own `work` group and
-  `collapseWorkEntriesKeepingLiveBackground`; its composer has diverged in the same places.
-  Follow-on upstream work on those files resolves to the fork, and upstream's companion fixes
-  (`490f48ed98`'s `AgentSpawnCtaRow` inset, `68966c1e66`'s shoulder-tab spacing) have no fork
-  counterpart. Carried out of those commits: `deriveActiveWorkStartedAt`'s
-  `latestUserMessageAt` fallback, ported onto the V2 run shell. The third is "unify activity logs
-  and composer banners" (`3d32797f6f`, reverted by `8dcb96314c`, re-landed as `30175a8af0`, then
-  `9842518c9a` and `3f62e6fa65`): it deletes `ThreadSyncStatusPill`, rewrites `ComposerBannerStack`
-  around a new `ComposerBanner`/`ComposerSurface`/`ComposerActivityStatus` trio, and rebuilds
-  `MessagesTimeline` and `session-logic` on the drawer surfaces the fork already declined. The
-  remaining unported behaviors are the complete shoulder/drawer arrangement, live-activity
-  focus treatment and interim turn folding (`17c48f7fc1`). Video attachments, media playback,
-  attached banners and task drawers have since been ported onto the fork's own components. The circle-alert treatment for ordinary failed tools
-  (`8b817cbcaa`/`f1e6f0c9bb`) is now ported to web and Swift, while typed runtime failures
-  retain their severe presentation. Worktree setup feedback (`ef84bc9873`) now stays on the
-  web timeline until a V2 run starts or fails; draft-route promotion waits for that same
-  evidence. Swift distinguishes preparing a workspace from starting the provider. V1 setup
-  activities and the continually repainting text shimmer are not imported. Upstream's separate web
-  file-attachment model (`bcb855a633`: a `files` array beside `images`, `composerFileNeedsReattach`,
-  per-chip upload progress) is likewise not carried — the fork's composer already models
-  image/file/pdf/video in one `images` array with its own upload queue.
+- Ports upstream's composer attachment surfaces onto V2: notices, task progress/list,
+  approval and question drawers, plan follow-up and the stash shoulder tab share the
+  existing composer form. The shell and context strip use one surface model and the
+  fork's theme tokens. Tasks no longer occupy a notice slot that could obscure another
+  notice. Approval actions keep the V2 live/non-resumable response gate. Swift keeps
+  native task/approval surfaces outside its push-to-talk gesture hierarchy.
+  The remaining timeline ports are live-activity focus and interim turn folding
+  (`17c48f7fc1`), which must use V2 runs and attempts rather than V1 activities.
+  Ordinary failed tools use a muted circle alert on web and Swift, while typed runtime
+  failures retain their severe presentation. Workspace setup feedback remains visible
+  until a V2 run starts or fails; draft-route promotion waits for that same evidence.
+  Swift distinguishes preparing the workspace from starting the provider. V1 setup
+  activities and the continually repainting text shimmer are not imported.
+  The fork's unified image/file/pdf/video upload queue replaces upstream's separate
+  `files` array; per-attachment progress, retry and video playback are carried through it.
 - Sidebar file drops are ported to both web sidebar layouts and search results using the
   fork's unified attachment queue. Deferred drops are scoped by environment and thread,
   survive repeated drops, and are cleared individually on navigation failure or when a

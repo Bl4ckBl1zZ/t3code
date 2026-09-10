@@ -178,3 +178,7 @@ agent starts or a startup failure can be shown. The iOS composer distinguishes
 Preparing workspace from Starting agent. Ordinary failed commands use a muted
 alert icon in the work log; failures that stop the runtime retain their stronger
 error treatment. Open a failed row to inspect its output.
+
+On web and desktop, task progress and stashed prompts appear as tabs attached above the composer.
+Expand Tasks to inspect the current plan. Approval requests and questions open in the same
+attached area, with their actions beside the request. Notices keep their own stack.

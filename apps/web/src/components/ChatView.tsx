@@ -1,3 +1,5 @@
+import { ComposerBanner } from "./chat/ComposerBanner";
+import { ComposerSurface } from "./chat/ComposerSurface";
 import {
   isSameSidebarThreadRef,
   useSidebarPendingFileDropStore,
@@ -7,7 +9,7 @@ import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection
 import { assistantCitationFromLocation } from "~/lib/assistantCitationNavigation";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { resolveEnvironmentMachineKind, type EnvironmentMachineKind } from "@t3tools/contracts";
-import { ComposerTasksContent } from "./chat/ComposerTasksBadge";
+import { ComposerTasksBadge, ComposerTasksDrawer } from "./chat/ComposerTasksBadge";
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
@@ -2686,22 +2688,6 @@ function ChatViewContent(props: ChatViewProps) {
     pendingApprovals.length,
     pendingUserInputs.length,
   ]);
-  const composerTasksNotice =
-    composerTasks === null
-      ? null
-      : {
-          id: "active-tasks",
-          priority: "activity" as const,
-          variant: "default" as const,
-          content: (
-            <ComposerTasksContent
-              expanded={tasksDrawerExpanded}
-              onToggle={() => setTasksDrawerExpanded((open) => !open)}
-              progress={composerTasks.progress}
-              steps={composerTasks.steps}
-            />
-          ),
-        };
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -7842,14 +7828,6 @@ function ChatViewContent(props: ChatViewProps) {
                           isProjectlessConversation={isHermesConversation}
                         />
                       </div>
-                      <ComposerBannerStack
-                        className="relative z-0"
-                        items={
-                          composerTasksNotice === null
-                            ? composerBannerItems
-                            : [composerTasksNotice, ...composerBannerItems]
-                        }
-                      />
                     </div>
                   ) : null}
                   {isServerThread ? (
@@ -7865,16 +7843,7 @@ function ChatViewContent(props: ChatViewProps) {
                       optimisticMessages={optimisticUserMessages}
                     />
                   ) : null}
-                  {!isDraftHeroState ? (
-                    <ComposerBannerStack
-                      className="relative z-0"
-                      items={
-                        composerTasksNotice === null
-                          ? composerBannerItems
-                          : [composerTasksNotice, ...composerBannerItems]
-                      }
-                    />
-                  ) : null}
+
                   <div
                     ref={draftHeroTransition.composerAnchorRef}
                     className="relative z-10"
@@ -7884,15 +7853,32 @@ function ChatViewContent(props: ChatViewProps) {
                         : undefined
                     }
                   >
-                    <div
-                      className={cn(
-                        "chat-composer-glass-shell relative mx-auto w-full max-w-3xl",
-                        showComposerContextStrip && "chat-composer-glass-shell-with-context",
-                      )}
-                    >
-                      <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
+                    <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
+                      <ComposerSurface.Host>
                         <div className="relative z-10">
                           <ChatComposer
+                            attachments={
+                              <>
+                                <ComposerBannerStack items={composerBannerItems} />
+                                {composerTasks &&
+                                  (tasksDrawerExpanded ? (
+                                    <ComposerTasksDrawer
+                                      onCollapse={() => setTasksDrawerExpanded(false)}
+                                      progress={composerTasks.progress}
+                                      steps={composerTasks.steps}
+                                    />
+                                  ) : (
+                                    <ComposerBanner.Attachment>
+                                      <ComposerTasksBadge
+                                        expanded={false}
+                                        onToggle={() => setTasksDrawerExpanded(true)}
+                                        progress={composerTasks.progress}
+                                        steps={composerTasks.steps}
+                                      />
+                                    </ComposerBanner.Attachment>
+                                  ))}
+                              </>
+                            }
                             promptHistoryMessages={serverProjection?.messages ?? []}
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
@@ -8003,7 +7989,7 @@ function ChatViewContent(props: ChatViewProps) {
                             onExpandImage={onExpandTimelineImage}
                           />
                         </div>
-                      </div>
+                      </ComposerSurface.Host>
                       <div className="min-h-0">
                         <div
                           data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
@@ -8041,7 +8027,7 @@ function ChatViewContent(props: ChatViewProps) {
                           )}
                         </div>
                       </div>
-                    </div>
+                    </ComposerSurface.Shell>
                     <div
                       aria-hidden
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"
